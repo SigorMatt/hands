@@ -19,3 +19,27 @@ def tmp_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Path]:
     monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
     monkeypatch.chdir(tmp_path)
     yield home
+
+
+MINIMAL_CONFIG = """
+[roles.builder]
+cwd = "~/git/demo"
+"""
+
+
+@pytest.fixture
+def write_config(tmp_home: Path):
+    """Write `~/.hands/<project>.toml` and return its path.
+
+    `body` is TOML text; when omitted a minimal valid config is written, so a
+    test that only cares about defaults does not have to spell the file out.
+    """
+
+    def _write(body: str | None = None, project: str = "demo") -> Path:
+        if body is None:
+            body = MINIMAL_CONFIG
+        path = tmp_home / ".hands" / f"{project}.toml"
+        path.write_text(body)
+        return path
+
+    return _write
