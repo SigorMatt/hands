@@ -1,0 +1,48 @@
+{
+  "permissions": {
+    "deny": [
+      "Edit",
+      "Write",
+      "MultiEdit",
+      "NotebookEdit",
+      "Bash(git push:*)",
+      "Bash(git commit:*)",
+      "Bash(git add:*)",
+      "Bash(git checkout:*)",
+      "Bash(git reset:*)",
+      "Bash(git stash:*)",
+      "Bash(git rebase:*)",
+      "Bash(git merge:*)",
+      "Bash(rm:*)",
+      "Bash(mv:*)",
+      "Bash(cp:*)",
+      "Bash(claude:*)"
+    ],
+    "allow": [
+      "Read",
+      "Glob",
+      "Grep",
+      "Bash(hands:*)",
+      "Bash(./dispatch.sh:*)",
+      "Bash(git fetch:*)",
+      "Bash(git -C ./repo fetch:*)",
+      "Bash(git -C ./repo log:*)",
+      "Bash(git -C ./repo show:*)",
+      "Bash(git -C ./repo diff:*)",
+      "Bash(git -C ./repo status:*)",
+      "Bash(git -C ./repo ls-remote:*)",
+      "Bash(git -C ./repo rev-parse:*)",
+      "Bash(git -C ./repo cat-file:*)",
+      "Bash(git log:*)",
+      "Bash(git show:*)",
+      "Bash(git diff:*)",
+      "Bash(git ls-remote:*)",
+      "Bash(cat:*)",
+      "Bash(ls:*)",
+      "Bash(jq:*)",
+      "Bash(pgrep:*)",
+      "Bash(sleep:*)",
+      "Bash(date:*)"
+    ]
+  }
+}
