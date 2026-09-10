@@ -1,24 +1,30 @@
 # CHECKPOINT
 
 Mission: 1 (meta/BUILDER-1-PROMPT.md)
-Unit in progress: U1 Config and spool
-Intent: give every later unit its two foundations — the project config of
-DESIGN §13 and the spool of §6/§7/§11 (job records, role state, inbox,
-path confinement). No process is spawned in this unit.
+Unit in progress: U2 Fake claude and runner
+Intent: the first unit that spawns a process. A fake `claude` under test
+control, and the runner of DESIGN §2 that drives it and fills the job
+record of §6.
 Done means:
-  - `src/hands/config.py` loads `~/.hands/<project>.toml` (§13), expands
-    `~`, validates roles (builder, aux) and allowed roots, and supplies a
-    default for every optional key.
-  - `src/hands/spool.py`: job records as JSON files under `~/.hands/jobs/`,
-    atomic writes (tmp + os.replace + fsync), the state machine of §6 with
-    illegal transitions refused, `~/.hands/roles/<role>.json`
-    (`last_session_id`, `last_job`), an append-only inbox with per-event
-    ack, and `resolve_under_roots` rejecting `..`, absolute escapes and
-    symlinks leaving the roots.
-  - Tests for every transition (legal and illegal), an atomic write under
-    a simulated crash, and confinement escapes.
+  - `tests/fake_claude.py`: executable, imitates
+    `claude -p --output-format stream-json --verbose`, emits system/init
+    with a session_id, honours `--resume <id>`, reads the prompt on stdin,
+    and per a control string in the prompt can emit a given result, sleep,
+    emit a rate-limit error event then exit, or block until SIGINT/SIGTERM
+    (143 on TERM, 130 on INT).
+  - `src/hands/runner.py`: spawns the §2 per-role invocation with the
+    `claude` binary from config, parses stream-json line by line, records
+    session_id, transcript_path, head_at_start/head_at_end, the verbatim
+    result, verdict, stderr_tail, permission_denials, num_turns,
+    duration_ms, total_cost_usd, exit_code. Cancel = SIGINT, wait
+    cancel_grace_s, then SIGTERM.
+  - Tests: clear, keep, keep refused (no session; session's last job not
+    terminal), verbatim result, verdict extraction, limited detection,
+    killed, and a job whose pid is gone at daemon start becoming orphaned.
   - `./scripts/check` green; one commit; pushed.
 Standing constraints: execution model of BUILDER-1-PROMPT.md is binding;
 one sub-agent per unit; commit and push every unit; ./scripts/check green;
-sub-agents never edit meta/plan.md, meta/CHECKPOINT.md or DESIGN.md;
-design changes are findings in meta/findings/FINDINGS.md.
+no test may require a real `claude` binary; sub-agents never edit
+meta/plan.md, meta/CHECKPOINT.md or DESIGN.md; design changes and product
+facts that contradict the design are findings in meta/findings/FINDINGS.md
+with evidence.

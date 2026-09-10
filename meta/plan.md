@@ -5,7 +5,7 @@ commit and a push. `[x]` = done and pushed, `[b]` = blocked (two failures),
 `[y]` = yielded under budget pressure.
 
 - [x] U0 Scaffold — pyproject, package skeleton, scripts/check, tests/conftest tmp_home
-- [ ] U1 Config and spool — config.py (§13), spool.py (§6 state machine, inbox, confinement)
+- [x] U1 Config and spool — config.py (§13), spool.py (§6 state machine, inbox, confinement)
 - [ ] U2 Fake claude and runner — tests/fake_claude.py, runner.py (§2, §6)
 - [ ] U3 Daemon, local API, CLI — daemon.py, api.py, cli.py, handsd (§3, §4)
 - [ ] U4 Files and gates — put/get/ls, --file, gate triggers, authority table (§4, §8)
