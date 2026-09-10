@@ -16,6 +16,8 @@
       "Bash(rm:*)",
       "Bash(mv:*)",
       "Bash(cp:*)",
+      "Bash(touch:*)",
+      "Bash(tee:*)",
       "Bash(claude:*)"
     ],
     "allow": [
@@ -33,6 +35,7 @@
       "Bash(git -C ./repo ls-remote:*)",
       "Bash(git -C ./repo rev-parse:*)",
       "Bash(git -C ./repo cat-file:*)",
+      "Bash(git -C ./repo ls-files:*)",
       "Bash(git log:*)",
       "Bash(git show:*)",
       "Bash(git diff:*)",
@@ -42,7 +45,26 @@
       "Bash(jq:*)",
       "Bash(pgrep:*)",
       "Bash(sleep:*)",
-      "Bash(date:*)"
+      "Bash(date:*)",
+      "Bash(echo:*)",
+      "Bash(head:*)",
+      "Bash(tail:*)",
+      "Bash(wc:*)",
+      "Bash(grep:*)",
+      "Bash(kill -0:*)"
+    ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/bash_guard.py"
+          }
+        ]
+      }
     ]
   }
 }
