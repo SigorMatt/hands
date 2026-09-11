@@ -1,18 +1,17 @@
 # CHECKPOINT
 
-Mission: 4 (meta/BUILDER-4-PROMPT.md) — IN PROGRESS
-Unit in progress: U6 (final report)
-Intent: meta/FINAL-REPORT-4.md — what changed (a sha per unit), what the tests
-prove, NOT PROVEN (mandatory), and a `## Review items` table mapping review 3's
-blockers 1-3 and should-fix 1-11 to `closed <sha>` | `deferred <mission>` |
-`not applicable <reason>`. Then the verdict line.
-Done means: the report exists, the gate is green on the pushed tip three
-consecutive runs, and the mission's five acceptance criteria are checked.
-Tip: U0 (8268539, meta only), U1 (935a275), U2 (667ea52), U3 (c108bfe),
-U4 (15eeb76) and U5 (2fb3b7f, then the follow-up d348d07) committed and pushed
-on `main`; 726 passed at U5's tip, gate green three consecutive runs. U2's
-flake reproduction (`--basetemp=/tmp/pt-40/pytest-1340`) is green where it was
-red. Base 796e5ae was green here at 618 passed.
+Mission: 4 (meta/BUILDER-4-PROMPT.md) — FINISHED 2026-09-12
+Unit in progress: none
+Intent: -
+Done means: -
+Tip: all of U0..U6 committed and pushed on `main`. `./scripts/check` green
+three consecutive runs at 8343b92 (ruff + 726 tests + cli smoke) and
+`bash_guard.py --selftest` 65/65. meta/FINAL-REPORT-4.md holds the account.
+No order deviation, no unit yielded, no unit blocked; one departure from
+one-commit-per-unit (U5 landed as 2fb3b7f then d348d07), recorded in the
+report. Review 3's three blockers are closed by 935a275, 667ea52 and 8268539;
+should-fix 1, 2, 4, 5, 8, 9, 10 and 11 are closed; should-fix 3, 6 and 7 are
+deferred to a later mission by the mission brief.
 Findings: H-001 open (needs a capture from a dotted cwd). H-011 filed after
 U3: `stop.suppressed` falls inside `stop`'s wake namespace, so `hands wait
 --for stop` wakes on a stop that was deliberately not notified — design-side,
