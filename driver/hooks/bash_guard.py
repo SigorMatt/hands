@@ -9,6 +9,9 @@ interpreters, no direct `claude`. `hands open` is blocked too: it execs an
 interactive `claude --resume`, which is a direct claude by another name.
 Quoted text is stripped before inspection: prose inside quotes is text, but
 $(...) and backticks inside double quotes are still executed and still checked.
+Git is read in the subcommand position only (after `-C <path>`, `-c k=v` and
+the other global flags): `rev-parse <sha>^{commit}` and `log --grep=push` read,
+`git -c x=y commit` and `find . -exec git push \\;` write and are blocked.
 
 Self-test: python3 bash_guard.py --selftest
 """
@@ -30,6 +33,18 @@ ALLOWED_GIT_SUBCOMMANDS = {
 }
 FORBIDDEN_GIT_FLAGS = {"--prune", "--delete", "-d", "-D", "-m", "-M",
                        "add", "set-url", "remove", "rename", "--set-upstream"}
+# Verbs that write. They are checked in the subcommand position only: `commit`
+# and `push` are also ordinary words in a revision (`<sha>^{commit}`) and in a
+# pattern (`log --grep=push`), and refusing those refuses read-only reads.
+MUTATING_GIT_SUBCOMMANDS = {
+    "push", "commit", "add", "checkout", "switch", "reset", "stash", "rebase", "merge",
+    "cherry-pick", "revert", "clean", "worktree", "config", "tag", "am", "apply", "restore",
+    "rm", "mv", "init", "clone", "pull",
+}
+# git global flags that take their value as the next word, so that word is not
+# the subcommand: `git -c user.name=x commit` is still a commit.
+GIT_GLOBAL_FLAGS_WITH_ARG = {"-C", "-c", "--git-dir", "--work-tree", "--namespace",
+                             "--exec-path", "--config-env", "--super-prefix"}
 # `hands open <job>` execs `claude --resume <id>` in the role's directory
 # (DESIGN §7): an interactive session inside the driver's Bash call, and a way
 # past the `claude` block. The driver reads jobs with show/log/tail instead.
@@ -45,7 +60,6 @@ FORBIDDEN_PATTERNS = [
     (r"(^|[\s;&|(`])(python3?|perl|ruby|node|bash|sh|zsh|eval|exec|source|xargs|env|sudo|su)\b", "interpreter or wrapper"),
     (r"(^|[^\w./-])claude\b", "direct claude"),
     (r"\bkill\b(?!\s+-0\b)", "kill other than -0"),
-    (r"\bgit\b.*\b(push|commit|add|checkout|switch|reset|stash|rebase|merge|cherry-pick|revert|clean|worktree|config|tag|am|apply|restore|rm|mv|init|clone|pull)\b", "mutating git"),
 ]
 
 SPLIT_RE = re.compile(r"\|\||&&|;|\||\n|\$\(|`|\(\s*")
@@ -138,6 +152,38 @@ def first_word(segment: str):
     return words
 
 
+def git_subcommand(words, start: int):
+    """Return the subcommand of the `git` at words[start - 1], or None.
+
+    Leading global flags are skipped, including the ones whose value is the
+    next word, so `git -C ./repo -c x=y commit` resolves to `commit`.
+    """
+    i = start
+    while i < len(words):
+        w = words[i]
+        if w in GIT_GLOBAL_FLAGS_WITH_ARG:
+            i += 2
+            continue
+        if w.startswith("-"):
+            i += 1
+            continue
+        return w.strip("()")
+    return None
+
+
+def mutating_git(words):
+    """True if any `git` in this segment writes — first word or not.
+
+    `find . -exec git push \\;` is a git push; only the subcommand position of
+    each git invocation is read, so revisions and patterns are left alone.
+    """
+    for i, w in enumerate(words):
+        if w.strip("()") == "git" or w.endswith("/git"):
+            if git_subcommand(words, i + 1) in MUTATING_GIT_SUBCOMMANDS:
+                return True
+    return False
+
+
 def check(cmd: str):
     """Return None if allowed, else a reason string."""
     try:
@@ -152,6 +198,8 @@ def check(cmd: str):
         words = first_word(raw)
         if not words:
             continue
+        if mutating_git(words):
+            return f"mutating git: {cmd!r}"
         w = words[0].strip("()")
         if not w:
             continue
@@ -159,17 +207,7 @@ def check(cmd: str):
         if w.startswith("$") or re.match(r"^\d+$", w):
             continue
         if w == "git":
-            sub = None
-            i = 1
-            while i < len(words):
-                if words[i] == "-C":
-                    i += 2
-                    continue
-                if words[i].startswith("-"):
-                    i += 1
-                    continue
-                sub = words[i]
-                break
+            sub = git_subcommand(words, 1)
             if sub not in ALLOWED_GIT_SUBCOMMANDS:
                 return f"git subcommand not allowed: {sub!r} in {cmd!r}"
             if any(f in words for f in FORBIDDEN_GIT_FLAGS):
@@ -225,6 +263,18 @@ SELFTEST = [
     ("mv a b", False),
     ("git -C ./repo branch -D main", False),
     ("git clone https://example.com/x", False),
+    # a mutating verb is a verb only in the subcommand position: these read
+    ("git -C ./repo rev-parse 8448b6f^{commit}", True),
+    ("git -C ./repo rev-parse --verify HEAD^{commit}", True),
+    ("git -C ./repo show 861097f^{commit} --stat", True),
+    ("git log --grep=commit -5", True),
+    ("git -C ./repo log --oneline --grep=push -20", True),
+    # ... and these still write, wherever the verb hides
+    ("git -c user.name=x commit -m y", False),
+    ("git --git-dir=./repo/.git push origin main", False),
+    ("git -C ./repo log --oneline -1 && git -C ./repo push", False),
+    ("git -C ./repo status; git -C ./repo add -A", False),
+    ("find . -name x -exec git push \\;", False),
     # prose inside quotes is text, not shell
     ("hands send --role builder --context clear --gate \"apply kit\" \"Apply ~/Downloads/k.zip (it replaces DESIGN.md), then commit 'plan: kit (v3.1)' and push. Reply: VERDICT: kit applied <sha>.\"", True),
     ("hands send --role aux --context clear 'Review commits since abc123; report blockers=0 or blockers>0 (count them)'", True),

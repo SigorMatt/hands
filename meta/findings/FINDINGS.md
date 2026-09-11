@@ -379,4 +379,7 @@ together). For the architect: strike `MultiEdit` from §12's deny list in the
 next design revision, or say there that the list is by capability and the kit
 carries whatever tool names the installed Claude Code actually has.
 
-Status: open
+Status: open — U6 dropped `"MultiEdit"` from `driver/settings.json`
+and `tests/test_docs.py` (which now asserts it is absent, citing this memo).
+The kit denies Edit, Write, NotebookEdit; DESIGN §12 line 503 still lists
+MultiEdit, so design and kit disagree until the architect resolves it.
