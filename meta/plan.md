@@ -13,7 +13,7 @@ commit and a push. `[x]` = done and pushed, `[b]` = blocked (two failures),
 - [x] U6 Monitor bridge — ops monitor_cmd bridge + built-in stall monitor (§5)
 - [x] U7 Playbook engine — playbook.py, pause/resume, pipeline (§10)
 - [x] U8 Wake path and notifications — wait --for, notify.py ntfy, quiet hours (§11)
-- [ ] U9 Job library — jobs/show/open/log (§7)
+- [x] U9 Job library — jobs/show/open/log (§7)
 - [ ] U10 Install surface — systemd unit, doctor, docs, driver/ check (§12, §14)
 - [ ] U11 Final report — meta/FINAL-REPORT-1.md
 
