@@ -358,8 +358,15 @@ def test_status_says_queue_depth_is_capacity_and_what_the_monitor_sees(project: 
         status = await ok("status")
         builder = status["roles"]["builder"]
         assert builder["queue_depth"] == 1
-        assert builder["queue_capacity"] == builder["queue_depth"]  # alias, §4
         assert builder["queued"] == []
+        # U2 (review should-fix 8): the alias is asserted on aux, whose depth is 4
+        # (§6/§13), not on builder, where depth 1 makes a hardcoded literal pass.
+        aux = status["roles"]["aux"]
+        assert aux["queue_depth"] == 4
+        assert aux["queue_capacity"] == 4  # alias, §4 — the role's capacity, not a constant
+        assert aux["queue_capacity"] == aux["queue_depth"]
+        assert aux["queue_capacity"] != builder["queue_capacity"]
+        assert aux["queued"] == []
 
         code, out, _ = await cli("status")
         assert code == 0

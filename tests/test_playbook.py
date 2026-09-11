@@ -231,6 +231,16 @@ def test_a_missing_playbook_is_no_engine_and_not_an_error(tmp_home: Path, workdi
     assert engine.spool.events() == []
 
 
+# The refusal messages the `run` cases pin, verbatim from src/hands/playbook.py (§10,
+# H-006). The bare substring "run" cannot fail here: `only_if_run_in` contains it, and
+# so does the generic "unknown key(s) in rule 1: run" the pre-H-006 loader raised for a
+# `run` key it did not know. These pin the sentence, or `run = "{n+1}"` itself.
+NOT_A_RUN_EXPRESSION = (
+    "run takes one named group of the rule's verdict regex, {name} or {name+k} (§10), got "
+)
+ONLY_IF_RUN_IN_IS_GONE = 'only_if_run_in is gone; §10 spells the check as run = "{n+1}"'
+
+
 BAD_PLAYBOOKS: list[tuple[str, str, str]] = [
     ("not toml", "version = = 1", "not valid TOML"),
     ("unknown top key", 'version = 1\nseries = "s"\nrules = []', "unknown key"),
@@ -269,15 +279,15 @@ BAD_PLAYBOOKS: list[tuple[str, str, str]] = [
      'run = "{n+1}"', "verdict"),
     ("run that is not an expression", 'version = 1\n[limits]\nauto_runs = [2]\n[[rule]]\n'
      'on = "aux.done"\nverdict = "run (?P<n>\\\\d+)"\nthen = "send"\nrole = "builder"\n'
-     'prompt = "run {n+1}"\nrun = "3"', "run"),
+     'prompt = "run {n+1}"\nrun = "3"', NOT_A_RUN_EXPRESSION + "'3'"),
     ("run naming a job field", 'version = 1\n[limits]\nauto_runs = [2]\n[[rule]]\n'
      'on = "aux.done"\nverdict = "run (?P<n>\\\\d+)"\nthen = "send"\nrole = "builder"\n'
-     'prompt = "run {n+1}"\nrun = "{job.id}"', "run"),
+     'prompt = "run {n+1}"\nrun = "{job.id}"', NOT_A_RUN_EXPRESSION + "'{job.id}'"),
     ("only_if_run_in at all", 'version = 1\n[limits]\nauto_runs = [2]\n[[rule]]\n'
      'on = "aux.done"\nverdict = "run (?P<n>\\\\d+)"\nthen = "send"\nrole = "builder"\n'
-     'prompt = "run {n+1}"\nonly_if_run_in = "auto_runs"', "run"),
+     'prompt = "run {n+1}"\nonly_if_run_in = "auto_runs"', ONLY_IF_RUN_IN_IS_GONE),
     ("only_if_run_in on its own", 'version = 1\n[[rule]]\non = "builder.done"\n'
-     'then = "stop"\nonly_if_run_in = "auto_runs"', "run"),
+     'then = "stop"\nonly_if_run_in = "auto_runs"', ONLY_IF_RUN_IN_IS_GONE),
     ("auto_runs is not integers", 'version = 1\n[limits]\nauto_runs = ["two"]', "auto_runs"),
 ]
 
