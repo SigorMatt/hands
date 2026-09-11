@@ -7,7 +7,7 @@ commit and a push. `[x]` = done and pushed, `[b]` = blocked (two failures),
 Base of the mission: 59e7ac7 (`plan: mission 2 kit`).
 
 - [x] U0 Plan — this file, meta/CHECKPOINT.md reset, H-008 entered in the ledger
-- [ ] U1 Origin `limit` — ORIGINS + `jobs --origin` + resume event (H-004, §6, §4)
+- [x] U1 Origin `limit` — ORIGINS + `jobs --origin` + resume event (H-004, §6, §4)
 - [ ] U2 Resume line optional — `role.resume_line` has no default (H-008, §6)
 - [x] U3 Explicit `run` key — load-time check, `only_if_run_in` refused (H-006, §10)
 - [ ] U4 Pause files an event — `stop`/`pipeline.resumed`, doctor wake procedure (H-007, §11)
