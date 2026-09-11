@@ -306,10 +306,10 @@ def test_help_lists_every_command_of_section_4(capsys: pytest.CaptureFixture[str
 
 def test_commands_of_later_units_name_their_unit(project: str) -> None:
     async def body(daemon: Daemon) -> None:
+        # `wait --for` is no longer here: U8 landed it (§11, tests/test_wake.py).
         for argv, unit in [
             (["doctor"], "U10"),
             (["log", "somejob"], "U9"),
-            (["wait", "--for", "stop,held"], "U8"),
         ]:
             err = await fails(*argv)
             assert "not implemented" in err.lower(), err

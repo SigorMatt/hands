@@ -385,6 +385,48 @@ class LimitManager:
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
 
+    def pending_resumes(self) -> list[Job]:
+        """`limited` jobs whose resume never happened (§6, and the daemon of §3).
+
+        A resume is a task in the daemon's process: if the daemon dies between the
+        limit and the reset, the resume dies with it and the role is stuck. The
+        spool still holds the evidence — a `limited` job that is the *newest* job
+        of its role. Anything newer (the resume itself, or work a human sent in
+        the meantime) means nothing is owed.
+        """
+        newest: dict[str, Job] = {}
+        limited: dict[str, Job] = {}
+        for job in self.spool.list_jobs():  # oldest id first
+            newest[job.role] = job
+            if job.state == "limited":
+                limited[job.role] = job
+        return [job for role, job in limited.items() if newest[role].id == job.id]
+
+    async def reschedule_pending(self) -> list[Job]:
+        """Re-arm the resumes a dead daemon owed. Called once, at startup (§3, §6).
+
+        No second `limit` event is written: the limit was recorded when it
+        happened and this is the same resume, late. A reset that passed while the
+        daemon was down is due now — `resume_delay_s` floors at the grace.
+        """
+        owed: list[Job] = []
+        for job in self.pending_resumes():
+            resumes = self.spool.read_role(job.role).consecutive_resumes
+            if resumes >= self.max_resumes:
+                log.info("job %s: not rescheduling; %s is at max_resumes", job.id, job.role)
+                continue
+            delay = resume_delay_s(
+                job, now=self.clock(), backoff_minutes=self.config.limits.backoff_minutes
+            )
+            log.info("job %s: re-scheduling the resume this daemon owes in %.0fs", job.id, delay)
+            task = asyncio.create_task(
+                self._resume_after(job, delay), name=f"hands-resume-{job.role}"
+            )
+            self._tasks.add(task)
+            task.add_done_callback(self._tasks.discard)
+            owed.append(job)
+        return owed
+
     async def stop(self, reason: str, payload: dict[str, Any]) -> None:
         """Give up on a role: a `stop` event (§11) and the U7 seam, nothing else."""
         self.spool.append_event("stop", {**payload, "reason": reason})

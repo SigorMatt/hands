@@ -18,13 +18,24 @@ from pathlib import Path
 from typing import Any, TextIO
 
 from hands import __version__
+from hands.api import TIMEOUT as TIMEOUT_CODE
 from hands.config import ConfigError, load_config, resolve_project
 
-__all__ = ["ClientError", "build_parser", "call", "main"]
+__all__ = ["EXIT_TIMEOUT", "ClientError", "build_parser", "call", "main"]
+
+#: `hands wait` that timed out, told apart from every other failure (which is 1).
+#: The driver runs `hands wait --for stop,held` in the background (§11) and has
+#: to know whether it was woken or simply gave up waiting.
+EXIT_TIMEOUT = 2
 
 
 class ClientError(Exception):
     """The daemon could not be reached, or answered with an error."""
+
+    def __init__(self, message: str, *, code: int | None = None) -> None:
+        super().__init__(message)
+        #: The JSON-RPC error code the daemon answered with, when it answered.
+        self.code = code
 
 
 # --------------------------------------------------------------- the client
@@ -58,7 +69,7 @@ def call(
         raise ClientError(f"the daemon answered with something that is not JSON: {exc}") from exc
     if isinstance(response, dict) and "error" in response:
         error = response["error"]
-        raise ClientError(str(error.get("message", error)))
+        raise ClientError(str(error.get("message", error)), code=error.get("code"))
     if not isinstance(response, dict) or "result" not in response:
         raise ClientError(f"the daemon answered without a result: {line.strip()}")
     return response["result"]
@@ -122,7 +133,13 @@ def build_parser() -> argparse.ArgumentParser:
 
     wait = command("wait", "block until a job is terminal, or an event arrives")
     wait.add_argument("job", nargs="?")
-    wait.add_argument("--for", dest="for_", metavar="KINDS", help="event kinds (unit U8)")
+    wait.add_argument(
+        "--for",
+        dest="for_",
+        metavar="KINDS",
+        help="inbox event kinds, comma-separated (e.g. stop,held); returns the "
+        f"event unacked, and exits {EXIT_TIMEOUT} if --timeout expires",
+    )
     wait.add_argument("--timeout", type=float, metavar="S")
 
     command("result", "the job record").add_argument("job")
@@ -265,6 +282,14 @@ def _job_block(record: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def _event_line(event: dict[str, Any]) -> str:
+    """One inbox event, spelled as `hands inbox` spells it (§11)."""
+    return (
+        f"{event['id']}  {event['created']}  {event['kind']}  "
+        f"{json.dumps(event['payload'], sort_keys=True)}"
+    )
+
+
 def _status_block(result: dict[str, Any]) -> str:
     daemon = result.get("daemon", {})
     lines = [
@@ -334,6 +359,8 @@ def _numbers(values: list[Any]) -> str:
 
 
 def _render(command: str, result: Any) -> str:
+    if command == "wait" and isinstance(result, dict) and "kind" in result:
+        return _event_line(result)  # `wait --for` answers with an event, not a job
     if command in (
         "result", "show", "wait", "send", "cancel", "approve", "deny"
     ) and isinstance(result, dict):
@@ -367,11 +394,7 @@ def _render(command: str, result: Any) -> str:
         events = result.get("events", [])
         if not events:
             return "inbox empty"
-        return "\n".join(
-            f"{event['id']}  {event['created']}  {event['kind']}  "
-            f"{json.dumps(event['payload'], sort_keys=True)}"
-            for event in events
-        )
+        return "\n".join(_event_line(event) for event in events)
     return json.dumps(result, indent=2, sort_keys=True)
 
 
@@ -406,7 +429,12 @@ def main(
             key: value for key, value in _PARAMS[command](args).items() if value is not None
         }
         result = call(socket_path, command, params, project=project)
-    except (ClientError, ConfigError, ValueError) as exc:
+    except ClientError as exc:
+        print(f"hands: {exc}", file=err)
+        # §11: a background `wait --for` that timed out is not a failure of hands,
+        # and the driver re-arms rather than reporting it.
+        return EXIT_TIMEOUT if exc.code == TIMEOUT_CODE else 1
+    except (ConfigError, ValueError) as exc:
         print(f"hands: {exc}", file=err)
         return 1
     print(json.dumps(result, sort_keys=True) if as_json else _render(command, result), file=out)

@@ -14,13 +14,16 @@ synchronous IO with `os.replace` is enough; no locking is needed.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import time
-from collections.abc import Iterable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import MISSING, dataclass, field, fields
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+
+log = logging.getLogger("hands.spool")
 
 __all__ = [
     "EVENT_KINDS",
@@ -37,6 +40,7 @@ __all__ = [
     "Spool",
     "SpoolError",
     "new_job_id",
+    "resolve_kinds",
     "resolve_under_roots",
 ]
 
@@ -107,8 +111,39 @@ EVENT_KINDS = frozenset(
         "limit",
         "resume",
         "heartbeat",
+        "notify",  # a notification hands could not deliver (§11, U8)
     }
 )
+
+
+def resolve_kinds(spec: str) -> frozenset[str]:
+    """The kinds `hands wait --for <spec>` waits for (§11).
+
+    The driver kit types `hands wait --for stop,held` (§11, §12) and the kind it
+    means is `job.held`, so a name is matched three ways, in this order: the kind
+    itself (`job.held`), the part after the dot (`held`), and a namespace
+    (`job` → every `job.*`). A name that no kind can have is refused here rather
+    than blocking forever on an event that cannot arrive.
+    """
+    wanted: set[str] = set()
+    for raw in spec.split(","):
+        name = raw.strip()
+        if not name:
+            continue
+        matched = {
+            kind
+            for kind in EVENT_KINDS
+            if kind == name or kind.endswith(f".{name}") or kind.startswith(f"{name}.")
+        }
+        if not matched:
+            raise SpoolError(
+                f"no inbox event kind is called {name!r}; the kinds are: "
+                f"{', '.join(sorted(EVENT_KINDS))}"
+            )
+        wanted |= matched
+    if not wanted:
+        raise SpoolError("--for needs at least one event kind, e.g. `--for stop,held`")
+    return frozenset(wanted)
 
 
 # ------------------------------------------------------------- job record §6
@@ -343,6 +378,11 @@ class Spool:
     """Reader/writer for `~/.hands/`."""
 
     def __init__(self, root: str | Path | None = None) -> None:
+        #: Called with every event this spool appends, in the appending call's own
+        #: stack. The daemon puts one here so `hands wait --for` is a subscription
+        #: and not a poll (§11); a listener that raises is logged and ignored,
+        #: because writing the event is the part that must not fail.
+        self.listeners: list[Callable[[Event], None]] = []
         self.root = Path(root).expanduser() if root is not None else Path("~/.hands").expanduser()
         self.jobs_dir = self.root / "jobs"
         self.roles_dir = self.root / "roles"
@@ -517,6 +557,11 @@ class Spool:
             id=self._next_event_id(), kind=kind, created=now_iso(), payload=dict(payload or {})
         )
         _append_line(self.inbox_path, json.dumps(event.to_dict(), sort_keys=True))
+        for listener in list(self.listeners):
+            try:
+                listener(event)
+            except Exception:  # pragma: no cover - a listener bug must not lose the event
+                log.exception("inbox listener failed on event %s (%s)", event.id, event.kind)
         return event
 
     def events(self, *, since: str | None = None, unacked_only: bool = False) -> list[Event]:

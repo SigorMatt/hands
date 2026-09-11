@@ -42,9 +42,10 @@ from hands.api import Api, ApiError, job_summary
 from hands.config import Config, ConfigError, load_config, resolve_project
 from hands.limits import LimitManager
 from hands.monitor import MonitorSupervisor
+from hands.notify import Notifier
 from hands.playbook import PlaybookEngine
 from hands.runner import MAX_PROMPT_BYTES, Runner, RunnerError, reconcile_orphans
-from hands.spool import TERMINAL_STATES, Job, Spool, now_iso
+from hands.spool import TERMINAL_STATES, Event, Job, Spool, now_iso
 
 __all__ = ["Daemon", "DaemonError", "main"]
 
@@ -63,6 +64,16 @@ _LINE_LIMIT = MAX_PROMPT_BYTES + 1024 * 1024
 
 _SHUTDOWN_GRACE_S = 30.0  # ceiling on waiting for cancelled jobs to write their record
 
+#: §11: "heartbeat (hourly while any job runs, so silence is distinguishable
+#: from death)". A parameter, so a test does not wait an hour for one.
+HEARTBEAT_S = 3600.0
+
+#: §11's notifications, as the inbox kinds that carry them. `stop` is not here:
+#: every `stop` event goes through `PlaybookEngine.stop`, which notifies once
+#: through the same publisher (and `max_resumes` exhausted is such a stop, §6).
+NOTIFY_KINDS: dict[str, str] = {"job.held": "hands: a job is held for a human"}
+
+
 class DaemonError(Exception):
     """The daemon cannot start, or cannot do what it was asked."""
 
@@ -74,7 +85,13 @@ class Daemon:
     `handsd`, so a test drives the same code path a terminal does.
     """
 
-    def __init__(self, config: Config, *, socket_path: Path | None = None) -> None:
+    def __init__(
+        self,
+        config: Config,
+        *,
+        socket_path: Path | None = None,
+        heartbeat_s: float = HEARTBEAT_S,
+    ) -> None:
         self.config = config
         # The spool lives beside the config: `~/.hands/<project>.toml` → `~/.hands`.
         self.spool = Spool(config.path.parent)
@@ -89,6 +106,9 @@ class Daemon:
         self.monitors = MonitorSupervisor(
             config, self.spool, ready=self.runner.wait_for_session, on_event=self._monitor_event
         )
+        #: §11's ntfy publisher. It is handed the playbook's `[limits] quiet_hours`
+        #: as a callable, because the playbook is re-read while the daemon runs.
+        self.notifier = Notifier(config, self.spool, quiet_hours=self._quiet_hours)
         self.api = Api(self)
         #: §10's automaton. It fires through the API's own `send`, so a job hands
         #: starts on its own is gated by §8's patterns exactly as a human's is.
@@ -98,6 +118,7 @@ class Daemon:
             send=self.api.send,
             enqueue=self._enqueue_resume,
             limits=self.limits,
+            notify=self.notifier.notify,
         )
         self.socket_path = Path(socket_path) if socket_path else config.server.socket
         self.started: str | None = None
@@ -124,6 +145,13 @@ class Daemon:
         self._changed = asyncio.Condition()
         self._server: asyncio.Server | None = None
         self._stopping = False
+        self.heartbeat_s = float(heartbeat_s)
+        self._beat: asyncio.Task[None] | None = None
+        #: One queue per armed `hands wait --for` (§11). The spool tells the
+        #: daemon about every event it appends, so a wait is a subscription and
+        #: never a poll of the inbox file.
+        self._subscribers: set[asyncio.Queue[Event]] = set()
+        self.spool.listeners.append(self._on_event)
 
     # ------------------------------------------------------------- lifecycle
 
@@ -147,6 +175,13 @@ class Daemon:
         ]
         self.started = now_iso()
         self._readmit_queued()
+        self._beat = asyncio.create_task(self._heartbeat(), name="hands-heartbeat")
+        # §6: a resume scheduled by a daemon that then died is owed by this one.
+        await self.limits.reschedule_pending()
+        self.notifier.notify(  # §11: daemon start is one of the four notifications
+            "hands: handsd started",
+            {"message": f"{self.config.project} on {self.socket_path}", "pid": os.getpid()},
+        )
         log.info(
             "handsd %s listening on %s (project %s)",
             __version__, self.socket_path, self.config.project,
@@ -162,14 +197,28 @@ class Daemon:
         if self._stopping:
             return
         self._stopping = True
+        # One turn of the loop first: a connection the loop has accepted but whose
+        # handler has not started yet would otherwise be left with a transport
+        # attached to a server that is already closed.
+        await asyncio.sleep(0)
         # Before anything else: a resume scheduled for hours from now must not
         # fire into a daemon that is going down (§6), and neither must a rule
         # still being decided (§10).
         self.limits.cancel_all()
         self.playbook.cancel_all()
+        if self._beat is not None:
+            self._beat.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._beat
+            self._beat = None
 
         if self._server is not None:
             self._server.close()
+        # The clients go before the server is awaited: `Server.wait_closed()`
+        # waits for every handler, and an armed `wait --for` (§11) is a handler
+        # that never returns on its own — waiting for it would hang the shutdown.
+        await self._close_conns()
+        if self._server is not None:
             with contextlib.suppress(Exception):
                 await self._server.wait_closed()
 
@@ -194,20 +243,34 @@ class Daemon:
         # Whatever the workers did not get to: no monitor outlives the daemon.
         await self.monitors.stop_all()
 
-        for task in list(self._conns):
-            task.cancel()
-        if self._conns:
-            await asyncio.gather(*self._conns, return_exceptions=True)
-        self._conns.clear()
+        await self._close_conns()
 
         for stream in self._streams.values():
             with contextlib.suppress(Exception):
                 stream.close()
         self._streams.clear()
 
+        # Anything ntfy has not taken by now goes down with the daemon (§11): a
+        # notification is a message to a human, not a durable queue.
+        self.notifier.cancel_all()
+        # A stopped daemon hears no more events, and the spool stops holding it
+        # alive: the listener is a bound method, so leaving it there would keep
+        # this daemon (and its socket) reachable for as long as the spool is.
+        with contextlib.suppress(ValueError):
+            self.spool.listeners.remove(self._on_event)
+        self._subscribers.clear()
+
         with contextlib.suppress(OSError):
             self.socket_path.unlink()
         log.info("handsd stopped")
+
+    async def _close_conns(self) -> None:
+        """Cancel every client connection and let each close its writer."""
+        for task in list(self._conns):
+            task.cancel()
+        if self._conns:
+            await asyncio.gather(*self._conns, return_exceptions=True)
+        self._conns.clear()
 
     def _bind_guard(self) -> None:
         self.socket_path.parent.mkdir(parents=True, exist_ok=True)
@@ -425,6 +488,81 @@ class Daemon:
                     await asyncio.wait_for(self._changed.wait(), remaining)
                 except TimeoutError:
                     return None
+
+    # ------------------------------------------------- the wake path (§11)
+
+    def _on_event(self, event: Event) -> None:
+        """Every inbox event, as the spool appends it (§11).
+
+        Two jobs, both of which must be cheap: wake every armed `wait --for`,
+        and raise the notification if this is one of §11's four.
+        """
+        for queue in list(self._subscribers):
+            queue.put_nowait(event)
+        title = NOTIFY_KINDS.get(event.kind)
+        if title is not None:
+            self.notifier.notify(title, event.payload)
+
+    async def wait_for_event(
+        self, kinds: frozenset[str], *, timeout: float | None = None
+    ) -> Event | None:
+        """The first inbox event of one of `kinds`, or None if `timeout` expired (§11).
+
+        A subscription, not a poll: the queue is registered *before* the inbox is
+        read, so an event that arrives in between is delivered and not lost.
+
+        An *unacked* event that is already in the inbox counts as a match and is
+        returned at once. §11 acks per event and the driver acks what it has
+        acted on, so "unacked" is exactly "the driver has not handled this yet" —
+        and the driver re-arms the wait after acting, which is the moment an
+        event raised while it was reporting would otherwise be lost forever.
+        """
+        loop = asyncio.get_running_loop()
+        deadline = None if timeout is None else loop.time() + float(timeout)
+        queue: asyncio.Queue[Event] = asyncio.Queue()
+        self._subscribers.add(queue)
+        try:
+            for event in self.spool.unacked():
+                if event.kind in kinds:
+                    return event
+            while True:
+                if deadline is None:
+                    event = await queue.get()
+                else:
+                    remaining = deadline - loop.time()
+                    if remaining <= 0:
+                        return None
+                    try:
+                        event = await asyncio.wait_for(queue.get(), remaining)
+                    except TimeoutError:
+                        return None
+                if event.kind in kinds:
+                    return event
+        finally:
+            self._subscribers.discard(queue)
+
+    def _quiet_hours(self) -> str | None:
+        """§10's `[limits] quiet_hours`, read afresh: the playbook is re-read per job."""
+        book = self.playbook.playbook
+        return book.quiet_hours if book is not None else None
+
+    async def _heartbeat(self) -> None:
+        """§11: an hourly inbox event while any job runs, so silence is not death.
+
+        Not an ntfy notification — §11 keeps the phone for the four things that
+        need a human. Nothing is written when nothing runs: an idle daemon is
+        silent by design, and `hands status` is what asks whether it is alive.
+        """
+        while not self._stopping:
+            await asyncio.sleep(self.heartbeat_s)
+            running = {
+                role: job_id for role, job_id in self._running.items() if job_id is not None
+            }
+            if not running or self._stopping:
+                continue
+            self.spool.append_event(
+                "heartbeat", {"running": sorted(running.values()), "roles": running}
+            )
 
     async def cancel(self, job: Job, *, reason: str | None = None) -> Job:
         """Stop a job wherever it is: in the queue, or in flight (§2, §4)."""
@@ -674,6 +812,29 @@ def main(argv: Sequence[str] | None = None) -> int:
     except DaemonError as exc:
         print(f"handsd: {exc}", file=sys.stderr)
         return 1
+    except Exception as exc:
+        _notify_crash(config, exc)
+        raise
+
+
+def _notify_crash(config: Config, exc: BaseException) -> None:
+    """§11: "daemon start/crash" — best effort, in a loop of its own.
+
+    Quiet hours are not consulted here, and that is the point: the queue lives in
+    the process, so a crash notification held until 07:00 would die with the
+    process that held it. A crash is the one message that is worthless late.
+    """
+
+    async def publish() -> None:
+        notifier = Notifier(config, Spool(config.path.parent))
+        await notifier.deliver(
+            "hands: handsd crashed",
+            f"{type(exc).__name__}: {exc}",
+            {"project": config.project},
+        )
+
+    with contextlib.suppress(Exception):  # a crash notification cannot itself fail
+        asyncio.run(publish())
 
 
 if __name__ == "__main__":  # pragma: no cover

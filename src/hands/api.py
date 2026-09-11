@@ -22,7 +22,7 @@ from typing import TYPE_CHECKING, Any
 
 from hands import files, gates
 from hands.runner import KeepRefused
-from hands.spool import TERMINAL_STATES, Event, Job, SpoolError
+from hands.spool import TERMINAL_STATES, Event, Job, SpoolError, resolve_kinds
 
 if TYPE_CHECKING:  # pragma: no cover - import cycle only matters to type checkers
     from hands.daemon import Daemon
@@ -169,11 +169,29 @@ class Api:
         for_: str | None = None,
         timeout: float | None = None,
     ) -> dict[str, Any]:
-        """A job's record once it is terminal (§4). `--for <kinds>` is U8."""
+        """A job's record once it is terminal, or the first event of `--for` (§4, §11).
+
+        `--for` is the driver's wake path: it blocks on a subscription, returns
+        the event *unacked* (the driver acks it with `hands inbox --ack` once it
+        has acted), and answers a timeout with a `Timeout` error, which the CLI
+        turns into its own exit code so a background wait can be told apart from
+        a failure.
+        """
         if for_:
-            raise _later("wait", "U8", "--for <event kinds> is the driver's wake path (§11)")
+            if job:
+                raise ApiError(
+                    f"hands wait takes a job id or --for <kinds>, not both (got {job!r})"
+                )
+            try:
+                kinds = resolve_kinds(for_)
+            except SpoolError as exc:
+                raise ApiError(str(exc)) from exc
+            event = await self.daemon.wait_for_event(kinds, timeout=timeout)
+            if event is None:
+                raise Timeout(f"timeout after {timeout}s waiting for an event of {for_}")
+            return event.to_dict()
         if not job:
-            raise ApiError("hands wait needs a job id (or --for <kinds>, which is U8)")
+            raise ApiError("hands wait needs a job id, or --for <kinds> (§11)")
         record = self._job(job)
         if record.state in TERMINAL_STATES:
             return record.to_dict()
