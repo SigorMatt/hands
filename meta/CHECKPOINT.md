@@ -1,23 +1,23 @@
 # CHECKPOINT
 
-Mission: 2 (meta/BUILDER-2-PROMPT.md) — FINISHED 2026-09-11
-Unit in progress: none
-Intent: -
-Done means: -
-Tip: all of U0..U8 committed and pushed on `main`; `./scripts/check` green
-(ruff + 521 tests + CLI smoke). `meta/FINAL-REPORT-2.md` holds the account.
-Order deviation on the record: U3 ran first, because the mission base was
-red until it landed (meta/plan.md says why).
-Findings: H-001 open (needs a capture from a dotted cwd — an observation,
-not a change); H-002, H-003 fixed with no code change; H-004 a67c4b0,
-H-005/H-006 34b4ede, H-007 267ee01, H-008 8448b6f.
-Not proven, the two that matter most for the next mission:
-  1. None of U1..U7's code has ever run outside the test suite — the
-     installed daemon serving this session is the mission-1 build. A
-     reinstall (`uv tool install --force ~/git/hands`) is what would put
-     this mission's code under a real run.
-  2. `hands notify --test` exists but has never been run against a live
-     ntfy topic; that is the one command that would prove delivery.
-Standing constraints: unchanged for the next mission — one sub-agent per
-unit, commit and push every unit, ./scripts/check green, DESIGN.md is not
-edited by builders.
+Mission: 3 (meta/BUILDER-3-PROMPT.md) — IN PROGRESS
+Unit in progress: U1 Status describes the deciding monitor
+Intent: `hands status` must describe whichever monitor is actually deciding
+(review should-fix 2, DESIGN §4 status row, §5).
+Done means: for `monitor.source == builtin` status prints the built-in stall
+rule; for `ops` it prints the script path and the three flags it is given
+(`--pids/--transcript/--base`); for `stall_minutes = 0` it says detection is
+off. Tests for all three; gate green; committed and pushed.
+Tip: U0 pushed (meta only, gate green).
+Findings: H-001 open (needs a capture from a dotted cwd). H-002, H-003,
+H-005 fixed with no code change; H-004 a67c4b0, H-006 34b4ede, H-007
+267ee01, H-008 8448b6f. H-009, H-010 filed by this unit, both open and
+both for the architect.
+Not proven, carried forward from mission 2 and still true at the base:
+  1. None of mission 2's code has ever run outside the test suite — the
+     installed daemon is the mission-1 build. `uv tool install --force
+     ~/git/hands` is what would put it under a real run.
+  2. `hands notify --test` has never been run against a live ntfy topic.
+Standing constraints: one sub-agent per unit, commit and push every unit,
+./scripts/check green before each commit, DESIGN.md is not edited by
+builders (file a finding), sub-agents do not edit meta/plan.md or this file.

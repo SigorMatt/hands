@@ -313,3 +313,70 @@ the resume line when the config sets one, otherwise the resumed job's own
 prompt; aux is unchanged. `hands doctor`'s role check prints the behaviour it
 has (`RoleConfig.resume_behaviour`), since a limit is otherwise the first time
 the difference shows.
+
+---
+
+## H-009 — §4's prose example for `hands jobs` omits `--origin`
+
+Severity: low · Component: DESIGN §7 prose (DESIGN.md:258), against §4's
+command table (DESIGN.md:159)
+Filed by: mission 3 U0, carrying over `meta/reviews/REVIEW-2.md` Notes
+("Design-side staleness, for a finding, not for a builder").
+
+Symptom. Mission 2 U1 (a67c4b0) added `--origin` to `hands jobs` because §4's
+table asks for it:
+
+    $ sed -n 159p DESIGN.md
+    | `jobs` | `[--role r] [--origin o] [--grep pat] [--since d] [-n]` | recent job summaries |
+
+The §7 prose example one section later was not updated with it:
+
+    $ sed -n 258p DESIGN.md
+        hands jobs [--role builder] [--grep "run 3"] [--since 2d]
+
+The code is right (`hands jobs --help` lists `--origin`, and
+`tests/test_library.py::test_jobs_filters_by_origin` covers it); only the
+design's own illustration is behind. Nothing is broken by it — but §7 is the
+section a reader goes to for the job library, so the omission reads as "the
+filter does not exist".
+
+Direction. For the architect: add `[--origin limit]` (or similar) to the
+DESIGN.md:258 example, or say in §7 that the table in §4 is the full arg
+list and the examples are illustrative. Builders do not edit `DESIGN.md`, so
+no mission unit can close this.
+
+Status: open
+
+---
+
+## H-010 — §12 requires `MultiEdit` in the driver deny list; no such tool exists in Claude Code 2.1.x
+
+Severity: low · Component: driver kit (DESIGN §12, `driver/settings.json`)
+Filed by: mission 3 U0, ahead of U6, so that unit does not have to stop on a
+design conflict it is not allowed to resolve.
+
+Symptom. §12 enumerates the driver's enforcement:
+
+    $ sed -n 502,503p DESIGN.md
+    - `driver/settings.json` — enforcement: `permissions.deny` for Edit, Write,
+      MultiEdit, NotebookEdit; `permissions.allow` for `Bash(hands *)`,
+
+and the kit and its test both follow it:
+
+    $ grep -n 'MultiEdit' driver/settings.json tests/test_docs.py
+    driver/settings.json:6:      "MultiEdit",
+    tests/test_docs.py:117:    for tool in ("Edit", "Write", "MultiEdit", "NotebookEdit"):
+
+Claude Code 2.1.x has no `MultiEdit` tool (Edit takes the multi-edit case),
+so the rule denies a name nothing can call and the CLI warns about an unknown
+tool in `permissions.deny` when the driver session starts. The rule is inert,
+and the warning is the only thing it produces.
+
+Direction. `meta/BUILDER-3-PROMPT.md` U6 directs the kit to drop the rule,
+which contradicts §12's list as written; the brief is taken as the
+architect's instruction and U6 implements it (kit, test, and this memo
+together). For the architect: strike `MultiEdit` from §12's deny list in the
+next design revision, or say there that the list is by capability and the kit
+carries whatever tool names the installed Claude Code actually has.
+
+Status: open

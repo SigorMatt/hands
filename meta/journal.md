@@ -14,7 +14,9 @@ One line per unit, appended by the builder: date, unit, sha, verdict.
 2026-09-11  U9 Job library  8cc2356  green (465 tests); tail implemented too
 2026-09-11  U10 Install surface  9096b50  green (488 tests); finding H-007 (pause writes no event)
 2026-09-11  U11 Final report  530de9d  green (488 tests); mission 1 finished
-2026-09-11  U0 Plan  857f6f2  meta only; base gate RED until U3 (§10 example fixture)
+2026-09-11  U0 Plan  3c5d880  meta only; base gate RED until U3 (§10 example fixture)
+            (this entry named its own sha, so the commit was amended; the original
+             857f6f2 is unreachable from main. Corrected by mission 3 U0.)
 2026-09-11  U3 Explicit run key  34b4ede  green (494 tests); H-006 fixed; base gate green again
 2026-09-11  U1 Origin limit  a67c4b0  green (496 tests); H-004 fixed; --origin did not exist, added
 2026-09-11  U2 Resume line optional  8448b6f  green (501 tests); H-008 fixed; one rule in RoleConfig.resume_prompt
