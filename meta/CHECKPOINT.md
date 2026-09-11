@@ -1,27 +1,27 @@
 # CHECKPOINT
 
-Mission: 3 (meta/BUILDER-3-PROMPT.md) — IN PROGRESS
-Unit in progress: U7 `hands send --prompt-file PATH`
-Intent: add `hands send --prompt-file PATH` (DESIGN §4, §12, §19) so prompts
-never travel on a command line.
-Done means: the CLI reads the prompt from the file (UTF-8, any readable path
-— the CLI is a client, not the daemon, so no root confinement) and sends it
-byte for byte; mutually exclusive with `--stdin` and the positional prompt;
-driver/CLAUDE.md rule 6 becomes "prompts and long content travel as files"
-(`--prompt-file`, `hands put`); docs/INTEGRATION.md and the driver command
-list updated; bash_guard SELFTEST gains a `--prompt-file` case. Tests include
-a prompt containing `>`, `(`, quotes and a newline arriving verbatim in the
-job record. Gate green; pushed.
-Tip: ecdb0f3 (U6) — gate green, 603 passed; guard selftest 62/62.
+Mission: 3 (meta/BUILDER-3-PROMPT.md) — FINISHED 2026-09-12
+Unit in progress: none
+Intent: -
+Done means: -
+Tip: all of U0..U8 committed and pushed on `main`; `./scripts/check` green
+(ruff + 618 tests + CLI smoke) and `bash_guard.py --selftest` 65/65.
+`meta/FINAL-REPORT-3.md` holds the account. No order deviation, no unit
+yielded, no unit blocked. Review should-fix 2-8 are closed by U0-U5 (item 1
+by the brief's amended wording); U6 and U7 are DESIGN §19 work.
 Findings: H-001 open (needs a capture from a dotted cwd). H-002, H-003,
 H-005 fixed with no code change; H-004 a67c4b0, H-006 34b4ede, H-007
-267ee01, H-008 8448b6f. H-009, H-010 filed by this unit, both open and
-both for the architect.
-Not proven, carried forward from mission 2 and still true at the base:
-  1. None of mission 2's code has ever run outside the test suite — the
-     installed daemon is the mission-1 build. `uv tool install --force
-     ~/git/hands` is what would put it under a real run.
-  2. `hands notify --test` has never been run against a live ntfy topic.
+267ee01, H-008 8448b6f. H-009 and H-010 filed by mission 3 U0, both open
+and both for the architect; H-010 carries a Status line recording that the
+kit now diverges from DESIGN §12 by the mission brief's instruction.
+Not proven, the two that matter most for the next mission (unchanged, and
+now three missions old — see meta/FINAL-REPORT-3.md §3 for all twelve):
+  1. None of mission 2's or mission 3's code has ever run outside the test
+     suite — the installed daemon is still the mission-1 build. `uv tool
+     install --force ~/git/hands` is what would put it under a real run.
+  2. `hands notify --test` has never been run against a live ntfy topic; U5
+     proved the status plumbing against httpx MockTransport, which is
+     off-network by construction, so delivery is still unproven.
 Standing constraints: one sub-agent per unit, commit and push every unit,
 ./scripts/check green before each commit, DESIGN.md is not edited by
 builders (file a finding), sub-agents do not edit meta/plan.md or this file.

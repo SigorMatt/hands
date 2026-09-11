@@ -32,3 +32,5 @@ One line per unit, appended by the builder: date, unit, sha, verdict.
 2026-09-12  U4 Empty resume_line refused  9cd6108  green (530 tests); should-fix 5 closed; whitespace-only refused too
 2026-09-12  U5 notify status on failure  861097f  green (539 tests); should-fix 7 closed; real httpx MockTransport
 2026-09-12  U6 Guard fix and guard tests  ecdb0f3  green (603 tests); selftest 62/62 in pytest; MultiEdit rule dropped (H-010)
+2026-09-12  U7 send --prompt-file  45400e8  green (618 tests); DESIGN 19; prompt byte for byte over the socket
+2026-09-12  U8 Final report  (this commit)  green (618 tests); mission 3 finished

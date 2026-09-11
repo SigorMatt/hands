@@ -16,8 +16,8 @@ Every unit but U0 closes a named should-fix of `meta/reviews/REVIEW-2.md`.
 - [x] U4 Empty `resume_line` refused (should-fix 5, §6, §19)
 - [x] U5 notify status on failure (should-fix 7, §4, §19)
 - [x] U6 Guard fix and guard tests (§19)
-- [ ] U7 `hands send --prompt-file PATH` (§4, §12, §19)
-- [ ] U8 Final report — meta/FINAL-REPORT-3.md, then the verdict line
+- [x] U7 `hands send --prompt-file PATH` (§4, §12, §19)
+- [x] U8 Final report — meta/FINAL-REPORT-3.md, then the verdict line
 
 No order deviation is planned: the base is green, so every unit is gated
 normally and runs in the order above.
