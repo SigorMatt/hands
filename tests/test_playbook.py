@@ -231,52 +231,67 @@ def test_a_missing_playbook_is_no_engine_and_not_an_error(tmp_home: Path, workdi
     assert engine.spool.events() == []
 
 
-# The refusal messages the `run` cases pin, verbatim from src/hands/playbook.py (§10,
-# H-006). The bare substring "run" cannot fail here: `only_if_run_in` contains it, and
-# so does the generic "unknown key(s) in rule 1: run" the pre-H-006 loader raised for a
-# `run` key it did not know. These pin the sentence, or `run = "{n+1}"` itself.
+# The refusal messages the cases below pin, verbatim from src/hands/playbook.py (§10,
+# H-006). U2 (review blocker 2, should-fix 11): every one of these messages opens with
+# the playbook's path — a pytest tmpdir — and most of them print the list of keys,
+# events or actions the loader knows, so a bare word ("on", "role", "send", "auto_runs")
+# can be matched by the path or by another case's message. Each case pins the sentence
+# that only it makes; `test_every_bad_playbook_is_pinned_to_a_refusal_only_it_makes`
+# holds the table to that.
 NOT_A_RUN_EXPRESSION = (
     "run takes one named group of the rule's verdict regex, {name} or {name+k} (§10), got "
 )
 ONLY_IF_RUN_IN_IS_GONE = 'only_if_run_in is gone; §10 spells the check as run = "{n+1}"'
+#: One sentence, two inputs: no `[limits] auto_runs` at all and an empty one are the
+#: same refusal by design, so the two cases are told apart by their bodies, not by it.
+NEEDS_AUTO_RUNS = (
+    'run = "{n+1}" needs [limits] auto_runs to list the runs hands may start on its own'
+)
+NO_SUCH_GROUP = "names no group of this rule's verdict regex"
 
 
 BAD_PLAYBOOKS: list[tuple[str, str, str]] = [
-    ("not toml", "version = = 1", "not valid TOML"),
-    ("unknown top key", 'version = 1\nseries = "s"\nrules = []', "unknown key"),
-    ("wrong version", "version = 2", "version"),
+    ("not toml", "version = = 1", "is not valid TOML"),
+    ("unknown top key", 'version = 1\nseries = "s"\nrules = []',
+     "unknown key(s) in the playbook: rules"),
+    ("wrong version", "version = 2", "version must be 1 (§10), got 2"),
     ("unknown rule key", 'version = 1\n[[rule]]\non = "builder.done"\nthen = "stop"\nwhen = 1',
-     "unknown key"),
-    ("unknown event", 'version = 1\n[[rule]]\non = "builder.exploded"\nthen = "stop"', "on"),
-    ("unknown action", 'version = 1\n[[rule]]\non = "builder.done"\nthen = "shrug"', "then"),
+     "unknown key(s) in rule 0: when"),
+    ("unknown event", 'version = 1\n[[rule]]\non = "builder.exploded"\nthen = "stop"',
+     "on must be one of §10's events"),
+    ("unknown action", 'version = 1\n[[rule]]\non = "builder.done"\nthen = "shrug"',
+     "then must be one of §10's actions"),
     ("bad regex", 'version = 1\n[[rule]]\non = "builder.done"\nverdict = "(unclosed"\n'
-     'then = "stop"', "regex"),
+     'then = "stop"', "verdict is not a valid regex"),
     ("send with no prompt", 'version = 1\n[[rule]]\non = "builder.done"\nthen = "send"\n'
-     'role = "aux"', "prompt"),
+     'role = "aux"', "a send needs a prompt"),
     ("send with no role", 'version = 1\n[[rule]]\non = "builder.done"\nthen = "send"\n'
-     'prompt = "go"', "role"),
+     'prompt = "go"', "a send needs a role (builder or aux)"),
     ("send to an unknown role", 'version = 1\n[[rule]]\non = "builder.done"\nthen = "send"\n'
-     'role = "cook"\nprompt = "go"', "role"),
+     'role = "cook"\nprompt = "go"', "role must be builder or aux, got 'cook'"),
     ("notify with no message", 'version = 1\n[[rule]]\non = "builder.done"\nthen = "notify"',
-     "message"),
+     "a notify needs a message"),
     ("unknown placeholder", 'version = 1\n[[rule]]\non = "builder.done"\nthen = "send"\n'
-     'role = "aux"\nprompt = "run {n}"', "{n}"),
+     'role = "aux"\nprompt = "run {n}"', "prompt: {n} " + NO_SUCH_GROUP),
     ("unknown job field", 'version = 1\n[[rule]]\non = "builder.done"\nthen = "send"\n'
-     'role = "aux"\nprompt = "run {job.cost}"', "job.cost"),
+     'role = "aux"\nprompt = "run {job.cost}"', "{job.cost} is not one of §10's job fields"),
     ("run on a non-send", 'version = 1\n[limits]\nauto_runs = [2]\n[[rule]]\n'
-     'on = "builder.done"\nverdict = "run (?P<n>\\\\d+)"\nthen = "stop"\nrun = "{n}"', "send"),
+     'on = "builder.done"\nverdict = "run (?P<n>\\\\d+)"\nthen = "stop"\nrun = "{n}"',
+     "run belongs on a send, not on a stop"),
     ("run with no auto_runs", 'version = 1\n[[rule]]\non = "aux.done"\n'
      'verdict = "run (?P<n>\\\\d+)"\nthen = "send"\nrole = "builder"\nprompt = "run {n+1}"\n'
-     'run = "{n+1}"', "auto_runs"),
+     'run = "{n+1}"', NEEDS_AUTO_RUNS),
     ("run with an empty auto_runs", 'version = 1\n[limits]\nauto_runs = []\n[[rule]]\n'
      'on = "aux.done"\nverdict = "run (?P<n>\\\\d+)"\nthen = "send"\nrole = "builder"\n'
-     'prompt = "run {n+1}"\nrun = "{n+1}"', "auto_runs"),
+     'prompt = "run {n+1}"\nrun = "{n+1}"', NEEDS_AUTO_RUNS),
     ("run naming a group the verdict does not define", 'version = 1\n[limits]\n'
      'auto_runs = [2]\n[[rule]]\non = "aux.done"\nverdict = "run (?P<n>\\\\d+)"\n'
-     'then = "send"\nrole = "builder"\nprompt = "run {n+1}"\nrun = "{k+1}"', "{k+1}"),
+     'then = "send"\nrole = "builder"\nprompt = "run {n+1}"\nrun = "{k+1}"',
+     'run = "{k+1}" reads {k+1}, which ' + NO_SUCH_GROUP + " (n)"),
     ("run on a rule with no verdict at all", 'version = 1\n[limits]\nauto_runs = [2]\n'
      '[[rule]]\non = "aux.done"\nthen = "send"\nrole = "builder"\nprompt = "go"\n'
-     'run = "{n+1}"', "verdict"),
+     'run = "{n+1}"',
+     'run = "{n+1}" reads {n+1}, which ' + NO_SUCH_GROUP + " (the rule has no verdict)"),
     ("run that is not an expression", 'version = 1\n[limits]\nauto_runs = [2]\n[[rule]]\n'
      'on = "aux.done"\nverdict = "run (?P<n>\\\\d+)"\nthen = "send"\nrole = "builder"\n'
      'prompt = "run {n+1}"\nrun = "3"', NOT_A_RUN_EXPRESSION + "'3'"),
@@ -288,7 +303,8 @@ BAD_PLAYBOOKS: list[tuple[str, str, str]] = [
      'prompt = "run {n+1}"\nonly_if_run_in = "auto_runs"', ONLY_IF_RUN_IN_IS_GONE),
     ("only_if_run_in on its own", 'version = 1\n[[rule]]\non = "builder.done"\n'
      'then = "stop"\nonly_if_run_in = "auto_runs"', ONLY_IF_RUN_IN_IS_GONE),
-    ("auto_runs is not integers", 'version = 1\n[limits]\nauto_runs = ["two"]', "auto_runs"),
+    ("auto_runs is not integers", 'version = 1\n[limits]\nauto_runs = ["two"]',
+     "[limits] auto_runs must be a list of run numbers, got ['two']"),
 ]
 
 
@@ -303,6 +319,32 @@ def test_an_invalid_playbook_is_an_error_not_a_half_read_file(
     assert expected in str(caught.value)
 
 
+def _refusal(body: str, tmp_path: Path) -> str:
+    with pytest.raises(PlaybookError) as caught:
+        parse_playbook(body, path=tmp_path / "PLAYBOOK.toml")
+    return str(caught.value)
+
+
+def test_every_bad_playbook_is_pinned_to_a_refusal_only_it_makes(tmp_path: Path) -> None:
+    """U2 (review blocker 2, should-fix 11): a bare substring is not a pin.
+
+    Every refusal above opens with the playbook's path, which lives under the
+    pytest tmpdir, and most of them print a list of the keys, events or actions
+    the loader knows. So a one-word expectation can be satisfied by the path, by
+    that list, or by a *different* case's message — and then the case passes
+    without ever reading the sentence it is about. Each expectation has to single
+    its own case out: it appears in that case's refusal and in no other, bar the
+    pairs the loader answers with one and the same sentence by design.
+    """
+    refusals = {name: _refusal(body, tmp_path) for name, body, _expected in BAD_PLAYBOOKS}
+    for name, _body, expected in BAD_PLAYBOOKS:
+        assert expected in refusals[name], f"{name}: the expectation is not its own refusal"
+        for other, refusal in refusals.items():
+            if other == name or refusal == refusals[name]:
+                continue  # one sentence for two inputs is the loader's answer, not a loose pin
+            assert expected not in refusal, f"{name}'s expectation also matches {other}"
+
+
 def test_an_unparseable_playbook_stops_and_notifies_and_fires_nothing(
     tmp_home: Path, workdir: Path
 ) -> None:
@@ -310,7 +352,10 @@ def test_an_unparseable_playbook_stops_and_notifies_and_fires_nothing(
     job = finished(engine.spool, verdict="VERDICT: run 2 finished")
     run(engine.on_job_start(job))
     assert engine.pipeline()["paused"] is True
-    assert "playbook" in engine.pipeline()["stop_reason"]
+    # U2: not the bare word "playbook" — the tmpdir path in the reason carries that.
+    assert "the playbook cannot be read, so no rule can be trusted to fire" in (
+        engine.pipeline()["stop_reason"]
+    )
     assert [event.kind for event in engine.spool.events()] == ["stop"]
     assert recorder.notified
     run(engine.on_job(job))
@@ -423,10 +468,17 @@ STOPS: list[tuple[str, str, str | None, str]] = [
         "unmatched event",
         'version = 1\n[[rule]]\non = "aux.done"\nthen = "stop"\n',
         "VERDICT: run 2 finished",
-        "no rule",
+        # U2: "no rule" was the expectation of two of these three, so neither case
+        # could tell the event it did not pre-plan from the verdict nothing matched.
+        "builder.done: the playbook has no rule for it",
     ),
-    ("no rule matches the verdict", EXAMPLE, "VERDICT: run two finished", "no rule"),
-    ("no VERDICT line", EXAMPLE, None, "VERDICT:"),
+    (
+        "no rule matches the verdict",
+        EXAMPLE,
+        "VERDICT: run two finished",
+        "no rule matches the verdict 'VERDICT: run two finished'",
+    ),
+    ("no VERDICT line", EXAMPLE, None, "has no VERDICT: line"),
 ]
 
 
@@ -454,8 +506,11 @@ def test_a_run_outside_auto_runs_stops(tmp_home: Path, workdir: Path) -> None:
     run(engine.on_job_start(job))
     run(engine.on_job(job))
     assert recorder.sent == []
-    assert "auto_runs" in engine.pipeline()["stop_reason"]
-    assert "4" in engine.pipeline()["stop_reason"]
+    # U2: the run number is a bare digit that the rule index, the allowed list and a
+    # job id in the reason could all supply; pin the sentence that names run 4.
+    assert "would start run 4, which [limits] auto_runs does not list ([2, 3])" in (
+        engine.pipeline()["stop_reason"]
+    )
 
 
 def test_the_run_key_is_read_not_the_prompt(tmp_home: Path, workdir: Path) -> None:
@@ -965,7 +1020,9 @@ def test_the_section_10_example_end_to_end(
         assert [record["playbook_sha256"] for record in records] == [None, sha, sha, sha]
 
         assert state["auto_runs"] == {"allowed": [2, 3], "used": [3]}
-        assert "4" in state["stop_reason"] and "auto_runs" in state["stop_reason"]
+        assert "would start run 4, which [limits] auto_runs does not list ([2, 3])" in (
+            state["stop_reason"]
+        )
         kinds = [event["kind"] for event in (await ok("inbox"))["events"]]
         assert kinds.count("playbook.rule") == 3
         assert kinds[-1] == "stop"

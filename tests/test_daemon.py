@@ -468,7 +468,8 @@ def test_the_socket_is_removed_on_shutdown_and_refuses_a_second_daemon(
 def test_the_cli_says_so_when_no_daemon_is_listening(project: str) -> None:
     code, _out, err = main_capture(["--project", PROJECT, "status"])
     assert code != 0
-    assert "handsd" in err
+    # U2: the socket path ends in `handsd.sock`, so the bare word proved nothing.
+    assert "is handsd running?" in err
 
 
 def main_capture(argv: list[str]) -> tuple[int, str, str]:
@@ -551,9 +552,13 @@ def test_status_names_the_ops_script_and_its_flags_when_ops_decides(
         for flag in ("--pids", "--transcript", "--base"):
             assert flag in out
         # The built-in rule is not the one deciding here, and stall_minutes
-        # never reaches the script.
+        # never reaches the script. U2 (review blocker 2): this is asserted on
+        # the stall sentence, never on a bare "40" — the monitor line carries the
+        # ops script's path as well, so under `--basetemp .../pytest-1340` the
+        # substring matched the path and the gate went red about one run in ten.
         assert "no progress and no liveness" not in out
-        assert "40" not in out.split("monitor  ")[1].splitlines()[0]
+        assert "for 40m" not in out
+        assert "the script decides; hands fills --pids --transcript --base" in out
 
     drive(body)
 
@@ -569,9 +574,10 @@ def test_status_says_stall_detection_is_off_at_zero_minutes(tmp_home: Path, work
 
         code, out, _ = await cli("status")
         assert code == 0
-        assert "off" in out
-        assert "stall_minutes = 0" in out
-        assert "0m" not in out
+        # U2: the sentence, not "off" and not a bare "0m" — every line of `status`
+        # carries a tmpdir path, and the monitor line is one of them.
+        assert "stall detection off (monitor.stall_minutes = 0)" in out
+        assert "for 0m" not in out
         assert "no progress and no liveness" not in out
 
     drive(body)
