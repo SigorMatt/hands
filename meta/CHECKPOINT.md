@@ -1,27 +1,26 @@
 # CHECKPOINT
 
 Mission: 1 (meta/BUILDER-1-PROMPT.md)
-Unit in progress: U3 Daemon, local API, CLI
-Intent: make hands usable end to end — the daemon that owns the roles and
-the queue, the local JSON-RPC surface of DESIGN §4, and the thin CLI that
-the driver actually types.
+Unit in progress: U4 Files and gates
+Intent: the human-decision boundary. Files move only inside the allowed
+roots; gated work waits in `held` until a human decision releases it, and
+nothing else can release it.
 Done means:
-  - `src/hands/daemon.py`: asyncio, unix socket at `server.socket`,
-    newline-delimited JSON-RPC 2.0, one running job per role, FIFO queue
-    with `queue_depth`, orphan reconciliation at startup, graceful
-    shutdown. `handsd --project <name>` entry point.
-  - `src/hands/api.py`: a method for every command in §4 (methods that
-    belong to later units may return a documented "not implemented yet"
-    error, but the method names and shapes must be the ones the MCP face
-    of §9 would wrap).
-  - `src/hands/cli.py`: `hands <command>` as a thin client with `--json`
-    and a readable form; `hands status`.
-  - The daemon persists each job's captured stream so `hands log` (U9)
-    has something to read.
-  - End-to-end test in `tmp_home`: daemon against `fake_claude`,
-    `hands send --role builder --context clear`, `hands wait`,
-    `hands result` shows the verbatim result; a second `send` to the busy
-    role queues; the aux queue accepts 4.
+  - `hands put/get/ls` confined to `files.allowed_roots` (reuse
+    `spool.resolve_under_roots`), sha256 and bytes reported per §4.
+  - `--file path=content` on `send`, written before spawn, recorded in
+    `files_written`.
+  - Gate triggers: `--gate reason` or `gates.patterns` (case-sensitive
+    substring match on the prompt) put the job in `held`; U3's temporary
+    refusal of pattern-matching prompts is replaced by real gating.
+  - `cancel` gated per `roles.<role>.cancel_gated`.
+  - `approve`/`deny` with the authority table of DESIGN §8: the CLI
+    decision is final (`decided_by: cli`); `--human-confirmed` (the driver
+    path) requires `--quote "<the human's instruction>"` and stores it
+    (`decided_by: driver`); a `held` job cannot be released any other way;
+    `denied` is terminal; gating on the default patterns cannot be
+    disabled.
+  - Table-driven tests for the authority table and for confinement.
   - `./scripts/check` green; one commit; pushed.
 Standing constraints: execution model of BUILDER-1-PROMPT.md is binding;
 one sub-agent per unit; commit and push every unit; ./scripts/check green;
