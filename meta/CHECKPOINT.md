@@ -1,26 +1,27 @@
 # CHECKPOINT
 
 Mission: 1 (meta/BUILDER-1-PROMPT.md)
-Unit in progress: U2 Fake claude and runner
-Intent: the first unit that spawns a process. A fake `claude` under test
-control, and the runner of DESIGN §2 that drives it and fills the job
-record of §6.
+Unit in progress: U3 Daemon, local API, CLI
+Intent: make hands usable end to end — the daemon that owns the roles and
+the queue, the local JSON-RPC surface of DESIGN §4, and the thin CLI that
+the driver actually types.
 Done means:
-  - `tests/fake_claude.py`: executable, imitates
-    `claude -p --output-format stream-json --verbose`, emits system/init
-    with a session_id, honours `--resume <id>`, reads the prompt on stdin,
-    and per a control string in the prompt can emit a given result, sleep,
-    emit a rate-limit error event then exit, or block until SIGINT/SIGTERM
-    (143 on TERM, 130 on INT).
-  - `src/hands/runner.py`: spawns the §2 per-role invocation with the
-    `claude` binary from config, parses stream-json line by line, records
-    session_id, transcript_path, head_at_start/head_at_end, the verbatim
-    result, verdict, stderr_tail, permission_denials, num_turns,
-    duration_ms, total_cost_usd, exit_code. Cancel = SIGINT, wait
-    cancel_grace_s, then SIGTERM.
-  - Tests: clear, keep, keep refused (no session; session's last job not
-    terminal), verbatim result, verdict extraction, limited detection,
-    killed, and a job whose pid is gone at daemon start becoming orphaned.
+  - `src/hands/daemon.py`: asyncio, unix socket at `server.socket`,
+    newline-delimited JSON-RPC 2.0, one running job per role, FIFO queue
+    with `queue_depth`, orphan reconciliation at startup, graceful
+    shutdown. `handsd --project <name>` entry point.
+  - `src/hands/api.py`: a method for every command in §4 (methods that
+    belong to later units may return a documented "not implemented yet"
+    error, but the method names and shapes must be the ones the MCP face
+    of §9 would wrap).
+  - `src/hands/cli.py`: `hands <command>` as a thin client with `--json`
+    and a readable form; `hands status`.
+  - The daemon persists each job's captured stream so `hands log` (U9)
+    has something to read.
+  - End-to-end test in `tmp_home`: daemon against `fake_claude`,
+    `hands send --role builder --context clear`, `hands wait`,
+    `hands result` shows the verbatim result; a second `send` to the busy
+    role queues; the aux queue accepts 4.
   - `./scripts/check` green; one commit; pushed.
 Standing constraints: execution model of BUILDER-1-PROMPT.md is binding;
 one sub-agent per unit; commit and push every unit; ./scripts/check green;
