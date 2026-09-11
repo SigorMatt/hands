@@ -22,3 +22,4 @@ One line per unit, appended by the builder: date, unit, sha, verdict.
 2026-09-11  U5 hands notify --test  44c345b  green (518 tests); client-side, not over the socket; no real HTTP yet
 2026-09-11  U6 Status wording  bde33fe  green (519 tests); queue_capacity alias; monitor line matches §5
 2026-09-11  U7 Retire bootstrap  d973ece  green (521 tests); dispatch.sh gone from code, docs and driver
+2026-09-11  U8 Final report  f636e81  green (521 tests); mission 2 finished
