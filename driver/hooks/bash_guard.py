@@ -7,6 +7,8 @@ unless every command segment starts with an allowed word and the command
 contains no way to write: no redirection, no tee, no in-place edits, no
 interpreters, no direct `claude`. `hands open` is blocked too: it execs an
 interactive `claude --resume`, which is a direct claude by another name.
+Quoted text is stripped before inspection: prose inside quotes is text, but
+$(...) and backticks inside double quotes are still executed and still checked.
 
 Self-test: python3 bash_guard.py --selftest
 """
@@ -26,12 +28,12 @@ ALLOWED_GIT_SUBCOMMANDS = {
     "cat-file", "ls-files", "ls-tree", "branch", "remote", "describe",
     "shortlog", "blame", "grep", "name-rev",
 }
+FORBIDDEN_GIT_FLAGS = {"--prune", "--delete", "-d", "-D", "-m", "-M",
+                       "add", "set-url", "remove", "rename", "--set-upstream"}
 # `hands open <job>` execs `claude --resume <id>` in the role's directory
 # (DESIGN §7): an interactive session inside the driver's Bash call, and a way
 # past the `claude` block. The driver reads jobs with show/log/tail instead.
 FORBIDDEN_HANDS_SUBCOMMANDS = {"open"}
-FORBIDDEN_GIT_FLAGS = {"--prune", "--delete", "-d", "-D", "-m", "-M",
-                       "add", "set-url", "remove", "rename", "--set-upstream"}
 SHELL_KEYWORDS = {"for", "while", "until", "do", "done", "if", "then", "else",
                   "elif", "fi", "in", "break", "continue", "!", "{", "}", "("}
 
@@ -47,6 +49,74 @@ FORBIDDEN_PATTERNS = [
 ]
 
 SPLIT_RE = re.compile(r"\|\||&&|;|\||\n|\$\(|`|\(\s*")
+
+
+class UnbalancedQuotes(Exception):
+    pass
+
+
+def strip_quoted(cmd: str) -> str:
+    """Return the command with quoted text removed.
+
+    Text inside single quotes is literal to bash and is dropped entirely.
+    Inside double quotes only $(...) and `...` are executed, so those parts
+    are kept and the rest is dropped. Unbalanced quotes raise: the shell
+    would wait for more input, and the guard fails closed.
+    """
+    out = []
+    i, n = 0, len(cmd)
+    while i < n:
+        c = cmd[i]
+        if c == "\\" and i + 1 < n:
+            i += 2
+            continue
+        if c == "'":
+            j = cmd.find("'", i + 1)
+            if j < 0:
+                raise UnbalancedQuotes("single quote")
+            out.append("''")
+            i = j + 1
+            continue
+        if c == '"':
+            j = i + 1
+            kept = []
+            while j < n and cmd[j] != '"':
+                if cmd[j] == "\\" and j + 1 < n:
+                    j += 2
+                    continue
+                if cmd.startswith("$(", j):
+                    depth, k = 0, j
+                    while k < n and cmd[k] != '"':
+                        if cmd.startswith("$(", k):
+                            depth += 1
+                            k += 2
+                            continue
+                        if cmd[k] == ")":
+                            depth -= 1
+                            k += 1
+                            if depth == 0:
+                                break
+                            continue
+                        k += 1
+                    kept.append(" " + cmd[j:k] + " ")
+                    j = k
+                    continue
+                if cmd[j] == "`":
+                    k = cmd.find("`", j + 1)
+                    if k < 0 or k > cmd.find('"', j):
+                        raise UnbalancedQuotes("backtick")
+                    kept.append(" " + cmd[j:k + 1] + " ")
+                    j = k + 1
+                    continue
+                j += 1
+            if j >= n:
+                raise UnbalancedQuotes("double quote")
+            out.append('"' + "".join(kept) + '"')
+            i = j + 1
+            continue
+        out.append(c)
+        i += 1
+    return "".join(out)
 
 
 def strip_redirect_noise(cmd: str) -> str:
@@ -70,11 +140,15 @@ def first_word(segment: str):
 
 def check(cmd: str):
     """Return None if allowed, else a reason string."""
-    noise_free = strip_redirect_noise(cmd)
+    try:
+        bare = strip_quoted(cmd)
+    except UnbalancedQuotes as e:
+        return f"unbalanced quotes ({e}): {cmd!r}"
+    noise_free = strip_redirect_noise(bare)
     for pat, why in FORBIDDEN_PATTERNS:
         if re.search(pat, noise_free):
             return f"{why}: {cmd!r}"
-    for raw in SPLIT_RE.split(cmd):
+    for raw in SPLIT_RE.split(bare):
         words = first_word(raw)
         if not words:
             continue
@@ -130,10 +204,6 @@ SELFTEST = [
     ("git -C ./repo show origin/main:meta/CHECKPOINT.md", True),
     ("git status 2>/dev/null", True),
     ("hands wait --for stop,held --timeout 3600", True),
-    ("hands show job-1 --json", True),
-    ("hands log job-1", True),
-    ("hands open job-1", False),
-    ("hands --json open job-1", False),
     ("echo hi > probe.txt", False),
     ("echo hi >> probe.txt", False),
     ("cat x | tee probe.txt", False),
@@ -156,6 +226,28 @@ SELFTEST = [
     ("mv a b", False),
     ("git -C ./repo branch -D main", False),
     ("git clone https://example.com/x", False),
+    # prose inside quotes is text, not shell
+    ("hands send --role builder --context clear --gate \"apply kit\" \"Apply ~/Downloads/k.zip (it replaces DESIGN.md), then commit 'plan: kit (v3.1)' and push. Reply: VERDICT: kit applied <sha>.\"", True),
+    ("hands send --role aux --context clear 'Review commits since abc123; report blockers=0 or blockers>0 (count them)'", True),
+    ("hands approve JOBID --human-confirmed --quote \"Approve job JOBID (my words)\"", True),
+    ("echo \"a > b\"", True),
+    ("echo \"a\" > b", False),
+    ("echo 'it (works)'", True),
+    # command substitution inside double quotes still executes
+    ("hands send --role aux \"$(rm -rf x)\"", False),
+    ("echo \"`touch x`\"", False),
+    ("echo '$(rm -rf x)'", True),
+    ("kill -0 \"$(cat ~/.hands/bootstrap/2.pid)\" && echo alive", True),
+    # unbalanced quotes fail closed
+    ("echo \"unterminated", False),
+    ("hands send 'oops", False),
+    ("hands show job-1 --json", True),
+    ("hands log job-1", True),
+    ("hands open job-1", False),
+    ("hands --json open job-1", False),
+    # stdin route
+    ("hands send --role builder --context clear --stdin < ~/Downloads/m2-send.txt", True),
+    ("cat ~/Downloads/m2-send.txt | hands send --role builder --context clear --stdin", True),
 ]
 
 
