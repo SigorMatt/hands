@@ -99,3 +99,38 @@ All six exist with the spelling §2 uses, and `--permission-prompts` does take
 `none`. No flag was dropped. (`claude -p` was not run: that would spend quota.)
 
 Status: fixed — nothing to change
+
+---
+
+## H-004 — §6's `origin` vocabulary has no value for a limit resume
+
+Severity: low · Component: limits (DESIGN §6, "Limits — DECIDED: automatic, no nudge")
+
+Symptom. §6's job record says `origin (driver|playbook|cli)` — the three clients
+that can ask for work. The same section then has hands create a job that no
+client asked for:
+
+    DESIGN.md:236  … sends `role.resume_line` (`Resume WORKPLAN.md`) as a new
+                   `clear` job for the builder, or re-sends the same prompt for aux.
+
+A limit resume is hands resuming itself: not a human at a terminal (`cli`), not
+the driver session (`driver`), and not a playbook rule firing (`playbook`). The
+vocabulary is closed in code —
+
+    $ grep -n 'ORIGINS' src/hands/spool.py
+    87:ORIGINS = frozenset({"driver", "playbook", "cli"})  # §6
+
+— so U5 had to pick one of the three or invent a fourth.
+
+Direction. A fourth value (`limit`, say) is the honest spelling and is what §6
+should say if it is ever revised; inventing it silently would have put a value on
+the wire that `hands jobs --origin` and the §9 remote face do not know. So U5
+picks the least wrong existing value, `playbook`: it is the "hands did this on
+its own, from a pre-planned rule" origin rather than a human's client, and §10
+already gives the playbook authority over `max_resumes`. Nothing is lost by the
+choice, because `resumed_from` — non-null exactly on a limit resume — is what
+actually identifies one, and both the job record and the `resume` inbox event
+carry it. Revisit together with §10's playbook-issued sends, which will want to
+be distinguishable from limit resumes by something better than `resumed_from`.
+
+Status: open

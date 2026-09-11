@@ -9,11 +9,13 @@ from __future__ import annotations
 import asyncio
 import os
 import subprocess
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
 
 from hands.config import Config, parse_config
+from hands.limits import from_iso
 from hands.runner import (
     KeepRefused,
     Runner,
@@ -208,7 +210,7 @@ def test_a_rate_limit_retry_event_makes_the_job_limited(runner: Runner, spool: S
     assert job.limit is not None
     assert job.limit["category"] == "rate_limit"
     assert "rate_limit" in job.limit["message"]
-    # Reset-time parsing is U5's, not this unit's.
+    # "slow down" names no reset time, and U5's parser does not invent one.
     assert job.limit["reset_at"] is None
 
 
@@ -218,6 +220,30 @@ def test_a_limit_notice_in_the_result_makes_the_job_limited(runner: Runner, spoo
     assert job.limit is not None
     assert job.limit["message"] == "Usage limit reached. Try later."
     assert job.result == "Usage limit reached. Try later."
+
+
+def test_a_widened_limit_notice_is_detected_and_its_reset_time_parsed(
+    runner: Runner, spool: Spool
+) -> None:
+    """U5 widened the notice shapes the runner accepts, and fills `reset_at` (§6)."""
+    notice = "Rate limit exceeded - try again in 45 minutes"
+    job = send(runner, spool, f"FAKE:result {notice}")
+    assert job.state == "limited"
+    assert job.limit is not None
+    assert job.limit["message"] == notice  # raw, never normalised
+    parsed = from_iso(job.limit["reset_at"])
+    assert parsed is not None
+    ahead = (parsed - datetime.now(UTC)).total_seconds()
+    assert 44 * 60 < ahead <= 45 * 60
+
+
+def test_a_reset_time_in_the_retry_event_reaches_the_record(
+    runner: Runner, spool: Spool
+) -> None:
+    job = send(runner, spool, "FAKE:rate-limit usage limit reached, try again in 30 minutes")
+    assert job.state == "limited"
+    assert job.limit is not None
+    assert from_iso(job.limit["reset_at"]) is not None
 
 
 def test_an_ordinary_result_is_not_limited(runner: Runner, spool: Spool) -> None:

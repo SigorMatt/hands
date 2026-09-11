@@ -40,6 +40,7 @@ from typing import Any, TextIO
 from hands import __version__
 from hands.api import Api, ApiError, job_summary
 from hands.config import Config, ConfigError, load_config, resolve_project
+from hands.limits import LimitManager
 from hands.runner import MAX_PROMPT_BYTES, Runner, RunnerError, reconcile_orphans
 from hands.spool import TERMINAL_STATES, Job, Spool, now_iso
 
@@ -76,6 +77,9 @@ class Daemon:
         # The spool lives beside the config: `~/.hands/<project>.toml` → `~/.hands`.
         self.spool = Spool(config.path.parent)
         self.runner = Runner(config, self.spool, on_stream_line=self._capture)
+        #: §6's limits: it is handed every terminal job and schedules the resume.
+        #: Its `sleep` and `clock` are attributes so a test never waits one out.
+        self.limits = LimitManager(config, self.spool, enqueue=self._enqueue_resume)
         self.api = Api(self)
         self.socket_path = Path(socket_path) if socket_path else config.server.socket
         self.started: str | None = None
@@ -140,6 +144,9 @@ class Daemon:
         if self._stopping:
             return
         self._stopping = True
+        # Before anything else: a resume scheduled for hours from now must not
+        # fire into a daemon that is going down (§6).
+        self.limits.cancel_all()
 
         if self._server is not None:
             self._server.close()
@@ -204,6 +211,7 @@ class Daemon:
         origin: str,
         gate: dict[str, Any] | None = None,
         files_written: list[dict[str, Any]] | None = None,
+        resumed_from: str | None = None,
     ) -> Job:
         """Accept a send: create the record and either hold it or join the FIFO.
 
@@ -222,6 +230,7 @@ class Daemon:
             state="held" if gate else "queued",
             gate=gate,
             files_written=files_written or [],
+            resumed_from=resumed_from,
         )
         if gate is None:
             self._admit(job)
@@ -297,6 +306,9 @@ class Daemon:
             log.info("job %s (%s) starting", job_id, role)
             finished = await self.runner.run(job)
             log.info("job %s (%s) %s", job_id, role, finished.state)
+            # §6: a `limited` job schedules its own resume, a `done` one clears
+            # the resume counter. Both are the limit manager's, not the queue's.
+            await self.limits.on_job_finished(finished)
         except RunnerError as exc:
             # The job was accepted but cannot be spawned (a `keep` whose session
             # went away between the send and its turn, or an oversized prompt).
@@ -318,6 +330,17 @@ class Daemon:
                 stream.close()
             self._running[role] = None
             await self._announce()
+
+    async def _enqueue_resume(self, **fields: Any) -> Job:
+        """The limit manager's way in: a resume is an ordinary send (§6).
+
+        It is not re-gated. The prompt is one that already passed the gate of §8
+        when it was first sent — and §6's limit handling is "automatic, no
+        nudge", so a gate here would deadlock exactly the case it exists for.
+        """
+        job = self.enqueue(**fields)
+        await self._announce()
+        return job
 
     def _capture(self, job_id: str, line: str) -> None:
         """Persist one captured stdout line so `hands log` (U9) has something to read."""

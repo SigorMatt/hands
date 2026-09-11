@@ -180,11 +180,17 @@ _SETTABLE_FIELDS = frozenset(JOB_FIELDS) - {"id", "created", "state"}
 
 @dataclass
 class RoleState:
-    """`~/.hands/roles/<role>.json` — what `--context keep` resumes (§6)."""
+    """`~/.hands/roles/<role>.json` — what `--context keep` resumes (§6).
+
+    `consecutive_resumes` is §6's limit counter: auto-resumes since the role's
+    last terminal `done`. It lives on the role and not on a job because it is
+    the *role* that hands gives up on after `limits.max_resumes` (§6).
+    """
 
     role: str
     last_session_id: str | None = None
     last_job: str | None = None
+    consecutive_resumes: int = 0
     updated: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
@@ -192,6 +198,7 @@ class RoleState:
             "role": self.role,
             "last_session_id": self.last_session_id,
             "last_job": self.last_job,
+            "consecutive_resumes": self.consecutive_resumes,
             "updated": self.updated,
         }
 
@@ -471,6 +478,7 @@ class Spool:
             role=role,
             last_session_id=data.get("last_session_id"),
             last_job=data.get("last_job"),
+            consecutive_resumes=data.get("consecutive_resumes") or 0,
             updated=data.get("updated"),
         )
 
@@ -481,10 +489,24 @@ class Spool:
         )
         return state
 
+    def update_role(self, role: str, **fields: Any) -> RoleState:
+        """Read-modify-write one role's state, leaving every other field alone.
+
+        Whole-record writes are what lose counters: the session id is rewritten
+        on every job (§2) and the limit counter of §6 must survive that.
+        """
+        state = self.read_role(role)
+        unknown = sorted(set(fields) - {"last_session_id", "last_job", "consecutive_resumes"})
+        if unknown:
+            raise SpoolError(f"not settable role field(s): {', '.join(unknown)}")
+        for name, value in fields.items():
+            setattr(state, name, value)
+        return self.write_role(state)
+
     def set_last_session(
         self, role: str, *, session_id: str | None, job_id: str | None
     ) -> RoleState:
-        return self.write_role(RoleState(role=role, last_session_id=session_id, last_job=job_id))
+        return self.update_role(role, last_session_id=session_id, last_job=job_id)
 
     # --------------------------------------------------------------- inbox
 

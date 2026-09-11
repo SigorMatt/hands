@@ -29,6 +29,7 @@ from pathlib import Path
 from typing import Any
 
 from hands.config import Config, RoleConfig
+from hands.limits import is_limit_notice, parse_reset_at, to_iso
 from hands.spool import TERMINAL_STATES, Job, Spool, SpoolError
 
 __all__ = [
@@ -75,10 +76,9 @@ _VERDICT_RE = re.compile(r"^VERDICT:")  # §6: "the first line of result matchin
 # category lives in the `error` field, whose schema is an enum that contains
 # `rate_limit`; `category` is read too in case a future build renames it.
 _RATE_LIMIT = "rate_limit"
-# The notice text, kept deliberately narrow: the only phrasing this unit can
-# point at evidence for is the binary's own "Usage limit reached". Widening it,
-# parsing the reset time and scheduling the retry are U5's.
-_LIMIT_NOTICE_RE = re.compile(r"usage limit reached", re.IGNORECASE)
+# The notice text and the reset time in it are `hands.limits` (U5): the runner
+# asks, it does not decide. `_finish` stores whatever the parser makes of the
+# notice, and the raw notice either way.
 
 # Claude Code's project directory under ~/.claude/projects is the working
 # directory with every non-alphanumeric character replaced by "-" (see the
@@ -421,11 +421,7 @@ class Runner:
         parsed.total_cost_usd = _as_float(event.get("total_cost_usd"))
         denials = event.get("permission_denials")
         parsed.permission_denials = list(denials) if isinstance(denials, list) else []
-        if (
-            parsed.limit_category is None
-            and isinstance(result, str)
-            and _LIMIT_NOTICE_RE.search(result)
-        ):
+        if parsed.limit_category is None and is_limit_notice(result):
             parsed.limit_category = _RATE_LIMIT
             parsed.limit_message = result
 
@@ -449,12 +445,14 @@ class Runner:
     ) -> Job:
         limit = None
         if state == "limited":
-            # reset_at stays None here: parsing it, and the backoff that uses it,
-            # are U5's (§6). What this unit stores is the raw notice.
+            # §6's `{category, message, reset_at}`. `message` is the raw notice,
+            # stored whatever the parser makes of it; `reset_at` is None whenever
+            # the notice names no usable reset time, and the daemon then waits
+            # `limits.backoff_minutes` (`hands.limits`).
             limit = {
                 "category": parsed.limit_category,
                 "message": parsed.limit_message,
-                "reset_at": None,
+                "reset_at": to_iso(parse_reset_at(parsed.limit_message)),
             }
         updates: dict[str, Any] = {
             "exit_code": exit_code,
