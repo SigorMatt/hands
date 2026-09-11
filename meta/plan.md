@@ -14,7 +14,7 @@ Every unit but U0 closes a named should-fix of `meta/reviews/REVIEW-2.md`.
 - [x] U2 Tests that can fail (should-fix 3 and 8)
 - [x] U3 Pause keeps the first reason (should-fix 4, §10, §19)
 - [x] U4 Empty `resume_line` refused (should-fix 5, §6, §19)
-- [ ] U5 notify status on failure (should-fix 7, §4, §19)
+- [x] U5 notify status on failure (should-fix 7, §4, §19)
 - [ ] U6 Guard fix and guard tests (§19)
 - [ ] U7 `hands send --prompt-file PATH` (§4, §12, §19)
 - [ ] U8 Final report — meta/FINAL-REPORT-3.md, then the verdict line
