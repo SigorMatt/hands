@@ -37,17 +37,26 @@ from hands.config import Config
 from hands.spool import Spool
 
 __all__ = [
+    "DEFAULT_TEST_MESSAGE",
+    "TEST_TITLE",
     "Notification",
     "Notifier",
+    "NotifyError",
     "QuietWindow",
     "http_post",
     "parse_quiet_hours",
+    "send_test",
 ]
 
 log = logging.getLogger("hands.notify")
 
 #: ntfy is a phone notification, not a transfer: a slow one is a failed one.
 POST_TIMEOUT_S = 10.0
+
+#: `hands notify --test` with no message of its own (§4).
+DEFAULT_TEST_MESSAGE = "hands notify --test: if you can read this, delivery works."
+#: The title of that one message, so it is obvious on the phone what it is.
+TEST_TITLE = "hands: notify --test"
 
 _WINDOW_RE = re.compile(r"^\s*(\d{1,2}):(\d{2})\s*-\s*(\d{1,2}):(\d{2})\s*$")
 
@@ -104,8 +113,13 @@ def parse_quiet_hours(text: str | None) -> QuietWindow | None:
 # ------------------------------------------------------------ the transport
 
 
-async def http_post(url: str, *, title: str, message: str) -> None:
-    """Publish one ntfy message. The only place in hands that speaks to a network.
+async def http_post(url: str, *, title: str, message: str) -> int:
+    """Publish one ntfy message; answer with the HTTP status ntfy gave back.
+
+    The only place in hands that speaks to a network. The status is returned
+    because `hands notify --test` (§4) exists to print it — §11's own
+    notifications ignore it, since for them "it did not raise" is the whole
+    answer.
 
     `httpx` is imported here and not at module scope so that importing `hands`
     — which the CLI does for every command — costs nothing.
@@ -119,6 +133,52 @@ async def http_post(url: str, *, title: str, message: str) -> None:
             headers={"Title": title, "Tags": "robot"},
         )
         response.raise_for_status()
+    return int(response.status_code)
+
+
+class NotifyError(Exception):
+    """`hands notify --test` could not send. The one loud failure in this module.
+
+    Everything else here is best effort (§11): a job must never learn that ntfy
+    is down. `--test` is the opposite — a human asked, at an install, for proof
+    of delivery, and a silent failure would be the one answer that is useless.
+    """
+
+
+async def send_test(
+    config: Config, message: str, *, post: Callable[..., Awaitable[Any]] | None = None
+) -> dict[str, Any]:
+    """One message to the configured topic, now, and the status it got back (§4).
+
+    Deliberately not routed through `Notifier`: quiet hours delay notifications
+    and never actions (§11), and a `--test` the human asked for at a terminal is
+    an action. The transport underneath is the same `http_post` every §11
+    notification uses — that is what makes this a proof of delivery.
+    """
+    topic = config.server.ntfy_topic
+    if not topic:
+        raise NotifyError(
+            f"no [server] ntfy_topic in {config.path}: there is nowhere to send to. "
+            "Set one (a long random word — anyone who knows it can read your "
+            "notifications) and subscribe to it in the ntfy app (§11, §16)."
+        )
+    url = f"{config.server.ntfy_url.rstrip('/')}/{topic}"
+    send = post if post is not None else http_post
+    try:
+        status = await send(url, title=TEST_TITLE, message=message)
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        raise NotifyError(f"{url} did not take the message: {type(exc).__name__}: {exc}") from exc
+    log.info("ntfy test published to %s (%s)", url, status)
+    return {
+        "topic": topic,
+        "url": url,
+        "title": TEST_TITLE,
+        "message": message,
+        "status": status,
+        "delivered": True,
+    }
 
 
 # ---------------------------------------------------------------- notifier
@@ -141,7 +201,7 @@ class Notifier:
         config: Config,
         spool: Spool,
         *,
-        post: Callable[..., Awaitable[None]] | None = None,
+        post: Callable[..., Awaitable[Any]] | None = None,
         clock: Callable[[], datetime] | None = None,
         sleep: Callable[[float], Awaitable[None]] | None = None,
         quiet_hours: Callable[[], str | None] | None = None,

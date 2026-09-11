@@ -9,6 +9,7 @@ watches one takes milliseconds rather than an hour.
 from __future__ import annotations
 
 import asyncio
+import io
 import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -16,12 +17,18 @@ from typing import Any
 
 import pytest
 
+from hands.cli import main
 from hands.config import Config, load_config, parse_config
 from hands.daemon import Daemon
 from hands.limits import LimitManager, to_iso
-from hands.notify import Notifier, parse_quiet_hours
+from hands.notify import (
+    DEFAULT_TEST_MESSAGE,
+    TEST_TITLE,
+    Notifier,
+    parse_quiet_hours,
+)
 from hands.spool import Job, Spool, resolve_kinds
-from harness import BLOCK, PROJECT, cli, config_body, drive, ok, poll
+from harness import BLOCK, PROJECT, cli, config_body, drive, ok, poll, write_project
 
 NOW = datetime(2026, 9, 11, 12, 0, tzinfo=UTC)
 
@@ -598,5 +605,158 @@ def test_the_event_stream_of_a_wait_is_json_on_stdout(project: str, tmp_home: Pa
         code, out, err = await cli("wait", "--for", "stop", "--timeout", "30")
         assert code == 0, err
         assert "stop" in out and "again" in out
+
+    drive(body)
+
+
+# --------------------------------------------- `hands notify --test` (§4, §11)
+
+
+def notify_project(tmp_home: Path, workdir: Path, *, topic: str | None = "hands-abc123") -> str:
+    """`~/.hands/demo.toml` with (or deliberately without) an ntfy topic."""
+    server = f'ntfy_topic = "{topic}"\nntfy_url = "https://ntfy.example"\n' if topic else ""
+    body = config_body(tmp_home, workdir).replace(
+        "[roles.builder]", f"{server}\n[roles.builder]", 1
+    )
+    return write_project(tmp_home, body)
+
+
+class StatusPosts:
+    """The real transport's stand-in: it records and answers with a status."""
+
+    def __init__(self, status: int = 200, fail: Exception | None = None) -> None:
+        self.sent: list[dict[str, Any]] = []
+        self.status = status
+        self.fail = fail
+
+    async def __call__(self, url: str, *, title: str, message: str) -> int:
+        if self.fail is not None:
+            raise self.fail
+        self.sent.append({"url": url, "title": title, "message": message})
+        return self.status
+
+
+def run_cli(project: str, *argv: str) -> tuple[int, str, str]:
+    out, err = io.StringIO(), io.StringIO()
+    code = main(["--project", project, *argv], stdout=out, stderr=err)
+    return code, out.getvalue(), err.getvalue()
+
+
+def test_notify_test_publishes_one_message_and_prints_the_status(
+    tmp_home: Path, workdir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project = notify_project(tmp_home, workdir)
+    posts = StatusPosts()
+    monkeypatch.setattr("hands.notify.http_post", posts)
+
+    code, out, err = run_cli(project, "notify", "--test", "hands is wired up")
+
+    assert code == 0, err
+    assert len(posts.sent) == 1, "exactly one message, to the configured topic"
+    assert posts.sent[0]["url"] == "https://ntfy.example/hands-abc123"
+    assert posts.sent[0]["message"] == "hands is wired up"
+    assert "200" in out and "https://ntfy.example/hands-abc123" in out
+
+
+def test_notify_test_prints_the_delivery_as_json(
+    tmp_home: Path, workdir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project = notify_project(tmp_home, workdir)
+    monkeypatch.setattr("hands.notify.http_post", StatusPosts(status=202))
+
+    code, out, err = run_cli(project, "--json", "notify", "--test", "hi")
+
+    assert code == 0, err
+    assert json.loads(out) == {
+        "delivered": True,
+        "message": "hi",
+        "status": 202,
+        "title": TEST_TITLE,
+        "topic": "hands-abc123",
+        "url": "https://ntfy.example/hands-abc123",
+    }
+
+
+def test_notify_test_without_a_message_sends_the_default_line(
+    tmp_home: Path, workdir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project = notify_project(tmp_home, workdir)
+    posts = StatusPosts()
+    monkeypatch.setattr("hands.notify.http_post", posts)
+
+    code, _, err = run_cli(project, "notify", "--test")
+
+    assert code == 0, err
+    assert [item["message"] for item in posts.sent] == [DEFAULT_TEST_MESSAGE]
+
+
+def test_notify_refuses_when_no_topic_is_configured(
+    tmp_home: Path, workdir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project = notify_project(tmp_home, workdir, topic=None)
+    posts = StatusPosts()
+    monkeypatch.setattr("hands.notify.http_post", posts)
+
+    code, _, err = run_cli(project, "notify", "--test", "anyone there?")
+
+    assert code == 1
+    assert posts.sent == [], "nothing may be sent when there is nowhere to send it"
+    assert "ntfy_topic" in err and "demo.toml" in err
+
+
+def test_notify_without_test_says_what_the_command_takes(
+    tmp_home: Path, workdir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project = notify_project(tmp_home, workdir)
+    posts = StatusPosts()
+    monkeypatch.setattr("hands.notify.http_post", posts)
+
+    code, _, err = run_cli(project, "notify")
+
+    assert code == 1
+    assert "--test" in err
+    assert posts.sent == []
+
+
+def test_a_failed_publish_is_reported_and_exits_nonzero(
+    tmp_home: Path, workdir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The opposite of §11's best effort: this one exists to tell you it failed."""
+    project = notify_project(tmp_home, workdir)
+    monkeypatch.setattr("hands.notify.http_post", StatusPosts(fail=OSError("no route to host")))
+
+    code, _, err = run_cli(project, "notify", "--test", "hello")
+
+    assert code == 1
+    assert "no route to host" in err
+
+
+def test_notify_test_is_not_delayed_by_quiet_hours(
+    tmp_home: Path, workdir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """§11: quiet hours delay notifications, never actions — and --test is an action."""
+    project = notify_project(tmp_home, workdir)
+    (workdir / "PLAYBOOK.toml").write_text(
+        'version = 1\n\n[limits]\nquiet_hours = "00:00-23:59"\n'
+    )
+    posts = StatusPosts()
+    monkeypatch.setattr("hands.notify.http_post", posts)
+
+    code, _, err = run_cli(project, "notify", "--test", "now, please")
+
+    assert code == 0, err
+    assert [item["message"] for item in posts.sent] == ["now, please"]
+
+
+def test_the_daemon_has_the_same_notify_method(tmp_home: Path, workdir: Path) -> None:
+    """§9: every command of §4 is an API method, and it sends through the same transport."""
+    notify_project(tmp_home, workdir)
+    posts = StatusPosts(status=200)
+
+    async def body(daemon: Daemon) -> None:
+        daemon.notifier.post = posts
+        result = await daemon.api.notify(test="from the daemon")
+        assert result["status"] == 200
+        assert [item["message"] for item in posts.sent] == ["from the daemon"]
 
     drive(body)

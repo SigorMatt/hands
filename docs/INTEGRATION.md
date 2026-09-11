@@ -115,6 +115,18 @@ opt-in, and `HANDS_DOCTOR_FAKE=1` refuses it (that is how the test suite runs
 doctor without a real binary). `hands doctor --json` prints the same report as
 data.
 
+Doctor checks that a topic is *configured*; it never sends anything. The proof
+of delivery is one command, and it needs no daemon either:
+
+    hands notify --test "ping from the laptop"
+    hands notify --test                   # the same, with a default line
+
+It publishes one message to `server.ntfy_topic` through the same transport
+§11's `stop` and `job.held` notifications use, and prints the HTTP status ntfy
+answered with. With no `ntfy_topic` set, or if the publish failed, it says so
+and exits 1. Quiet hours do not delay it: §11 delays notifications, never
+actions, and a message you asked for at a terminal is an action.
+
 Doctor also prints the **background-wake check** of §11 — the one check hands
 cannot run itself, because it needs an idle interactive session. Run it by
 hand after step 5; the procedure is in doctor's own output.
@@ -198,5 +210,6 @@ Then arm the wake path the way the driver does:
   and record the answer; §11's fallback is a long-timeout `hands wait` re-armed
   by the driver, plus the ntfy notification.
 - ntfy delivery has only been driven through a recording transport in the
-  tests (`tests/test_wake.py`); no request has ever left the machine. The first
-  real `stop` or `job.held` notification is the first proof.
+  tests (`tests/test_wake.py`); no request has ever left the machine. `hands
+  notify --test` is the command that proves it, and running it once at an
+  install is the first proof there has ever been.

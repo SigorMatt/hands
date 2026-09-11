@@ -10,6 +10,7 @@ implements answer with an error that names that unit.
 from __future__ import annotations
 
 import argparse
+import asyncio
 import json
 import os
 import socket
@@ -21,6 +22,7 @@ from pathlib import Path
 from typing import Any, TextIO
 
 from hands import __version__, doctor
+from hands import notify as notify_mod
 from hands.api import TIMEOUT as TIMEOUT_CODE
 from hands.config import Config, ConfigError, load_config, resolve_project
 from hands.spool import ORIGINS
@@ -228,6 +230,15 @@ def build_parser() -> argparse.ArgumentParser:
     command("pause", "pause the playbook engine")
     command("resume", "unpause the playbook engine")
     command("status", "daemon, roles, running jobs, monitor state")
+    notify = command("notify", "send one message to the configured ntfy topic (§4, §11)")
+    notify.add_argument(
+        "--test",
+        nargs="?",
+        const=notify_mod.DEFAULT_TEST_MESSAGE,
+        metavar="MESSAGE",
+        help="publish this message (or a default line) to server.ntfy_topic now and "
+        "print the HTTP status — the proof that delivery works",
+    )
     check = command("doctor", "check the install end to end (§4, §14)")
     check.add_argument(
         "--live",
@@ -278,6 +289,7 @@ _PARAMS: dict[str, Any] = {
     "pause": lambda a: {},
     "resume": lambda a: {},
     "status": lambda a: {},
+    "notify": lambda a: {"test": a.test},
     "doctor": lambda a: {"live": a.live},
 }
 
@@ -521,6 +533,10 @@ def main(
         # The daemon is a *check*, not a precondition (see hands/doctor.py).
         if command == "doctor":
             return _doctor(config, socket_path, live=args.live, out=out, as_json=as_json)
+        # §4's `notify --test` is the same story: it is the proof that ntfy works,
+        # and it has to work at an install, before (or without) a running daemon.
+        if command == "notify":
+            return _notify(config, args.test, out=out, as_json=as_json)
         # §7: `hands log -f <role>` is a follow, and a follow is many requests.
         if command == "log" and args.role:
             if args.job:
@@ -542,7 +558,7 @@ def main(
         # §11: a background `wait --for` that timed out is not a failure of hands,
         # and the driver re-arms rather than reporting it.
         return EXIT_TIMEOUT if exc.code == TIMEOUT_CODE else 1
-    except (ConfigError, ValueError, OSError) as exc:
+    except (ConfigError, ValueError, OSError, notify_mod.NotifyError) as exc:
         print(f"hands: {exc}", file=err)
         return 1
     print(json.dumps(result, sort_keys=True) if as_json else _render(command, result), file=out)
@@ -563,6 +579,40 @@ def _doctor(
     else:
         print(doctor.render(config, found, live=live), file=out)
     return 1 if any(check.status == doctor.FAIL for check in found) else 0
+
+
+def _notify(config: Config, message: str | None, *, out: TextIO, as_json: bool) -> int:
+    """`hands notify --test` (§4, §11): one real ntfy message, sent from the client.
+
+    Not over the socket, for the same reason as doctor: the point of the command
+    is to prove delivery at an install (§14 step 1), when handsd may not be
+    running — a proof you cannot run until the daemon is up proves the wrong
+    thing. Nothing is lost by that: the topic and the URL are config (§13), and
+    the transport is `hands.notify.http_post`, the one §11 itself uses. What the
+    daemon adds — quiet hours — is exactly what a `--test` must not have: §11
+    delays notifications, never actions, and a message a human asked for at a
+    terminal is an action.
+    """
+    if message is None:
+        raise ValueError(
+            'hands notify takes --test "<message>" (its only mode today, §4); '
+            "with no message it sends a default line"
+        )
+    result = asyncio.run(notify_mod.send_test(config, message))
+    print(json.dumps(result, sort_keys=True) if as_json else _notify_block(result), file=out)
+    return 0
+
+
+def _notify_block(result: dict[str, Any]) -> str:
+    """What ntfy answered, and who sent it — the daemon's notifications are its own."""
+    return "\n".join(
+        [
+            f"ntfy {result['status']}  {result['url']}",
+            f"  title    {result['title']}",
+            f"  message  {result['message']}",
+            "  sent by the CLI itself, not handsd, and not delayed by quiet hours (§11)",
+        ]
+    )
 
 
 def _follow(socket_path: Path, role: str, *, project: str, out: TextIO) -> int:

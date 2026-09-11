@@ -69,6 +69,7 @@ Write `~/.hands/<project>.toml` (every key is listed in
 Then check the install and send one prompt:
 
     hands doctor                                   # every check but the live turn is free
+    hands notify --test "ping from the laptop"     # one real ntfy message + status
     hands status
     hands send --role aux --context clear "Reply with: VERDICT: hello"
     hands wait <job> --timeout 300
@@ -81,7 +82,7 @@ background-wake procedure, for you to run from the driver session.
 
 `send`, `wait`, `result`, `jobs`, `show`, `open`, `log`, `cancel`, `put`,
 `get`, `ls`, `tail`, `inbox`, `pipeline`, `approve`, `deny`, `pause`,
-`resume`, `status`, `doctor`. Every one takes `--json` (that is what the driver
+`resume`, `status`, `notify`, `doctor`. Every one takes `--json` (that is what the driver
 reads) and `--project`. `hands --help` is the reference; `handsd --help` is the
 daemon's.
 
@@ -107,7 +108,8 @@ the ops script.
 
 The core is built and tested against the stand-ins. **No real `claude` has ever
 run under hands**, no real `watch_monitor.sh` has been driven, and no ntfy
-request has left the machine; `docs/INTEGRATION.md` ends with the full list of
+request has left the machine (`hands notify --test` is the command that
+changes that, and it has not been run here); `docs/INTEGRATION.md` ends with the full list of
 what is unproven. Whether a finished background task wakes an idle interactive
 Claude Code session (DESIGN §11, §16) is still an open question — `hands
 doctor` prints the procedure that answers it.

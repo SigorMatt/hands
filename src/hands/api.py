@@ -28,6 +28,7 @@ from typing import TYPE_CHECKING, Any
 from hands import __version__, files, gates
 from hands.doctor import report as doctor_report
 from hands.doctor import run_checks as doctor_checks
+from hands.notify import NotifyError, send_test
 from hands.runner import KeepRefused
 from hands.spool import ORIGINS, TERMINAL_STATES, Event, Job, SpoolError, resolve_kinds
 
@@ -78,7 +79,7 @@ class Api:
     COMMANDS: tuple[str, ...] = (
         "send", "wait", "result", "jobs", "show", "open", "log", "cancel",
         "put", "get", "ls", "tail", "inbox", "pipeline", "approve", "deny",
-        "pause", "resume", "status", "doctor",
+        "pause", "resume", "status", "notify", "doctor",
     )  # fmt: skip
 
     def __init__(self, daemon: Daemon) -> None:
@@ -637,6 +638,25 @@ class Api:
     async def resume(self) -> dict[str, Any]:
         """Un-pause the playbook engine and clear the stop reason (§4, §10)."""
         return await self.daemon.playbook.resume()
+
+    # ---------------------------------------------------------- notify (§4)
+
+    async def notify(self, *, test: str | None = None) -> dict[str, Any]:
+        """Send one test message to the configured ntfy topic (§4, §11).
+
+        `hands notify --test` does this in the *client*, so that it works at an
+        install with no daemon yet; this method is the other half of the same
+        surface (§9), for a caller that has only the daemon — and it sends
+        through the daemon's own transport, so a test that replaced it sees this
+        message too. Quiet hours are not consulted here either: §11 delays
+        notifications, never actions.
+        """
+        if test is None:
+            raise ApiError('notify takes --test "<message>": it has no other mode (§4)')
+        try:
+            return await send_test(self.config, test, post=self.daemon.notifier.post)
+        except NotifyError as exc:
+            raise ApiError(str(exc)) from exc
 
     # ---------------------------------------------------------- doctor (§4)
 

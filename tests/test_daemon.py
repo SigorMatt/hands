@@ -291,7 +291,7 @@ def test_jobs_lists_recent_jobs_newest_first(project: str) -> None:
 SECTION_4 = [
     "send", "wait", "result", "jobs", "show", "open", "log", "cancel",
     "put", "get", "ls", "tail", "inbox", "pipeline", "approve", "deny",
-    "pause", "resume", "status", "doctor",
+    "pause", "resume", "status", "notify", "doctor",
 ]
 
 
