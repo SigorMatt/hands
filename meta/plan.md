@@ -12,7 +12,7 @@ Base of the mission: 59e7ac7 (`plan: mission 2 kit`).
 - [x] U3 Explicit `run` key — load-time check, `only_if_run_in` refused (H-006, §10)
 - [x] U4 Pause files an event — `stop`/`pipeline.resumed`, doctor wake procedure (H-007, §11)
 - [x] U5 `hands notify --test` — one real ntfy message, prints the HTTP status (§4)
-- [ ] U6 Status wording — `queue_depth` is capacity; `queue_capacity` alias in JSON
+- [x] U6 Status wording — `queue_depth` is capacity; `queue_capacity` alias in JSON
 - [ ] U7 Retire bootstrap — delete bootstrap/, purge every dispatch.sh mention
 - [ ] U8 Final report — meta/FINAL-REPORT-2.md, then the verdict line
 
