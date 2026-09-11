@@ -9,7 +9,7 @@ commit and a push. `[x]` = done and pushed, `[b]` = blocked (two failures),
 - [x] U2 Fake claude and runner — tests/fake_claude.py, runner.py (§2, §6)
 - [x] U3 Daemon, local API, CLI — daemon.py, api.py, cli.py, handsd (§3, §4)
 - [x] U4 Files and gates — put/get/ls, --file, gate triggers, authority table (§4, §8)
-- [ ] U5 Limits — detection, reset parsing, resume, max_resumes (§6)
+- [x] U5 Limits — detection, reset parsing, resume, max_resumes (§6)
 - [ ] U6 Monitor bridge — ops monitor_cmd bridge + built-in stall monitor (§5)
 - [ ] U7 Playbook engine — playbook.py, pause/resume, pipeline (§10)
 - [ ] U8 Wake path and notifications — wait --for, notify.py ntfy, quiet hours (§11)
