@@ -376,8 +376,11 @@ def wake_procedure(config: Config) -> list[str]:
 
     hands cannot run this itself: it needs an idle *interactive* Claude Code
     session, and the question it answers (§16) is whether a background task
-    finishing wakes one. The event used is a **held job** — gated by `--gate`, so
-    it never runs and never spends a turn — and it is cleared with `hands deny`.
+    finishing wakes one. Two events will do it (H-007): `hands pause`, which
+    files a `stop` (`paused by human`) and is cleared by `hands resume` — one
+    command, no job, no turn — or a **held job**, gated by `--gate` so it never
+    runs, cleared with `hands deny`. The second is the only one that witnesses a
+    real `job.held`, which is the other kind the driver waits for.
     """
     project = config.project
     return [
@@ -389,23 +392,30 @@ def wake_procedure(config: Config) -> list[str]:
         "",
         "         hands wait --for stop,held --timeout 3600",
         "",
-        "  2. At the laptop, file an event the check can see. A gated send is held",
-        "     for a human (§8), so it never starts a turn and costs nothing:",
+        "  2. At the laptop, file an event the check can see. The simplest is a",
+        "     pause: it files a `stop` event (reason `paused by human`, §11), needs",
+        "     no job and no playbook, and costs nothing:",
+        "",
+        f"         hands --project {project} pause",
+        "",
+        "     Or, to witness a real `job.held` instead, a gated send — held for a",
+        "     human (§8), so it never starts a turn and costs nothing either:",
         "",
         f"         hands --project {project} send --role aux --context clear \\",
         '             --gate "doctor wake check" "doctor wake check — do not run"',
         "",
         "  3. Watch the driver session without typing in it. Within seconds it should",
-        "     report that the background task returned with a `job.held` event and",
-        "     should then read the inbox on its own (driver/CLAUDE.md rule 2 and 8).",
+        "     report that the background task returned with that event and should",
+        "     then read the inbox on its own (driver/CLAUDE.md rule 2 and 8).",
         "",
-        "  4. Clear the held job and the pipeline, whatever the answer:",
+        "  4. Clear it, whatever the answer:",
         "",
+        f"         hands --project {project} resume            # after the pause",
         f"         hands --project {project} deny <job> --reason \"doctor wake check\"",
-        f"         hands --project {project} resume",
+        f"         hands --project {project} resume            # after the gated send",
         "",
-        "     (`resume` matters only if a playbook was loaded: an unplanned job.held",
-        "     also stops the pipeline, §10.)",
+        "     (after a gated send, `resume` matters only if a playbook was loaded:",
+        "     an unplanned job.held also stops the pipeline, §10.)",
         "",
         "  If the session did not wake, §11's fallback: the driver re-issues",
         "  `hands wait --for stop,held --timeout 3600` in a loop (exit code 2 is a",

@@ -49,6 +49,7 @@ from hands.spool import Job, Spool, SpoolError, atomic_write, now_iso
 
 __all__ = [
     "ACTIONS",
+    "PAUSE_REASON",
     "EVENTS",
     "JOB_PLACEHOLDERS",
     "ORIGIN",
@@ -91,6 +92,9 @@ JOB_PLACEHOLDERS: tuple[str, ...] = ("id", "head_at_start", "head_at_end", "sess
 
 #: §6's origin vocabulary. Every job the engine fires carries this one.
 ORIGIN = "playbook"
+
+#: The `stop` reason `hands pause` files (§11, H-007). A human, not a rule.
+PAUSE_REASON = "paused by human"
 
 TOP_KEYS: tuple[str, ...] = ("version", "series", "limits", "rule")
 LIMIT_KEYS: tuple[str, ...] = ("auto_runs", "max_resumes", "quiet_hours")
@@ -913,11 +917,20 @@ class PlaybookEngine:
         self._notify("hands: the pipeline stopped", {**(payload or {}), "reason": reason})
 
     async def pause(self) -> dict[str, Any]:
-        """`hands pause` (§4): no rule fires until it is resumed."""
-        self.state.paused = True
-        self.state.paused_by = "cli"
+        """`hands pause` (§4): no rule fires until it is resumed.
+
+        H-007: a pause is a stop like any other, so it goes through `stop()` —
+        the `stop` event of §11 (reason `paused by human`) and its notification,
+        not a silent flag. That event is what wakes a driver blocked on
+        `hands wait --for stop,held`, which makes `hands pause` the one command
+        §11's background-wake check needs: no job, no turn, nothing to clean up
+        but `hands resume`. Pausing an already-paused pipeline files nothing —
+        `stop()` keeps "one stop, one notification". No playbook has to be
+        loaded: the wake check runs at install time (§14 step 1).
+        """
+        await self.stop(PAUSE_REASON, {"by": "hands pause"})
+        self.state.paused_by = "cli"  # `hands pipeline` still says who paused it
         self._save()
-        log.info("playbook: paused by hand")
         return self.pipeline()
 
     async def resume(self) -> dict[str, Any]:
@@ -932,12 +945,22 @@ class PlaybookEngine:
         self._unpause("a send")
 
     def _unpause(self, by: str) -> None:
+        """Close §10's cycle, and say so in the inbox (§11's `pipeline.resumed`).
+
+        A pipeline that is not paused has nothing to resume: nothing is written,
+        so `hands resume` twice (or on a running pipeline) is not an event storm.
+        A resume is not on §11's notification list — the human is the one doing
+        it — so it is inboxed and not published.
+        """
+        if not self.state.paused:
+            return
         was = self.state.stop_reason
         self.state.paused = False
         self.state.paused_by = None
         self.state.stop_reason = None
         self.state.stopped_at = None
         self._save()
+        self.spool.append_event("pipeline.resumed", {"by": by, "was": was})
         log.info("playbook: un-paused by %s (was: %s)", by, was)
 
     # ------------------------------------------------------------ reporting

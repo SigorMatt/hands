@@ -328,6 +328,19 @@ def test_doctor_prints_the_background_wake_procedure(
     assert "§11" in out
 
 
+def test_the_wake_procedure_offers_hands_pause(
+    tmp_home: Path, tmp_path: Path, fake_mode: None
+) -> None:
+    """H-007: the simplest event to fire is `hands pause` — one command, no job,
+    cleared by `hands resume`. The gated send stays: it is the only way to see a
+    real `job.held`."""
+    write_config(tmp_home, tmp_path)
+    _code, out, _err = run()
+    assert "pause" in out and "paused by human" in out
+    assert "hands --project demo resume" in out  # how to clear it
+    assert "--gate" in out and "deny <job>" in out  # the job.held variant is kept
+
+
 def test_the_wake_procedure_is_in_the_json_too(
     tmp_home: Path, tmp_path: Path, fake_mode: None
 ) -> None:

@@ -143,6 +143,35 @@ def test_wait_for_wakes_on_a_gated_job(project: str, tmp_home: Path) -> None:
     drive(body)
 
 
+def test_wait_for_stop_wakes_on_a_hand_pause(project: str, tmp_home: Path) -> None:
+    """H-007: `hands pause` is the one-command event §11's wake check can fire —
+    no job, nothing to clean up but `hands resume`."""
+
+    async def body(daemon: Daemon) -> None:
+        waiting = asyncio.create_task(ok("wait", "--for", "stop,held", "--timeout", "30"))
+        await asyncio.sleep(0.1)
+        assert not waiting.done()
+        await ok("pause")
+        event = await asyncio.wait_for(waiting, 10)
+        assert event["kind"] == "stop"
+        assert event["payload"]["reason"] == "paused by human"
+
+    drive(body)
+
+
+def test_a_resume_files_the_pipeline_resumed_event(project: str, tmp_home: Path) -> None:
+    """§10's stop → resume cycle, both halves in the inbox."""
+
+    async def body(daemon: Daemon) -> None:
+        await ok("pause")
+        await ok("resume")
+        events = (await ok("inbox"))["events"]
+        assert [event["kind"] for event in events] == ["stop", "pipeline.resumed"]
+        assert events[1]["payload"]["was"] == "paused by human"
+
+    drive(body)
+
+
 def test_wait_needs_a_job_or_for_but_not_both(project: str, tmp_home: Path) -> None:
     async def body(daemon: Daemon) -> None:
         code, _, err = await cli("wait", "somejob", "--for", "stop")
@@ -373,6 +402,30 @@ def test_a_stop_notifies_and_a_held_job_notifies(tmp_home: Path, workdir: Path) 
         titles = [item["title"] for item in posts.sent]
         assert any("held" in title for title in titles), titles
         assert any("stopped" in title for title in titles), titles
+
+    asyncio.run(scenario())
+
+
+def test_a_hand_pause_notifies_like_any_other_stop(tmp_home: Path, workdir: Path) -> None:
+    """§11 lists `stop` among the notifications, and a pause files a `stop`. Quiet
+    hours are the Notifier's (they delay this exact title, see the quiet tests);
+    the action — the pause itself — is never delayed."""
+    config_with_ntfy(tmp_home, workdir)
+    posts = Posts()
+
+    async def scenario() -> None:
+        daemon = Daemon(load_config(PROJECT))
+        daemon.notifier.post = posts
+        await daemon.start()
+        try:
+            await ok("pause")
+            await ok("resume")
+            await daemon.notifier.drain()
+        finally:
+            await daemon.stop()
+        titles = [item["title"] for item in posts.sent]
+        assert any("stopped" in title for title in titles), titles
+        assert sum("stopped" in title for title in titles) == 1, titles
 
     asyncio.run(scenario())
 

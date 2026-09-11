@@ -44,6 +44,7 @@ from harness import PROJECT, cli, config_body, drive, ok, poll, write_project
 DESIGN = Path(__file__).parents[1] / "DESIGN.md"
 EXAMPLE_FIXTURE = Path(__file__).parent / "fixtures" / "playbook_example.toml"
 EXAMPLE = EXAMPLE_FIXTURE.read_text(encoding="utf-8")
+PAUSE_REASON = "paused by human"
 
 
 # ------------------------------------------------------------------ fixtures
@@ -610,6 +611,61 @@ def test_while_paused_no_rule_fires_and_resume_unpauses(tmp_home: Path, workdir:
     assert len(recorder.sent) == 1
 
 
+def test_a_hand_pause_files_a_stop_event_and_notifies(tmp_home: Path, workdir: Path) -> None:
+    """H-007, §11: a pause is a stop like any other, so it files the `stop` event
+    (`paused by human`) and notifies. Without the event, a driver blocked on
+    `hands wait --for stop,held` is not woken by a pause and §11's wake check has
+    no one-command event behind it."""
+    engine, recorder = engine_for(tmp_home, workdir)
+    state = run(engine.pause())
+    (event,) = [e for e in engine.spool.events() if e.kind == "stop"]
+    assert event.payload["reason"] == PAUSE_REASON
+    assert event.payload["by"] == "hands pause"
+    assert state["paused"] is True and state["stop_reason"] == PAUSE_REASON
+    assert [title for title, _ in recorder.notified] == ["hands: the pipeline stopped"]
+
+
+def test_pausing_an_already_paused_pipeline_files_one_event(
+    tmp_home: Path, workdir: Path
+) -> None:
+    """One stop, one notification (the rule `stop()` already keeps): no event storm."""
+    engine, recorder = engine_for(tmp_home, workdir)
+    run(engine.pause())
+    run(engine.pause())
+    assert [e.kind for e in engine.spool.events()] == ["stop"]
+    assert len(recorder.notified) == 1
+
+
+def test_a_pause_works_with_no_playbook_at_all(tmp_home: Path, workdir: Path) -> None:
+    """§14: the wake check is run at install time, before any playbook exists."""
+    engine, _recorder = engine_for(tmp_home, workdir, body=None)
+    state = run(engine.pause())
+    assert state["paused"] is True
+    assert state["playbook"]["loaded"] is False
+    (event,) = [e for e in engine.spool.events() if e.kind == "stop"]
+    assert event.payload["reason"] == PAUSE_REASON
+
+
+def test_a_resume_files_a_pipeline_resumed_event(tmp_home: Path, workdir: Path) -> None:
+    """The other half of §10's stop → resume cycle is in the inbox too."""
+    engine, recorder = engine_for(tmp_home, workdir)
+    run(engine.pause())
+    run(engine.resume())
+    (event,) = [e for e in engine.spool.events() if e.kind == "pipeline.resumed"]
+    assert event.payload["by"] == "hands resume"
+    assert event.payload["was"] == PAUSE_REASON
+    assert len(recorder.notified) == 1, "a resume is not on §11's notification list"
+
+
+def test_resuming_a_pipeline_that_is_not_paused_files_nothing(
+    tmp_home: Path, workdir: Path
+) -> None:
+    engine, _recorder = engine_for(tmp_home, workdir)
+    assert run(engine.resume())["paused"] is False
+    run(engine.resume())
+    assert [e.kind for e in engine.spool.events()] == []
+
+
 def test_a_pause_survives_a_restart(tmp_home: Path, workdir: Path) -> None:
     """A stop that a restart forgot would chain runs nobody is watching."""
     engine, _recorder = engine_for(tmp_home, workdir)
@@ -627,6 +683,8 @@ def test_a_hand_sent_job_unpauses_the_pipeline(tmp_home: Path, workdir: Path) ->
     run(engine.stop("because", {}))
     run(engine.on_send("cli"))
     assert engine.pipeline()["paused"] is False
+    (resumed,) = [e for e in engine.spool.events() if e.kind == "pipeline.resumed"]
+    assert resumed.payload["by"] == "a send"  # §10: a send un-pauses, and says so
     run(engine.stop("because", {}))
     run(engine.on_send("playbook"))  # its own send must not un-pause it
     assert engine.pipeline()["paused"] is True

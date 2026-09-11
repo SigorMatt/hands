@@ -109,6 +109,7 @@ EVENT_KINDS = frozenset(
         "monitor.event",
         "playbook.rule",
         "stop",
+        "pipeline.resumed",  # the other half of §10's stop → resume cycle (H-007)
         "gate.decided",
         "limit",
         "resume",

@@ -239,6 +239,15 @@ playbook is loaded. If §11 is ever revised, either name this procedure or say
 which command files the fake event.
 
 Status: open
+Status: fixed — DESIGN v3.1 §11 named the procedure. Mission 2 U4: `hands pause`
+goes through the engine's own `stop()`, so it files the `stop` event with reason
+`paused by human` and notifies like any other stop; a second pause files nothing
+(`stop()` keeps "one stop, one notification") and no playbook needs to be loaded,
+so the check is runnable at install time. `hands resume` closes the cycle with a
+new `pipeline.resumed` event (as does the send that un-pauses, §10); resuming an
+un-paused pipeline writes nothing. Doctor's wake procedure now offers `hands
+pause` first and keeps the gated send, which is still the only way to witness a
+real `job.held`.
 
 ---
 
