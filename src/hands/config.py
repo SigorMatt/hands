@@ -282,12 +282,13 @@ def parse_config(data: dict[str, Any], *, project: str, path: Path) -> Config:
 
     gates_t = _table(data, "gates", path)
     _check_keys(gates_t, ("patterns",), "[gates]", path)
+    # §8: "gating on the default patterns cannot be disabled". A project's list
+    # is therefore *added* to the defaults, never substituted for them: the union
+    # is taken here, defaults first, so a config can only ever widen the gate.
+    extra = tuple(_str_list(gates_t, "patterns", "[gates]", path))
     gates = GatesConfig(
-        patterns=(
-            tuple(_str_list(gates_t, "patterns", "[gates]", path))
-            if "patterns" in gates_t
-            else DEFAULT_GATE_PATTERNS
-        )
+        patterns=DEFAULT_GATE_PATTERNS
+        + tuple(p for p in dict.fromkeys(extra) if p not in DEFAULT_GATE_PATTERNS)
     )
 
     runner_t = _table(data, "runner", path)

@@ -20,6 +20,7 @@ import re
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
+from hands import files, gates
 from hands.runner import KeepRefused
 from hands.spool import TERMINAL_STATES, Event, Job, SpoolError
 
@@ -111,19 +112,10 @@ class Api:
             raise ApiError(f"--context must be clear or keep, got {context!r}")
         if not prompt.strip():
             raise ApiError("refusing to send an empty prompt")
-        if file:
-            raise _later("send", "U4", "--file writes content under the allowed roots")
-        if gate:
-            raise _later("send", "U4", "--gate holds the job for a human (§8)")
 
-        # §8: "gating on the default patterns cannot be disabled". Until U4 can
-        # hold a job, a matching prompt is refused rather than run ungated —
-        # running it would silently disable a gate the design says is absolute.
-        for pattern in self.config.gates.patterns:
-            if pattern in prompt:
-                raise _later(
-                    "send", "U4", f"this prompt matches the gate pattern {pattern!r} (§8)"
-                )
+        # §8: "gating on the default patterns cannot be disabled" — `config.py`
+        # keeps the defaults in `gates.patterns` whatever the project says.
+        reason = gates.gate_reason(prompt, explicit=gate, patterns=self.config.gates.patterns)
 
         if context == "keep":
             # §6: refused if there is no session or its last job is not terminal.
@@ -134,10 +126,31 @@ class Api:
             except KeepRefused as exc:
                 raise ApiError(str(exc)) from exc
 
+        # §4: `--file path=content`, written before the spawn and recorded with
+        # its sha256 (§1 invariant 2). Every path is confined before any byte is
+        # written, so a path outside the roots refuses the whole send.
+        written = self._write_files(file or [])
+
         job = self.daemon.enqueue(
-            role=role, context=context, prompt=prompt, origin=origin
+            role=role,
+            context=context,
+            prompt=prompt,
+            origin=origin,
+            gate=gates.new_gate(kind="send", reason=reason) if reason else None,
+            files_written=written,
         )
+        if reason:
+            self.spool.append_event(
+                "job.held",
+                {"job": job.id, "role": role, "state": "held", "reason": reason, "gate": "send"},
+            )
         return job.to_dict()
+
+    def _write_files(self, specs: list[str]) -> list[dict[str, Any]]:
+        try:
+            return files.write_files(specs, roots=self.config.files.allowed_roots)
+        except (files.PathEscape, files.FileError) as exc:
+            raise ApiError(str(exc)) from exc
 
     # ------------------------------------------------------------------ wait
 
@@ -211,11 +224,49 @@ class Api:
     async def cancel(self, *, job: str, reason: str | None = None) -> dict[str, Any]:
         """Stop a job: SIGINT then SIGTERM if running, drop it if queued (§2, §4).
 
-        §4 gates cancel by default; the gate itself is U4. This is the ungated
-        form, which is what `role.cancel_gated = false` will reach.
+        §4: "held for human unless `role.cancel_gated: false`". When the role
+        gates its cancels the job is *not* touched — the request waits for a
+        decision and the record comes back in the state it is still in, with the
+        pending gate on it.
         """
         record = self._job(job)
+        if self.config.role(record.role).cancel_gated:
+            return (await self._request_cancel(record, reason)).to_dict()
         return (await self.daemon.cancel(record, reason=reason)).to_dict()
+
+    async def _request_cancel(self, record: Job, reason: str | None) -> Job:
+        """Park a gated cancel until a human decides it (§8)."""
+        if record.state in TERMINAL_STATES:
+            raise ApiError(f"job {record.id} is already {record.state}")
+        if record.state == "held":
+            raise ApiError(
+                f"job {record.id} is held and has not run; decide the job itself "
+                f"with `hands approve {record.id}` or `hands deny {record.id}` (§8)"
+            )
+        if record.id in self.daemon.pending_cancels:
+            raise ApiError(
+                f"a cancel of job {record.id} is already waiting for a human decision (§8)"
+            )
+        gate = gates.new_gate(
+            kind="cancel",
+            reason=reason or f"cancel job {record.id} ({record.role})",
+        )
+        self.daemon.pending_cancels[record.id] = gate
+        self.spool.append_event(
+            "gate.requested",
+            {
+                "job": record.id,
+                "role": record.role,
+                "gate": "cancel",
+                "reason": gate["reason"],
+                "state": record.state,
+            },
+        )
+        # Returned with the gate on it so the caller sees that nothing died. It is
+        # deliberately not saved: while a job runs, the runner owns its record.
+        out = self._job(record.id)
+        out.gate = gate
+        return out
 
     # ----------------------------------------------------------------- inbox
 
@@ -233,18 +284,29 @@ class Api:
         """Daemon, roles, running jobs, monitor state (§4)."""
         return self.daemon.status()
 
-    # ------------------------------------------------------ later units (§4)
+    # ----------------------------------------------------------------- files
 
     async def put(
         self, *, path: str, content: str | None = None, from_: str | None = None
     ) -> dict[str, Any]:
-        raise _later("put", "U4", "writing content under files.allowed_roots")
+        """Write a file under `files.allowed_roots` → sha256 and bytes (§4)."""
+        return self._files(files.put_file, path, content=content, from_path=from_)
 
     async def get(self, *, path: str) -> dict[str, Any]:
-        raise _later("get", "U4", "reading a file under files.allowed_roots")
+        """Read a file under `files.allowed_roots` → its content (§4)."""
+        return self._files(files.read_file, path)
 
     async def ls(self, *, path: str) -> dict[str, Any]:
-        raise _later("ls", "U4", "listing a directory under files.allowed_roots")
+        """List a directory under `files.allowed_roots` → entries (§4)."""
+        return self._files(files.list_dir, path)
+
+    def _files(self, operation: Any, path: str, **kwargs: Any) -> dict[str, Any]:
+        try:
+            return operation(path, roots=self.config.files.allowed_roots, **kwargs)
+        except (files.PathEscape, files.FileError) as exc:
+            raise ApiError(str(exc)) from exc
+
+    # ------------------------------------------------------------ gates (§8)
 
     async def approve(
         self,
@@ -254,7 +316,10 @@ class Api:
         human_confirmed: bool = False,
         quote: str | None = None,
     ) -> dict[str, Any]:
-        raise _later("approve", "U4", "the gate authority table of §8")
+        """Release a held job, or carry out a gated cancel (§8)."""
+        return await self._decide(
+            job, "approved", reason=reason, human_confirmed=human_confirmed, quote=quote
+        )
 
     async def deny(
         self,
@@ -264,7 +329,125 @@ class Api:
         human_confirmed: bool = False,
         quote: str | None = None,
     ) -> dict[str, Any]:
-        raise _later("deny", "U4", "the gate authority table of §8")
+        """Refuse a held job (terminal, §6) or a gated cancel (the job runs on)."""
+        return await self._decide(
+            job, "denied", reason=reason, human_confirmed=human_confirmed, quote=quote
+        )
+
+    async def _decide(
+        self,
+        job: str,
+        decision: str,
+        *,
+        reason: str | None,
+        human_confirmed: bool,
+        quote: str | None,
+    ) -> dict[str, Any]:
+        """The authority table of §8, applied to whichever gate is waiting.
+
+        The daemon cannot tell the laptop CLI from the driver — both are local
+        clients of the same socket — and does not pretend to: `--human-confirmed`
+        is a declaration, and its whole force is the quote it must carry. See
+        `hands.gates`.
+        """
+        record = self._job(job)
+        decided_by = gates.decider_for(human_confirmed=human_confirmed)
+        try:
+            gates.check_decider(decided_by, quote)
+        except gates.GateRefused as exc:
+            raise ApiError(str(exc)) from exc
+
+        if record.state == "held":
+            return await self._decide_send(record, decision, decided_by, quote, reason)
+        pending = self.daemon.pending_cancels.get(record.id)
+        if pending is not None:
+            return await self._decide_cancel(record, pending, decision, decided_by, quote, reason)
+        was = f"job {record.id} is {record.state}"
+        if record.state == "denied":
+            was += " — a denied job is terminal (§8)"
+        raise ApiError(f"{was}; there is no gate on it waiting for a decision")
+
+    async def _decide_send(
+        self,
+        record: Job,
+        decision: str,
+        decided_by: str,
+        quote: str | None,
+        reason: str | None,
+    ) -> dict[str, Any]:
+        gate = self._stamp(
+            record.gate or gates.new_gate(kind="send", reason="gated"),
+            decision, decided_by, quote, reason,
+        )
+        if decision == "approved":
+            out = await self.daemon.release(record, gate=gate)
+        else:
+            out = self.spool.transition(record, "denied", gate=gate)
+            self.spool.append_event(
+                "job.denied",
+                {"job": record.id, "role": record.role, "state": "denied", "reason": reason},
+            )
+        self._gate_decided(out, gate)
+        return out.to_dict()
+
+    async def _decide_cancel(
+        self,
+        record: Job,
+        pending: dict[str, Any],
+        decision: str,
+        decided_by: str,
+        quote: str | None,
+        reason: str | None,
+    ) -> dict[str, Any]:
+        if record.state in TERMINAL_STATES:
+            self.daemon.pending_cancels.pop(record.id, None)
+            raise ApiError(
+                f"job {record.id} reached {record.state} on its own; "
+                "there is nothing left to cancel"
+            )
+        gate = self._stamp(pending, decision, decided_by, quote, reason)
+        # Spent either way: a denied cancel is not standing permission to ask
+        # again without a human, and an approved one is carried out now.
+        self.daemon.pending_cancels.pop(record.id, None)
+        self._gate_decided(record, gate)
+        if decision == "denied":
+            out = self._job(record.id)  # untouched: the job runs on
+            out.gate = gate
+            return out.to_dict()
+        return (await self.daemon.cancel(record, reason=gate["reason"])).to_dict()
+
+    def _stamp(
+        self,
+        gate: dict[str, Any],
+        decision: str,
+        decided_by: str,
+        quote: str | None,
+        reason: str | None,
+    ) -> dict[str, Any]:
+        try:
+            return gates.decide(
+                gate, decision=decision, decided_by=decided_by, quote=quote, reason=reason
+            )
+        except gates.GateRefused as exc:
+            raise ApiError(str(exc)) from exc
+
+    def _gate_decided(self, record: Job, gate: dict[str, Any]) -> None:
+        self.spool.append_event(
+            "gate.decided",
+            {
+                "job": record.id,
+                "role": record.role,
+                "gate": gate.get("kind"),
+                "reason": gate.get("reason"),
+                "decision": gate["decision"],
+                "decided_by": gate["decided_by"],
+                "decided_at": gate["decided_at"],
+                "quote": gate["quote"],
+                "decided_reason": gate["decided_reason"],
+            },
+        )
+
+    # ------------------------------------------------------ later units (§4)
 
     async def pipeline(self) -> dict[str, Any]:
         raise _later("pipeline", "U7", "the active playbook and its counters (§10)")

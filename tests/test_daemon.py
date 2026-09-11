@@ -11,9 +11,7 @@ import asyncio
 import io
 import json
 import os
-from collections.abc import Awaitable, Callable
 from pathlib import Path
-from typing import Any
 
 import pytest
 
@@ -21,11 +19,7 @@ from hands.cli import main
 from hands.config import load_config
 from hands.daemon import Daemon
 from hands.spool import Spool
-
-FAKE = Path(__file__).with_name("fake_claude.py")
-PROJECT = "demo"
-TIMEOUT = 60.0
-
+from harness import BLOCK, PROJECT, cli, config_body, drive, fails, ok, running_job
 
 # ------------------------------------------------------------------ fixtures
 
@@ -39,82 +33,13 @@ def workdir(tmp_path: Path) -> Path:
 
 @pytest.fixture
 def project(tmp_home: Path, workdir: Path) -> str:
-    """`~/.hands/demo.toml`: both roles on the fake binary, §13 queue depths."""
-    body = f"""
-[server]
-socket = "{tmp_home}/.hands/handsd.sock"
-
-[roles.builder]
-cwd = "{workdir}"
-queue_depth = 1
-
-[roles.aux]
-cwd = "{workdir}"
-queue_depth = 4
-
-[runner]
-claude = "{FAKE}"
-cancel_grace_s = 0.5
-"""
+    """`~/.hands/demo.toml`. Cancel is ungated here: these are U3's queue tests,
+    and the cancel gate of §8 has its own file (tests/test_gates.py)."""
+    body = config_body(
+        tmp_home, workdir, builder="cancel_gated = false", aux="cancel_gated = false"
+    )
     (tmp_home / ".hands" / f"{PROJECT}.toml").write_text(body)
     return PROJECT
-
-
-# ------------------------------------------------------------------- helpers
-
-
-async def cli(*argv: str) -> tuple[int, str, str]:
-    """Run the CLI in a thread — it is a blocking socket client, like the real one."""
-    out, err = io.StringIO(), io.StringIO()
-    code = await asyncio.to_thread(
-        main, ["--project", PROJECT, *argv], stdout=out, stderr=err
-    )
-    return code, out.getvalue(), err.getvalue()
-
-
-async def ok(*argv: str) -> Any:
-    code, out, err = await cli(*argv, "--json")
-    assert code == 0, f"hands {' '.join(argv)} failed: {err}"
-    return json.loads(out)
-
-
-async def fails(*argv: str) -> str:
-    code, out, err = await cli(*argv, "--json")
-    assert code != 0, f"hands {' '.join(argv)} unexpectedly succeeded: {out}"
-    return err
-
-
-async def poll(check: Callable[[], Awaitable[Any]], what: str) -> Any:
-    for _ in range(int(TIMEOUT / 0.02)):
-        value = await check()
-        if value:
-            return value
-        await asyncio.sleep(0.02)
-    raise AssertionError(f"timed out waiting for {what}")
-
-
-async def running_job(role: str = "builder") -> Any:
-    async def check() -> Any:
-        return (await ok("status"))["roles"][role]["running"]
-
-    return await poll(check, f"a running job on {role}")
-
-
-def drive(body: Callable[[Daemon], Awaitable[None]]) -> None:
-    """Start a daemon in-process, run `body` against it, always shut it down."""
-
-    async def scenario() -> None:
-        daemon = Daemon(load_config(PROJECT))
-        await daemon.start()
-        try:
-            await asyncio.wait_for(body(daemon), TIMEOUT)
-        finally:
-            await daemon.stop()
-
-    asyncio.run(scenario())
-
-
-BLOCK = "FAKE:block"
 
 
 # --------------------------------------------------- the gate of this unit
@@ -332,22 +257,6 @@ def test_send_reads_the_prompt_from_stdin(project: str) -> None:
     drive(body)
 
 
-def test_a_prompt_matching_a_gate_pattern_is_refused_until_u4(project: str) -> None:
-    """§8: gating on the default patterns cannot be disabled — so it cannot be skipped.
-
-    U4 replaces this refusal with a `held` job; when it does, this test changes
-    with it. Until then a gated prompt must not run ungated.
-    """
-
-    async def body(daemon: Daemon) -> None:
-        err = await fails("send", "--role", "builder", "--context", "clear", "open the PR now")
-        assert "U4" in err
-        assert "open the PR" in err
-        assert (await ok("jobs"))["jobs"] == []
-
-    drive(body)
-
-
 def test_global_flags_work_before_and_after_the_command(project: str) -> None:
     async def body(daemon: Daemon) -> None:
         out, err = io.StringIO(), io.StringIO()
@@ -398,7 +307,6 @@ def test_help_lists_every_command_of_section_4(capsys: pytest.CaptureFixture[str
 def test_commands_of_later_units_name_their_unit(project: str) -> None:
     async def body(daemon: Daemon) -> None:
         for argv, unit in [
-            (["put", "/tmp/x", "--from", "/tmp/y"], "U4"),
             (["pipeline"], "U7"),
             (["pause"], "U7"),
             (["doctor"], "U10"),

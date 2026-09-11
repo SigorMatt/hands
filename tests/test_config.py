@@ -288,17 +288,20 @@ def test_bad_values_are_refused(write_config, body: str) -> None:
         load_config("demo")
 
 
-def test_gates_patterns_may_be_extended(write_config) -> None:
+def test_gates_patterns_may_be_extended_but_never_reduced(write_config) -> None:
+    """§8: "gating on the default patterns cannot be disabled"."""
     write_config(
         """
 [roles.builder]
 cwd = "~/git/demo"
 [gates]
-patterns = ["Apply ~/Downloads/", "rm -rf"]
+patterns = ["Apply ~/Downloads/", "rm -rf", "rm -rf"]
 """
     )
     cfg = load_config("demo")
-    assert cfg.gates.patterns == ("Apply ~/Downloads/", "rm -rf")
+    # the config named one of the defaults and one addition, and tried to drop
+    # the other four; the four stay, the addition is appended, once.
+    assert cfg.gates.patterns == (*DEFAULT_GATE_PATTERNS, "rm -rf")
 
 
 def test_runner_keys_are_configurable(write_config) -> None:

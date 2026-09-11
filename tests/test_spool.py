@@ -387,6 +387,7 @@ def test_events_since_filters_by_id(tmp_home: Path) -> None:
         "playbook.rule",
         "stop",
         "gate.decided",
+        "gate.requested",
         "limit",
         "resume",
         "heartbeat",

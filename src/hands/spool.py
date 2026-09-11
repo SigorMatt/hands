@@ -97,6 +97,7 @@ EVENT_KINDS = frozenset(
         "job.killed",
         "job.orphaned",
         "job.denied",
+        "gate.requested",  # a human decision is waiting on a cancel (§8)
         "monitor.stall",
         "monitor.tripwire",
         "monitor.event",
@@ -130,7 +131,7 @@ class Job:
     prompt: str
     started: str | None = None
     ended: str | None = None
-    files_written: list[str] = field(default_factory=list)
+    files_written: list[dict[str, Any]] = field(default_factory=list)
     session_id: str | None = None
     transcript_path: str | None = None
     pid: int | None = None

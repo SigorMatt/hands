@@ -12,6 +12,7 @@ backslash, so a multi-line result fits on one line of a test:
 
     FAKE:session <id>      use this session id (ignored when --resume is given)
     FAKE:result <text>     the text of the `result` event (default "ok")
+    FAKE:cat <path>        result is that file's content, or MISSING:<path>
     FAKE:stderr <text>     write this to stderr before anything else
     FAKE:junk <text>       emit this as a raw, non-JSON stdout line
     FAKE:sleep <seconds>   sleep this long after the init event
@@ -124,6 +125,18 @@ def park() -> None:
         time.sleep(0.02)
 
 
+def _result(one) -> str | None:  # noqa: ANN001
+    """`FAKE:cat <path>` proves a file was on disk *before* claude was spawned."""
+    path = one("cat")
+    if path is None:
+        return one("result", "ok")
+    try:
+        with open(path, encoding="utf-8") as handle:
+            return handle.read()
+    except OSError:
+        return f"MISSING:{path}"
+
+
 def main(argv: list[str]) -> int:
     args = parse_argv(argv)
     prompt = sys.stdin.read() if not sys.stdin.isatty() else ""
@@ -212,7 +225,7 @@ def main(argv: list[str]) -> int:
         emit({**common, "subtype": "error_during_execution", "is_error": True,
               "errors": [one("error", "") or ""]})
         return exit_code or 1
-    emit({**common, "subtype": "success", "is_error": False, "result": one("result", "ok")})
+    emit({**common, "subtype": "success", "is_error": False, "result": _result(one)})
     return exit_code
 
 

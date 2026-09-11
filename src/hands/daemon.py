@@ -89,6 +89,13 @@ class Daemon:
             role: asyncio.Queue() for role in self._roles
         }
         self._running: dict[str, str | None] = dict.fromkeys(self._roles)
+        #: job id → the undecided `cancel` gate of §8, for `roles.<role>.cancel_gated`.
+        #: It lives here and not on the job record because a cancel gate is a gate on
+        #: the *request*, not on the job: the job keeps running, and the runner owns
+        #: its record until it stops. The request is the daemon's, so it dies with the
+        #: daemon — which is the safe direction, since nothing is ever cancelled
+        #: without a decision. The inbox keeps the permanent trail (§11).
+        self.pending_cancels: dict[str, dict[str, Any]] = {}
         self._workers: list[asyncio.Task[None]] = []
         self._conns: set[asyncio.Task[None]] = set()
         self._streams: dict[str, TextIO] = {}
@@ -188,8 +195,39 @@ class Daemon:
 
     # ----------------------------------------------------------------- queue
 
-    def enqueue(self, *, role: str, context: str, prompt: str, origin: str) -> Job:
-        """Accept a send: depth check, create the record, join the FIFO (§6)."""
+    def enqueue(
+        self,
+        *,
+        role: str,
+        context: str,
+        prompt: str,
+        origin: str,
+        gate: dict[str, Any] | None = None,
+        files_written: list[dict[str, Any]] | None = None,
+    ) -> Job:
+        """Accept a send: create the record and either hold it or join the FIFO.
+
+        A gated job is born `held` (§6, §8) and takes no queue slot until a human
+        approves it, so the depth check is the queue's, not the gate's: it runs
+        on admission, here for an ungated send and in `release` for an approved
+        one.
+        """
+        if gate is None:
+            self._check_depth(role)
+        job = self.spool.create_job(
+            role=role,
+            context=context,
+            prompt=prompt,
+            origin=origin,
+            state="held" if gate else "queued",
+            gate=gate,
+            files_written=files_written or [],
+        )
+        if gate is None:
+            self._admit(job)
+        return job
+
+    def _check_depth(self, role: str) -> None:
         depth = self.config.role(role).queue_depth
         waiting = len(self._waiting[role])
         if waiting >= depth:
@@ -199,11 +237,22 @@ class Daemon:
                 f"role {role} already has {waiting} job(s) queued{behind} and "
                 f"roles.{role}.queue_depth is {depth}; wait or cancel one"
             )
-        job = self.spool.create_job(
-            role=role, context=context, prompt=prompt, origin=origin, state="queued"
-        )
-        self._admit(job)
-        return job
+
+    async def release(self, job: Job, *, gate: dict[str, Any]) -> Job:
+        """held → queued: an approved job joins the normal path (§6, §8).
+
+        The queue depth is the role's, not the gate's: approving into a full
+        queue is refused and the job stays `held`, to be approved when there is
+        room. Nothing else in hands calls this — that is the whole of "nothing
+        else releases a held job".
+        """
+        if job.state != "held":
+            raise ApiError(f"job {job.id} is {job.state}, not held")
+        self._check_depth(job.role)
+        released = self.spool.transition(job, "queued", gate=gate)
+        self._admit(released)
+        await self._announce()
+        return released
 
     def _admit(self, job: Job) -> None:
         """Put a `queued` job at the back of its role's FIFO.
@@ -311,8 +360,12 @@ class Daemon:
         """Stop a job wherever it is: in the queue, or in flight (§2, §4)."""
         if job.state in TERMINAL_STATES:
             raise ApiError(f"job {job.id} is already {job.state}")
-        if job.state == "held":  # pragma: no cover - U4 creates held jobs
-            raise ApiError(f"job {job.id} is held; decide it with approve/deny (§8)")
+        if job.state == "held":
+            raise ApiError(
+                f"job {job.id} is held and has not run; §6 gives it no edge to "
+                f"`killed`. Release or refuse it with `hands approve {job.id}` "
+                f"or `hands deny {job.id}` (§8)"
+            )
         if job.state == "queued":
             with contextlib.suppress(ValueError):
                 self._waiting[job.role].remove(job.id)

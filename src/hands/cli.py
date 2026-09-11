@@ -108,8 +108,15 @@ def build_parser() -> argparse.ArgumentParser:
     send = command("send", "queue a prompt for a role")
     send.add_argument("--role", required=True, help="builder or aux")
     send.add_argument("--context", required=True, choices=["clear", "keep"])
-    send.add_argument("--file", action="append", metavar="PATH=CONTENT", help="(unit U4)")
-    send.add_argument("--gate", metavar="REASON", help="hold the job for a human (unit U4)")
+    send.add_argument(
+        "--file",
+        action="append",
+        metavar="PATH=CONTENT",
+        help="write this file under files.allowed_roots before the job runs (repeatable)",
+    )
+    send.add_argument(
+        "--gate", metavar="REASON", help="hold the job until a human decides it (§8)"
+    )
     send.add_argument("--stdin", action="store_true", help="read the prompt from stdin")
     send.add_argument("prompt", nargs="?", help="the prompt; or use --stdin")
 
@@ -139,8 +146,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     put = command("put", "write a file under the allowed roots")
     put.add_argument("path")
-    put.add_argument("--content")
-    put.add_argument("--from", dest="from_", metavar="FILE")
+    put.add_argument("--content", help="the text to write")
+    put.add_argument(
+        "--from", dest="from_", metavar="FILE", help="copy this file (also under the roots)"
+    )
     command("get", "read a file under the allowed roots").add_argument("path")
     command("ls", "list a directory under the allowed roots").add_argument("path")
 
@@ -234,6 +243,17 @@ def _job_block(record: dict[str, Any]) -> str:
         value = record.get(key)
         if value not in (None, ""):
             lines.append(f"  {label:<8} {value}")
+    gate = record.get("gate")
+    if gate:
+        decided = (
+            f"{gate.get('decision')} by {gate.get('decided_by')} at {gate.get('decided_at')}"
+            if gate.get("decided_by")
+            else "waiting for a human (§8)"
+        )
+        lines.append(f"  gate     {gate.get('kind')}: {gate.get('reason')}")
+        lines.append(f"           {decided}")
+        if gate.get("quote"):
+            lines.append(f"           quote: {gate['quote']}")
     result = record.get("result")
     if result:
         lines.append("  result")
@@ -267,8 +287,22 @@ def _status_block(result: dict[str, Any]) -> str:
 
 
 def _render(command: str, result: Any) -> str:
-    if command in ("result", "show", "wait", "send", "cancel") and isinstance(result, dict):
+    if command in (
+        "result", "show", "wait", "send", "cancel", "approve", "deny"
+    ) and isinstance(result, dict):
         return _job_block(result)
+    if command in ("put", "get") and isinstance(result, dict):
+        head = f"{result.get('path')}  {result.get('bytes')} bytes  sha256 {result.get('sha256')}"
+        return f"{head}\n{result['content']}" if command == "get" else head
+    if command == "ls" and isinstance(result, dict):
+        entries = result.get("entries", [])
+        if not entries:
+            return f"{result.get('path')} is empty"
+        return "\n".join(
+            f"{entry['type']:<5} {str(entry.get('bytes') or '-'):>10}  "
+            f"{entry.get('modified') or '':<21} {entry['name']}"
+            for entry in entries
+        )
     if command == "status" and isinstance(result, dict):
         return _status_block(result)
     if command == "jobs" and isinstance(result, dict):
