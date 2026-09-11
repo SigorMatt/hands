@@ -29,24 +29,44 @@ from hands.runner import MAX_PROMPT_BYTES
 from hands.spool import ORIGINS
 
 __all__ = [
+    "EXIT_REFUSED",
     "EXIT_TIMEOUT",
     "FOLLOW_INTERVAL_S",
     "ClientError",
+    "PromptFileError",
     "build_parser",
     "call",
     "exec_session",
     "main",
 ]
 
-#: `hands wait` that timed out, told apart from every other failure (which is 1).
-#: The driver runs `hands wait --for stop,held` in the background (§11) and has
-#: to know whether it was woken or simply gave up waiting.
-EXIT_TIMEOUT = 2
+#: Exit 2: the command refused before it did anything, and nothing changed —
+#: a `hands wait` that gave up waiting, and a `hands send` that refused its
+#: `--prompt-file` before the daemon was contacted (§4). Every other failure
+#: is 1. The driver runs `hands wait --for stop,held` in the background (§11)
+#: and has to know whether it was woken or simply gave up waiting (rule 8);
+#: a refused send is the same answer at the other end — no job was dispatched.
+EXIT_REFUSED = 2
+
+#: `hands wait`'s timeout under the name its readers know it by. One value,
+#: two spellings: the code says "nothing happened", and `wait` is where that
+#: first had to be told apart from a failure.
+EXIT_TIMEOUT = EXIT_REFUSED
 
 #: How often `hands log -f` asks the daemon for the rest of the stream (§7).
 #: A poll, not a subscription: the answer is a file the daemon is appending to,
 #: and one request per fifth of a second is cheaper than a second protocol.
 FOLLOW_INTERVAL_S = 0.2
+
+
+class PromptFileError(ValueError):
+    """§4: `--prompt-file` named a file the client itself refuses.
+
+    A `ValueError` like every other bad command line, and told apart from them
+    only by its exit code: `EXIT_REFUSED`, because the refusal is complete
+    before the daemon is contacted — the four refusals of §4's `send` row
+    (missing, unreadable, empty, over the cap) all arrive here.
+    """
 
 
 class ClientError(Exception):
@@ -152,7 +172,9 @@ def build_parser() -> argparse.ArgumentParser:
         "--prompt-file",
         metavar="PATH",
         help="read the prompt from this file (UTF-8), sent byte for byte; §4's "
-        "normal route for prose, since the prompt never touches a command line",
+        "normal route for prose, since the prompt never touches a command line. "
+        f"A missing, unreadable, empty or over-{MAX_PROMPT_BYTES}-byte file is "
+        f"refused here, before the daemon is contacted, and exits {EXIT_REFUSED}",
     )
     send.add_argument("--stdin", action="store_true", help="read the prompt from stdin")
     send.add_argument("prompt", nargs="?", help="the prompt; or --prompt-file/--stdin")
@@ -610,6 +632,12 @@ def main(
         if command == "open" and not as_json:
             (exec_fn or exec_session)(result["argv"], result["cwd"])
             return 0
+    except PromptFileError as exc:
+        # §4: the client refused the file itself. Nothing was sent, so this is
+        # not a failure of the run — it is the same "nothing happened" that a
+        # timed-out `wait` reports, and it carries the same code.
+        print(f"hands: {exc}", file=err)
+        return EXIT_REFUSED
     except ClientError as exc:
         print(f"hands: {exc}", file=err)
         # §11: a background `wait --for` that timed out is not a failure of hands,
@@ -764,23 +792,25 @@ def _read_prompt_file(where: str) -> str:
     try:
         size = path.stat().st_size
     except OSError as exc:
-        raise ValueError(f"--prompt-file {path}: {exc.strerror or exc}") from exc
+        raise PromptFileError(f"--prompt-file {path}: {exc.strerror or exc}") from exc
     # §2's cap, spelled once: the client refuses exactly what the runner would.
     if size > MAX_PROMPT_BYTES:
-        raise ValueError(
+        raise PromptFileError(
             f"--prompt-file {path} is {size} bytes, over the {MAX_PROMPT_BYTES} byte "
             "cap of §2; send the content with `hands put` and name it in the prompt"
         )
     try:
         raw = path.read_bytes()
     except OSError as exc:
-        raise ValueError(f"--prompt-file {path}: {exc.strerror or exc}") from exc
+        raise PromptFileError(f"--prompt-file {path}: {exc.strerror or exc}") from exc
     try:
         text = raw.decode("utf-8")
     except UnicodeDecodeError as exc:
-        raise ValueError(f"--prompt-file {path}: not UTF-8 text ({exc})") from exc
+        raise PromptFileError(f"--prompt-file {path}: not UTF-8 text ({exc})") from exc
     if not text.strip():
-        raise ValueError(f"--prompt-file {path} is empty; refusing to send an empty prompt")
+        raise PromptFileError(
+            f"--prompt-file {path} is empty; refusing to send an empty prompt"
+        )
     return text
 
 

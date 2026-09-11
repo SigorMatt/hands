@@ -17,7 +17,7 @@ from pathlib import Path
 import pytest
 
 from hands import cli as cli_mod
-from hands.cli import main
+from hands.cli import EXIT_REFUSED, EXIT_TIMEOUT, main
 from hands.config import load_config
 from hands.daemon import Daemon
 from hands.runner import MAX_PROMPT_BYTES
@@ -336,28 +336,35 @@ def test_send_refuses_a_prompt_file_together_with_stdin_or_a_prompt(
         code, _, err = send_cli(
             "--role", "aux", "--context", "clear", "--prompt-file", str(path), *extra
         )
-        assert code == 1
+        assert code == 1, "a bad command line is a plain failure, not a refused file"
         for named in ("--prompt-file", "--stdin", "prompt"):
             assert named in err, f"the refusal must name all three routes: {err!r}"
 
 
 def test_send_with_no_prompt_at_all_names_every_route(project: str) -> None:
     code, _, err = send_cli("--role", "aux", "--context", "clear")
-    assert code == 1
+    assert code == 1, "a bad command line is a plain failure, not a refused file"
     for named in ("--prompt-file", "--stdin", "prompt"):
         assert named in err
+
+
+def test_a_refused_prompt_file_and_a_wait_timeout_share_one_exit_code() -> None:
+    """Exit 2 means the command did nothing: `wait` gave up waiting, or `send`
+    refused its file before contacting the daemon. Two spellings, one value."""
+    assert EXIT_REFUSED == 2
+    assert EXIT_TIMEOUT == EXIT_REFUSED
 
 
 def test_send_refuses_a_missing_prompt_file(project: str, tmp_path: Path) -> None:
     missing = tmp_path / "nope.txt"
     code, _, err = send_cli("--role", "aux", "--context", "clear", "--prompt-file", str(missing))
-    assert code == 1
+    assert code == EXIT_REFUSED
     assert str(missing) in err and "No such file" in err
 
 
 def test_send_refuses_a_directory_as_a_prompt_file(project: str, tmp_path: Path) -> None:
     code, _, err = send_cli("--role", "aux", "--context", "clear", "--prompt-file", str(tmp_path))
-    assert code == 1
+    assert code == EXIT_REFUSED
     assert str(tmp_path) in err and "directory" in err.lower()
 
 
@@ -365,7 +372,7 @@ def test_send_refuses_a_prompt_file_that_is_not_utf8(project: str, tmp_path: Pat
     path = tmp_path / "prompt.bin"
     path.write_bytes(b"a prompt\xff\xfe and then some")
     code, _, err = send_cli("--role", "aux", "--context", "clear", "--prompt-file", str(path))
-    assert code == 1
+    assert code == EXIT_REFUSED
     assert str(path) in err and "UTF-8" in err
 
 
@@ -376,7 +383,7 @@ def test_send_refuses_an_empty_prompt_file(project: str, tmp_path: Path) -> None
         path = tmp_path / "empty.txt"
         path.write_text(body_text, encoding="utf-8")
         code, _, err = send_cli("--role", "aux", "--context", "clear", "--prompt-file", str(path))
-        assert code == 1
+        assert code == EXIT_REFUSED
         assert str(path) in err and "empty" in err
 
 
@@ -391,7 +398,7 @@ def test_send_refuses_an_oversized_prompt_file(project: str, tmp_path: Path) -> 
     with path.open("wb") as handle:  # sparse: the size is the point, not the bytes
         handle.truncate(MAX_PROMPT_BYTES + 1)
     code, _, err = send_cli("--role", "aux", "--context", "clear", "--prompt-file", str(path))
-    assert code == 1
+    assert code == EXIT_REFUSED
     assert str(path) in err and str(MAX_PROMPT_BYTES) in err
     assert len(err.splitlines()) == 1, f"a refusal is one line: {err!r}"
 
@@ -409,7 +416,7 @@ def test_the_prompt_file_cap_is_checked_without_reading_the_file(
 
     monkeypatch.setattr(Path, "read_bytes", never)
     code, _, err = send_cli("--role", "aux", "--context", "clear", "--prompt-file", str(path))
-    assert code == 1 and str(path) in err
+    assert code == EXIT_REFUSED and str(path) in err
 
 
 def test_a_prompt_file_at_exactly_the_cap_is_sent(project: str, tmp_path: Path) -> None:
@@ -445,7 +452,7 @@ def test_no_bad_prompt_file_ever_reaches_the_daemon(
     monkeypatch.setattr(cli_mod, "call", never)
     for path in (missing, unreadable, empty, oversized):
         code, out, err = send_cli("--role", "aux", "--context", "clear", "--prompt-file", str(path))
-        assert code == 1, f"{path.name}: exit {code}"
+        assert code == EXIT_REFUSED, f"{path.name}: exit {code}"
         assert out == "", f"{path.name}: a refusal prints no job record"
         assert str(path) in err, f"{path.name}: the refusal must name the path: {err!r}"
         assert len(err.splitlines()) == 1, f"{path.name}: a refusal is one line: {err!r}"
