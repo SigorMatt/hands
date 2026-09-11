@@ -223,6 +223,29 @@ seen to fail before the fix landed. The load-bearing evidence, unit by unit:
     \;` is blocked because `mutating_git()` scans every `git` token, but
     `-exec` with a non-git verb is as permitted as it was before U6.
 
+**Correction, 2026-09-12 (mission 4 U0; REVIEW-3 blocker 3).** Item 1 above is
+wrong about the machine and was already wrong when this report was written: the
+installed daemon was the **mission-2** build, not the mission-1 build. The
+report is a snapshot and is not rewritten (DESIGN §20); this line is the
+correction. Evidence, re-run today from outside the repo:
+
+    $ hands --version
+    hands 0.1.0
+    $ hands --help | grep notify
+        notify           send one message to the configured ntfy topic (§4, §11)
+
+`notify` is mission 2's command (`44c345b`, m2 U5) and does not exist in the
+mission-1 build, so what is installed carries mission-2 code. The installed
+package (`~/.local/share/uv/tools/hands/lib/python3.14/site-packages/hands/`,
+mtime `2026-09-11 23:35`) agrees: `spool.py` has `ORIGINS = frozenset({"driver",
+"playbook", "cli", "limit"})` (`a67c4b0`, m2 U1). What survives of item 1 is the
+residue REVIEW-3 names: **mission 3's** code has never run outside the test
+suite — the installed `cli.py` has no `--prompt-file` (`grep -c prompt-file` →
+`0`). §6's closing recommendation rests on the same false premise and is
+corrected with it: two missions of code, not three, had been gated only by the
+test suite. The lesson: a NOT PROVEN item that asserts a fact about the machine
+must be re-run, not re-copied.
+
 ---
 
 ## 4. Review items

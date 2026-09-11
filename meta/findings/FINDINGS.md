@@ -383,3 +383,41 @@ Status: open — U6 dropped `"MultiEdit"` from `driver/settings.json`
 and `tests/test_docs.py` (which now asserts it is absent, citing this memo).
 The kit denies Edit, Write, NotebookEdit; DESIGN §12 line 503 still lists
 MultiEdit, so design and kit disagree until the architect resolves it.
+
+Amendment, 2026-09-12 (mission 4 U0; REVIEW-3 should-fix 2). Appended, not a
+rewrite: everything above is left as it was filed. Both observations are real
+and they are about different things.
+
+1. The CLI warning is real. `2.1.268` (and `2.1.269`) carries the string, and
+   it is about the *rule*, not about the tool being callable:
+
+       $ grep -ao '.\{60\}matches no known tool.\{25\}' \
+             ~/.local/share/claude/versions/2.1.269
+       …`Permission ${mn.ruleBehavior} rule "${gr(mn.ruleValue)}" matches no
+       known tool — check for typos.`…
+
+   This is what was observed at driver start on 2.1.268 and what the memo
+   above generalised from.
+
+2. `MultiEdit` *is* a known permission-rule tool name in 2.1.269, which the
+   memo's headline denies. REVIEW-3 found it in the deny-rule normalizer, and
+   that reproduces here:
+
+       $ grep -ac 'MultiEdit' ~/.local/share/claude/versions/2.1.269
+       9
+       $ grep -aoc '"Write","Edit","MultiEdit","NotebookEdit"' … 2.1.269
+       2
+       $ grep -ao 'toolName==="MultiEdit"?"Edit"' … 2.1.269
+       toolName==="MultiEdit"?"Edit"
+
+   So the rule normalises to an `Edit` deny rather than being discarded. "Not
+   offered to a model today" is a different claim from "no such tool name".
+
+Decision (DESIGN §20, and §12 as revised in v3.3): **keep the rule.** A deny
+rule that normalises to `Edit` costs a start-up warning and nothing else;
+dropping it cost coverage on a name the binary still maps. Mission 4 U1 is the
+unit that restores `"MultiEdit"` to `driver/settings.json` and turns
+`tests/test_docs.py` back to asserting it is present.
+
+Status: open — decision taken above, not yet on disk when this amendment was
+written. The headline stays as filed and is corrected by point 2.

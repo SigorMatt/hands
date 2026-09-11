@@ -1,37 +1,49 @@
-# plan — mission 3 (close the review)
+# plan — mission 4 (blockers and pipeline state)
 
-Source: meta/BUILDER-3-PROMPT.md. Units run in order; each ends with a
+Source: meta/BUILDER-4-PROMPT.md. Units run in order; each ends with a
 commit and a push. `[x]` = done and pushed, `[b]` = blocked (two failures),
 `[y]` = yielded under budget pressure.
 
-Base of the mission: fa409e6 (`plan: mission 3 kit (DESIGN v3.2)`), green
-here (ruff clean, 521 passed, cli smoke) before U0.
+Base of the mission: 796e5ae (`plan: mission 4 kit (DESIGN v3.3)`), green
+here before U0 — ruff clean, 618 passed, cli smoke, `check: green`.
 
-Every unit but U0 closes a named should-fix of `meta/reviews/REVIEW-2.md`.
+Every unit closes a named item of `meta/reviews/REVIEW-3.md`
+(`VERDICT: review mission 3 blockers=3 should-fix=11`).
 
-- [x] U0 Plan — this file, meta/CHECKPOINT.md reset, journal.md:17 sha fixed (should-fix 6)
-- [x] U1 Status describes the deciding monitor (should-fix 2, §4)
-- [x] U2 Tests that can fail (should-fix 3 and 8)
-- [x] U3 Pause keeps the first reason (should-fix 4, §10, §19)
-- [x] U4 Empty `resume_line` refused (should-fix 5, §6, §19)
-- [x] U5 notify status on failure (should-fix 7, §4, §19)
-- [x] U6 Guard fix and guard tests (§19)
-- [x] U7 `hands send --prompt-file PATH` (§4, §12, §19)
-- [x] U8 Final report — meta/FINAL-REPORT-3.md, then the verdict line
+- [x] U0 Plan and corrections — this file, meta/CHECKPOINT.md, the dated
+      correction in meta/FINAL-REPORT-3.md §3 (blocker 3), the H-010
+      amendment (should-fix 2's evidence, both observations)
+- [x] U1 Guard scope: the allowlist applies to every `git` token; `find`
+      `-exec`/`-execdir`/`-ok`/`-okdir`/`-delete` forbidden; `MultiEdit`
+      restored (blocker 1, should-fix 1 and 2; §12, §20)
+- [x] U2 A deterministic gate: test_daemon.py:556 and every loose numeric or
+      path-shaped assertion pinned; 5/5 runs of ./scripts/check (blocker 2,
+      should-fix 11)
+- [x] U3 Pipeline state: un-pause at job start, one `stop()`, `stop.suppressed`,
+      `last_rule` reset, `by: start|resume` (should-fix 4; §10, §20)
+- [x] U4 Optional keys and doctor: empty strings refused, `hands doctor`
+      reports a config error instead of crashing (should-fix 5, 8)
+- [x] U5 `--prompt-file` refusals and driver rule 6 (should-fix 9, 10; §4, §12)
+- [x] U6 Final report — meta/FINAL-REPORT-4.md, then the verdict line
 
 No order deviation is planned: the base is green, so every unit is gated
-normally and runs in the order above.
+normally and runs in the order above. U1 and U2 are independent of each
+other; U2 runs second anyway, because a gate that fails one run in ten makes
+every later unit's green a sample rather than a property.
 
-Yield order under quota pressure (BUILDER-3-PROMPT "Budget guidance"):
-U1, then U5. Never yield U0, U2, U3, U6, U7, U8.
+Yield order under quota pressure (BUILDER-4-PROMPT "Budget guidance"):
+U4, then U5. Never yield U0, U1, U2, U3, U6.
 
-Review items closed by unit: 1 by the brief's own acceptance wording (the
-architect amended it — `only_if_run_in` is now allowed at the refusal site,
-its tests and the migration note), 2 by U1, 3 and 8 by U2, 4 by U3, 5 by U4,
-6 by U0, 7 by U5. U6 and U7 are DESIGN §19 work, not review items.
+Review items by unit. Blocker 1 → U1. Blocker 2 → U2. Blocker 3 → U0.
+Should-fix 1 → U1 (the adversarial table), 2 → U1 (the `MultiEdit` rule) and
+U0 (the H-010 evidence), 4 → U3, 5 and 8 → U4, 9 and 10 → U5, 11 → U2.
+Should-fix 3 (doctor's probe argv hardcodes the three flags), 6
+(`accepted()` treats a non-integer status as delivered) and 7 (`Api.notify`'s
+failure shape has no client test) are **deferred by the brief** to a later
+mission; U6 lists them as such in the report's review-items table.
 
-Findings filed by this mission's U0, both design-side (builders may not edit
-DESIGN.md, so they are memos, not units): H-009 (§4's prose example line at
-DESIGN.md:258 omits `--origin`, carried over from REVIEW-2 Notes), H-010
-(§12 requires `MultiEdit` in the driver deny list; the tool does not exist in
-Claude Code 2.1.x, and U6's brief directs the opposite).
+Findings. H-010 is amended by U0 with both observations (the CLI's "matches
+no known tool" warning on 2.1.268, and `MultiEdit` in 2.1.269's
+permission-rule normalizer) and the decision to keep the rule; U1 closes it
+on disk. H-009 stays open — it is design-side and builders do not edit
+DESIGN.md. H-001 stays open (it needs a capture from a dotted cwd).
