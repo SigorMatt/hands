@@ -166,7 +166,11 @@ def _role_check(role: RoleConfig) -> Check:
     if not role.cwd.is_dir():
         return Check(name, FAIL, f"cwd {role.cwd} does not exist; §13 [roles.{role.name}] cwd")
     flags = role.permission_flags or "(none)"
-    detail = f"{role.cwd}  model {role.model}; permission_flags {flags}"
+    # H-008: the two limit-resume behaviours are invisible until a limit is hit.
+    detail = (
+        f"{role.cwd}  model {role.model}; permission_flags {flags}"
+        f"\n{role.resume_behaviour} (§6)"
+    )
     if not (role.cwd / ".git").exists():
         return Check(
             name,

@@ -87,6 +87,7 @@ def test_full_config_loads_every_field(write_config, tmp_home: Path) -> None:
     assert builder.permission_flags == "--dangerously-skip-permissions"
     assert builder.permission_argv == ("--dangerously-skip-permissions",)
     assert builder.resume_line == "Resume WORKPLAN.md"
+    assert builder.resume_prompt("the limited prompt") == "Resume WORKPLAN.md"
     assert builder.queue_depth == 1
     assert builder.cancel_gated is True
 
@@ -119,7 +120,9 @@ def test_every_optional_key_has_a_default(write_config, tmp_home: Path) -> None:
     assert builder.model == "opus"
     assert builder.permission_flags == ""
     assert builder.permission_argv == ()
-    assert builder.resume_line == "Resume WORKPLAN.md"
+    # H-008: no default. Absent, a limit resume re-sends the limited job's own prompt.
+    assert builder.resume_line is None
+    assert builder.resume_prompt("the limited prompt") == "the limited prompt"
     assert builder.queue_depth == 1
     assert builder.cancel_gated is True
 

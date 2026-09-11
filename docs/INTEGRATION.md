@@ -43,7 +43,7 @@ Without systemd, `handsd --project <project>` in a terminal is the same thing.
 
 `~/.hands/<project>.toml`. Every key below is read by `src/hands/config.py`;
 an unknown key or section is refused, and everything except `[roles.builder]
-cwd` has a default.
+cwd` is optional.
 
     [server]
     socket = "~/.hands/handsd.sock"      # default
@@ -54,7 +54,9 @@ cwd` has a default.
     cwd = "~/git/<project>"              # required; the only required key
     model = "opus"                       # default
     permission_flags = "--dangerously-skip-permissions"
-    resume_line = "Resume WORKPLAN.md"   # default; sent on a limit resume (§6)
+    resume_line = "Resume WORKPLAN.md"   # optional, no default: sent on a limit
+                                         # resume (§6). Leave it out and a limit
+                                         # resume re-sends the limited prompt
     queue_depth = 1                      # default for builder
     cancel_gated = true                  # default
 

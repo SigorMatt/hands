@@ -52,7 +52,6 @@ DEFAULT_GATE_PATTERNS: tuple[str, ...] = (
 KNOWN_ROLES: tuple[str, ...] = ("builder", "aux")
 DEFAULT_QUEUE_DEPTH = {"builder": 1, "aux": 4}  # §6
 DEFAULT_MODEL = "opus"
-DEFAULT_RESUME_LINE = "Resume WORKPLAN.md"  # §6
 DEFAULT_NTFY_URL = "https://ntfy.sh"
 DEFAULT_SOCKET = "~/.hands/handsd.sock"
 DEFAULT_STALL_MINUTES = 40.0  # §5
@@ -76,7 +75,7 @@ class RoleConfig:
     cwd: Path
     model: str
     permission_flags: str
-    resume_line: str
+    resume_line: str | None  # §6, H-008: optional, no default
     queue_depth: int
     cancel_gated: bool
 
@@ -84,6 +83,27 @@ class RoleConfig:
     def permission_argv(self) -> tuple[str, ...]:
         """`permission_flags` as argv, for the §2 invocation."""
         return tuple(shlex.split(self.permission_flags))
+
+    def resume_prompt(self, prompt: str) -> str:
+        """§6/§10 (H-008): `resume_line` when the config sets one, else `prompt` again.
+
+        The one place the rule lives, so the limit resume (§6) and a playbook
+        `resume` action (§10) cannot drift apart. `prompt` is the prompt of the
+        job being resumed: re-sending it is right for a checkpoint-driven
+        kickoff line, while `Resume WORKPLAN.md` is right for a workplan one.
+        """
+        return prompt if self.resume_line is None else self.resume_line
+
+    @property
+    def resume_behaviour(self) -> str:
+        """One line for `hands doctor`: which of the two resumes this role has."""
+        if self.name != "builder":
+            unused = " (resume_line is set, but only the builder uses it)"
+            extra = unused if self.resume_line else ""
+            return f"limit resume: re-sends the limited job's own prompt{extra}"
+        if self.resume_line is None:
+            return "limit resume: re-sends the limited job's own prompt (no resume_line set)"
+        return f'limit resume: sends resume_line "{self.resume_line}" as a clear job'
 
 
 @dataclass(frozen=True)
@@ -332,7 +352,8 @@ def _role(name: str, table: Any, path: Path) -> RoleConfig:
         cwd=_abs(_path(table, "cwd", "", where, path), f"roles.{name}.cwd"),
         model=_str(table, "model", DEFAULT_MODEL, where, path),
         permission_flags=_str(table, "permission_flags", "", where, path),
-        resume_line=_str(table, "resume_line", DEFAULT_RESUME_LINE, where, path),
+        # H-008: no default — absent (or empty) means "re-send the limited prompt".
+        resume_line=_opt_str(table, "resume_line", where, path) or None,
         queue_depth=_int(
             table, "queue_depth", DEFAULT_QUEUE_DEPTH.get(name, 1), where, path, minimum=1
         ),

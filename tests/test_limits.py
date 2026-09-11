@@ -165,11 +165,25 @@ def test_a_reset_already_past_resumes_after_the_grace_only(tmp_home: Path) -> No
 
 @pytest.fixture
 def cfg(tmp_home: Path, tmp_path: Path) -> Config:
+    return make_cfg(tmp_home, tmp_path)
+
+
+def make_cfg(
+    tmp_home: Path,
+    tmp_path: Path,
+    *,
+    builder: dict[str, Any] | None = None,
+    aux: dict[str, Any] | None = None,
+) -> Config:
+    """§13 roles; the two dicts add keys to a role table (H-008: `resume_line`)."""
     work = tmp_path / "work"
     work.mkdir(exist_ok=True)
     return parse_config(
         {
-            "roles": {"builder": {"cwd": str(work)}, "aux": {"cwd": str(work)}},
+            "roles": {
+                "builder": {"cwd": str(work), **(builder or {})},
+                "aux": {"cwd": str(work), **(aux or {})},
+            },
             "limits": {"backoff_minutes": 30, "max_resumes": 3},
         },
         project="demo",
@@ -239,15 +253,47 @@ def run(coro: Callable[[], Awaitable[None]]) -> None:
     asyncio.run(coro())
 
 
-def test_a_limited_builder_is_resumed_with_the_resume_line(harness: Harness) -> None:
+def test_a_limited_builder_is_resumed_with_the_resume_line(
+    tmp_home: Path, tmp_path: Path
+) -> None:
+    """H-008: `resume_line` set — the spanweave form sends that line, `clear`."""
+    cfg = make_cfg(tmp_home, tmp_path, builder={"resume_line": "Resume WORKPLAN.md"})
+    harness = Harness(cfg, Spool(tmp_home / ".hands"))
+
     async def scenario() -> None:
-        limited = await harness.limit(notice="Usage limit reached, resets at 3pm")
+        limited = await harness.limit(
+            prompt="Read meta/BUILDER-2-PROMPT.md",
+            notice="Usage limit reached, resets at 3pm",
+        )
         (resume,) = harness.resumes()
         assert resume.prompt == "Resume WORKPLAN.md"  # roles.builder.resume_line (§13)
         assert resume.context == "clear"
         assert resume.resumed_from == limited.id
         assert resume.origin == "limit"  # §6, H-004: not a client's origin
         assert harness.delays == [3 * 3600 + RESUME_GRACE_S]
+
+    run(scenario)
+
+
+def test_a_limited_builder_without_a_resume_line_is_sent_its_own_prompt_again(
+    harness: Harness,
+) -> None:
+    """H-008: `resume_line` absent — §6 re-sends the limited job's own prompt, `clear`.
+
+    The agile-skills form: the kickoff line is checkpoint-driven, so the prompt
+    that was limited is exactly the right thing to send again.
+    """
+
+    async def scenario() -> None:
+        limited = await harness.limit(
+            prompt="Read meta/BUILDER-2-PROMPT.md and execute the mission",
+            notice="Usage limit reached, resets at 3pm",
+        )
+        (resume,) = harness.resumes()
+        assert resume.prompt == "Read meta/BUILDER-2-PROMPT.md and execute the mission"
+        assert resume.context == "clear"
+        assert resume.resumed_from == limited.id
+        assert resume.origin == "limit"
 
     run(scenario)
 
@@ -261,6 +307,19 @@ def test_a_limited_aux_job_is_sent_the_same_prompt_again(harness: Harness) -> No
         assert resume.resumed_from == limited.id
         # no reset time in the notice → limits.backoff_minutes
         assert harness.delays == [30 * 60]
+
+    run(scenario)
+
+
+def test_a_limited_aux_job_ignores_a_resume_line(tmp_home: Path, tmp_path: Path) -> None:
+    """H-008: aux is unchanged — always the same prompt again, line or no line."""
+    cfg = make_cfg(tmp_home, tmp_path, aux={"resume_line": "Resume WORKPLAN.md"})
+    harness = Harness(cfg, Spool(tmp_home / ".hands"))
+
+    async def scenario() -> None:
+        await harness.limit(role="aux", prompt="audit run 3")
+        (resume,) = harness.resumes()
+        assert resume.prompt == "audit run 3"
 
     run(scenario)
 
@@ -361,7 +420,9 @@ def test_the_daemon_resumes_a_limited_builder(tmp_home: Path, tmp_path: Path) ->
 
     work = tmp_path / "work"
     work.mkdir(exist_ok=True)
-    write_project(tmp_home, config_body(tmp_home, work))
+    write_project(
+        tmp_home, config_body(tmp_home, work, builder='resume_line = "Resume WORKPLAN.md"')
+    )
     slept: list[float] = []
 
     async def instant(seconds: float) -> None:

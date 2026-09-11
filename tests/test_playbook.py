@@ -76,9 +76,16 @@ def git_repo(path: Path) -> str:
     return head.stdout.strip()
 
 
-def make_config(tmp_home: Path, workdir: Path) -> Config:
+def make_config(
+    tmp_home: Path, workdir: Path, *, builder: dict[str, Any] | None = None
+) -> Config:
     return parse_config(
-        {"roles": {"builder": {"cwd": str(workdir)}, "aux": {"cwd": str(workdir)}}},
+        {
+            "roles": {
+                "builder": {"cwd": str(workdir), **(builder or {})},
+                "aux": {"cwd": str(workdir)},
+            }
+        },
         project=PROJECT,
         path=tmp_home / ".hands" / f"{PROJECT}.toml",
     )
@@ -116,11 +123,15 @@ class Recorder:
 
 
 def engine_for(
-    tmp_home: Path, workdir: Path, body: str | None = EXAMPLE
+    tmp_home: Path,
+    workdir: Path,
+    body: str | None = EXAMPLE,
+    *,
+    builder: dict[str, Any] | None = None,
 ) -> tuple[PlaybookEngine, Recorder]:
     if body is not None:
         (workdir / "PLAYBOOK.toml").write_text(body)
-    config = make_config(tmp_home, workdir)
+    config = make_config(tmp_home, workdir, builder=builder)
     recorder = Recorder()
     engine = PlaybookEngine(
         config,
@@ -488,7 +499,10 @@ def test_a_held_job_stops_the_pipeline(tmp_home: Path, workdir: Path) -> None:
 def test_a_resume_rule_on_an_orphan_resends_the_resume_line(
     tmp_home: Path, workdir: Path
 ) -> None:
-    engine, recorder = engine_for(tmp_home, workdir)
+    """H-008: §10's `resume` sends the role's resume line when one is configured."""
+    engine, recorder = engine_for(
+        tmp_home, workdir, builder={"resume_line": "Resume WORKPLAN.md"}
+    )
     job = finished(engine.spool, state="orphaned")
     run(engine.on_job_start(job))
     run(engine.on_job(job))
@@ -506,6 +520,18 @@ def test_a_resume_rule_on_an_orphan_resends_the_resume_line(
     (event,) = [e for e in engine.spool.events() if e.kind == "resume"]
     # H-004: only §6's limit resume is `limit`; a rule-issued one stays playbook.
     assert event.payload["origin"] == "playbook"
+
+
+def test_a_resume_rule_without_a_resume_line_resends_the_jobs_own_prompt(
+    tmp_home: Path, workdir: Path
+) -> None:
+    """H-008: §10 reads as §6 does — no line configured, the same prompt again."""
+    engine, recorder = engine_for(tmp_home, workdir)
+    job = finished(engine.spool, state="orphaned")
+    run(engine.on_job_start(job))
+    run(engine.on_job(job))
+    assert [(e["prompt"], e["context"]) for e in recorder.enqueued] == [(job.prompt, "clear")]
+    assert engine.spool.read_role("builder").consecutive_resumes == 1
 
 
 def test_exhausted_resumes_stop(tmp_home: Path, workdir: Path) -> None:

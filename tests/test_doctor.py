@@ -38,6 +38,7 @@ def write_config(
     monitor_cmd: str | None = FAKE_MONITOR.name,
     roots: list[str] | None = None,
     project: str = "demo",
+    resume_line: str | None = None,
 ) -> Path:
     """A whole, valid `~/.hands/<project>.toml` (§13) pointing at the stand-ins."""
     work = tmp_path / "work"
@@ -51,6 +52,7 @@ def write_config(
             target.symlink_to(FAKE_MONITOR)
     allowed = roots if roots is not None else [str(work)]
     ops_block = f'monitor_cmd = "{monitor_cmd}"' if monitor_cmd else ""
+    resume_block = f'resume_line = "{resume_line}"' if resume_line else ""
     body = f"""
 [server]
 socket = "{home}/.hands/handsd.sock"
@@ -58,6 +60,7 @@ ntfy_topic = "hands-test"
 
 [roles.builder]
 cwd = "{work}"
+{resume_block}
 
 [roles.aux]
 cwd = "{work}"
@@ -173,6 +176,31 @@ def test_fake_mode_refuses_the_live_turn_and_spawns_nothing(
 
 
 # ---------------------------------------------------------- the free checks
+
+
+def test_the_role_check_names_the_limit_resume_behaviour(
+    tmp_home: Path, tmp_path: Path, fake_mode: None
+) -> None:
+    """H-008: which of the two resumes a role has is invisible until a limit hits."""
+    write_config(tmp_home, tmp_path)
+    code, found = checks()
+    assert code == 0
+    detail = found["role builder"]["detail"]
+    assert "limit resume: re-sends the limited job's own prompt" in detail
+    assert "resume_line" in detail
+    assert "limit resume: re-sends the limited job's own prompt" in found["role aux"]["detail"]
+
+
+def test_the_role_check_names_a_configured_resume_line(
+    tmp_home: Path, tmp_path: Path, fake_mode: None
+) -> None:
+    write_config(tmp_home, tmp_path, resume_line="Resume WORKPLAN.md")
+    code, found = checks()
+    assert code == 0
+    detail = found["role builder"]["detail"]
+    assert 'limit resume: sends resume_line "Resume WORKPLAN.md"' in detail
+    # aux is unchanged either way (§6)
+    assert "limit resume: re-sends the limited job's own prompt" in found["role aux"]["detail"]
 
 
 def test_a_missing_claude_binary_fails(tmp_home: Path, tmp_path: Path, fake_mode: None) -> None:

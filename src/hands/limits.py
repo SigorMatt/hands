@@ -452,10 +452,11 @@ class LimitManager:
             )
 
     async def _resume(self, job: Job) -> Job:
-        """§6: the builder gets `role.resume_line` as a new `clear` job; aux the same prompt."""
+        """§6: the builder gets a new `clear` job — `role.resume_line` when the config
+        sets one, otherwise the limited job's own prompt (H-008); aux the same prompt."""
         role = self.config.role(job.role)
         if job.role == "builder":
-            prompt, context = role.resume_line, "clear"
+            prompt, context = role.resume_prompt(job.prompt), "clear"
         else:
             prompt, context = job.prompt, job.context
         resumed = await self.enqueue(

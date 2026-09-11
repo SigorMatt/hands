@@ -278,3 +278,11 @@ reports which of the two behaviours each role has, because the difference is
 invisible until a limit is hit.
 
 Status: open
+Status: fixed — mission 2 U2: `role.resume_line` is `str | None` with no default
+(`DEFAULT_RESUME_LINE` is gone). `RoleConfig.resume_prompt(prompt)` is the one
+place the rule lives, so §6's limit resume (`hands.limits`) and §10's `resume`
+action (`hands.playbook`) cannot drift: the builder gets a `clear` job carrying
+the resume line when the config sets one, otherwise the resumed job's own
+prompt; aux is unchanged. `hands doctor`'s role check prints the behaviour it
+has (`RoleConfig.resume_behaviour`), since a limit is otherwise the first time
+the difference shows.

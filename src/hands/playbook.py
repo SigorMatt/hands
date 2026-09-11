@@ -802,8 +802,8 @@ class PlaybookEngine:
             return
 
         role = self.config.role(job.role)
-        if job.role == "builder":  # §6: the builder gets its resume line, clear
-            prompt, context = role.resume_line, "clear"
+        if job.role == "builder":  # §10/§6: the resume line when configured, else the
+            prompt, context = role.resume_prompt(job.prompt), "clear"  # same prompt (H-008)
         else:
             prompt, context = job.prompt, job.context
         try:

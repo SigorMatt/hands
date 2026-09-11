@@ -55,7 +55,7 @@ job you cancelled yourself (`killed`) is not an event — you already know.
 | `then` | what happens |
 |---|---|
 | `send` | one `hands send` with `role`, `context` and the rendered `prompt`. It goes through the same API `hands send` uses, so §8's gate patterns still apply to a job hands starts on its own |
-| `resume` | the role's `resume_line` from the config, counted against `max_resumes` |
+| `resume` | the resumed job's own prompt again, or the role's `resume_line` from the config when it sets one, counted against `max_resumes` |
 | `notify` | one ntfy message (`message`), nothing else |
 | `stop` | pause the pipeline, notify, write the reason to the inbox |
 
