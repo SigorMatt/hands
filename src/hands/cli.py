@@ -11,9 +11,12 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import socket
 import sys
-from collections.abc import Sequence
+import time
+from collections.abc import Callable, Sequence
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, TextIO
 
@@ -21,12 +24,25 @@ from hands import __version__
 from hands.api import TIMEOUT as TIMEOUT_CODE
 from hands.config import ConfigError, load_config, resolve_project
 
-__all__ = ["EXIT_TIMEOUT", "ClientError", "build_parser", "call", "main"]
+__all__ = [
+    "EXIT_TIMEOUT",
+    "FOLLOW_INTERVAL_S",
+    "ClientError",
+    "build_parser",
+    "call",
+    "exec_session",
+    "main",
+]
 
 #: `hands wait` that timed out, told apart from every other failure (which is 1).
 #: The driver runs `hands wait --for stop,held` in the background (§11) and has
 #: to know whether it was woken or simply gave up waiting.
 EXIT_TIMEOUT = 2
+
+#: How often `hands log -f` asks the daemon for the rest of the stream (§7).
+#: A poll, not a subscription: the answer is a file the daemon is appending to,
+#: and one request per fifth of a second is cheaper than a second protocol.
+FOLLOW_INTERVAL_S = 0.2
 
 
 class ClientError(Exception):
@@ -147,15 +163,27 @@ def build_parser() -> argparse.ArgumentParser:
 
     jobs = command("jobs", "recent job summaries")
     jobs.add_argument("--role")
-    jobs.add_argument("--grep", metavar="PAT", help="substring of the prompt")
-    jobs.add_argument("--since", metavar="D", help="e.g. 2d, 6h, or a date")
+    jobs.add_argument(
+        "--grep", metavar="PAT", help="case-insensitive substring of the prompt (§7)"
+    )
+    jobs.add_argument("--since", metavar="D", help="an age (30m, 6h, 2d, 1w) or a date")
     jobs.add_argument("-n", type=int, default=20)
 
-    command("open", "the `claude --resume` line for a job").add_argument("job")
+    open_ = command(
+        "open",
+        "resume a finished job's session: execs `claude --resume <id>` in the role's cwd "
+        "(--json prints the invocation instead of running it)",
+    )
+    open_.add_argument("job")
 
-    log = command("log", "the captured stream of a job or role")
+    log = command("log", "the captured stream-json of a job, verbatim")
     log.add_argument("job", nargs="?")
-    log.add_argument("-f", dest="role", metavar="ROLE", help="follow a role's current job")
+    log.add_argument(
+        "-f",
+        dest="role",
+        metavar="ROLE",
+        help="follow the role's running job, printing each stream-json line as it is written",
+    )
 
     cancel = command("cancel", "stop a job")
     cancel.add_argument("job")
@@ -213,7 +241,7 @@ _PARAMS: dict[str, Any] = {
     "show": lambda a: {"job": a.job},
     "jobs": lambda a: {"role": a.role, "grep": a.grep, "since": a.since, "n": a.n},
     "open": lambda a: {"job": a.job},
-    "log": lambda a: {"job": a.job, "role": a.role},
+    "log": lambda a: {"job": a.job, "role": a.role},  # `-f` adds `offset`; see _follow
     "cancel": lambda a: {"job": a.job, "reason": a.reason},
     "put": lambda a: {"path": a.path, "content": a.content, "from": a.from_},
     "get": lambda a: {"path": a.path},
@@ -354,6 +382,35 @@ def _pipeline_block(result: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def _job_line(row: dict[str, Any]) -> str:
+    """One job, one line: id, role, state, age, and what it was for (§4, §7).
+
+    The verdict is what a human scanning the library is looking for; when a job
+    has none (it is still running, or it never printed one) the first line of the
+    prompt stands in, because §7's library is searched by prompt.
+    """
+    what = row.get("verdict") or row.get("prompt_line") or ""
+    return (
+        f"{row['id']}  {row['role']:<8} {row['state']:<9} "
+        f"{_age(row.get('created')):>5}  {what}"
+    )
+
+
+def _age(created: str | None) -> str:
+    """How long ago, in the coarsest unit that still says something."""
+    if not created:
+        return "?"
+    try:
+        then = datetime.strptime(created, "%Y-%m-%dT%H:%M:%S.%fZ").replace(tzinfo=UTC)
+    except ValueError:
+        return "?"
+    seconds = max(0, int((datetime.now(UTC) - then).total_seconds()))
+    for size, unit in ((86400, "d"), (3600, "h"), (60, "m")):
+        if seconds >= size:
+            return f"{seconds // size}{unit}"
+    return f"{seconds}s"
+
+
 def _numbers(values: list[Any]) -> str:
     return ", ".join(str(value) for value in values) or "none"
 
@@ -385,11 +442,19 @@ def _render(command: str, result: Any) -> str:
         rows = result.get("jobs", [])
         if not rows:
             return "no jobs"
-        return "\n".join(
-            f"{row['id']}  {row['state']:<9} {row['role']:<8} {row['created']}  "
-            f"{row.get('prompt_line', '')}"
-            for row in rows
-        )
+        return "\n".join(_job_line(row) for row in rows)
+    if command == "log" and isinstance(result, dict):
+        lines = result.get("lines") or []
+        if not lines:
+            return (
+                f"no captured stream for job {result.get('job')} "
+                f"({result.get('state')}): {result.get('path')}"
+            )
+        return "\n".join(lines)  # stream-json, verbatim: hands captured it, it does not re-render
+    if command == "tail" and isinstance(result, dict):
+        entries = result.get("entries") or []
+        header = f"transcript {result.get('path')}  (job {result.get('job')})"
+        return "\n".join([header, *entries])
     if command == "inbox" and isinstance(result, dict):
         events = result.get("events", [])
         if not events:
@@ -401,12 +466,24 @@ def _render(command: str, result: Any) -> str:
 # ------------------------------------------------------------------- the CLI
 
 
+def exec_session(argv: Sequence[str], cwd: str) -> None:
+    """Become `claude --resume <id>` in the role's cwd (§7). Never returns.
+
+    This is the one place hands replaces itself with another program: `hands
+    open` exists to hand a human an interactive session, and an interactive
+    session is not something a daemon can hold on their behalf.
+    """
+    os.chdir(cwd)
+    os.execvp(argv[0], list(argv))  # the argv is the daemon's answer, never a shell string
+
+
 def main(
     argv: Sequence[str] | None = None,
     *,
     stdout: TextIO | None = None,
     stderr: TextIO | None = None,
     stdin: TextIO | None = None,
+    exec_fn: Callable[[Sequence[str], str], None] | None = None,
 ) -> int:
     out = sys.stdout if stdout is None else stdout
     err = sys.stderr if stderr is None else stderr
@@ -425,20 +502,56 @@ def main(
         config = load_config(project)
         override = getattr(args, "socket", None)
         socket_path = Path(override).expanduser() if override else config.server.socket
+        # §7: `hands log -f <role>` is a follow, and a follow is many requests.
+        if command == "log" and args.role:
+            if args.job:
+                raise ValueError(
+                    f"hands log takes a job id or -f <role>, not both (got {args.job!r})"
+                )
+            return _follow(socket_path, args.role, project=project, out=out)
         params = {
             key: value for key, value in _PARAMS[command](args).items() if value is not None
         }
         result = call(socket_path, command, params, project=project)
+        # §7: `hands open` *is* the resume. With --json it is only described —
+        # the driver reads JSON and has no terminal to be replaced by (§12).
+        if command == "open" and not as_json:
+            (exec_fn or exec_session)(result["argv"], result["cwd"])
+            return 0
     except ClientError as exc:
         print(f"hands: {exc}", file=err)
         # §11: a background `wait --for` that timed out is not a failure of hands,
         # and the driver re-arms rather than reporting it.
         return EXIT_TIMEOUT if exc.code == TIMEOUT_CODE else 1
-    except (ConfigError, ValueError) as exc:
+    except (ConfigError, ValueError, OSError) as exc:
         print(f"hands: {exc}", file=err)
         return 1
     print(json.dumps(result, sort_keys=True) if as_json else _render(command, result), file=out)
     return 0
+
+
+def _follow(socket_path: Path, role: str, *, project: str, out: TextIO) -> int:
+    """`hands log -f <role>`: the running job's stream-json, line by line (§7).
+
+    The first request names the role and so refuses a role with nothing running;
+    every later one names the *job* it answered with, so a follow stays with the
+    job it started on and stops when that job does — it does not silently jump to
+    whatever the role runs next. Lines are printed exactly as captured: this is
+    the only rendering that cannot drop information.
+    """
+    params: dict[str, Any] = {"role": role, "offset": 0}
+    try:
+        while True:
+            result = call(socket_path, "log", params, project=project)
+            for line in result["lines"]:
+                print(line, file=out, flush=True)
+            params = {"job": result["job"], "offset": result["offset"]}
+            if not result["running"] and not result["lines"]:
+                return 0  # the job is terminal and its stream is drained
+            if not result["lines"]:
+                time.sleep(FOLLOW_INTERVAL_S)
+    except KeyboardInterrupt:  # pragma: no cover - a human stopping a watch
+        return 0  # Ctrl-C ends the watch and nothing else: watching is read-only
 
 
 def _prompt_of(args: argparse.Namespace, stdin: TextIO) -> str:

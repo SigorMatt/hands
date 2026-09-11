@@ -606,6 +606,15 @@ class Daemon:
 
     # ---------------------------------------------------------------- status
 
+    def running_job_id(self, role: str) -> str | None:
+        """The job this role is running now, if any (§6: one per role).
+
+        `status()` answers this too, but it reads the whole spool and inbox to do
+        it; `hands log -f` asks several times a second (§7), and a follow must
+        not cost a status report each time round.
+        """
+        return self._running.get(role)
+
     def status(self) -> dict[str, Any]:
         """§4: "daemon, roles, running jobs, monitor state"."""
         running: list[dict[str, Any]] = []

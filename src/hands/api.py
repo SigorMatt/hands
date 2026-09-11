@@ -17,7 +17,9 @@ are seams, not stubs: nothing in this unit's scope is hidden behind one.
 from __future__ import annotations
 
 import re
+import shlex
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from hands import files, gates
@@ -54,7 +56,9 @@ def _later(command: str, unit: str, what: str) -> NotImplementedYet:
     return NotImplementedYet(f"`hands {command}` is not implemented ({unit}): {what}")
 
 
-_SINCE_RE = re.compile(r"^(\d+)([dhm])$")
+_SINCE_RE = re.compile(r"^(\d+)([smhdw])$")
+#: `--since 2026-09-01`, or a fuller ISO stamp; compared lexically against `created`.
+_ISO_SINCE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}([T ][0-9:.]+Z?)?$")
 _SUMMARY_FIELDS = (
     "id", "role", "context", "state", "created", "started", "ended",
     "origin", "verdict", "session_id", "pid", "resumed_from",
@@ -219,13 +223,22 @@ class Api:
         since: str | None = None,
         n: int = 20,
     ) -> dict[str, Any]:
-        """Recent job summaries, newest first (§4). Rendering is U9's."""
+        """Recent job summaries, newest first (§4, §7).
+
+        §7: "searching prompts is searching work items". `grep` is a
+        case-insensitive substring of the *prompt* only — not of `result`: the
+        prompt is the work item a human named ("run 3", "Batch 12"), while the
+        result is the model's prose, and matching it would answer a search for a
+        run with jobs that were never part of it. What a human wants out of the
+        result — the verdict — is on every summary line already.
+        """
         cutoff = _since_cutoff(since)
+        needle = grep.lower() if grep is not None else None
         out: list[dict[str, Any]] = []
         for record in reversed(self.spool.list_jobs()):
             if role is not None and record.role != role:
                 continue
-            if grep is not None and grep not in record.prompt:
+            if needle is not None and needle not in record.prompt.lower():
                 continue
             if cutoff is not None and record.created < cutoff:
                 continue
@@ -235,15 +248,145 @@ class Api:
         return {"jobs": out}
 
     async def open(self, *, job: str) -> dict[str, Any]:
-        raise _later("open", "U9", "the `claude --resume` line for a finished job (§7)")
+        """The `claude --resume <session_id>` invocation for a finished job (§7).
 
-    async def log(self, *, job: str | None = None, role: str | None = None) -> dict[str, Any]:
-        raise _later(
-            "log", "U9", "the captured stream; the daemon already writes jobs/<id>.stream.jsonl"
-        )
+        The API only ever *describes* the session: it returns the argv and the
+        directory, and the CLI is what execs it (§3 — the daemon runs jobs, it
+        does not hand a human a terminal). §2's rule is enforced here, where
+        every caller of the API meets it: never resume a session whose job is
+        still running.
+        """
+        record = self._job(job)
+        if record.state == "running":
+            raise ApiError(
+                f"job {record.id} is still running; §2 forbids resuming its session. "
+                f"Watch it with `hands log -f {record.role}`, or "
+                f"`hands cancel {record.id}` first"
+            )
+        if not record.session_id:
+            raise ApiError(
+                f"job {record.id} is {record.state} and has no session id; "
+                "there is nothing to resume"
+            )
+        live = self._running_with_session(record.session_id, exclude=record.id)
+        if live is not None:
+            raise ApiError(
+                f"job {live} is running in the same session ({record.session_id}); "
+                f"§2 forbids resuming it. Watch it with `hands log -f {record.role}`"
+            )
+        try:
+            role_config = self.config.role(record.role)
+        except KeyError as exc:
+            raise ApiError(str(exc)) from exc
+        # §7 spells this invocation out in full: `claude --resume <session_id>`.
+        # Nothing else is added — this is the human's own interactive session,
+        # and the headless flags of §2 are the runner's, not theirs.
+        argv = [self.config.runner.claude, "--resume", record.session_id]
+        return {
+            "job": record.id,
+            "role": record.role,
+            "state": record.state,
+            "session_id": record.session_id,
+            "cwd": str(role_config.cwd),
+            "argv": argv,
+            "command": shlex.join(argv),
+        }
+
+    def _running_with_session(self, session_id: str, *, exclude: str) -> str | None:
+        """The id of another job that is `running` in this session, if there is one (§2)."""
+        for other in self.spool.list_jobs():
+            if other.id != exclude and other.state == "running" and other.session_id == session_id:
+                return other.id
+        return None
+
+    async def log(
+        self, *, job: str | None = None, role: str | None = None, offset: int = 0
+    ) -> dict[str, Any]:
+        """The captured stream of a job, from `offset` bytes on (§7).
+
+        The lines are the `--output-format stream-json` lines of §2, verbatim:
+        hands captured them, it does not re-render them. `offset` is what makes
+        `hands log -f` a follow rather than a re-print — the CLI asks again from
+        where the last answer ended — and a half-written trailing line is never
+        returned, so a follower never sees a fragment of an event.
+        """
+        if role is not None and job:
+            raise ApiError(f"hands log takes a job id or -f <role>, not both (got {job!r})")
+        record = self._role_job(role) if role is not None else self._log_job(job)
+        path = self.spool.jobs_dir / f"{record.id}.stream.jsonl"
+        lines, end = _read_from(path, offset)
+        return {
+            "job": record.id,
+            "role": record.role,
+            "state": record.state,
+            "running": record.state not in TERMINAL_STATES,
+            "path": str(path),
+            "exists": path.exists(),
+            "offset": end,
+            "lines": lines,
+        }
+
+    def _log_job(self, job: str | None) -> Job:
+        if not job:
+            raise ApiError("hands log needs a job id, or -f <role> to follow a running one (§7)")
+        return self._job(job)
+
+    def _role_job(self, role: str) -> Job:
+        """The job `hands log -f <role>` follows: the one running now (§7)."""
+        if role not in self.config.roles:
+            known = ", ".join(sorted(self.config.roles))
+            raise ApiError(f"unknown role {role!r}; this project configures: {known}")
+        running = self.daemon.running_job_id(role)
+        if running is None:
+            last = self._last_job(role)
+            hint = f"; its last job was {last.id} (`hands log {last.id}`)" if last else ""
+            raise ApiError(f"role {role} has no running job to follow{hint}")
+        return self._job(running)
+
+    def _last_job(self, role: str, *, with_transcript: bool = False) -> Job | None:
+        for record in reversed(self.spool.list_jobs()):
+            if record.role != role:
+                continue
+            if with_transcript and not record.transcript_path:
+                continue
+            return record
+        return None
 
     async def tail(self, *, role: str, n: int = 20) -> dict[str, Any]:
-        raise _later("tail", "U9", "the last n transcript entries of a role's session")
+        """The last `n` entries of the role's current or last transcript (§4).
+
+        The file is Claude Code's own (§7: "Transcripts are Claude Code's own
+        files under `~/.claude/projects/`; hands stores their paths"), so the
+        lines come back verbatim and unparsed — hands does not own that format
+        and will not pretend to.
+        """
+        if role not in self.config.roles:
+            known = ", ".join(sorted(self.config.roles))
+            raise ApiError(f"unknown role {role!r}; this project configures: {known}")
+        record = self._last_job(role, with_transcript=True)
+        if record is None or not record.transcript_path:
+            raise ApiError(
+                f"role {role} has no session with a transcript yet; "
+                f"`hands jobs --role {role}` shows what it has run"
+            )
+        path = Path(record.transcript_path).expanduser()
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace")
+        except OSError as exc:
+            raise ApiError(
+                f"cannot read the transcript of job {record.id} at {path}: {exc}. "
+                "Claude Code writes that file, not hands, and only for a session "
+                "that really ran on this machine"
+            ) from exc
+        entries = [line for line in text.splitlines() if line.strip()]
+        return {
+            "role": role,
+            "job": record.id,
+            "state": record.state,
+            "session_id": record.session_id,
+            "path": str(path),
+            "entries": entries[-n:] if n else entries,
+        }
 
     # ---------------------------------------------------------------- cancel
 
@@ -504,14 +647,51 @@ class Api:
 
 
 def _since_cutoff(since: str | None) -> str | None:
-    """`--since 2d|6h|30m` → an ISO cutoff; anything else is used as a literal prefix."""
+    """`--since 30m|6h|2d|1w` or `--since 2026-09-01` → an ISO cutoff (§4, §7).
+
+    A form hands cannot read is refused rather than guessed at: `created` is
+    compared lexically, so an unreadable word would silently sort above every
+    real timestamp and quietly answer "no jobs".
+    """
     if since is None:
         return None
-    match = _SINCE_RE.match(since.strip())
-    if match is None:
-        return since  # e.g. `--since 2026-09-01`; job.created sorts lexically
-    amount, unit = int(match.group(1)), match.group(2)
-    delta = {"d": timedelta(days=amount), "h": timedelta(hours=amount)}.get(
-        unit, timedelta(minutes=amount)
+    text = since.strip()
+    match = _SINCE_RE.match(text)
+    if match is not None:
+        amount, unit = int(match.group(1)), match.group(2)
+        delta = {
+            "s": timedelta(seconds=amount),
+            "m": timedelta(minutes=amount),
+            "h": timedelta(hours=amount),
+            "d": timedelta(days=amount),
+            "w": timedelta(weeks=amount),
+        }[unit]
+        return (datetime.now(UTC) - delta).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+    if _ISO_SINCE_RE.match(text):
+        return text.replace(" ", "T")
+    raise ApiError(
+        f"--since {since!r} is not a time hands can read; give an age (30s, 30m, "
+        "6h, 2d, 1w) or a date (2026-09-01)"
     )
-    return (datetime.now(UTC) - delta).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+
+
+def _read_from(path: Path, offset: int) -> tuple[list[str], int]:
+    """The complete lines of `path` after `offset` bytes, and where they end (§7).
+
+    A trailing partial line is left for the next read: the daemon appends to this
+    file while the job runs, so a follower that took one would print half an event
+    and then its other half.
+    """
+    start = max(0, int(offset))
+    try:
+        with path.open("rb") as handle:
+            handle.seek(start)
+            raw = handle.read()
+    except FileNotFoundError:
+        return [], start
+    except OSError as exc:  # pragma: no cover - unreadable spool file
+        raise ApiError(f"cannot read {path}: {exc}") from exc
+    cut = raw.rfind(b"\n") + 1
+    if cut == 0:
+        return [], start
+    return raw[:cut].decode("utf-8", errors="replace").splitlines(), start + cut
