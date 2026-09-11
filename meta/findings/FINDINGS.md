@@ -239,7 +239,7 @@ playbook is loaded. If §11 is ever revised, either name this procedure or say
 which command files the fake event.
 
 Status: open
-Status: fixed — DESIGN v3.1 §11 named the procedure. Mission 2 U4: `hands pause`
+Status: fixed 267ee01 — DESIGN v3.1 §11 named the procedure. Mission 2 U4: `hands pause`
 goes through the engine's own `stop()`, so it files the `stop` event with reason
 `paused by human` and notifies like any other stop; a second pause files nothing
 (`stop()` keeps "one stop, one notification") and no playbook needs to be loaded,
