@@ -22,6 +22,13 @@ interactive* Claude Code session, which a CLI process cannot be. Doctor
 therefore prints the procedure with the exact commands, for the human to run
 from the driver session, plus §11's fallback.
 
+**A config that will not load is a check result, not a crash** (§20, review 3
+should-fix 8). Doctor is the one command whose job is explaining a broken
+config, so the CLI hands the `ConfigError` back here as a failed `config` row
+(`config_error`) and prints the same report it always prints. Everything below
+therefore takes the project name and the config path rather than a `Config`:
+when there is no `Config`, there is still a report.
+
 Statuses: `ok`, `warn` (worth knowing, not broken), `skip` (deliberately not
 run), `fail` (this install will not work). `hands doctor` exits 1 if anything
 failed, 0 otherwise.
@@ -45,6 +52,7 @@ from hands.runner import build_argv
 __all__ = [
     "FAKE_ENV",
     "Check",
+    "config_error",
     "render",
     "report",
     "run_checks",
@@ -115,6 +123,21 @@ def run_checks(
     found += [_daemon_check(config, socket_path, daemon)]
     found += [_live_check(config, role, live=live) for role in config.roles.values()]
     return found
+
+
+def config_error(exc: Exception, path: Path | None) -> Check:
+    """The `config` row when the config does not load at all (§4, §20).
+
+    The name is `config` — the row a `--json` caller already reads — so a broken
+    config is the same check failing, not a different report shape.
+    """
+    where = f"{path}: " if path is not None and str(path) not in str(exc) else ""
+    return Check(
+        "config",
+        FAIL,
+        f"{where}{exc}\nthe config does not load, so none of doctor's other checks "
+        "could run; fix the line above and run `hands doctor` again (§13)",
+    )
 
 
 def _config_check(config: Config) -> Check:
@@ -374,7 +397,7 @@ def _live_check(config: Config, role: RoleConfig, *, live: bool) -> Check:
 # ------------------------------------------------------- the wake check (§11)
 
 
-def wake_procedure(config: Config) -> list[str]:
+def wake_procedure(project: str) -> list[str]:
     """§11's background-wake check, for the human to run from the driver session.
 
     hands cannot run this itself: it needs an idle *interactive* Claude Code
@@ -385,7 +408,6 @@ def wake_procedure(config: Config) -> list[str]:
     runs, cleared with `hands deny`. The second is the only one that witnesses a
     real `job.held`, which is the other kind the driver waits for.
     """
-    project = config.project
     return [
         "Background-wake check (§11) — hands cannot run this one: it needs an idle",
         "interactive Claude Code session. Run it once, by hand, on a new install.",
@@ -430,10 +452,10 @@ def wake_procedure(config: Config) -> list[str]:
 # ------------------------------------------------------------- the rendering
 
 
-def render(config: Config, found: list[Check], *, live: bool) -> str:
+def render(project: str, found: list[Check], *, live: bool) -> str:
     """The readable report. `--json` prints the same facts as data."""
     width = max((len(check.name) for check in found), default=0)
-    lines = [f"hands doctor — project {config.project}", ""]
+    lines = [f"hands doctor — project {project}", ""]
     for check in found:
         head, *rest = check.detail.splitlines() or [""]
         lines.append(f"  {check.status:<4}  {check.name:<{width}}  {head}")
@@ -449,23 +471,25 @@ def render(config: Config, found: list[Check], *, live: bool) -> str:
     ]
     if not live and not is_fake():
         lines.append("  (the one-turn `claude -p` per role is only run by `hands doctor --live`)")
-    lines += ["", *wake_procedure(config), ""]
+    lines += ["", *wake_procedure(project), ""]
     lines.append(
         "doctor: green" if not counted[FAIL] else f"doctor: {counted[FAIL]} check(s) failed"
     )
     return "\n".join(lines)
 
 
-def report(config: Config, found: list[Check], *, live: bool) -> dict[str, Any]:
+def report(
+    project: str, path: Path | None, found: list[Check], *, live: bool
+) -> dict[str, Any]:
     """The `--json` form: what the driver (and §9's MCP face) would read."""
     return {
-        "project": config.project,
-        "config": str(config.path),
+        "project": project,
+        "config": str(path) if path is not None else "",
         "live": live,
         "fake": is_fake(),
         "checks": [check.to_dict() for check in found],
         "green": not any(check.status == FAIL for check in found),
-        "wake_check": wake_procedure(config),
+        "wake_check": wake_procedure(project),
     }
 
 

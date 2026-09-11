@@ -61,6 +61,9 @@ DEFAULT_PLAYBOOK_PATH = "PLAYBOOK.toml"  # §10, relative to roles.builder.cwd
 DEFAULT_CLAUDE = "claude"
 DEFAULT_CANCEL_GRACE_S = 20.0  # §2: SIGINT, wait, SIGTERM
 
+#: What leaving [ops] out means (§5): both keys, or neither.
+_BUILT_IN_MONITOR = "hands then watches builder jobs with its built-in stall detector"
+
 
 @dataclass(frozen=True)
 class ServerConfig:
@@ -238,9 +241,31 @@ def parse_config(data: dict[str, Any], *, project: str, path: Path) -> Config:
     server_t = _table(data, "server", path)
     _check_keys(server_t, ("socket", "ntfy_topic", "ntfy_url"), "[server]", path)
     server = ServerConfig(
-        socket=_path(server_t, "socket", DEFAULT_SOCKET, "[server]", path),
-        ntfy_topic=_opt_str(server_t, "ntfy_topic", "[server]", path),
-        ntfy_url=_str(server_t, "ntfy_url", DEFAULT_NTFY_URL, "[server]", path),
+        socket=_path(
+            server_t,
+            "socket",
+            DEFAULT_SOCKET,
+            "[server]",
+            path,
+            blank=_omit(f"the socket is then {DEFAULT_SOCKET}", "path"),
+        ),
+        ntfy_topic=_opt_str(
+            server_t,
+            "ntfy_topic",
+            "[server]",
+            path,
+            blank=_omit(
+                "§11's notifications then have nowhere to go, which doctor warns about", "topic"
+            ),
+        ),
+        ntfy_url=_str(
+            server_t,
+            "ntfy_url",
+            DEFAULT_NTFY_URL,
+            "[server]",
+            path,
+            blank=_omit(f"notifications then go to {DEFAULT_NTFY_URL}", "URL"),
+        ),
     )
 
     roles_t = _table(data, "roles", path)
@@ -257,8 +282,26 @@ def parse_config(data: dict[str, Any], *, project: str, path: Path) -> Config:
     _check_keys(ops_t, ("repo", "monitor_cmd"), "[ops]", path)
     repo = ops_t.get("repo")
     ops = OpsConfig(
-        repo=None if repo is None else _abs(_path(ops_t, "repo", "", "[ops]", path), "ops.repo"),
-        monitor_cmd=_opt_str(ops_t, "monitor_cmd", "[ops]", path),
+        repo=(
+            None
+            if repo is None
+            else _abs(
+                _path(
+                    ops_t,
+                    "repo",
+                    "",
+                    "[ops]",
+                    path,
+                    blank=_omit(_BUILT_IN_MONITOR, "path"),
+                ),
+                "ops.repo",
+            )
+        ),
+        # Review 3 should-fix 5: `Path('/ops') / '' == Path('/ops')`, so a blank
+        # here used to make the ops *directory* the monitor script (§5).
+        monitor_cmd=_opt_str(
+            ops_t, "monitor_cmd", "[ops]", path, blank=_omit(_BUILT_IN_MONITOR, "script name")
+        ),
     )
 
     monitor_t = _table(data, "monitor", path)
@@ -278,7 +321,14 @@ def parse_config(data: dict[str, Any], *, project: str, path: Path) -> Config:
 
     playbook_t = _table(data, "playbook", path)
     _check_keys(playbook_t, ("path",), "[playbook]", path)
-    playbook_path = _str(playbook_t, "path", DEFAULT_PLAYBOOK_PATH, "[playbook]", path)
+    playbook_path = _str(
+        playbook_t,
+        "path",
+        DEFAULT_PLAYBOOK_PATH,
+        "[playbook]",
+        path,
+        blank=_omit(f"hands then looks for {DEFAULT_PLAYBOOK_PATH} in roles.builder.cwd", "path"),
+    )
     if Path(playbook_path).is_absolute() or playbook_path.startswith("~"):
         raise ConfigError(
             f"{path}: playbook.path must be relative to roles.builder.cwd, got {playbook_path!r}"
@@ -290,7 +340,13 @@ def parse_config(data: dict[str, Any], *, project: str, path: Path) -> Config:
     if "allowed_roots" in files_t:
         roots = tuple(
             _abs(Path(item).expanduser(), "files.allowed_roots")
-            for item in _str_list(files_t, "allowed_roots", "[files]", path)
+            for item in _str_list(
+                files_t,
+                "allowed_roots",
+                "[files]",
+                path,
+                blank=_omit("the role working directories are then the only roots", "path"),
+            )
         )
         if not roots:
             raise ConfigError(f"{path}: files.allowed_roots must not be empty")
@@ -305,7 +361,15 @@ def parse_config(data: dict[str, Any], *, project: str, path: Path) -> Config:
     # §8: "gating on the default patterns cannot be disabled". A project's list
     # is therefore *added* to the defaults, never substituted for them: the union
     # is taken here, defaults first, so a config can only ever widen the gate.
-    extra = tuple(_str_list(gates_t, "patterns", "[gates]", path))
+    extra = tuple(
+        _str_list(
+            gates_t,
+            "patterns",
+            "[gates]",
+            path,
+            blank=_omit("only §8's default patterns then gate", "pattern"),
+        )
+    )
     gates = GatesConfig(
         patterns=DEFAULT_GATE_PATTERNS
         + tuple(p for p in dict.fromkeys(extra) if p not in DEFAULT_GATE_PATTERNS)
@@ -314,7 +378,14 @@ def parse_config(data: dict[str, Any], *, project: str, path: Path) -> Config:
     runner_t = _table(data, "runner", path)
     _check_keys(runner_t, ("claude", "cancel_grace_s"), "[runner]", path)
     runner = RunnerConfig(
-        claude=_str(runner_t, "claude", DEFAULT_CLAUDE, "[runner]", path),
+        claude=_str(
+            runner_t,
+            "claude",
+            DEFAULT_CLAUDE,
+            "[runner]",
+            path,
+            blank=_omit(f"hands then spawns `{DEFAULT_CLAUDE}` from PATH", "name or path"),
+        ),
         cancel_grace_s=_number(
             runner_t, "cancel_grace_s", DEFAULT_CANCEL_GRACE_S, "[runner]", path
         ),
@@ -349,9 +420,29 @@ def _role(name: str, table: Any, path: Path) -> RoleConfig:
         raise ConfigError(f"{path}: {where} needs a cwd")
     return RoleConfig(
         name=name,
-        cwd=_abs(_path(table, "cwd", "", where, path), f"roles.{name}.cwd"),
-        model=_str(table, "model", DEFAULT_MODEL, where, path),
-        permission_flags=_str(table, "permission_flags", "", where, path),
+        cwd=_abs(
+            _path(
+                table,
+                "cwd",
+                "",
+                where,
+                path,
+                # The one required key of §13: "omit it" is not one of the choices.
+                blank=f"{where} cwd is the only required key (§13): name the role's "
+                "working directory, as an absolute path or one starting with ~",
+            ),
+            f"roles.{name}.cwd",
+        ),
+        model=_str(
+            table,
+            "model",
+            DEFAULT_MODEL,
+            where,
+            path,
+            blank=_omit(f"the role then runs {DEFAULT_MODEL}", "model name"),
+        ),
+        # "" is this key's default and its meaning: no permission flags at all.
+        permission_flags=_str(table, "permission_flags", "", where, path, blank=None),
         # H-008: no default — absent means "re-send the limited prompt". Empty is
         # refused above (§19), so the two behaviours cannot be confused.
         resume_line=_resume_line(table, where, path),
@@ -370,14 +461,24 @@ def _resume_line(table: dict[str, Any], where: str, path: Path) -> str | None:
     an operator mistake rather than a second way to ask for that branch, and it
     is refused here instead of at the two resume sites.
     """
-    value = _opt_str(table, "resume_line", where, path)
-    if value is not None and not value.strip():
-        raise ConfigError(
-            f"{path}: {where} resume_line must not be empty, got {value!r}; "
-            f"either omit the key entirely (a limit resume then re-sends the "
-            f"limited job's own prompt) or give a non-empty line"
-        )
-    return value
+    return _opt_str(
+        table,
+        "resume_line",
+        where,
+        path,
+        blank=_omit("a limit resume then re-sends the limited job's own prompt", "line"),
+    )
+
+
+def _omit(absent: str, noun: str = "value") -> str:
+    """The tail every blank refusal carries: the two valid choices (§20).
+
+    Review 3 should-fix 5: mission 3 refused a blank `resume_line` and left the
+    same hole in the next dataclass down. The shape is one function now, so the
+    choices are named identically for every key, and `absent` forces each call
+    site to say what leaving the key out actually does.
+    """
+    return f"either omit the key entirely ({absent}) or give a non-empty {noun}"
 
 
 # --------------------------------------------------------------- primitives
@@ -399,17 +500,29 @@ def _table(data: dict[str, Any], name: str, path: Path) -> dict[str, Any]:
     return value
 
 
-def _str(table: dict[str, Any], key: str, default: str, where: str, path: Path) -> str:
+def _str(
+    table: dict[str, Any], key: str, default: str, where: str, path: Path, *, blank: str | None
+) -> str:
+    """One string key. `blank` is the hint printed when the value is empty.
+
+    `blank=None` is the explicit "an empty string is a legal value here" — it is
+    a required argument precisely so that a new key cannot acquire the §20 hole
+    by omission: whoever adds the key has to answer the question.
+    """
     value = table.get(key, default)
     if not isinstance(value, str):
         raise ConfigError(f"{path}: {where} {key} must be a string, got {value!r}")
+    if blank is not None and not value.strip():
+        raise ConfigError(f"{path}: {where} {key} must not be empty, got {value!r}; {blank}")
     return value
 
 
-def _opt_str(table: dict[str, Any], key: str, where: str, path: Path) -> str | None:
+def _opt_str(
+    table: dict[str, Any], key: str, where: str, path: Path, *, blank: str | None
+) -> str | None:
     if key not in table:
         return None
-    return _str(table, key, "", where, path)
+    return _str(table, key, "", where, path, blank=blank)
 
 
 def _bool(table: dict[str, Any], key: str, default: bool, where: str, path: Path) -> bool:
@@ -439,15 +552,21 @@ def _number(table: dict[str, Any], key: str, default: float, where: str, path: P
     return float(value)
 
 
-def _str_list(table: dict[str, Any], key: str, where: str, path: Path) -> list[str]:
+def _str_list(table: dict[str, Any], key: str, where: str, path: Path, *, blank: str) -> list[str]:
     value = table.get(key, [])
     if not isinstance(value, list) or any(not isinstance(item, str) for item in value):
         raise ConfigError(f"{path}: {where} {key} must be a list of strings, got {value!r}")
+    if any(not item.strip() for item in value):
+        raise ConfigError(
+            f"{path}: {where} {key} must not contain an empty string, got {value!r}; {blank}"
+        )
     return value
 
 
-def _path(table: dict[str, Any], key: str, default: str, where: str, path: Path) -> Path:
-    return Path(_str(table, key, default, where, path)).expanduser()
+def _path(
+    table: dict[str, Any], key: str, default: str, where: str, path: Path, *, blank: str | None
+) -> Path:
+    return Path(_str(table, key, default, where, path, blank=blank)).expanduser()
 
 
 def _abs(value: Path, what: str) -> Path:

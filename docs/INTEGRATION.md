@@ -56,12 +56,7 @@ cwd` is optional.
     permission_flags = "--dangerously-skip-permissions"
     resume_line = "Resume WORKPLAN.md"   # optional, no default: sent on a limit
                                          # resume (§6). Leave it out and a limit
-                                         # resume re-sends the limited prompt.
-                                         # `resume_line = ""` (or blanks only) is
-                                         # refused at load: an empty line is no
-                                         # prompt, and it would silently mean the
-                                         # other behaviour. Omit the key, or give
-                                         # a non-empty line
+                                         # resume re-sends the limited prompt
     queue_depth = 1                      # capacity: how many jobs may wait
     cancel_gated = true                  # default
 
@@ -103,6 +98,12 @@ Notes that are easy to get wrong:
   `decisions-`, `playbook-`, `gh pr create`, `open the PR`). A config can only
   widen the gate, never disable it (§8).
 - `roles` are exactly `builder` and `aux`; `[roles.builder]` is required.
+- **An empty string is refused at load, for every optional key** (§20): `""` or
+  blanks only is neither the key's absent meaning nor a usable value — an empty
+  `ops.monitor_cmd` would have made the *ops directory* the monitor script. The
+  error names both valid choices: omit the key, or give it a real value. The one
+  exception is `permission_flags`, whose `""` is its default and means "no
+  flags".
 
 ## 4. `hands doctor` (§14 step 1)
 
@@ -113,6 +114,11 @@ each role's `cwd` (and whether it is a git repository), the allowed roots, the
 ops script's flags, the playbook, and whether handsd is answering. A daemon
 that is not running is a **warning**, not a failure — this step comes before
 you have to have started one. Exit code 1 means a check failed.
+
+A config that will not load at all is reported the same way, not as a crash:
+doctor prints its usual report with a failed `config` row carrying the error
+(`--json` included) and exits 1. It is the one command that does this — every
+other command exits 1 with the message alone.
 
     hands doctor --live       # also runs ONE real `claude -p` turn per role
 

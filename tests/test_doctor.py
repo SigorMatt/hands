@@ -351,6 +351,80 @@ def test_the_wake_procedure_is_in_the_json_too(
     assert report["green"] is True
 
 
+# ------------------------------------------- a config that will not load (§20)
+
+
+def break_config(tmp_home: Path, tmp_path: Path) -> str:
+    """A whole, valid config with one key emptied — the §20 refusal from U4(a)."""
+    path = write_config(tmp_home, tmp_path)
+    path.write_text(path.read_text().replace('ntfy_topic = "hands-test"', "ntfy_topic = ''"))
+    return str(path)
+
+
+def test_doctor_reports_a_config_error_as_a_failed_check(
+    tmp_home: Path, tmp_path: Path, fake_mode: None
+) -> None:
+    """Review 3 should-fix 8: doctor explains a broken config, it does not die of one.
+
+    Every other command exits 1 with the bare `ConfigError`; doctor is the one
+    whose job this is, so the error becomes its `config` row — normal report,
+    status `fail`, exit 1.
+    """
+    break_config(tmp_home, tmp_path)
+
+    code, out, err = run()
+
+    assert code == 1
+    assert "hands doctor — project demo" in out  # the normal report, not a bare message
+    assert "ntfy_topic" in out, out  # the ConfigError's own words
+    assert "omit" in out and "non-empty" in out  # including both valid choices
+    assert "fail" in out and "config" in out
+    assert out.strip().splitlines()[-1] == "doctor: 1 check(s) failed"
+    assert err == "", err
+
+
+def test_the_failed_config_check_has_the_same_shape_in_json(
+    tmp_home: Path, tmp_path: Path, fake_mode: None
+) -> None:
+    """A caller parsing `--json` reads the same failed `config` check, not a new shape."""
+    path = break_config(tmp_home, tmp_path)
+
+    code, out, _err = run("--json")
+
+    report = json.loads(out)
+    found = {check["name"]: check for check in report["checks"]}
+    assert code == 1
+    assert report["green"] is False
+    assert report["project"] == "demo"
+    assert report["config"] == path
+    assert found["config"]["status"] == "fail"
+    assert "ntfy_topic" in found["config"]["detail"]
+    assert any("hands wait --for stop,held" in line for line in report["wake_check"])
+
+
+def test_doctor_reports_a_missing_config_too(tmp_home: Path) -> None:
+    """§14 step 1 runs doctor on a config that may not be there yet."""
+    code, out, err = run()
+    assert code == 1
+    assert "demo.toml" in out
+    assert err == ""
+
+
+def test_other_commands_still_exit_with_the_bare_config_error(
+    tmp_home: Path, tmp_path: Path, fake_mode: None
+) -> None:
+    """The reporting is doctor's alone; `status` (and every other command) is unchanged."""
+    break_config(tmp_home, tmp_path)
+    out, err = io.StringIO(), io.StringIO()
+
+    code = main(["--project", "demo", "status"], stdout=out, stderr=err)
+
+    assert code == 1
+    assert out.getvalue() == ""
+    assert err.getvalue().startswith("hands: ")
+    assert "ntfy_topic" in err.getvalue()
+
+
 # ------------------------------------------------- the same surface over §9
 
 

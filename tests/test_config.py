@@ -282,10 +282,119 @@ def test_an_empty_resume_line_on_aux_is_refused_too(write_config) -> None:
     assert "resume_line" in str(exc.value)
 
 
-def test_an_empty_ntfy_topic_is_still_legal(write_config) -> None:
-    """The refusal is at the `resume_line` site: other optional strings keep ""."""
-    write_config("[server]\nntfy_topic = ''\n[roles.builder]\ncwd = '~/g'\n")
-    assert load_config("demo").server.ntfy_topic == ""
+#: Every optional string key of §13, with `{v}` where the blank value goes.
+#: The table lives here rather than being derived from `config.py`, so that a key
+#: added to the parser without a blank refusal shows up as a row nobody wrote —
+#: review 3 should-fix 5 was exactly one dataclass that the last sweep missed.
+OPTIONAL_STRING_KEYS = [
+    (
+        "server.socket",
+        "[server]\nsocket = {v}\n[roles.builder]\ncwd = '~/g'\n",
+        "[server]",
+        "socket",
+    ),
+    (
+        "server.ntfy_topic",
+        "[server]\nntfy_topic = {v}\n[roles.builder]\ncwd = '~/g'\n",
+        "[server]",
+        "ntfy_topic",
+    ),
+    (
+        "server.ntfy_url",
+        "[server]\nntfy_url = {v}\n[roles.builder]\ncwd = '~/g'\n",
+        "[server]",
+        "ntfy_url",
+    ),
+    (
+        "roles.builder.model",
+        "[roles.builder]\ncwd = '~/g'\nmodel = {v}\n",
+        "[roles.builder]",
+        "model",
+    ),
+    (
+        "roles.builder.resume_line",
+        "[roles.builder]\ncwd = '~/g'\nresume_line = {v}\n",
+        "[roles.builder]",
+        "resume_line",
+    ),
+    ("ops.repo", "[roles.builder]\ncwd = '~/g'\n[ops]\nrepo = {v}\n", "[ops]", "repo"),
+    (
+        "ops.monitor_cmd",
+        "[roles.builder]\ncwd = '~/g'\n[ops]\nrepo = '~/ops'\nmonitor_cmd = {v}\n",
+        "[ops]",
+        "monitor_cmd",
+    ),
+    (
+        "playbook.path",
+        "[roles.builder]\ncwd = '~/g'\n[playbook]\npath = {v}\n",
+        "[playbook]",
+        "path",
+    ),
+    (
+        "files.allowed_roots",
+        "[roles.builder]\ncwd = '~/g'\n[files]\nallowed_roots = ['~/g', {v}]\n",
+        "[files]",
+        "allowed_roots",
+    ),
+    (
+        "gates.patterns",
+        "[roles.builder]\ncwd = '~/g'\n[gates]\npatterns = [{v}]\n",
+        "[gates]",
+        "patterns",
+    ),
+    (
+        "runner.claude",
+        "[roles.builder]\ncwd = '~/g'\n[runner]\nclaude = {v}\n",
+        "[runner]",
+        "claude",
+    ),
+]
+
+
+@pytest.mark.parametrize("blank", ["''", "'   '"], ids=["empty", "blanks"])
+@pytest.mark.parametrize(
+    "body,where,key",
+    [row[1:] for row in OPTIONAL_STRING_KEYS],
+    ids=[row[0] for row in OPTIONAL_STRING_KEYS],
+)
+def test_an_optional_string_key_refuses_a_blank_value(
+    write_config, body: str, where: str, key: str, blank: str
+) -> None:
+    """§20 (review 3 should-fix 5): `""` is not a third state for an optional key.
+
+    Every key here means something definite when it is left out. An empty value
+    is neither that meaning nor a usable one — `Path('/ops') / ''` is the ops
+    *directory*, which `hands status` would then report as the deciding monitor
+    script while builder jobs go unwatched — so it is refused at load, with both
+    valid choices named, the way mission 3 did it for `resume_line`.
+    """
+    write_config(body.format(v=blank))
+    with pytest.raises(ConfigError) as exc:
+        load_config("demo")
+    message = str(exc.value)
+    assert "demo.toml" in message  # the `path` context every config error carries
+    assert where in message and key in message
+    assert "omit" in message  # choice 1: leave the key out
+    assert "non-empty" in message  # choice 2: give a real value
+
+
+def test_an_empty_monitor_cmd_cannot_make_the_ops_repo_the_monitor(write_config) -> None:
+    """Review 3 should-fix 5, stated as the behaviour it prevents.
+
+    `OpsConfig(repo=Path('/x'), monitor_cmd="").monitor_path` was `/x` — a
+    directory as the monitor script. No config can reach that state now.
+    """
+    write_config("[roles.builder]\ncwd = '~/g'\n[ops]\nrepo = '~/ops'\nmonitor_cmd = ''\n")
+    with pytest.raises(ConfigError) as exc:
+        load_config("demo")
+    assert "monitor_cmd" in str(exc.value)
+
+
+def test_empty_permission_flags_stay_legal(write_config) -> None:
+    """The one optional string whose blank is its default: no flags at all (§13)."""
+    write_config("[roles.builder]\ncwd = '~/g'\npermission_flags = ''\n")
+    assert load_config("demo").role("builder").permission_flags == ""
+    assert load_config("demo").role("builder").permission_argv == ()
 
 
 def test_unknown_section_is_refused(write_config) -> None:

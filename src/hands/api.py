@@ -689,7 +689,7 @@ class Api:
                 "socket": str(self.daemon.socket_path),
             },
         )
-        return doctor_report(self.config, found, live=live)
+        return doctor_report(self.config.project, self.config.path, found, live=live)
 
     # -------------------------------------------------------------- internals
 

@@ -24,7 +24,7 @@ from typing import Any, TextIO
 from hands import __version__, doctor
 from hands import notify as notify_mod
 from hands.api import TIMEOUT as TIMEOUT_CODE
-from hands.config import Config, ConfigError, load_config, resolve_project
+from hands.config import Config, ConfigError, config_path, load_config, resolve_project
 from hands.spool import ORIGINS
 
 __all__ = [
@@ -570,8 +570,18 @@ def main(
     try:
         if command == "send":
             args.prompt = _prompt_of(args, sys.stdin if stdin is None else stdin)
-        project = resolve_project(getattr(args, "project", None))
-        config = load_config(project)
+        project: str | None = None
+        try:
+            project = resolve_project(getattr(args, "project", None))
+            config = load_config(project)
+        except ConfigError as exc:
+            # §4/§20 (review 3 should-fix 8): doctor is the command whose job is
+            # explaining a broken config, so it reports the error as its failed
+            # `config` check instead of dying with a bare message. Every other
+            # command still surfaces a ConfigError the way it always has.
+            if command != "doctor":
+                raise
+            return _doctor_unloadable(project, exc, live=args.live, out=out, as_json=as_json)
         override = getattr(args, "socket", None)
         socket_path = Path(override).expanduser() if override else config.server.socket
         # §14 step 1 is "write the config; `hands doctor`" — before handsd has
@@ -620,10 +630,41 @@ def _doctor(
     failure, because §14 runs doctor on a config the daemon has never seen.
     """
     found = doctor.run_checks(config, live=live, socket_path=socket_path)
+    return _doctor_print(
+        config.project, config.path, found, live=live, out=out, as_json=as_json
+    )
+
+
+def _doctor_unloadable(
+    project: str | None, exc: ConfigError, *, live: bool, out: TextIO, as_json: bool
+) -> int:
+    """`hands doctor` on a config that will not load (§20, review 3 should-fix 8).
+
+    The same report, with the error as the `config` row a `--json` caller already
+    reads. No other check can run: they all need the config. `project` is None
+    only when the project itself could not be resolved — there is then no path to
+    name either, and the wake procedure prints a placeholder rather than a guess.
+    """
+    named = project or "<project>"
+    path = config_path(project) if project else None
+    found = [doctor.config_error(exc, path)]
+    return _doctor_print(named, path, found, live=live, out=out, as_json=as_json)
+
+
+def _doctor_print(
+    project: str,
+    path: Path | None,
+    found: list[doctor.Check],
+    *,
+    live: bool,
+    out: TextIO,
+    as_json: bool,
+) -> int:
+    """One printer for both, so the two reports cannot drift into two shapes."""
     if as_json:
-        print(json.dumps(doctor.report(config, found, live=live), sort_keys=True), file=out)
+        print(json.dumps(doctor.report(project, path, found, live=live), sort_keys=True), file=out)
     else:
-        print(doctor.render(config, found, live=live), file=out)
+        print(doctor.render(project, found, live=live), file=out)
     return 1 if any(check.status == doctor.FAIL for check in found) else 0
 
 
