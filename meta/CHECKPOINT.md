@@ -1,30 +1,31 @@
 # CHECKPOINT
 
 Mission: 1 (meta/BUILDER-1-PROMPT.md)
-Unit in progress: U6 Monitor bridge
-Intent: DESIGN §5 — every builder job is watched from outside the
-process, one report per event, never an intervention. The ops repo's
-script is the real monitor; the built-in stall detector is the fallback
-when no script is configured.
+Unit in progress: U7 Playbook engine
+Intent: the reason hands exists — the architect's pre-planned steps run
+without a human, and anything outside them stops the pipeline and calls
+one. DESIGN §10 is the whole specification; read it twice.
 Done means:
-  - For every builder job, if `ops.monitor_cmd` is set, run
-    `<ops.repo>/<monitor_cmd> --pids <pid list> --transcript <path>
-    --base <head_at_start>` and file each blank-line-separated stdout
-    block to the inbox as `monitor.<kind>`, `<kind>` = the block's first
-    word lower-cased (`stall`, `tripwire`, else `event`). Blocks are
-    filed verbatim.
-  - If unset, run the built-in liveness/stall monitor of §5 (transcript
-    mtime, `subagents/` dir mtime, process CPU ticks): no progress and no
-    liveness for `monitor.stall_minutes` → one `monitor.stall` event,
-    re-firing only after another interval.
-  - Tripwires are external-only in this mission.
-  - The monitor stops when the job ends.
-  - Tests with a fake monitor script and with the built-in monitor at
-    `stall_minutes = 0.01`.
+  - `src/hands/playbook.py` loads `<roles.builder.cwd>/<playbook.path>`
+    when a job starts and records its sha256 on every job it fires.
+  - Rules per §10: `on`, optional `verdict` regex with named groups,
+    `then` in `send | resume | notify | stop`, placeholders `{name}`,
+    `{name+k}` integer arithmetic, `{job.*}`, `only_if_run_in =
+    "auto_runs"`.
+  - Unmatched event, missing or unparseable verdict, exhausted limits →
+    `stop`. `stop` pauses the engine, records the reason, writes the inbox
+    event.
+  - `hands pause` / `hands resume`; `hands pipeline` per §4 (path,
+    sha256, series, paused?, auto-runs used/allowed, resumes used, last
+    rule fired, current stop reason).
+  - `origin = playbook` on fired jobs.
+  - Table-driven tests including the §10 example playbook end to end
+    against `fake_claude`: run finished -> review sent -> blockers=0 ->
+    run 3 sent -> run 4 not in auto_runs -> stop.
   - `./scripts/check` green; one commit; pushed.
 Standing constraints: execution model of BUILDER-1-PROMPT.md is binding;
 one sub-agent per unit; commit and push every unit; ./scripts/check green;
-no test may require a real `claude` binary and no test may wait a real
-stall interval; sub-agents never edit meta/plan.md, meta/CHECKPOINT.md or
-DESIGN.md; design changes and product facts that contradict the design
-are findings in meta/findings/FINDINGS.md with evidence.
+no test may require a real `claude` binary; sub-agents never edit
+meta/plan.md, meta/CHECKPOINT.md or DESIGN.md; design changes and product
+facts that contradict the design are findings in meta/findings/FINDINGS.md
+with evidence.

@@ -8,3 +8,4 @@ One line per unit, appended by the builder: date, unit, sha, verdict.
 2026-09-11  U3 Daemon, local API, CLI  1e4429a  green (249 tests); e2e over the real socket
 2026-09-11  U4 Files and gates  3d27480  green (293 tests); authority table table-driven
 2026-09-11  U5 Limits  b667786  green (341 tests); finding H-004 (origin of a self-made job)
+2026-09-11  U6 Monitor bridge  37d4e2a  green (361 tests); ops-script contract untested against a real script
