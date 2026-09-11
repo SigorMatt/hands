@@ -89,6 +89,8 @@ daemon's.
 Three commands are worth knowing before the rest:
 
     hands send --role builder --context clear "Execute WORKPLAN.md run 2"
+    hands send --role builder --context clear --prompt-file ./run-3.txt   # prose: the
+                                                # prompt is the file, sent byte for byte
     hands wait --for stop,held --timeout 3600   # the driver's wake path (§11)
     hands approve <job> --human-confirmed --quote "<your own words>"
 

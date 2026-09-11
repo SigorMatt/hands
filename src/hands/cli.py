@@ -147,8 +147,14 @@ def build_parser() -> argparse.ArgumentParser:
     send.add_argument(
         "--gate", metavar="REASON", help="hold the job until a human decides it (§8)"
     )
+    send.add_argument(
+        "--prompt-file",
+        metavar="PATH",
+        help="read the prompt from this file (UTF-8), sent byte for byte; §4's "
+        "normal route for prose, since the prompt never touches a command line",
+    )
     send.add_argument("--stdin", action="store_true", help="read the prompt from stdin")
-    send.add_argument("prompt", nargs="?", help="the prompt; or use --stdin")
+    send.add_argument("prompt", nargs="?", help="the prompt; or --prompt-file/--stdin")
 
     wait = command("wait", "block until a job is terminal, or an event arrives")
     wait.add_argument("job", nargs="?")
@@ -687,12 +693,56 @@ def _follow(socket_path: Path, role: str, *, project: str, out: TextIO) -> int:
         return 0  # Ctrl-C ends the watch and nothing else: watching is read-only
 
 
+#: §4's `send` row: `[--prompt-file path|--stdin|prompt]`. Spelled once so the
+#: refusals name all three routes, whichever of them the caller reached for.
+_PROMPT_ROUTES = "--prompt-file PATH, --stdin, or a prompt argument"
+
+
+def _read_prompt_file(where: str) -> str:
+    """§4/§12: the prompt travels as a file, so no shell ever parses it.
+
+    The bytes are sent exactly as they are — a trailing newline included, the
+    way `--stdin` sends what it was piped. Only an empty (or all-whitespace)
+    file is refused: `Api.send` refuses an empty prompt anyway (§6), and
+    catching it here names the file that was empty.
+
+    This is the one path where hands reads a file without `files.py`'s
+    allowed-roots check, and that is deliberate, not an oversight: those roots
+    confine what the *daemon* writes and reads on a role's behalf, while this
+    read is the CLI's own, running as the human who typed the command. A human
+    is not confined to their own roles' roots.
+    """
+    path = Path(where).expanduser()
+    try:
+        raw = path.read_bytes()
+    except OSError as exc:
+        raise ValueError(f"--prompt-file {path}: {exc.strerror or exc}") from exc
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise ValueError(f"--prompt-file {path}: not UTF-8 text ({exc})") from exc
+    if not text.strip():
+        raise ValueError(f"--prompt-file {path} is empty; refusing to send an empty prompt")
+    return text
+
+
 def _prompt_of(args: argparse.Namespace, stdin: TextIO) -> str:
-    """§4: `[--stdin|prompt]` — one of the two, never both, never neither."""
-    if args.stdin and args.prompt is not None:
-        raise ValueError("give a prompt or --stdin, not both")
+    """§4: `[--prompt-file path|--stdin|prompt]` — exactly one of the three."""
+    given = [
+        name
+        for name, used in (
+            ("--prompt-file", args.prompt_file is not None),
+            ("--stdin", args.stdin),
+            ("a prompt argument", args.prompt is not None),
+        )
+        if used
+    ]
+    if len(given) > 1:
+        raise ValueError(f"give {_PROMPT_ROUTES} — one of them, not {' and '.join(given)}")
+    if args.prompt_file is not None:
+        return _read_prompt_file(args.prompt_file)
     if args.stdin:
         return stdin.read()
     if args.prompt is None:
-        raise ValueError("send needs a prompt (or --stdin)")
+        raise ValueError(f"send needs a prompt: {_PROMPT_ROUTES}")
     return args.prompt

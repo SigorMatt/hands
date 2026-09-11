@@ -203,12 +203,31 @@ ops script.
   still land there), and the "name the session and say clear context"
   preference — `hands send --context clear|keep` is the enforcement now.
 
+### Prompts travel as files (§4, §12 rule 6)
+
+    hands send --role builder --context clear --prompt-file ~/Downloads/run-3.txt
+
+`--prompt-file` reads the file as UTF-8 and sends it byte for byte — a
+trailing newline included — so a prompt with a `>`, a parenthesis or a quote in
+it never reaches a command line and never has to survive a shell or the
+driver's Bash guard. It is one of three exclusive routes: `--prompt-file PATH`,
+`--stdin`, or the prompt as an argument. A missing file, a directory, bytes
+that are not UTF-8, and an empty (or all-whitespace) file are each refused with
+a message naming the file, and hands exits non-zero.
+
+That read is **not** confined to `files.allowed_roots`, and that is deliberate,
+not an oversight: the roots confine what the *daemon* writes and reads on a
+role's behalf (`hands put`/`get`/`ls`, `send --file`), while `--prompt-file` is
+read by the CLI, in your terminal, as you. Any file you can read is a prompt
+you can send.
+
 ---
 
 ## First run, end to end
 
     hands status                                  # daemon, roles, monitor
     hands send --role aux --context clear "Reply with: VERDICT: hello"
+    hands send --role aux --context clear --prompt-file ./prompt.txt   # prose route (§4)
     hands wait <job> --timeout 300
     hands show <job>                              # the record; `result` verbatim
     hands jobs -n 5

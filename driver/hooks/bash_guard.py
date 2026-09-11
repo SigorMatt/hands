@@ -294,6 +294,10 @@ SELFTEST = [
     ("hands log job-1", True),
     ("hands open job-1", False),
     ("hands --json open job-1", False),
+    # the file routes: the prompt itself never reaches the command line (§4)
+    ("hands send --role builder --context clear --prompt-file ~/Downloads/m3-kickoff.txt", True),
+    ("hands send --role aux --context clear --prompt-file ./repo/meta/REVIEW-2.md --json", True),
+    ("hands send --role builder --context keep --prompt-file ~/hands-driver/hands/answer.txt", True),
     # stdin route
     ("hands send --role builder --context clear --stdin < ~/Downloads/m2-send.txt", True),
     ("cat ~/Downloads/m2-send.txt | hands send --role builder --context clear --stdin", True),

@@ -26,9 +26,9 @@ design, and you do not write.
    QUESTIONS in full from the fetched branch. Files win over memory. If the
    fetch fails, say so and do not proceed on memory.
 3. Every instruction to a role goes through `hands send --role <builder|aux>
-   --context <clear|keep> "<prompt>"` (or `--stdin`). `keep` only to answer a
-   question the role ended with; hands refuses it when the role has no
-   resumable session. Never ask the human to paste anything anywhere.
+   --context <clear|keep>` with the prompt as a file (rule 6). `keep` only to
+   answer a question the role ended with; hands refuses it when the role has
+   no resumable session. Never ask the human to paste anything anywhere.
 4. Every run prompt and review prompt you send requires the reply's first
    line to begin with `VERDICT:` in the vocabulary of the active playbook
    (`hands pipeline` shows it). Mission kickoffs use the fixed kickoff line
@@ -37,11 +37,14 @@ design, and you do not write.
    sending. Run `hands approve <job> --human-confirmed --quote "<text>"`
    only when the human's message in this session explicitly approves that
    job id; quote it verbatim. Never approve on your own judgment.
-6. Long content goes through `hands put <path> --content "<text>"` (confined
-   to `files.allowed_roots`) or `hands send --file <path>=<content>`, and is
-   then named in the prompt. If the content contains a `>`, the Bash guard
-   cannot tell it from a redirection and will block the call: say so and ask
-   the human to move the file.
+6. Prompts and long content travel as files: `hands send --prompt-file
+   <path>` for the prompt (hands reads it as UTF-8 and sends it byte for
+   byte), `hands put <path> --content "<text>"` for content the role must
+   read, named in the prompt. Nothing with shell metacharacters goes on a
+   command line. You do not write files, so a prompt file is one that already
+   exists: mission and review text fetched into `CLONE`, or a file the human
+   placed (`~/Downloads/...`). Only a short plain line — words, no `>`, no
+   quotes, no parentheses — may be passed as the positional prompt instead.
 7. Verify milestone claims against `CLONE` (shas exist, files exist, check
    output as reported) before reporting them as facts. Reports and disk
    must agree; a disagreement is reported as such, not resolved.
@@ -71,7 +74,10 @@ design, and you do not write.
                                         may be queued; `queued` is what is waiting)
     hands pipeline                      playbook path + sha256, paused?, auto-runs,
                                         resumes, last rule fired, stop reason
-    hands send --role <r> --context <clear|keep> [--gate "<reason>"] "<prompt>"
+    hands send --role <r> --context <clear|keep> [--gate "<reason>"] --prompt-file <path>
+                                        the prompt is the file, byte for byte (rule 6);
+                                        `--stdin` and a positional "<prompt>" are the
+                                        other two routes, and the three are exclusive
     hands wait <job> [--timeout <s>] | hands wait --for stop,held --timeout 3600
     hands show <job> | hands result <job>    the record, `result` untouched
     hands jobs [--role <r>] [--origin <o>] [--grep <pat>] [--since <2d>] [-n <n>]
@@ -90,10 +96,16 @@ than one project.
 
 ## Starting a mission
 
-A mission kickoff is a plain `hands send` carrying the fixed kickoff line from
-the mission file, unchanged:
+A mission kickoff carries the fixed kickoff line from the mission file,
+unchanged. One plain line may go inline; anything longer, or with a `>`, a
+quote or a parenthesis in it, goes as a file (rule 6):
 
     hands send --role builder --context clear "Read meta/BUILDER-2-PROMPT.md and execute the mission below its divider."
+    hands send --role builder --context clear --prompt-file ~/Downloads/m3-kickoff.txt
+
+You cannot write that file yourself: it is the one the human or the architect
+put on disk. If there is no such file and the line will not go inline, say so
+and ask for one.
 
 It prints a job id. Arm the background wait (rule 8), and when it returns read
 the event with `hands inbox`, the job with `hands show <job>` and its reply

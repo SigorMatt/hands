@@ -49,3 +49,11 @@ def test_selftest_case(cmd: str, allowed: bool) -> None:
 def test_the_files_own_selftest_reports_zero() -> None:
     # `python3 driver/hooks/bash_guard.py --selftest` is what a human runs.
     assert guard.selftest() == 0
+
+
+def test_the_table_covers_the_prompt_file_route() -> None:
+    """§4/§12: `--prompt-file` is the driver's normal route for prose, so the
+    guard's own table has to prove it is not mistaken for something writing."""
+    cases = [(cmd, allowed) for cmd, allowed in guard.SELFTEST if "--prompt-file" in cmd]
+    assert cases, "the guard's SELFTEST has no `hands send --prompt-file` case"
+    assert all(allowed for _, allowed in cases)

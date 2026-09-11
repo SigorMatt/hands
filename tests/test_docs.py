@@ -125,6 +125,17 @@ def test_the_driver_denies_every_writing_tool() -> None:
     assert "Bash(hands open:*)" in deny
 
 
+def test_the_driver_kit_sends_prompts_as_files() -> None:
+    """§12 rule 6 (and §4's `send` row): prose travels as a file, so nothing
+    with shell metacharacters is ever put on a command line."""
+    kit = (ROOT / "driver" / "CLAUDE.md").read_text(encoding="utf-8")
+    assert "--prompt-file" in kit, "driver/CLAUDE.md must route prompts through --prompt-file"
+    assert "hands put" in kit, "§12 rule 6 sends long content with `hands put`"
+    rule_6 = kit.split("\n6. ")[1].split("\n7. ")[0]
+    assert "--prompt-file" in rule_6 and "hands put" in rule_6
+    assert "--prompt-file" in (ROOT / "docs" / "INTEGRATION.md").read_text(encoding="utf-8")
+
+
 def test_the_driver_bash_guard_selftest_passes() -> None:
     spec = importlib.util.spec_from_file_location(
         "bash_guard", ROOT / "driver" / "hooks" / "bash_guard.py"

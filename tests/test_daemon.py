@@ -258,6 +258,133 @@ def test_send_reads_the_prompt_from_stdin(project: str) -> None:
     drive(body)
 
 
+# ------------------------------------------- `send --prompt-file` (§4, §12, §19)
+
+#: A prompt no shell could be trusted with: a redirection sign, a paren, both
+#: kinds of quote and an interior newline. §4's point is that `--prompt-file`
+#: means none of it is ever parsed by anything — it is read and sent verbatim.
+VERBATIM = (
+    'Run step 2 (the "hard" one) > notes.md\n'
+    "It's prose, not a redirection: keep every byte."
+)
+
+
+def send_cli(*argv: str, stdin: str = "") -> tuple[int, str, str]:
+    """`hands send …` in this thread: these cases fail before any socket call."""
+    out, err = io.StringIO(), io.StringIO()
+    code = main(
+        ["--project", PROJECT, "send", *argv, "--json"],
+        stdout=out,
+        stderr=err,
+        stdin=io.StringIO(stdin),
+    )
+    return code, out.getvalue(), err.getvalue()
+
+
+def test_send_reads_the_prompt_from_a_file_byte_for_byte(project: str, tmp_path: Path) -> None:
+    """§4: `--prompt-file` is the route for prose; the prompt never touches a
+    command line, and every byte of it reaches the job record unchanged."""
+    path = tmp_path / "prompt.txt"
+    path.write_text(VERBATIM, encoding="utf-8")
+
+    async def body(daemon: Daemon) -> None:
+        job = await ok("send", "--role", "aux", "--context", "clear", "--prompt-file", str(path))
+        assert job["prompt"] == VERBATIM
+        assert (await ok("show", job["id"]))["prompt"] == VERBATIM
+
+    drive(body)
+
+
+def test_a_prompt_file_is_sent_with_its_trailing_newline(project: str, tmp_path: Path) -> None:
+    """Byte for byte means byte for byte: an editor's trailing newline is part
+    of the file and is sent, exactly as `--stdin` sends what it is given."""
+    path = tmp_path / "prompt.txt"
+    path.write_text("FAKE:result from-a-file\n", encoding="utf-8")
+
+    async def body(daemon: Daemon) -> None:
+        job = await ok("send", "--role", "aux", "--context", "clear", "--prompt-file", str(path))
+        assert job["prompt"] == "FAKE:result from-a-file\n"
+        assert (await ok("wait", job["id"]))["result"] == "from-a-file"
+
+    drive(body)
+
+
+def test_send_reads_a_prompt_file_outside_the_allowed_roots(
+    project: str, tmp_path: Path
+) -> None:
+    """Deliberate: `files.allowed_roots` confines what the *daemon* writes for a
+    role; `--prompt-file` is read by the CLI, running as the human."""
+    path = tmp_path / "elsewhere" / "prompt.txt"
+    path.parent.mkdir()
+    path.write_text("FAKE:result outside-the-roots", encoding="utf-8")
+
+    async def body(daemon: Daemon) -> None:
+        job = await ok("send", "--role", "aux", "--context", "clear", "--prompt-file", str(path))
+        assert (await ok("wait", job["id"]))["result"] == "outside-the-roots"
+
+    drive(body)
+
+
+def test_send_refuses_a_prompt_file_together_with_stdin_or_a_prompt(
+    project: str, tmp_path: Path
+) -> None:
+    path = tmp_path / "prompt.txt"
+    path.write_text("from the file", encoding="utf-8")
+    for extra in (["a prompt"], ["--stdin"]):
+        code, _, err = send_cli(
+            "--role", "aux", "--context", "clear", "--prompt-file", str(path), *extra
+        )
+        assert code == 1
+        for named in ("--prompt-file", "--stdin", "prompt"):
+            assert named in err, f"the refusal must name all three routes: {err!r}"
+
+
+def test_send_with_no_prompt_at_all_names_every_route(project: str) -> None:
+    code, _, err = send_cli("--role", "aux", "--context", "clear")
+    assert code == 1
+    for named in ("--prompt-file", "--stdin", "prompt"):
+        assert named in err
+
+
+def test_send_refuses_a_missing_prompt_file(project: str, tmp_path: Path) -> None:
+    missing = tmp_path / "nope.txt"
+    code, _, err = send_cli("--role", "aux", "--context", "clear", "--prompt-file", str(missing))
+    assert code == 1
+    assert str(missing) in err and "No such file" in err
+
+
+def test_send_refuses_a_directory_as_a_prompt_file(project: str, tmp_path: Path) -> None:
+    code, _, err = send_cli("--role", "aux", "--context", "clear", "--prompt-file", str(tmp_path))
+    assert code == 1
+    assert str(tmp_path) in err and "directory" in err.lower()
+
+
+def test_send_refuses_a_prompt_file_that_is_not_utf8(project: str, tmp_path: Path) -> None:
+    path = tmp_path / "prompt.bin"
+    path.write_bytes(b"a prompt\xff\xfe and then some")
+    code, _, err = send_cli("--role", "aux", "--context", "clear", "--prompt-file", str(path))
+    assert code == 1
+    assert str(path) in err and "UTF-8" in err
+
+
+def test_send_refuses_an_empty_prompt_file(project: str, tmp_path: Path) -> None:
+    """An empty prompt is a mistake, not an instruction — and the daemon refuses
+    one anyway (§6); catching it here names the file that was empty."""
+    for body_text in ("", "\n   \n"):
+        path = tmp_path / "empty.txt"
+        path.write_text(body_text, encoding="utf-8")
+        code, _, err = send_cli("--role", "aux", "--context", "clear", "--prompt-file", str(path))
+        assert code == 1
+        assert str(path) in err and "empty" in err
+
+
+def test_send_help_lists_the_prompt_file_route(capsys: pytest.CaptureFixture[str]) -> None:
+    with pytest.raises(SystemExit) as exc:
+        main(["send", "--help"])
+    assert exc.value.code == 0
+    assert "--prompt-file" in capsys.readouterr().out
+
+
 def test_global_flags_work_before_and_after_the_command(project: str) -> None:
     async def body(daemon: Daemon) -> None:
         out, err = io.StringIO(), io.StringIO()
