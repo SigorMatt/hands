@@ -18,13 +18,13 @@ import asyncio
 import hashlib
 import json
 import subprocess
-from collections.abc import Awaitable
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
 
 import pytest
 
-from hands.config import Config, parse_config
+from hands.config import Config, load_config, parse_config
 from hands.daemon import Daemon
 from hands.playbook import (
     ACTIONS,
@@ -759,6 +759,119 @@ def test_pause_and_resume_are_the_cli_commands_of_section_4(project: str, workdi
         assert (await ok("pipeline"))["paused"] is True
         assert (await ok("resume"))["paused"] is False
         assert (await ok("pipeline"))["paused"] is False
+
+    drive(body)
+
+
+class Posts:
+    """The ntfy transport, recorded: no test may make a network call (§11)."""
+
+    def __init__(self) -> None:
+        self.sent: list[str] = []
+
+    async def __call__(self, url: str, *, title: str, message: str) -> None:
+        self.sent.append(title)
+
+
+def drive_notified(
+    tmp_home: Path, workdir: Path, body: Callable[[Daemon, Posts], Awaitable[None]]
+) -> None:
+    """`drive`, with the notifications of §11 countable instead of published."""
+    write_project(
+        tmp_home,
+        config_body(tmp_home, workdir).replace(
+            "[server]", '[server]\nntfy_topic = "hands-test"\nntfy_url = "https://ntfy.example"'
+        ),
+    )
+    posts = Posts()
+
+    async def scenario() -> None:
+        daemon = Daemon(load_config(PROJECT))
+        daemon.notifier.post = posts  # before start(): no test may reach a network
+        await daemon.start()
+        try:
+            await asyncio.wait_for(body(daemon, posts), 60)
+        finally:
+            await daemon.stop()
+
+    asyncio.run(scenario())
+
+
+async def assert_pause_is_a_no_op(daemon: Daemon, posts: Posts, reason: str) -> None:
+    """Review should-fix 4 / §19: the pipeline is already stopped for `reason`, so
+    `hands pause` keeps it, files nothing, notifies nobody — and says the reason,
+    because a silent success reads as "I stopped it"."""
+    was = await ok("pipeline")
+    assert was["stop_reason"] == reason, was["stop_reason"]
+    before = [event["id"] for event in (await ok("inbox"))["events"]]
+    await daemon.notifier.drain()
+    notified = list(posts.sent)
+
+    code, out, err = await cli("pause")
+
+    assert code == 0, err  # a no-op, not a failure
+    assert reason in out, out  # the human learns why it was already stopped
+    assert "already stopped" in out, out  # …and that this pause did nothing
+    now = await ok("pipeline")
+    assert now["stop_reason"] == reason
+    assert now["stopped_at"] == was["stopped_at"]
+    assert [event["id"] for event in (await ok("inbox"))["events"]] == before
+    await daemon.notifier.drain()
+    assert posts.sent == notified
+
+
+def test_a_pause_after_a_rule_stop_keeps_the_first_reason(
+    tmp_home: Path, workdir: Path
+) -> None:
+    """§19: the reason the pipeline stopped is what `hands pipeline` must keep
+    showing; `paused by human` over it loses the only copy outside the inbox."""
+    write_playbook(
+        workdir,
+        "version = 1\n"
+        '[[rule]]\non = "builder.done"\nverdict = "^VERDICT: stop me"\nthen = "stop"\n'
+        'message = "asked for"\n',
+    )
+
+    async def body(daemon: Daemon, posts: Posts) -> None:
+        job = await ok(
+            "send", "--role", "builder", "--context", "clear", "FAKE:result VERDICT: stop me"
+        )
+        await ok("wait", job["id"])
+        await wait_for_stop()
+        await assert_pause_is_a_no_op(daemon, posts, "asked for")
+
+    drive_notified(tmp_home, workdir, body)
+
+
+def test_a_pause_after_a_held_job_stop_keeps_the_first_reason(
+    tmp_home: Path, workdir: Path
+) -> None:
+    """The same for §8's `job.held` stop: a pause must not hide the held job."""
+    write_playbook(workdir, 'version = 1\n[[rule]]\non = "aux.done"\nthen = "stop"\n')
+
+    async def body(daemon: Daemon, posts: Posts) -> None:
+        await ok("send", "--role", "builder", "--context", "clear", "--gate", "by hand", "hi")
+        state = await wait_for_stop()
+        assert "job.held" in state["stop_reason"]
+        await assert_pause_is_a_no_op(daemon, posts, state["stop_reason"])
+
+    drive_notified(tmp_home, workdir, body)
+
+
+def test_a_resume_still_clears_a_stop_whatever_its_reason(
+    project: str, workdir: Path
+) -> None:
+    """The no-op is the pause path only: `hands resume` un-pauses a rule stop that a
+    pause no longer overwrites, or a stop could only be cleared by a `send`."""
+    write_playbook(workdir, EXAMPLE)
+
+    async def body(daemon: Daemon) -> None:
+        await daemon.playbook.stop("a rule said so")
+        code, out, err = await cli("pause")
+        assert code == 0, err
+        assert "a rule said so" in out
+        assert (await ok("resume"))["paused"] is False
+        assert (await ok("pipeline"))["stop_reason"] is None
 
     drive(body)
 

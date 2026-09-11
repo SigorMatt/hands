@@ -64,7 +64,14 @@ missing or unparseable `VERDICT:` line, an exhausted resume count, and any
 failure inside the engine itself.
 
 `hands resume`, or the next `hands send` you make yourself, un-pauses the
-pipeline. The engine's own sends do not.
+pipeline — whatever stopped it. The engine's own sends do not.
+
+`hands pause` is a stop you make yourself: it files the same `stop` event
+(reason `paused by human`) and the same notification, which is what wakes a
+driver blocked on `hands wait --for stop,held`. Over a pipeline that is
+*already* stopped it does nothing at all: it prints the reason it is already
+stopped for, keeps that reason and its timestamp in `hands pipeline`, and files
+no second event and no second notification.
 
 ## Verdict matching
 

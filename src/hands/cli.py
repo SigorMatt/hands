@@ -499,6 +499,10 @@ def _render(command: str, result: Any) -> str:
     if command == "status" and isinstance(result, dict):
         return _status_block(result)
     if command in ("pipeline", "pause", "resume") and isinstance(result, dict):
+        if result.get("already_stopped"):
+            # §19: the pause was a no-op. Say so and say why the pipeline stopped —
+            # a bare pipeline block reads as "I have just stopped it".
+            return f"already stopped: {result.get('stop_reason')}\n{_pipeline_block(result)}"
         return _pipeline_block(result)
     if command == "jobs" and isinstance(result, dict):
         rows = result.get("jobs", [])

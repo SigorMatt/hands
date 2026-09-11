@@ -924,10 +924,18 @@ class PlaybookEngine:
         not a silent flag. That event is what wakes a driver blocked on
         `hands wait --for stop,held`, which makes `hands pause` the one command
         §11's background-wake check needs: no job, no turn, nothing to clean up
-        but `hands resume`. Pausing an already-paused pipeline files nothing —
-        `stop()` keeps "one stop, one notification". No playbook has to be
-        loaded: the wake check runs at install time (§14 step 1).
+        but `hands resume`. No playbook has to be loaded: the wake check runs at
+        install time (§14 step 1).
+
+        §19: a pause over a pipeline *already* stopped — by a rule, by a held job,
+        by an earlier pause — is a no-op. The first reason is the one that explains
+        the pipeline, so it is kept: no second `stop` event, no second
+        notification, and `hands pipeline` keeps showing the original stop instead
+        of `paused by human`. The caller is told with `already_stopped` so it can
+        print that reason rather than a silent success.
         """
+        if self.state.paused:
+            return {**self.pipeline(), "already_stopped": True}
         await self.stop(PAUSE_REASON, {"by": "hands pause"})
         self.state.paused_by = "cli"  # `hands pipeline` still says who paused it
         self._save()

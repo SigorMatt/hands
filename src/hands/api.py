@@ -632,7 +632,11 @@ class Api:
         return self.daemon.playbook.pipeline()
 
     async def pause(self) -> dict[str, Any]:
-        """Pause the playbook engine: no rule fires until it is resumed (§4, §10)."""
+        """Pause the playbook engine: no rule fires until it is resumed (§4, §10).
+
+        Over an already-stopped pipeline it is a no-op that keeps the first stop
+        reason and answers `already_stopped: true` (§19).
+        """
         return await self.daemon.playbook.pause()
 
     async def resume(self) -> dict[str, Any]:
