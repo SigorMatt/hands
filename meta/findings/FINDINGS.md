@@ -228,3 +228,42 @@ playbook is loaded. If §11 is ever revised, either name this procedure or say
 which command files the fake event.
 
 Status: open
+
+---
+
+## H-008 — `role.resume_line` has a default, so a limit resume cannot re-send the limited prompt
+
+Severity: low · Component: config/limits (DESIGN §6 "Limits", §13)
+Filed by: the architect, in DESIGN v3.1 §18 (not by a mission-1 builder);
+entered here by mission 2 U0 so the ledger covers H-001..H-008.
+
+Symptom. §13's example config sets `resume_line = "Resume WORKPLAN.md"`, and
+mission 1 read that as a field every role has:
+
+    $ grep -n 'resume_line' src/hands/config.py
+    79:    resume_line: str
+    335:        resume_line=_str(table, "resume_line", DEFAULT_RESUME_LINE, where, path),
+
+so the field is non-optional with a default, and the builder's limit resume is
+unconditionally that line:
+
+    $ sed -n 456,460p src/hands/limits.py
+        """§6: the builder gets `role.resume_line` as a new `clear` job; aux the same prompt."""
+        …
+            prompt, context = role.resume_line, "clear"
+
+That is right for the spanweave form, whose kickoff line is `Resume
+WORKPLAN.md`. It is wrong for the agile-skills form used by this repository,
+whose kickoff line is checkpoint-driven (`Read meta/BUILDER-N-PROMPT.md and
+execute the mission below its divider`): a limit resume there must re-send the
+limited job's own prompt, and with a default in place a project cannot ask for
+that — omitting the key silently selects the spanweave line.
+
+Direction. §6 (v3.1) makes the key optional: absent, a builder limit resume
+re-sends the limited job's prompt; set, it sends the line. Aux is unchanged
+(always the same prompt again). §10's `resume` action reads the same way ("the
+same prompt again, or the role's resume line when configured"). `hands doctor`
+reports which of the two behaviours each role has, because the difference is
+invisible until a limit is hit.
+
+Status: open
