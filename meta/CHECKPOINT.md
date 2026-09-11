@@ -1,15 +1,14 @@
 # CHECKPOINT
 
 Mission: 3 (meta/BUILDER-3-PROMPT.md) — IN PROGRESS
-Unit in progress: U2 Tests that can fail
-Intent: make four assertions that cannot fail actually fail (review
-should-fix 3 and 8).
-Done means: the four `BAD_PLAYBOOKS` cases in tests/test_playbook.py pin the
-refusal on `run = "..."` or on the sentence, not on the bare substring `run`;
-three of them are confirmed failing against `34b4ede^` in a worktree and the
-commit body says so; the `queue_capacity` alias test asserts on aux (queue
-depth 4), not builder (1). Gate green; committed and pushed.
-Tip: 87bb7f8 (U1) — gate green, 523 passed.
+Unit in progress: U3 Pause keeps the first reason
+Intent: `hands pause` over an already-stopped pipeline must keep the first
+stop reason (review should-fix 4, DESIGN §10, §19).
+Done means: `hands pause` on a pipeline already stopped for another reason is
+a no-op that prints the existing reason, files no event and sends no
+notification; `hands pipeline` keeps showing the original stop. Tests for
+pause-after-rule-stop and pause-after-held. Gate green; committed and pushed.
+Tip: 4fb1f35 (U2) — gate green, 523 passed.
 Findings: H-001 open (needs a capture from a dotted cwd). H-002, H-003,
 H-005 fixed with no code change; H-004 a67c4b0, H-006 34b4ede, H-007
 267ee01, H-008 8448b6f. H-009, H-010 filed by this unit, both open and
