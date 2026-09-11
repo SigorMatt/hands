@@ -126,15 +126,56 @@ def test_the_driver_denies_every_writing_tool() -> None:
     assert "Bash(hands open:*)" in deny
 
 
+def flattened(text: str) -> str:
+    """One line, single-spaced: a rule is its words, not its line wrapping."""
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def design_rule(number: int) -> str:
+    """Rule `number` of DESIGN §12's `driver/CLAUDE.md` list, flattened."""
+    section = (ROOT / "DESIGN.md").read_text(encoding="utf-8")
+    listing = section.split("## 12. The driver kit")[1].split("\n- `driver/settings.json`")[0]
+    body = listing.split(f"\n  {number}. ")[1].split(f"\n  {number + 1}. ")[0]
+    return flattened(body)
+
+
+def kit_rule(number: int) -> str:
+    """Rule `number` of the shipped `driver/CLAUDE.md`, flattened."""
+    kit = (ROOT / "driver" / "CLAUDE.md").read_text(encoding="utf-8")
+    return flattened(kit.split(f"\n{number}. ")[1].split(f"\n{number + 1}. ")[0])
+
+
 def test_the_driver_kit_sends_prompts_as_files() -> None:
-    """§12 rule 6 (and §4's `send` row): prose travels as a file, so nothing
-    with shell metacharacters is ever put on a command line."""
+    """§12 rule 6 (and §4's `send` row): the prompts the architect wrote travel
+    as files, so no shell ever parses them."""
     kit = (ROOT / "driver" / "CLAUDE.md").read_text(encoding="utf-8")
     assert "--prompt-file" in kit, "driver/CLAUDE.md must route prompts through --prompt-file"
-    assert "hands put" in kit, "§12 rule 6 sends long content with `hands put`"
-    rule_6 = kit.split("\n6. ")[1].split("\n7. ")[0]
-    assert "--prompt-file" in rule_6 and "hands put" in rule_6
+    assert "--prompt-file" in kit_rule(6)
     assert "--prompt-file" in (ROOT / "docs" / "INTEGRATION.md").read_text(encoding="utf-8")
+
+
+def test_driver_rule_6_is_the_design_section_12_rule_6() -> None:
+    """§20 (review 3 should-fix 10): v3.3 rewrote rule 6 "to match what the
+    driver can do", so the kit carries that text and not a paraphrase of it."""
+    assert design_rule(6), "DESIGN §12 has no rule 6 to pin the kit to"
+    assert kit_rule(6) == design_rule(6)
+
+
+def test_the_driver_kit_never_claims_a_command_line_cannot_hold_punctuation() -> None:
+    """The driver cannot write files (settings.json denies every writing tool),
+    so a rule forbidding punctuation on a command line leaves it with no way to
+    send a prompt it composed. The guard passes quoted text as text; §12 rule 6
+    says so, and no corner of the kit may say otherwise (review 3 should-fix 10).
+    """
+    banned = "meta" + "characters"  # spelled apart: this file is not a hit
+    offenders = [
+        f"{where}:{n}: {line.strip()}"
+        for path in tracked_files()
+        if (where := path.relative_to(ROOT).as_posix()).startswith("driver/")
+        for n, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1)
+        if banned in line.lower()
+    ]
+    assert not offenders, "driver/ still claims a metacharacter rule:\n" + "\n".join(offenders)
 
 
 def test_the_driver_bash_guard_selftest_passes() -> None:

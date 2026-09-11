@@ -16,9 +16,11 @@ from pathlib import Path
 
 import pytest
 
+from hands import cli as cli_mod
 from hands.cli import main
 from hands.config import load_config
 from hands.daemon import Daemon
+from hands.runner import MAX_PROMPT_BYTES
 from hands.spool import Spool
 from harness import BLOCK, PROJECT, cli, config_body, drive, fails, ok, running_job, write_project
 
@@ -376,6 +378,77 @@ def test_send_refuses_an_empty_prompt_file(project: str, tmp_path: Path) -> None
         code, _, err = send_cli("--role", "aux", "--context", "clear", "--prompt-file", str(path))
         assert code == 1
         assert str(path) in err and "empty" in err
+
+
+def test_send_refuses_an_oversized_prompt_file(project: str, tmp_path: Path) -> None:
+    """§4: "the client refuses a missing, unreadable, empty or over-10 MB file".
+
+    The cap is `runner.MAX_PROMPT_BYTES`, the one the daemon enforces at run
+    time; enforcing it here means the error names the path the human typed
+    instead of arriving from a round trip (review 3 should-fix 9).
+    """
+    path = tmp_path / "huge.txt"
+    with path.open("wb") as handle:  # sparse: the size is the point, not the bytes
+        handle.truncate(MAX_PROMPT_BYTES + 1)
+    code, _, err = send_cli("--role", "aux", "--context", "clear", "--prompt-file", str(path))
+    assert code == 1
+    assert str(path) in err and str(MAX_PROMPT_BYTES) in err
+    assert len(err.splitlines()) == 1, f"a refusal is one line: {err!r}"
+
+
+def test_the_prompt_file_cap_is_checked_without_reading_the_file(
+    project: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The size comes from `stat`, so a 10 MB mistake never enters memory."""
+    path = tmp_path / "huge.txt"
+    with path.open("wb") as handle:
+        handle.truncate(MAX_PROMPT_BYTES + 1)
+
+    def never(self: Path) -> bytes:
+        raise AssertionError(f"the CLI read {self} before checking its size")
+
+    monkeypatch.setattr(Path, "read_bytes", never)
+    code, _, err = send_cli("--role", "aux", "--context", "clear", "--prompt-file", str(path))
+    assert code == 1 and str(path) in err
+
+
+def test_a_prompt_file_at_exactly_the_cap_is_sent(project: str, tmp_path: Path) -> None:
+    """The cap is a maximum, not a margin: the client refuses what the runner
+    refuses (`> MAX_PROMPT_BYTES`) and nothing more."""
+    path = tmp_path / "at-the-cap.txt"
+    path.write_bytes(b"x" * MAX_PROMPT_BYTES)
+
+    async def body(daemon: Daemon) -> None:
+        job = await ok("send", "--role", "aux", "--context", "clear", "--prompt-file", str(path))
+        assert len(job["prompt"].encode("utf-8")) == MAX_PROMPT_BYTES
+
+    drive(body)
+
+
+def test_no_bad_prompt_file_ever_reaches_the_daemon(
+    project: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """§4: all four refusals are the *client's*. No socket is opened for any of
+    them — `call` is the CLI's only route to the daemon, and it is not taken."""
+    missing = tmp_path / "nope.txt"
+    unreadable = tmp_path / "unreadable"  # a directory: openable, not readable
+    unreadable.mkdir()
+    empty = tmp_path / "empty.txt"
+    empty.write_text("\n   \n", encoding="utf-8")
+    oversized = tmp_path / "huge.txt"
+    with oversized.open("wb") as handle:
+        handle.truncate(MAX_PROMPT_BYTES + 1)
+
+    def never(*args: object, **kwargs: object) -> dict[str, object]:
+        raise AssertionError("the CLI contacted the daemon about a bad --prompt-file")
+
+    monkeypatch.setattr(cli_mod, "call", never)
+    for path in (missing, unreadable, empty, oversized):
+        code, out, err = send_cli("--role", "aux", "--context", "clear", "--prompt-file", str(path))
+        assert code == 1, f"{path.name}: exit {code}"
+        assert out == "", f"{path.name}: a refusal prints no job record"
+        assert str(path) in err, f"{path.name}: the refusal must name the path: {err!r}"
+        assert len(err.splitlines()) == 1, f"{path.name}: a refusal is one line: {err!r}"
 
 
 def test_send_help_lists_the_prompt_file_route(capsys: pytest.CaptureFixture[str]) -> None:

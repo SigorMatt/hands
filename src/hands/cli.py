@@ -25,6 +25,7 @@ from hands import __version__, doctor
 from hands import notify as notify_mod
 from hands.api import TIMEOUT as TIMEOUT_CODE
 from hands.config import Config, ConfigError, config_path, load_config, resolve_project
+from hands.runner import MAX_PROMPT_BYTES
 from hands.spool import ORIGINS
 
 __all__ = [
@@ -743,9 +744,12 @@ def _read_prompt_file(where: str) -> str:
     """§4/§12: the prompt travels as a file, so no shell ever parses it.
 
     The bytes are sent exactly as they are — a trailing newline included, the
-    way `--stdin` sends what it was piped. Only an empty (or all-whitespace)
-    file is refused: `Api.send` refuses an empty prompt anyway (§6), and
-    catching it here names the file that was empty.
+    way `--stdin` sends what it was piped. §4 makes all four refusals the
+    client's own — "the client refuses a missing, unreadable, empty or over-10
+    MB file" — so each one names the path the human typed, and none of them
+    costs a round trip. An empty file and an oversized one would both be
+    refused later anyway (`Api.send` at §6, `Runner.run` at §2); refusing them
+    here is what turns "the daemon said no" into "that file is empty".
 
     This is the one path where hands reads a file without `files.py`'s
     allowed-roots check, and that is deliberate, not an oversight: those roots
@@ -754,6 +758,19 @@ def _read_prompt_file(where: str) -> str:
     is not confined to their own roles' roots.
     """
     path = Path(where).expanduser()
+    # The size comes from the directory entry, so a 10 MB mistake is refused
+    # without ever being read into memory. `stat` also answers "missing" and
+    # "no permission" — the first two refusals — before anything is opened.
+    try:
+        size = path.stat().st_size
+    except OSError as exc:
+        raise ValueError(f"--prompt-file {path}: {exc.strerror or exc}") from exc
+    # §2's cap, spelled once: the client refuses exactly what the runner would.
+    if size > MAX_PROMPT_BYTES:
+        raise ValueError(
+            f"--prompt-file {path} is {size} bytes, over the {MAX_PROMPT_BYTES} byte "
+            "cap of §2; send the content with `hands put` and name it in the prompt"
+        )
     try:
         raw = path.read_bytes()
     except OSError as exc:

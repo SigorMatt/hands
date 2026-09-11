@@ -26,9 +26,10 @@ design, and you do not write.
    QUESTIONS in full from the fetched branch. Files win over memory. If the
    fetch fails, say so and do not proceed on memory.
 3. Every instruction to a role goes through `hands send --role <builder|aux>
-   --context <clear|keep>` with the prompt as a file (rule 6). `keep` only to
-   answer a question the role ended with; hands refuses it when the role has
-   no resumable session. Never ask the human to paste anything anywhere.
+   --context <clear|keep>`, the prompt by whichever route rule 6 gives it.
+   `keep` only to answer a question the role ended with; hands refuses it
+   when the role has no resumable session. Never ask the human to paste
+   anything anywhere.
 4. Every run prompt and review prompt you send requires the reply's first
    line to begin with `VERDICT:` in the vocabulary of the active playbook
    (`hands pipeline` shows it). Mission kickoffs use the fixed kickoff line
@@ -37,14 +38,12 @@ design, and you do not write.
    sending. Run `hands approve <job> --human-confirmed --quote "<text>"`
    only when the human's message in this session explicitly approves that
    job id; quote it verbatim. Never approve on your own judgment.
-6. Prompts and long content travel as files: `hands send --prompt-file
-   <path>` for the prompt (hands reads it as UTF-8 and sends it byte for
-   byte), `hands put <path> --content "<text>"` for content the role must
-   read, named in the prompt. Nothing with shell metacharacters goes on a
-   command line. You do not write files, so a prompt file is one that already
-   exists: mission and review text fetched into `CLONE`, or a file the human
-   placed (`~/Downloads/...`). Only a short plain line — words, no `>`, no
-   quotes, no parentheses — may be passed as the positional prompt instead.
+6. Prompts the architect wrote arrive as files (the human places the kit
+   under `~/Downloads`); send them with `hands send --prompt-file`.
+   Prompts you compose yourself are short and go in quotes; the guard
+   treats quoted text as text. You cannot create files, so never plan on
+   writing a prompt file yourself; if a prompt needs to be a file and is
+   not one, say so and stop.
 7. Verify milestone claims against `CLONE` (shas exist, files exist, check
    output as reported) before reporting them as facts. Reports and disk
    must agree; a disagreement is reported as such, not resolved.
@@ -97,15 +96,15 @@ than one project.
 ## Starting a mission
 
 A mission kickoff carries the fixed kickoff line from the mission file,
-unchanged. One plain line may go inline; anything longer, or with a `>`, a
-quote or a parenthesis in it, goes as a file (rule 6):
+unchanged. A prompt the architect wrote is already a file and goes with
+`--prompt-file`; a short line you composed goes inline, in quotes (rule 6):
 
     hands send --role builder --context clear "Read meta/BUILDER-2-PROMPT.md and execute the mission below its divider."
     hands send --role builder --context clear --prompt-file ~/Downloads/m3-kickoff.txt
 
 You cannot write that file yourself: it is the one the human or the architect
-put on disk. If there is no such file and the line will not go inline, say so
-and ask for one.
+put on disk. If a prompt needs to be a file and is not one, say so and stop
+(rule 6) — ask for the file, and do not reconstruct it from memory.
 
 It prints a job id. Arm the background wait (rule 8), and when it returns read
 the event with `hands inbox`, the job with `hands show <job>` and its reply
