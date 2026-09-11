@@ -1,12 +1,12 @@
-# hands — DESIGN v3.1
+# hands — DESIGN v3.2
 
 Machinery that replaces the human relay between the planning brain and the two
 Claude Code roles (builder, aux) on the Ubuntu laptop, and that keeps a series
 moving without a human while everything goes by plan. Working name: `hands`.
 The method it serves is described in WORKING-MODEL.md (agile-skills) and
 OPERATING-MODEL.md (spanweave); hands changes the topology, not the method.
-v3.1 (2026-09-11) folds in the mission 1 findings; changes from v3 are in
-§18, changes from v2 in §17.
+v3.2 (2026-09-11) folds in the mission 2 review; changes are in §19, §18
+(mission 1 findings) and §17 (from v2).
 
 Status: proposal, 2026-09-10. Items marked DECIDED were settled in discussion.
 
@@ -153,7 +153,7 @@ JSON with `--json` (the driver uses that) or a readable form for you.
 
 | Command | Args | Returns |
 |---|---|---|
-| `send` | `--role builder\|aux --context clear\|keep [--file path=content…] [--gate reason] [--stdin\|prompt]` | job id, state |
+| `send` | `--role builder\|aux --context clear\|keep [--file path=content…] [--gate reason] [--prompt-file path\|--stdin\|prompt]` | job id, state. `--prompt-file` is the normal route for prose: the prompt never touches a command line |
 | `wait` | `<job>\|--for event-kind [--timeout s]` | job record when terminal / the event; used by the driver in the background (§11) |
 | `result` | `<job>` | job record |
 | `jobs` | `[--role r] [--origin o] [--grep pat] [--since d] [-n]` | recent job summaries |
@@ -282,6 +282,10 @@ Authority, without the optional remote face:
   `decided_by: driver` plus the quoted instruction. This is the phone path.
 - Nothing else releases a `held` job; gating on the default patterns cannot
   be disabled.
+- `decided_by: driver` is a declaration, not authentication: the daemon
+  cannot tell a driver quoting the human from a driver inventing a quote.
+  The quote is the audit trail, and the driver's CLAUDE.md is the control.
+  Authenticated approval belongs to the remote face (§9), if it is built.
 
 With the optional remote face (§9), ntfy Approve/Deny buttons are added and
 are final (`decided_by: button`), winning over a driver approval that has
@@ -485,7 +489,9 @@ playbook path):
   5. Gated sends are announced before sending. `hands approve
      --human-confirmed` only when the human's message in this session
      explicitly approves that job id; quote it.
-  6. Long content goes through `hands put`, named in the prompt.
+  6. Prompts and long content travel as files: `hands send --prompt-file`
+     for the prompt, `hands put` for content the role must read, named in
+     the prompt. Nothing with shell metacharacters goes on a command line.
   7. Verify milestone claims against the remote before reporting them.
   8. After every dispatch or report, re-arm `hands wait --for stop,held` in
      the background and stop talking.
@@ -671,3 +677,23 @@ one-time checks in step 4.
 - Open question on the wake path answered: proven (§16).
 - Bootstrap mode retired: `bootstrap/dispatch.sh` and the driver's
   bootstrap section are removed (§15 stays as history).
+
+---
+
+## 19. Changes from v3.1 (mission 2 review)
+
+- `hands send --prompt-file PATH` (§4); the driver's rule 6 sends prose as
+  files (§12). The Bash guard is quote-aware since `14507ca`, but files are
+  the route that needs no guard at all.
+- `decided_by: driver` documented as a declaration (§8).
+- A pause over an already-stopped pipeline keeps the first stop reason and
+  files no second notification (review should-fix 4).
+- `resume_line = ""` is refused at config load (should-fix 5).
+- `hands notify --test` prints the HTTP status on the failure path too
+  (should-fix 7).
+- `hands status` describes whichever monitor is deciding (should-fix 2).
+- Guard: the mutating-git check applies to the subcommand position only, so
+  `rev-parse <sha>^{commit}` passes; the self-test lives in `tests/`.
+- Wake path: a background wait can be killed by the host under memory
+  pressure; the driver's rule 2 (inbox first on every wake) is the recovery,
+  observed once on 2026-09-11.

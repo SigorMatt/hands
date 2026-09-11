@@ -1,5 +1,5 @@
 version = 1
-series = "hands-mission-2"
+series = "hands-missions"
 
 [limits]
 max_resumes = 2
