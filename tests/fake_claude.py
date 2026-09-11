@@ -170,7 +170,16 @@ def _result(one) -> str | None:  # noqa: ANN001
         return f"MISSING:{path}"
 
 
+#: What `claude --version` prints, in the shape the real binary uses
+#: ("2.1.268 (Claude Code)"). `hands doctor` runs this check for real even in
+#: fake mode, so the stand-in has to answer it (DESIGN §4).
+VERSION_LINE = "2.1.268 (Claude Code stand-in)"
+
+
 def main(argv: list[str]) -> int:
+    if argv and argv[0] == "--version":
+        print(VERSION_LINE)
+        return 0
     args = parse_argv(argv)
     prompt = sys.stdin.read() if not sys.stdin.isatty() else ""
     directives = parse_directives(prompt)

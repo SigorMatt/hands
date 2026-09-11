@@ -18,7 +18,8 @@
       "Bash(cp:*)",
       "Bash(touch:*)",
       "Bash(tee:*)",
-      "Bash(claude:*)"
+      "Bash(claude:*)",
+      "Bash(hands open:*)"
     ],
     "allow": [
       "Read",

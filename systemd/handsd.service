@@ -1,0 +1,46 @@
+# handsd — the hands daemon for one project (DESIGN §3, §13, §14).
+#
+# A *user* unit: hands runs `claude -p` as you, with your subscription login and
+# your ~/.claude settings. It is never a system service.
+#
+#   install -Dm644 systemd/handsd.service ~/.config/systemd/user/handsd.service
+#   printf 'HANDS_PROJECT=spanweave\n' > ~/.config/hands.env
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now handsd
+#   journalctl --user -u handsd -f
+#
+# The project comes from the environment file, not from this unit, so the same
+# file serves every project: one config per project (§13), one `HANDS_PROJECT`
+# per environment file. For a second project, copy this unit to
+# `handsd-<project>.service` with its own `EnvironmentFile`; `server.socket` in
+# each `~/.hands/<project>.toml` must differ.
+#
+# ExecStart is an absolute path because a systemd unit has no login shell and so
+# no `~/.local/bin` on PATH. `uv tool install ~/git/hands` installs both
+# executables ("Installed 2 executables: hands, handsd") into uv's tool bin
+# directory, `~/.local/bin` by default; if you installed into a venv instead,
+# point ExecStart at `<venv>/bin/handsd`. `%h` is your home directory.
+
+[Unit]
+Description=handsd — dispatch prompts to headless Claude Code roles (project from %h/.config/hands.env)
+Documentation=https://github.com/SigorMatt/hands
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=%h/.config/hands.env
+ExecStart=%h/.local/bin/handsd --project ${HANDS_PROJECT}
+Restart=on-failure
+RestartSec=5
+# The spool and the socket live under %h/.hands (§3, §13); the daemon creates
+# them. A user unit has no login shell, so nothing here may rely on one.
+WorkingDirectory=%h
+# §11 sends the ntfy notification itself, and the crash notice is best-effort, so
+# journald is the only log that has to survive.
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=handsd
+
+[Install]
+WantedBy=default.target

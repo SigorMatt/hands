@@ -194,3 +194,37 @@ A cleaner spelling, if §10 is ever revised, is an explicit `run = "{n+1}"` key,
 which would need no inference at all.
 
 Status: open
+
+---
+
+## H-007 — §11's "fake event" for the wake check has no command behind it
+
+Severity: low · Component: doctor (DESIGN §11, "hands doctor checks this path
+end to end on first install (a fake event, and the driver session confirming it
+woke)")
+
+Symptom. §11 asks doctor to check the wake path with "a fake event". Nothing in
+the command surface of §4 files an inbox event on demand, and the two commands
+that sound as if they might do not:
+
+    $ grep -n 'append_event' src/hands/playbook.py | sed -n 1,3p
+    890:        if write_event:
+    891:            self.spool.append_event("stop", {**(payload or {}), "reason": reason})
+
+`stop` events are written by the engine's own `stop()`; `hands pause`
+(`PlaybookEngine.pause`, playbook.py:895) sets `state.paused` and writes no
+event at all, so a driver blocked on `hands wait --for stop,held` is not woken
+by it. `hands doctor` also cannot file one itself: it runs without a daemon by
+design (§14 step 1), and the spool belongs to the daemon.
+
+Direction. U10 does not add an event-injection command — that would be new CLI
+the design does not have, and the only honest "fake event" hands can produce is
+a real one. `hands doctor` prints a procedure that uses a **gated send** as the
+event: `hands send --role aux --context clear --gate "doctor wake check" …`
+enters `held`, files a real `job.held` event (api.py:148), notifies ntfy, and
+never starts a turn, so it costs nothing; `hands deny <job>` clears it, and
+`hands resume` clears the pipeline stop an unplanned `job.held` causes when a
+playbook is loaded. If §11 is ever revised, either name this procedure or say
+which command files the fake event.
+
+Status: open

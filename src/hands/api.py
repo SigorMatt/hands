@@ -9,32 +9,36 @@ one-to-one. That standing requirement shapes three things here:
   `context`, `-n` → `n`), so a caller that knows the CLI knows the API;
 * every result is JSON-serialisable — plain dicts and lists, no objects.
 
-Commands whose implementation belongs to a later unit are *present* with their
-final name and arguments and raise `NotImplementedYet` naming that unit. They
-are seams, not stubs: nothing in this unit's scope is hidden behind one.
+Every command of §4 is implemented here. `doctor` is the one method that also
+exists outside the daemon: §14 runs `hands doctor` on a fresh config, before
+handsd has ever been started, so the checks themselves live in `hands.doctor`
+and both halves call them.
 """
 
 from __future__ import annotations
 
+import asyncio
+import os
 import re
 import shlex
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from hands import files, gates
+from hands import __version__, files, gates
+from hands.doctor import report as doctor_report
+from hands.doctor import run_checks as doctor_checks
 from hands.runner import KeepRefused
 from hands.spool import TERMINAL_STATES, Event, Job, SpoolError, resolve_kinds
 
 if TYPE_CHECKING:  # pragma: no cover - import cycle only matters to type checkers
     from hands.daemon import Daemon
 
-__all__ = ["Api", "ApiError", "NotImplementedYet", "Timeout", "job_summary"]
+__all__ = ["Api", "ApiError", "Timeout", "job_summary"]
 
 # JSON-RPC 2.0 reserves -32768..-32000 for the protocol; -32000..-32099 is the
 # implementation-defined server-error range, which is where these live.
 HANDS_ERROR = -32001  # a refusal hands is sure about (bad role, full queue, …)
-NOT_IMPLEMENTED = -32002  # the command exists; its unit has not landed yet
 TIMEOUT = -32003  # `wait --timeout` expired
 
 
@@ -44,16 +48,8 @@ class ApiError(Exception):
     code = HANDS_ERROR
 
 
-class NotImplementedYet(ApiError):
-    code = NOT_IMPLEMENTED
-
-
 class Timeout(ApiError):
     code = TIMEOUT
-
-
-def _later(command: str, unit: str, what: str) -> NotImplementedYet:
-    return NotImplementedYet(f"`hands {command}` is not implemented ({unit}): {what}")
 
 
 _SINCE_RE = re.compile(r"^(\d+)([smhdw])$")
@@ -631,10 +627,28 @@ class Api:
         """Un-pause the playbook engine and clear the stop reason (§4, §10)."""
         return await self.daemon.playbook.resume()
 
-    # ------------------------------------------------------ later units (§4)
+    # ---------------------------------------------------------- doctor (§4)
 
-    async def doctor(self) -> dict[str, Any]:
-        raise _later("doctor", "U10", "the install check of §4 and §11")
+    async def doctor(self, *, live: bool = False) -> dict[str, Any]:
+        """The install check (§4, §11, §14), for a caller that has a daemon.
+
+        `hands doctor` runs the same checks in the *client*, because §14 step 1
+        runs it before handsd exists. This method is the other half of the same
+        surface (§9): it is the daemon describing its own install, so the daemon
+        check needs no socket round-trip to itself. The checks shell out, so they
+        run in a thread — the queue must keep moving while doctor probes.
+        """
+        found = await asyncio.to_thread(
+            doctor_checks,
+            self.config,
+            live=live,
+            daemon={
+                "version": __version__,
+                "pid": os.getpid(),
+                "socket": str(self.daemon.socket_path),
+            },
+        )
+        return doctor_report(self.config, found, live=live)
 
     # -------------------------------------------------------------- internals
 

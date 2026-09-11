@@ -5,7 +5,8 @@ Claude Code runs this before every Bash tool call. It reads the hook JSON on
 stdin, extracts the command, and exits 2 (block, with the reason on stderr)
 unless every command segment starts with an allowed word and the command
 contains no way to write: no redirection, no tee, no in-place edits, no
-interpreters, no direct `claude`.
+interpreters, no direct `claude`. `hands open` is blocked too: it execs an
+interactive `claude --resume`, which is a direct claude by another name.
 
 Self-test: python3 bash_guard.py --selftest
 """
@@ -25,6 +26,10 @@ ALLOWED_GIT_SUBCOMMANDS = {
     "cat-file", "ls-files", "ls-tree", "branch", "remote", "describe",
     "shortlog", "blame", "grep", "name-rev",
 }
+# `hands open <job>` execs `claude --resume <id>` in the role's directory
+# (DESIGN §7): an interactive session inside the driver's Bash call, and a way
+# past the `claude` block. The driver reads jobs with show/log/tail instead.
+FORBIDDEN_HANDS_SUBCOMMANDS = {"open"}
 FORBIDDEN_GIT_FLAGS = {"--prune", "--delete", "-d", "-D", "-m", "-M",
                        "add", "set-url", "remove", "rename", "--set-upstream"}
 SHELL_KEYWORDS = {"for", "while", "until", "do", "done", "if", "then", "else",
@@ -96,6 +101,11 @@ def check(cmd: str):
             if any(f in words for f in FORBIDDEN_GIT_FLAGS):
                 return f"git flag not allowed in {cmd!r}"
             continue
+        if w == "hands":
+            sub = next((x for x in words[1:] if not x.startswith("-")), None)
+            if sub in FORBIDDEN_HANDS_SUBCOMMANDS:
+                return f"hands {sub} starts an interactive session: {cmd!r}"
+            continue
         if w == "kill":
             if len(words) < 2 or words[1] != "-0":
                 return f"kill other than -0: {cmd!r}"
@@ -120,6 +130,10 @@ SELFTEST = [
     ("git -C ./repo show origin/main:meta/CHECKPOINT.md", True),
     ("git status 2>/dev/null", True),
     ("hands wait --for stop,held --timeout 3600", True),
+    ("hands show job-1 --json", True),
+    ("hands log job-1", True),
+    ("hands open job-1", False),
+    ("hands --json open job-1", False),
     ("echo hi > probe.txt", False),
     ("echo hi >> probe.txt", False),
     ("cat x | tee probe.txt", False),

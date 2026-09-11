@@ -304,19 +304,8 @@ def test_help_lists_every_command_of_section_4(capsys: pytest.CaptureFixture[str
         assert command in printed, f"`{command}` (DESIGN §4) is missing from hands --help"
 
 
-def test_commands_of_later_units_name_their_unit(project: str) -> None:
-    async def body(daemon: Daemon) -> None:
-        # `wait --for` is no longer here: U8 landed it (§11, tests/test_wake.py),
-        # and neither are `open`/`log`/`tail`: U9 landed them (§7,
-        # tests/test_library.py).
-        for argv, unit in [
-            (["doctor"], "U10"),
-        ]:
-            err = await fails(*argv)
-            assert "not implemented" in err.lower(), err
-            assert unit in err, f"{argv[0]} must name the unit that implements it: {err}"
-
-    drive(body)
+# Every command of §4 is implemented: the last stub (`doctor`, U10) landed with
+# `hands.doctor`, and its own tests are in tests/test_doctor.py.
 
 
 def test_the_api_method_names_are_exactly_the_command_names() -> None:

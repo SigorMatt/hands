@@ -20,9 +20,9 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, TextIO
 
-from hands import __version__
+from hands import __version__, doctor
 from hands.api import TIMEOUT as TIMEOUT_CODE
-from hands.config import ConfigError, load_config, resolve_project
+from hands.config import Config, ConfigError, load_config, resolve_project
 
 __all__ = [
     "EXIT_TIMEOUT",
@@ -222,7 +222,13 @@ def build_parser() -> argparse.ArgumentParser:
     command("pause", "pause the playbook engine")
     command("resume", "unpause the playbook engine")
     command("status", "daemon, roles, running jobs, monitor state")
-    command("doctor", "check the install end to end")
+    check = command("doctor", "check the install end to end (§4, §14)")
+    check.add_argument(
+        "--live",
+        action="store_true",
+        help="also run one real `claude -p` turn per role — the only check that spends "
+        f"your subscription; refused when ${doctor.FAKE_ENV}=1",
+    )
     return parser
 
 
@@ -264,7 +270,7 @@ _PARAMS: dict[str, Any] = {
     "pause": lambda a: {},
     "resume": lambda a: {},
     "status": lambda a: {},
-    "doctor": lambda a: {},
+    "doctor": lambda a: {"live": a.live},
 }
 
 
@@ -502,6 +508,11 @@ def main(
         config = load_config(project)
         override = getattr(args, "socket", None)
         socket_path = Path(override).expanduser() if override else config.server.socket
+        # §14 step 1 is "write the config; `hands doctor`" — before handsd has
+        # ever been started, so doctor is the one command the CLI answers itself.
+        # The daemon is a *check*, not a precondition (see hands/doctor.py).
+        if command == "doctor":
+            return _doctor(config, socket_path, live=args.live, out=out, as_json=as_json)
         # §7: `hands log -f <role>` is a follow, and a follow is many requests.
         if command == "log" and args.role:
             if args.job:
@@ -528,6 +539,22 @@ def main(
         return 1
     print(json.dumps(result, sort_keys=True) if as_json else _render(command, result), file=out)
     return 0
+
+
+def _doctor(
+    config: Config, socket_path: Path, *, live: bool, out: TextIO, as_json: bool
+) -> int:
+    """`hands doctor` (§4, §11, §14): run the checks here, in the client.
+
+    Exit 1 when a check failed; a warning (no daemon yet, no ntfy topic) is not a
+    failure, because §14 runs doctor on a config the daemon has never seen.
+    """
+    found = doctor.run_checks(config, live=live, socket_path=socket_path)
+    if as_json:
+        print(json.dumps(doctor.report(config, found, live=live), sort_keys=True), file=out)
+    else:
+        print(doctor.render(config, found, live=live), file=out)
+    return 1 if any(check.status == doctor.FAIL for check in found) else 0
 
 
 def _follow(socket_path: Path, role: str, *, project: str, out: TextIO) -> int:
