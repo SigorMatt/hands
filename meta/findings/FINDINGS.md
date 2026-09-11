@@ -45,6 +45,11 @@ such a cwd.
 
 Status: open
 
+Status: open — no unit in mission 2 touched it, and nothing on this machine
+can close it: the `.` rule still has no witness because no project directory
+here comes from a dotted path. Closing it needs a real capture from such a
+cwd, which is an observation, not a change. Blast radius unchanged (`hands
+tail` for a dotted cwd).
 ---
 
 ## H-002 — §6 calls the limit field an "error category"; on the wire it is `error`
@@ -75,6 +80,11 @@ notice. If §6 is ever revised, say `error`.
 
 Status: open
 
+Status: fixed — by DESIGN v3.1 itself, not by a mission-2 unit. §6 now reads
+"a `system`/`api_retry` event whose `error` field is `rate_limit` (there is no
+`category` field on the wire; H-002)" (DESIGN.md:236-238), which is what
+`runner._on_event` already implements; the `category` fallback stays, because
+it costs nothing and no real limit event has ever been seen by hands.
 ---
 
 ## H-003 — every flag DESIGN §2 names exists in claude 2.1.268
@@ -175,6 +185,14 @@ If §10 is ever revised, say which unit owns the limit resume.
 
 Status: open
 
+Status: fixed 34b4ede — by DESIGN v3.1 §10 plus mission 2 U3. §10 now states
+the ownership outright ("`limited` is owned by §6 and a `resume` rule on
+`builder.limited` is accepted as an authorization that enqueues nothing") and
+§6 says "§6 is the sole owner of the limit resume; the playbook never issues a
+second one (H-005)" — which is the reading mission 1 U7 already implemented.
+U3 removed the `builder.limited` rule from the §10 example fixture with the
+design; `test_a_limited_job_leaves_the_resume_to_section_6` keeps its own
+playbook (`LIMITED_BOOK`) so the authorization path is still proven.
 ---
 
 ## H-006 — §10 does not say which value `only_if_run_in = "auto_runs"` checks
