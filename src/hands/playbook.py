@@ -102,7 +102,7 @@ RULE_KEYS: tuple[str, ...] = (
     "context",
     "prompt",
     "message",
-    "only_if_run_in",
+    "run",
 )
 VERSION = 1
 CONTEXTS = ("clear", "keep")
@@ -217,27 +217,38 @@ def _value(ref: Ref, groups: dict[str, str], job: Job | None) -> str:
         ) from exc
 
 
-def run_number(text: str, *, groups: dict[str, str], job: Job | None = None) -> int:
-    """The run a `send` would start: the one group placeholder in its prompt (§10).
+def run_ref(expr: str) -> Ref:
+    """`run = "<expr>"` → the one placeholder it computes (§10, H-006).
 
-    §10 spells the check as "`{n+1}` must be listed above". The run is therefore
-    the *computed* value of the prompt's single verdict-group placeholder —
-    `only_if_run_in` refuses at load time to sit on a prompt that has anything
-    other than exactly one, so there is never a question of which.
+    The grammar is the placeholders' own, narrowed to a named group of the
+    rule's verdict regex: `{n}` or `{n+1}`. A literal, a job field, prose, or
+    two placeholders are not runs — and this is checked when the playbook is
+    loaded, so nothing ambiguous can reach a running pipeline.
     """
-    group_refs = [ref for ref in refs(text) if ref.kind == "group"]
-    if len(group_refs) != 1:  # pragma: no cover - refused when the playbook is loaded
+    found = _PLACEHOLDER_RE.fullmatch(expr.strip())
+    ref = parse_ref(found.group(1)) if found is not None else None
+    if ref is None or ref.kind != "group":
         raise PlaceholderError(
-            f"only_if_run_in needs exactly one {{name}} or {{name+k}} placeholder in the "
-            f"prompt to read the run from, and this one has {len(group_refs)}"
+            f"run takes one named group of the rule's verdict regex, {{name}} or "
+            f"{{name+k}} (§10), got {expr!r}"
         )
-    ref = group_refs[0]
+    return ref
+
+
+def run_number(expr: str, *, groups: dict[str, str], job: Job | None = None) -> int:
+    """The run a `send` would start: the computed value of its `run` key (§10).
+
+    §10 names the checked value explicitly (H-006): `run = "{n+1}"` with `n = 3`
+    is run 4. The expression itself was validated at load time, so the only
+    failure left here is a group whose matched text is not an integer.
+    """
+    ref = run_ref(expr)
     value = _value(ref, groups, job)
     try:
         return int(value)
     except ValueError as exc:
         raise PlaceholderError(
-            f"only_if_run_in needs {ref.text} to be a run number, and it is {value!r}"
+            f'run = "{expr}" needs {ref.text} to be a run number, and it is {value!r}'
         ) from exc
 
 
@@ -256,7 +267,7 @@ class Rule:
     context: str | None = None
     prompt: str | None = None
     message: str | None = None
-    only_if_run_in: str | None = None
+    run: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -268,7 +279,7 @@ class Rule:
             "context": self.context,
             "prompt": self.prompt,
             "message": self.message,
-            "only_if_run_in": self.only_if_run_in,
+            "run": self.run,
         }
 
 
@@ -373,6 +384,15 @@ def parse_playbook(text: str, *, path: Path) -> Playbook:
 
 def _rule(index: int, table: dict[str, Any], path: Path, *, auto_runs: tuple[int, ...]) -> Rule:
     where = f"{path}: rule {index}"
+    if "only_if_run_in" in table:
+        # §10 replaced the inferred check with an explicit key (H-006). Naming
+        # the replacement here is the point: an old playbook must fail loudly
+        # rather than quietly lose the check it thought it had.
+        raise PlaybookError(
+            f'{where}: only_if_run_in is gone; §10 spells the check as run = "{{n+1}}" — '
+            "an expression over the rule's own verdict groups, checked against [limits] "
+            "auto_runs"
+        )
     _check_keys(table, RULE_KEYS, f"rule {index}", path)
 
     on = table.get("on")
@@ -400,7 +420,7 @@ def _rule(index: int, table: dict[str, Any], path: Path, *, auto_runs: tuple[int
     context = _opt_str(table, "context", where)
     prompt = _opt_str(table, "prompt", where)
     message = _opt_str(table, "message", where)
-    only_if_run_in = _opt_str(table, "only_if_run_in", where)
+    run = _opt_str(table, "run", where)
 
     if then == "send":
         if not role:
@@ -420,23 +440,22 @@ def _rule(index: int, table: dict[str, Any], path: Path, *, auto_runs: tuple[int
         if text:
             _check_placeholders(text, group_names, f"{where}: {name}")
 
-    if only_if_run_in is not None:
+    if run is not None:
         if then != "send":
-            raise PlaybookError(f"{where}: only_if_run_in belongs on a send, not on a {then}")
-        if only_if_run_in != "auto_runs":
-            raise PlaybookError(
-                f'{where}: only_if_run_in takes only "auto_runs" (§10), got {only_if_run_in!r}'
-            )
+            raise PlaybookError(f"{where}: run belongs on a send, not on a {then}")
         if not auto_runs:
             raise PlaybookError(
-                f"{where}: only_if_run_in = \"auto_runs\" needs [limits] auto_runs to list "
-                "the runs hands may start"
+                f'{where}: run = "{run}" needs [limits] auto_runs to list the runs hands '
+                "may start on its own"
             )
-        found = [ref for ref in refs(prompt or "") if ref.kind == "group"]
-        if len(found) != 1:
+        try:
+            ref = run_ref(run)
+        except PlaceholderError as exc:
+            raise PlaybookError(f"{where}: {exc}") from exc
+        if ref.name not in group_names:
             raise PlaybookError(
-                f"{where}: only_if_run_in reads the run from the prompt, so the prompt needs "
-                f"exactly one {{name}} or {{name+k}} placeholder; this one has {len(found)}"
+                f"{where}: run = \"{run}\" reads {ref.text}, which names no group of this "
+                f"rule's verdict regex ({', '.join(group_names) or 'the rule has no verdict'})"
             )
 
     return Rule(
@@ -448,7 +467,7 @@ def _rule(index: int, table: dict[str, Any], path: Path, *, auto_runs: tuple[int
         context=context,
         prompt=prompt,
         message=message,
-        only_if_run_in=only_if_run_in,
+        run=run,
     )
 
 
@@ -723,8 +742,8 @@ class PlaybookEngine:
         assert book is not None and rule.prompt is not None and rule.role is not None
         prompt = render(rule.prompt, groups=groups, job=job)
         run: int | None = None
-        if rule.only_if_run_in is not None:
-            run = run_number(rule.prompt, groups=groups, job=job)
+        if rule.run is not None:
+            run = run_number(rule.run, groups=groups, job=job)
             if run not in book.auto_runs:
                 await self.stop(
                     f"{event}: rule {rule.index} would start run {run}, which [limits] "

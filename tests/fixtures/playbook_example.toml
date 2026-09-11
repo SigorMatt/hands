@@ -21,7 +21,7 @@ then = "send"
 role = "builder"
 context = "clear"
 prompt = "Execute WORKPLAN.md run {n+1}"
-only_if_run_in = "auto_runs"   # {n+1} must be listed above, else stop
+run = "{n+1}"                  # must be listed in auto_runs, else stop
 
 [[rule]]                  # blockers → you
 on = "aux.done"
@@ -34,12 +34,12 @@ on = "builder.done"
 verdict = '^VERDICT: (awaiting decision|question)'
 then = "stop"
 
-[[rule]]
-on = "builder.limited"
+[[rule]]                  # limits are §6's; nothing to say here
+on = "builder.orphaned"
 then = "resume"
 
 [[rule]]
-on = "builder.orphaned"
+on = "builder.failed"
 then = "resume"
 
 [[rule]]

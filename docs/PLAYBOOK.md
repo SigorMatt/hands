@@ -37,7 +37,7 @@ error.
     context = "clear" | "keep"   # a send defaults to "clear"
     prompt = "<text>"            # a send needs one; placeholders allowed
     message = "<text>"           # a notify needs one; a stop may have one
-    only_if_run_in = "auto_runs" # a send only; see below
+    run = "{n+1}"                # a send only; see below
 
 Unknown keys are refused, at the top level, in `[limits]` and in a `[[rule]]`.
 
@@ -90,13 +90,31 @@ A placeholder that names no group of the rule's own regex, and a `{job.…}`
 field outside that list of four, are refused when the file is parsed — never
 when the rule fires.
 
-## `only_if_run_in = "auto_runs"`
+## `run = "<expr>"`
 
-On a `send` only. The prompt must contain exactly one group placeholder; hands
-reads a run number out of it and refuses to launch unless that number is listed
-in `[limits] auto_runs`, stopping instead. This is the decision you took at
-plan time: the launches hands may make without you. It does not parse
-`WORKPLAN.md` — the architect lists the pre-planned runs because it knows them.
+On a `send` only. It names, explicitly, the run number that send would start,
+and hands refuses to launch unless that number is listed in `[limits]
+auto_runs` — it stops instead. This is the decision you took at plan time: the
+launches hands may make without you. hands does not parse `WORKPLAN.md` — the
+architect lists the pre-planned runs because it knows them.
+
+`<expr>` is the placeholder grammar above, narrowed to one named group of the
+rule's own `verdict` regex, with optional integer arithmetic: `"{n}"` or
+`"{n+1}"`. Nothing else is a run — not a literal (`"4"`), not a `{job.…}`
+field, not two placeholders, not prose.
+
+Refused when the file is parsed, never when the rule fires:
+
+- `run` on a rule that is not a `send`;
+- `run` with no `[limits] auto_runs`, or an empty one — there would be no run
+  hands could ever start;
+- `run` whose expression names a group the rule's `verdict` does not define,
+  including a rule that carries no `verdict` at all;
+- `run` that is not an expression of that grammar.
+
+`only_if_run_in`, the older spelling, is refused outright with a message naming
+`run`: a playbook written against it fails loudly rather than silently losing
+its check.
 
 ## Counters
 
@@ -135,7 +153,7 @@ known to load.
     role = "builder"
     context = "clear"
     prompt = "Execute WORKPLAN.md run {n+1}"
-    only_if_run_in = "auto_runs"   # {n+1} must be listed above, else stop
+    run = "{n+1}"                  # must be listed in auto_runs, else stop
 
     [[rule]]                  # blockers → you
     on = "aux.done"
@@ -148,19 +166,20 @@ known to load.
     verdict = '^VERDICT: (awaiting decision|question)'
     then = "stop"
 
-    [[rule]]
-    on = "builder.limited"
+    [[rule]]                  # limits are §6's; nothing to say here
+    on = "builder.orphaned"
     then = "resume"
 
     [[rule]]
-    on = "builder.orphaned"
+    on = "builder.failed"
     then = "resume"
 
     [[rule]]
     on = "monitor.tripwire"
     then = "stop"
 
-
 Read it as a sentence: a clean run starts a cold review; a clean review of a
 pre-planned run starts the next run; blockers, memos, questions and tripwires
-stop and call you; limits and orphans resume themselves until `max_resumes`.
+stop and call you; failures and orphans resume themselves until `max_resumes`.
+A rate limit is not in the playbook at all: §6 owns that resume and schedules
+it for the reset.

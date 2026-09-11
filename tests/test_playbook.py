@@ -177,11 +177,11 @@ def test_the_example_parses_into_the_rules_of_section_10(tmp_home: Path, workdir
         ("aux.done", "send"),
         ("aux.done", "stop"),
         ("builder.done", "stop"),
-        ("builder.limited", "resume"),
         ("builder.orphaned", "resume"),
+        ("builder.failed", "resume"),
         ("monitor.tripwire", "stop"),
     ]
-    assert book.rules[1].only_if_run_in == "auto_runs"
+    assert book.rules[1].run == "{n+1}"
     assert book.rules[1].role == "builder"
     assert book.rules[1].context == "clear"
     assert book.rules[2].message == "Review of run {n} has blockers"
@@ -241,17 +241,31 @@ BAD_PLAYBOOKS: list[tuple[str, str, str]] = [
      'role = "aux"\nprompt = "run {n}"', "{n}"),
     ("unknown job field", 'version = 1\n[[rule]]\non = "builder.done"\nthen = "send"\n'
      'role = "aux"\nprompt = "run {job.cost}"', "job.cost"),
-    ("only_if_run_in on a non-send", 'version = 1\n[limits]\nauto_runs = [2]\n[[rule]]\n'
-     'on = "builder.done"\nthen = "stop"\nonly_if_run_in = "auto_runs"', "only_if_run_in"),
-    ("only_if_run_in with no auto_runs", 'version = 1\n[[rule]]\non = "aux.done"\n'
+    ("run on a non-send", 'version = 1\n[limits]\nauto_runs = [2]\n[[rule]]\n'
+     'on = "builder.done"\nverdict = "run (?P<n>\\\\d+)"\nthen = "stop"\nrun = "{n}"', "send"),
+    ("run with no auto_runs", 'version = 1\n[[rule]]\non = "aux.done"\n'
      'verdict = "run (?P<n>\\\\d+)"\nthen = "send"\nrole = "builder"\nprompt = "run {n+1}"\n'
-     'only_if_run_in = "auto_runs"', "auto_runs"),
-    ("only_if_run_in with no run placeholder", 'version = 1\n[limits]\nauto_runs = [2]\n'
-     '[[rule]]\non = "aux.done"\nthen = "send"\nrole = "builder"\nprompt = "go"\n'
-     'only_if_run_in = "auto_runs"', "one"),
-    ("only_if_run_in spelled otherwise", 'version = 1\n[limits]\nauto_runs = [2]\n[[rule]]\n'
+     'run = "{n+1}"', "auto_runs"),
+    ("run with an empty auto_runs", 'version = 1\n[limits]\nauto_runs = []\n[[rule]]\n'
      'on = "aux.done"\nverdict = "run (?P<n>\\\\d+)"\nthen = "send"\nrole = "builder"\n'
-     'prompt = "run {n+1}"\nonly_if_run_in = "runs"', "auto_runs"),
+     'prompt = "run {n+1}"\nrun = "{n+1}"', "auto_runs"),
+    ("run naming a group the verdict does not define", 'version = 1\n[limits]\n'
+     'auto_runs = [2]\n[[rule]]\non = "aux.done"\nverdict = "run (?P<n>\\\\d+)"\n'
+     'then = "send"\nrole = "builder"\nprompt = "run {n+1}"\nrun = "{k+1}"', "{k+1}"),
+    ("run on a rule with no verdict at all", 'version = 1\n[limits]\nauto_runs = [2]\n'
+     '[[rule]]\non = "aux.done"\nthen = "send"\nrole = "builder"\nprompt = "go"\n'
+     'run = "{n+1}"', "verdict"),
+    ("run that is not an expression", 'version = 1\n[limits]\nauto_runs = [2]\n[[rule]]\n'
+     'on = "aux.done"\nverdict = "run (?P<n>\\\\d+)"\nthen = "send"\nrole = "builder"\n'
+     'prompt = "run {n+1}"\nrun = "3"', "run"),
+    ("run naming a job field", 'version = 1\n[limits]\nauto_runs = [2]\n[[rule]]\n'
+     'on = "aux.done"\nverdict = "run (?P<n>\\\\d+)"\nthen = "send"\nrole = "builder"\n'
+     'prompt = "run {n+1}"\nrun = "{job.id}"', "run"),
+    ("only_if_run_in at all", 'version = 1\n[limits]\nauto_runs = [2]\n[[rule]]\n'
+     'on = "aux.done"\nverdict = "run (?P<n>\\\\d+)"\nthen = "send"\nrole = "builder"\n'
+     'prompt = "run {n+1}"\nonly_if_run_in = "auto_runs"', "run"),
+    ("only_if_run_in on its own", 'version = 1\n[[rule]]\non = "builder.done"\n'
+     'then = "stop"\nonly_if_run_in = "auto_runs"', "run"),
     ("auto_runs is not integers", 'version = 1\n[limits]\nauto_runs = ["two"]', "auto_runs"),
 ]
 
@@ -422,6 +436,23 @@ def test_a_run_outside_auto_runs_stops(tmp_home: Path, workdir: Path) -> None:
     assert "4" in engine.pipeline()["stop_reason"]
 
 
+def test_the_run_key_is_read_not_the_prompt(tmp_home: Path, workdir: Path) -> None:
+    """H-006: `run` names the checked value; a prompt with two of them is fine."""
+    body = (
+        "version = 1\n[limits]\nauto_runs = [3]\n[[rule]]\n"
+        'on = "aux.done"\nverdict = \'^VERDICT: review run (?P<n>\\d+)\'\n'
+        'then = "send"\nrole = "builder"\nprompt = "run {n+1} follows run {n}"\n'
+        'run = "{n+1}"\n'
+    )
+    engine, recorder = engine_for(tmp_home, workdir, body=body)
+    job = finished(engine.spool, role="aux", verdict="VERDICT: review run 2")
+    run(engine.on_job_start(job))
+    run(engine.on_job(job))
+    assert [sent["prompt"] for sent in recorder.sent] == ["run 3 follows run 2"]
+    assert engine.pipeline()["auto_runs"] == {"allowed": [3], "used": [3]}
+    assert engine.pipeline()["paused"] is False
+
+
 def test_an_event_outside_section_10s_list_fires_nothing(tmp_home: Path, workdir: Path) -> None:
     """`killed` is a human's own cancel (§4); it is not one of §10's events."""
     engine, recorder = engine_for(tmp_home, workdir)
@@ -484,9 +515,24 @@ def test_exhausted_resumes_stop(tmp_home: Path, workdir: Path) -> None:
     assert "max_resumes" in engine.pipeline()["stop_reason"]
 
 
+LIMITED_BOOK = '''version = 1
+[limits]
+auto_runs = [2, 3]
+max_resumes = 3
+
+[[rule]]
+on = "builder.limited"
+then = "resume"
+'''
+
+
 def test_a_limited_job_leaves_the_resume_to_section_6(tmp_home: Path, workdir: Path) -> None:
-    """§6 schedules the limit resume for the reset; the rule must not double it."""
-    engine, recorder = engine_for(tmp_home, workdir)
+    """§6 schedules the limit resume for the reset; the rule must not double it.
+
+    §10's example no longer carries this rule (H-005), so the playbook is
+    written here: the behaviour is the finding's, not the example's.
+    """
+    engine, recorder = engine_for(tmp_home, workdir, body=LIMITED_BOOK)
     job = finished(engine.spool, state="limited", limit={"category": "rate_limit"})
     run(engine.on_job_start(job))
     run(engine.on_job(job))
