@@ -19,3 +19,4 @@ One line per unit, appended by the builder: date, unit, sha, verdict.
 2026-09-11  U1 Origin limit  a67c4b0  green (496 tests); H-004 fixed; --origin did not exist, added
 2026-09-11  U2 Resume line optional  8448b6f  green (501 tests); H-008 fixed; one rule in RoleConfig.resume_prompt
 2026-09-11  U4 Pause files an event  267ee01  green (510 tests); H-007 fixed; wait --for stop wakes on pause
+2026-09-11  U5 hands notify --test  44c345b  green (518 tests); client-side, not over the socket; no real HTTP yet
