@@ -8,6 +8,7 @@ dependencies = ["httpx>=0.27"]
 
 [project.scripts]
 hands = "hands.cli:main"
+handsd = "hands.daemon:main"
 
 [project.optional-dependencies]
 dev = ["pytest>=8", "ruff>=0.6"]

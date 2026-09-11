@@ -8,6 +8,7 @@ otherwise, and this file is edited by hand.
 
 from __future__ import annotations
 
+import os
 import shlex
 import tomllib
 from dataclasses import dataclass
@@ -28,7 +29,9 @@ __all__ = [
     "RunnerConfig",
     "ServerConfig",
     "config_path",
+    "list_projects",
     "load_config",
+    "resolve_project",
 ]
 
 
@@ -152,6 +155,42 @@ class Config:
 def config_path(project: str, *, home: Path | None = None) -> Path:
     base = Path("~/.hands").expanduser() if home is None else Path(home) / ".hands"
     return base / f"{project}.toml"
+
+
+def list_projects(*, home: Path | None = None) -> list[str]:
+    """Every project with a config in `~/.hands/`, by name."""
+    base = Path("~/.hands").expanduser() if home is None else Path(home) / ".hands"
+    try:
+        return sorted(path.stem for path in base.glob("*.toml"))
+    except OSError:  # pragma: no cover - unreadable ~/.hands
+        return []
+
+
+def resolve_project(explicit: str | None = None, *, home: Path | None = None) -> str:
+    """Which project a command means: the flag, then $HANDS_PROJECT, then the only one.
+
+    `handsd --project <name>` (§13) and `hands` share this, so the daemon and the
+    CLI can never disagree about which socket they mean. Guessing stops as soon
+    as there is more than one candidate.
+    """
+    if explicit:
+        return explicit
+    from_env = os.environ.get("HANDS_PROJECT")
+    if from_env:
+        return from_env
+    names = list_projects(home=home)
+    if len(names) == 1:
+        return names[0]
+    base = Path("~/.hands").expanduser() if home is None else Path(home) / ".hands"
+    if not names:
+        raise ConfigError(
+            f"no project config in {base}/*.toml; write one (DESIGN §13) "
+            "or name one with --project"
+        )
+    raise ConfigError(
+        f"{base} configures several projects ({', '.join(names)}); "
+        "name one with --project or $HANDS_PROJECT"
+    )
 
 
 def load_config(project: str, *, home: Path | None = None) -> Config:

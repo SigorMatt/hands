@@ -23,6 +23,7 @@ import json
 import os
 import re
 import signal
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -207,9 +208,19 @@ class Runner:
     `cancel()` is safe to call from another task while `run()` is in flight.
     """
 
-    def __init__(self, config: Config, spool: Spool) -> None:
+    def __init__(
+        self,
+        config: Config,
+        spool: Spool,
+        *,
+        on_stream_line: Callable[[str, str], None] | None = None,
+    ) -> None:
         self.config = config
         self.spool = spool
+        #: Called with (job id, line) for every stdout line of a run, before it is
+        #: parsed and whether or not it parses. The daemon (§3) uses it to keep
+        #: the captured stream `hands log` reads; nothing here depends on it.
+        self.on_stream_line = on_stream_line
         self._procs: dict[str, asyncio.subprocess.Process] = {}
         self._cancelled: set[str] = set()
         self._running: dict[str, asyncio.Event] = {}
@@ -360,9 +371,12 @@ class Runner:
         if stream is None:  # pragma: no cover
             return
         async for raw in stream:
-            line = raw.decode("utf-8", errors="replace").strip()
-            if not line:
+            line = raw.decode("utf-8", errors="replace").rstrip("\n")
+            if not line.strip():
                 continue
+            if self.on_stream_line is not None:
+                self.on_stream_line(job.id, line)
+            line = line.strip()
             try:
                 event = json.loads(line)
             except json.JSONDecodeError:
