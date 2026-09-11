@@ -246,6 +246,48 @@ allowed_roots = []
         load_config("demo")
 
 
+def test_an_empty_resume_line_is_refused(write_config) -> None:
+    """§19 (review should-fix 5): `resume_line = ""` is not the absent key.
+
+    Absent means "re-send the limited job's own prompt" (H-008); an empty line
+    is an operator mistake, so it is refused at load rather than folded into
+    that branch. The message must name both valid choices.
+    """
+    write_config("[roles.builder]\ncwd = '~/git/demo'\nresume_line = ''\n")
+    with pytest.raises(ConfigError) as exc:
+        load_config("demo")
+    message = str(exc.value)
+    assert "demo.toml" in message  # the `path` context every config error carries
+    assert "[roles.builder]" in message
+    assert "resume_line" in message
+    assert "omit" in message  # choice 1: leave the key out
+    assert "non-empty" in message  # choice 2: give a real line
+
+
+def test_a_whitespace_only_resume_line_is_refused(write_config) -> None:
+    """A line of blanks is no more a prompt than "" is — same refusal."""
+    write_config("[roles.aux]\ncwd = '~/g'\n[roles.builder]\ncwd = '~/g'\nresume_line = '   '\n")
+    with pytest.raises(ConfigError) as exc:
+        load_config("demo")
+    assert "resume_line" in str(exc.value)
+    assert "non-empty" in str(exc.value)
+
+
+def test_an_empty_resume_line_on_aux_is_refused_too(write_config) -> None:
+    """Aux ignores `resume_line` at resume time; the config is still wrong."""
+    write_config("[roles.builder]\ncwd = '~/g'\n[roles.aux]\ncwd = '~/g'\nresume_line = ''\n")
+    with pytest.raises(ConfigError) as exc:
+        load_config("demo")
+    assert "[roles.aux]" in str(exc.value)
+    assert "resume_line" in str(exc.value)
+
+
+def test_an_empty_ntfy_topic_is_still_legal(write_config) -> None:
+    """The refusal is at the `resume_line` site: other optional strings keep ""."""
+    write_config("[server]\nntfy_topic = ''\n[roles.builder]\ncwd = '~/g'\n")
+    assert load_config("demo").server.ntfy_topic == ""
+
+
 def test_unknown_section_is_refused(write_config) -> None:
     write_config("[roles.builder]\ncwd = '~/git/demo'\n[nonsense]\nx = 1\n")
     with pytest.raises(ConfigError) as exc:

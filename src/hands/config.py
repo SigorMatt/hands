@@ -352,13 +352,32 @@ def _role(name: str, table: Any, path: Path) -> RoleConfig:
         cwd=_abs(_path(table, "cwd", "", where, path), f"roles.{name}.cwd"),
         model=_str(table, "model", DEFAULT_MODEL, where, path),
         permission_flags=_str(table, "permission_flags", "", where, path),
-        # H-008: no default — absent (or empty) means "re-send the limited prompt".
-        resume_line=_opt_str(table, "resume_line", where, path) or None,
+        # H-008: no default — absent means "re-send the limited prompt". Empty is
+        # refused above (§19), so the two behaviours cannot be confused.
+        resume_line=_resume_line(table, where, path),
         queue_depth=_int(
             table, "queue_depth", DEFAULT_QUEUE_DEPTH.get(name, 1), where, path, minimum=1
         ),
         cancel_gated=_bool(table, "cancel_gated", True, where, path),
     )
+
+
+def _resume_line(table: dict[str, Any], where: str, path: Path) -> str | None:
+    """§13/§19 (should-fix 5): the key is optional, but `""` is not "absent".
+
+    An absent `resume_line` means "a limit resume re-sends the limited job's own
+    prompt" (§6, H-008). An empty — or blank — line is no prompt at all, so it is
+    an operator mistake rather than a second way to ask for that branch, and it
+    is refused here instead of at the two resume sites.
+    """
+    value = _opt_str(table, "resume_line", where, path)
+    if value is not None and not value.strip():
+        raise ConfigError(
+            f"{path}: {where} resume_line must not be empty, got {value!r}; "
+            f"either omit the key entirely (a limit resume then re-sends the "
+            f"limited job's own prompt) or give a non-empty line"
+        )
+    return value
 
 
 # --------------------------------------------------------------- primitives

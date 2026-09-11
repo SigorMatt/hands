@@ -56,7 +56,12 @@ cwd` is optional.
     permission_flags = "--dangerously-skip-permissions"
     resume_line = "Resume WORKPLAN.md"   # optional, no default: sent on a limit
                                          # resume (§6). Leave it out and a limit
-                                         # resume re-sends the limited prompt
+                                         # resume re-sends the limited prompt.
+                                         # `resume_line = ""` (or blanks only) is
+                                         # refused at load: an empty line is no
+                                         # prompt, and it would silently mean the
+                                         # other behaviour. Omit the key, or give
+                                         # a non-empty line
     queue_depth = 1                      # capacity: how many jobs may wait
     cancel_gated = true                  # default
 
