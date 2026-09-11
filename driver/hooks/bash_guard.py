@@ -17,7 +17,7 @@ import re
 import sys
 
 ALLOWED_FIRST_WORDS = {
-    "hands", "./dispatch.sh",
+    "hands",
     "cat", "ls", "jq", "pgrep", "sleep", "date", "echo", "head", "tail",
     "wc", "grep", "true", "false", "test", "[", "seq", "pwd", "which",
     "stat", "find", "diff", "sort", "uniq", "cut", "tr", "printf", "basename",
@@ -195,11 +195,10 @@ SELFTEST = [
     ("git -C ./repo fetch -q && git -C ./repo log --oneline origin/main -15", True),
     ("hands inbox --json", True),
     ("hands send --role builder --context clear 'Execute WORKPLAN.md run 2'", True),
-    ("./dispatch.sh ~/git/hands \"Read meta/BUILDER-1-PROMPT.md and execute the mission below its divider.\"", True),
-    ("sleep 20; kill -0 \"$(cat ~/.hands/bootstrap/2.pid)\" && echo alive || echo dead", True),
-    ("cat ~/.hands/bootstrap/2.json ~/.hands/bootstrap/2.err", True),
+    ("sleep 20; kill -0 \"$(pgrep -f handsd)\" && echo alive || echo dead", True),
+    ("cat ~/.hands/jobs/0mtxb7ecx.json ~/.hands/inbox.jsonl", True),
     ("ls probe.txt 2>&1", True),
-    ("jq -r '.result' ~/.hands/bootstrap/1.json", True),
+    ("jq -r '.result' ~/.hands/jobs/0mtxb7ecx.json", True),
     ("for i in $(seq 1 3); do echo $i; done", True),
     ("git -C ./repo show origin/main:meta/CHECKPOINT.md", True),
     ("git status 2>/dev/null", True),
@@ -237,7 +236,7 @@ SELFTEST = [
     ("hands send --role aux \"$(rm -rf x)\"", False),
     ("echo \"`touch x`\"", False),
     ("echo '$(rm -rf x)'", True),
-    ("kill -0 \"$(cat ~/.hands/bootstrap/2.pid)\" && echo alive", True),
+    ("kill -0 \"$(jq -r .pid ~/.hands/jobs/0mtxb7ecx.json)\" && echo alive", True),
     # unbalanced quotes fail closed
     ("echo \"unterminated", False),
     ("hands send 'oops", False),
@@ -278,7 +277,7 @@ def main() -> int:
     if reason is None:
         return 0
     print(f"bash_guard blocked this command ({reason}). The driver may only run "
-          f"hands, ./dispatch.sh, read-only git, and read-only inspection commands; "
+          f"hands, read-only git, and read-only inspection commands; "
           f"it never writes. If the task needs a write, say 'this is for aux' and stop.",
           file=sys.stderr)
     return 2

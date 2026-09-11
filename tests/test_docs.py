@@ -12,6 +12,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import re
+import subprocess
 import textwrap
 import tomllib
 from pathlib import Path
@@ -131,3 +132,48 @@ def test_the_driver_bash_guard_selftest_passes() -> None:
     assert guard.selftest() == 0
     assert guard.check("hands wait --for stop,held --timeout 3600") is None
     assert guard.check("hands open job-1") is not None
+
+
+# ------------------------------------------------ bootstrap retired (§18, §15)
+
+#: The v0 dispatcher's file name, built at runtime so that this file is not
+#: itself a hit: the acceptance criterion for retiring bootstrap mode is a
+#: repo-wide grep for that name, and a test that spelled it would fail it.
+BOOTSTRAP_DISPATCHER = "dispatch" + ".sh"
+#: DESIGN §15 keeps the bootstrap sequence as history, and `meta/` is the
+#: builder's record of what happened; both are allowed to name the dispatcher.
+HISTORY = ("DESIGN.md", "meta/")
+
+
+def tracked_files() -> list[Path]:
+    out = subprocess.run(
+        ["git", "ls-files", "-z"], cwd=ROOT, capture_output=True, text=True, check=True
+    ).stdout
+    return [ROOT / name for name in out.split("\0") if name]
+
+
+def test_the_bootstrap_dispatcher_is_gone_from_the_repo() -> None:
+    """§18: the v0 dispatcher and the driver's bootstrap section are removed."""
+    assert not (ROOT / "bootstrap").exists(), "bootstrap/ must be deleted (§18)"
+    offenders = []
+    for path in tracked_files():
+        where = path.relative_to(ROOT).as_posix()
+        if where.startswith(HISTORY):
+            continue
+        try:
+            text = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
+        for n, line in enumerate(text.splitlines(), 1):
+            if BOOTSTRAP_DISPATCHER in line:
+                offenders.append(f"{where}:{n}: {line.strip()}")
+    assert not offenders, "bootstrap mode is retired (§18); still named in:\n" + "\n".join(
+        offenders
+    )
+
+
+def test_the_driver_kit_does_not_mention_bootstrap_mode() -> None:
+    """The driver starts a mission with `hands send`, not a bootstrap dispatcher."""
+    for path in (ROOT / "driver" / "CLAUDE.md", ROOT / "driver" / "README.md"):
+        text = path.read_text(encoding="utf-8").lower()
+        assert "bootstrap" not in text, f"{path.relative_to(ROOT)} still describes bootstrap mode"

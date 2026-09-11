@@ -26,7 +26,6 @@
       "Glob",
       "Grep",
       "Bash(hands:*)",
-      "Bash(./dispatch.sh:*)",
       "Bash(git fetch:*)",
       "Bash(git -C ./repo fetch:*)",
       "Bash(git -C ./repo log:*)",

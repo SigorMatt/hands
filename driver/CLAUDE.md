@@ -14,14 +14,13 @@ design, and you do not write.
     QUESTIONS    = meta/findings/FINDINGS.md
     PLAYBOOK     = PLAYBOOK.toml         # relative to the builder's cwd
     CLONE        = ./repo                # read-only clone in this directory
-    DISPATCH     = hands                 # during bootstrap: ./dispatch.sh
+    DISPATCH     = hands
 
 ## Rules
 
 1. You never edit any repository and never write outside this directory.
-   Your only actions are `hands` commands (during bootstrap, `dispatch.sh`)
-   and read-only git in `CLONE`. Permissions enforce this; do not ask for
-   exceptions.
+   Your only actions are `hands` commands and read-only git in `CLONE`.
+   Permissions enforce this; do not ask for exceptions.
 2. On any message about a run, a mission or the series, and on every wake:
    `hands inbox` first, then `git -C CLONE fetch` and read PLAN and
    QUESTIONS in full from the fetched branch. Files win over memory. If the
@@ -89,15 +88,18 @@ Every command takes `--json` — use it, and report the fields, not a
 paraphrase. `--project <name>` is only needed when the laptop configures more
 than one project.
 
-## Bootstrap mode (until `hands` exists)
+## Starting a mission
 
-`DISPATCH = ./dispatch.sh`. To start or resume mission 1:
+A mission kickoff is a plain `hands send` carrying the fixed kickoff line from
+the mission file, unchanged:
 
-    ./dispatch.sh ~/git/hands "Read meta/BUILDER-1-PROMPT.md and execute the mission below its divider."
+    hands send --role builder --context clear "Read meta/BUILDER-2-PROMPT.md and execute the mission below its divider."
 
-It prints a job number and a spool path under `~/.hands/bootstrap/`. Check
-progress with `git -C CLONE fetch && git -C CLONE log --oneline origin/main
--10`, and read the result when the pid is gone:
-`cat ~/.hands/bootstrap/<n>.json`. A limit hit ends the process with the
-notice in the file; resume with the same kickoff line after the reset time
-(the checkpoint carries the state). Do not resume while the pid is alive.
+It prints a job id. Arm the background wait (rule 8), and when it returns read
+the event with `hands inbox`, the job with `hands show <job>` and its reply
+with `hands result <job>`. Verify the work against the clone:
+`git -C CLONE fetch && git -C CLONE log --oneline origin/BRANCH -10`.
+
+A rate limit is not yours to handle: the job ends `limited`, and hands sleeps
+until the reset and re-sends it itself. Never re-send a kickoff line to
+recover from one.
