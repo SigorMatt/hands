@@ -172,6 +172,13 @@ If `[ops]` is left out, hands uses its own built-in stall detector instead
 (transcript mtime, subagent mtime, CPU ticks, commits, `.git/index` mtime,
 stash) — the tripwire rules of §5 are the ops script's, though.
 
+`hands status` names whichever monitor is deciding: with `[ops]` set it prints
+the script's path and the three flags hands fills for it; otherwise it prints
+the built-in rule (`stall = no progress and no liveness for <stall_minutes>m`),
+and `monitor.stall_minutes = 0` prints that stall detection is off.
+`monitor.stall_minutes` is the built-in rule only — it is never passed to the
+ops script.
+
 ## 8. Plan kit and prompts (§14 steps 5–6)
 
 - The plan kit gains `PLAYBOOK.toml` (see `docs/PLAYBOOK.md`). It is applied

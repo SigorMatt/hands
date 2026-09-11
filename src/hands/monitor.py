@@ -37,6 +37,7 @@ from hands.spool import Job, Spool
 
 __all__ = [
     "DEFAULT_POLL_S",
+    "OPS_FLAGS",
     "WATCHED_ROLES",
     "BlockBuffer",
     "MonitorSupervisor",
@@ -50,6 +51,11 @@ log = logging.getLogger("hands.monitor")
 
 #: §5 says "hands starts those with every builder job"; aux is not watched.
 WATCHED_ROLES = frozenset({"builder"})
+
+#: The whole of what §5 hands the ops script, in the order `_external` passes it.
+#: `hands status` names these when the ops script is the monitor that decides, so
+#: the list lives where the invocation is built and is never spelled out again.
+OPS_FLAGS = ("--pids", "--transcript", "--base")
 
 DEFAULT_POLL_S = 5.0  # how often the built-in monitor samples; a test shortens it
 MIN_POLL_S = 0.01
@@ -306,11 +312,19 @@ class MonitorSupervisor:
         return "ops" if self.config.ops.monitor_path is not None else "builtin"
 
     def status(self) -> dict[str, Any]:
-        """§4's "monitor state", for `hands status`."""
+        """§4's "monitor state", for `hands status`.
+
+        Both monitors are described, because only one of them decides: `flags` is
+        what the ops script is given (and is None for the built-in monitor, which
+        is given nothing), and `stall_minutes` is the built-in rule's interval,
+        which never reaches the ops script (§5, §19).
+        """
         path = self.config.ops.monitor_path
+        ops = self.source == "ops"
         return {
             "source": self.source,
             "cmd": str(path) if path is not None else None,
+            "flags": list(OPS_FLAGS) if ops else None,
             "stall_minutes": self.config.monitor.stall_minutes,
             "watching": sorted(self._watches),
         }
@@ -401,15 +415,14 @@ class MonitorSupervisor:
             return
 
         pids = pid_list(job)
-        argv = [
-            str(path),
-            "--pids",
+        values = (
             ",".join(str(pid) for pid in pids),
-            "--transcript",
             job.transcript_path or "",
-            "--base",
             job.head_at_start or "",
-        ]
+        )
+        argv = [str(path)]
+        for flag, value in zip(OPS_FLAGS, values, strict=True):
+            argv += [flag, value]
         try:
             proc = await asyncio.create_subprocess_exec(
                 *argv,

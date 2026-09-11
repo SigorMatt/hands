@@ -363,8 +363,7 @@ def _status_block(result: dict[str, Any]) -> str:
     watching = monitor.get("watching") or []
     lines.append(
         f"  monitor  {monitor.get('source')} ({monitor.get('cmd') or 'built-in'}); "
-        f"stall = no progress and no liveness for {monitor.get('stall_minutes')}m; "
-        f"watching {len(watching)}"
+        f"{_monitor_rule(monitor)}; watching {len(watching)}"
     )
     lines.append(f"  inbox    {result.get('inbox', {}).get('unacked')} unread")
     # §4: the two numbers on a role line are not the same kind of thing, and §5
@@ -373,11 +372,37 @@ def _status_block(result: dict[str, Any]) -> str:
         "  note     queued N/M is jobs waiting now / the configured capacity"
         " (roles.<role>.queue_depth, in --json also queue_capacity)."
     )
-    lines.append(
-        "  note     the monitor sees liveness and progress only: a busy-wait on"
+    lines.append(f"  note     {_monitor_note(monitor)}")
+    return "\n".join(lines)
+
+
+def _monitor_rule(monitor: dict[str, Any]) -> str:
+    """What the monitor that is actually deciding decides on (§5, §19).
+
+    With `[ops]` configured the ops script holds the rule and hands only fills
+    its flags, so `monitor.stall_minutes` describes nothing that is running.
+    """
+    if monitor.get("source") == "ops":
+        flags = " ".join(monitor.get("flags") or ())
+        return f"the script decides; hands fills {flags}"
+    minutes = monitor.get("stall_minutes")
+    if not minutes:
+        return "stall detection off (monitor.stall_minutes = 0)"
+    # `:g` so the line shows the number the operator configured (40, not 40.0).
+    return f"stall = no progress and no liveness for {minutes:g}m"
+
+
+def _monitor_note(monitor: dict[str, Any]) -> str:
+    """§5 again: the note under the line must describe the same monitor."""
+    if monitor.get("source") == "ops":
+        return (
+            "hands files what the script prints, block for block, verbatim;"
+            " the rules are the ops repo's, not hands'."
+        )
+    return (
+        "the monitor sees liveness and progress only: a busy-wait on"
         " a nested run is not a stall, and it does not judge the work."
     )
-    return "\n".join(lines)
 
 
 def _pipeline_block(result: dict[str, Any]) -> str:

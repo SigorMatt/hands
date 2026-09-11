@@ -38,6 +38,7 @@ from pathlib import Path
 from typing import Any
 
 from hands.config import Config, RoleConfig
+from hands.monitor import OPS_FLAGS
 from hands.playbook import PlaybookError, load_playbook, playbook_path
 from hands.runner import build_argv
 
@@ -70,7 +71,9 @@ LIVE_PROMPT = "Reply with exactly this line and nothing else:\nVERDICT: doctor o
 #: reasons" (no git repo at the probe's `--base`, for one).
 _REFUSALS = ("unrecognized", "unrecognised", "unknown option", "invalid option", "illegal option")
 
-MONITOR_FLAGS = ("--pids", "--transcript", "--base")
+#: The flags §5 gives the ops script, from the module that actually passes them:
+#: doctor proves what the monitor will send, so there is one list, not two.
+MONITOR_FLAGS = OPS_FLAGS
 
 
 @dataclass(frozen=True)

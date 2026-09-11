@@ -11,6 +11,7 @@ import asyncio
 import io
 import json
 import os
+import shutil
 from pathlib import Path
 
 import pytest
@@ -19,7 +20,7 @@ from hands.cli import main
 from hands.config import load_config
 from hands.daemon import Daemon
 from hands.spool import Spool
-from harness import BLOCK, PROJECT, cli, config_body, drive, fails, ok, running_job
+from harness import BLOCK, PROJECT, cli, config_body, drive, fails, ok, running_job, write_project
 
 # ------------------------------------------------------------------ fixtures
 
@@ -367,5 +368,76 @@ def test_status_says_queue_depth_is_capacity_and_what_the_monitor_sees(project: 
         # §5: a stall is no progress *and* no liveness, and nothing more.
         assert "no progress and no liveness" in out
         assert "busy-wait on a nested run is not a stall" in out
+        # U1: the built-in monitor is the one deciding here; there is no script.
+        assert (await ok("status"))["monitor"]["source"] == "builtin"
+        assert "for 40m" in out  # the §13 default, spelled as it is configured
+        assert "--pids" not in out
+
+    drive(body)
+
+
+FAKE_MONITOR = Path(__file__).with_name("fake_monitor.py")
+
+
+def _ops_project(tmp_home: Path, workdir: Path, tmp_path: Path) -> Path:
+    """A config whose `[ops]` monitor is the deciding one (§5). Returns the script."""
+    ops = tmp_path / "ops"
+    ops.mkdir(exist_ok=True)
+    script = ops / "watch_monitor.sh"
+    shutil.copy(FAKE_MONITOR, script)
+    script.chmod(0o755)
+    write_project(
+        tmp_home,
+        config_body(
+            tmp_home,
+            workdir,
+            extra=f'\n[ops]\nrepo = "{ops}"\nmonitor_cmd = "watch_monitor.sh"\n',
+        ),
+    )
+    return script
+
+
+def test_status_names_the_ops_script_and_its_flags_when_ops_decides(
+    tmp_home: Path, workdir: Path, tmp_path: Path
+) -> None:
+    """U1 (§4 status row, §5, §19): with `[ops]` configured the ops script is the
+    monitor that decides, and hands gives it exactly `--pids/--transcript/--base`.
+    The built-in stall rule is not what is deciding, so status must not state it."""
+    script = _ops_project(tmp_home, workdir, tmp_path)
+
+    async def body(daemon: Daemon) -> None:
+        monitor = (await ok("status"))["monitor"]
+        assert monitor["source"] == "ops"
+        assert monitor["cmd"] == str(script)
+        assert monitor["flags"] == ["--pids", "--transcript", "--base"]
+
+        code, out, _ = await cli("status")
+        assert code == 0
+        assert str(script) in out
+        for flag in ("--pids", "--transcript", "--base"):
+            assert flag in out
+        # The built-in rule is not the one deciding here, and stall_minutes
+        # never reaches the script.
+        assert "no progress and no liveness" not in out
+        assert "40" not in out.split("monitor  ")[1].splitlines()[0]
+
+    drive(body)
+
+
+def test_status_says_stall_detection_is_off_at_zero_minutes(tmp_home: Path, workdir: Path) -> None:
+    """U1: `monitor.stall_minutes = 0` is stall detection off, not "for 0m"."""
+    write_project(
+        tmp_home, config_body(tmp_home, workdir, extra="\n[monitor]\nstall_minutes = 0\n")
+    )
+
+    async def body(daemon: Daemon) -> None:
+        assert (await ok("status"))["monitor"]["stall_minutes"] == 0
+
+        code, out, _ = await cli("status")
+        assert code == 0
+        assert "off" in out
+        assert "stall_minutes = 0" in out
+        assert "0m" not in out
+        assert "no progress and no liveness" not in out
 
     drive(body)
