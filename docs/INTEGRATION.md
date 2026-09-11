@@ -129,9 +129,17 @@ of delivery is one command, and it needs no daemon either:
 
 It publishes one message to `server.ntfy_topic` through the same transport
 §11's `stop` and `job.held` notifications use, and prints the HTTP status ntfy
-answered with. With no `ntfy_topic` set, or if the publish failed, it says so
-and exits 1. Quiet hours do not delay it: §11 delays notifications, never
-actions, and a message you asked for at a terminal is an action.
+answered with — **whatever that status was**:
+
+    ntfy 200  https://ntfy.sh/hands-<random>
+    ntfy 403  https://ntfy.sh/hands-<random>     # printed too, and exits 1
+
+A 2xx exits 0; any other code is printed with the same `ntfy <code> <url>` line
+and exits 1, because the message did not reach the topic. With no `ntfy_topic`
+set, or when nothing answered at all (no route, timeout, TLS), there is no code
+to print and it says so on stderr and exits 1. Quiet hours do not delay it: §11
+delays notifications, never actions, and a message you asked for at a terminal
+is an action.
 
 Doctor also prints the **background-wake check** of §11 — the one check hands
 cannot run itself, because it needs an idle interactive session. Run it by

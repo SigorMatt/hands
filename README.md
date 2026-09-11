@@ -69,7 +69,7 @@ Write `~/.hands/<project>.toml` (every key is listed in
 Then check the install and send one prompt:
 
     hands doctor                                   # every check but the live turn is free
-    hands notify --test "ping from the laptop"     # one real ntfy message + status
+    hands notify --test "ping from the laptop"     # one real ntfy message + the status, 2xx or not
     hands status
     hands send --role aux --context clear "Reply with: VERDICT: hello"
     hands wait <job> --timeout 300

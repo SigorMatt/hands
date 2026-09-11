@@ -640,17 +640,25 @@ def _notify(config: Config, message: str | None, *, out: TextIO, as_json: bool) 
         )
     result = asyncio.run(notify_mod.send_test(config, message))
     print(json.dumps(result, sort_keys=True) if as_json else _notify_block(result), file=out)
-    return 0
+    # §19: the status is printed whatever it was, and a non-2xx still fails. A
+    # refusal is a fact about the topic (wrong token, wrong URL), not a crash, so
+    # it is reported in the same shape as a success — with a code and an exit 1.
+    return 0 if result["delivered"] else 1
 
 
 def _notify_block(result: dict[str, Any]) -> str:
     """What ntfy answered, and who sent it — the daemon's notifications are its own."""
+    last = (
+        "  sent by the CLI itself, not handsd, and not delayed by quiet hours (§11)"
+        if result["delivered"]
+        else "  ntfy did not accept it: nothing was delivered to the topic"
+    )
     return "\n".join(
         [
             f"ntfy {result['status']}  {result['url']}",
             f"  title    {result['title']}",
             f"  message  {result['message']}",
-            "  sent by the CLI itself, not handsd, and not delayed by quiet hours (§11)",
+            last,
         ]
     )
 

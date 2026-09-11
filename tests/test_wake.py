@@ -12,9 +12,11 @@ import asyncio
 import io
 import json
 from datetime import UTC, datetime, timedelta
+from functools import partial
 from pathlib import Path
 from typing import Any
 
+import httpx
 import pytest
 
 from hands.cli import main
@@ -25,7 +27,9 @@ from hands.notify import (
     DEFAULT_TEST_MESSAGE,
     TEST_TITLE,
     Notifier,
+    http_post,
     parse_quiet_hours,
+    send_test,
 )
 from hands.spool import Job, Spool, resolve_kinds
 from harness import BLOCK, PROJECT, cli, config_body, drive, ok, poll, write_project
@@ -248,11 +252,11 @@ def notifier(
     tmp_home: Path,
     tmp_path: Path,
     *,
-    posts: Posts | None = None,
+    posts: Posts | StatusPosts | None = None,
     clock: Clock | None = None,
     quiet: str | None = None,
     topic: str | None = "hands-abc123",
-) -> tuple[Notifier, Posts, Clock, Spool]:
+) -> tuple[Notifier, Posts | StatusPosts, Clock, Spool]:
     posts = posts or Posts()
     clock = clock or Clock()
     spool = Spool(tmp_home / ".hands")
@@ -721,14 +725,120 @@ def test_notify_without_test_says_what_the_command_takes(
 def test_a_failed_publish_is_reported_and_exits_nonzero(
     tmp_home: Path, workdir: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The opposite of §11's best effort: this one exists to tell you it failed."""
+    """The opposite of §11's best effort: this one exists to tell you it failed.
+
+    A transport error has no HTTP status to print — nothing answered — so the
+    message shape stays `<url> did not take the message: <type>: <detail>`.
+    """
     project = notify_project(tmp_home, workdir)
     monkeypatch.setattr("hands.notify.http_post", StatusPosts(fail=OSError("no route to host")))
 
-    code, _, err = run_cli(project, "notify", "--test", "hello")
+    code, out, err = run_cli(project, "notify", "--test", "hello")
 
     assert code == 1
-    assert "no route to host" in err
+    assert "https://ntfy.example/hands-abc123 did not take the message" in err
+    assert "OSError: no route to host" in err
+    assert "ntfy " not in out, "no response, so there is no code to print"
+
+
+# ------------------------------- should-fix 7: the status on the failure path
+
+
+def refusing_transport(status: int, seen: list[httpx.Request] | None = None) -> httpx.MockTransport:
+    """A real httpx transport that answers every request with `status`, off-network."""
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        if seen is not None:
+            seen.append(request)
+        return httpx.Response(status, text="forbidden")
+
+    return httpx.MockTransport(handle)
+
+
+@pytest.mark.parametrize("status", [200, 202, 403, 404, 500])
+def test_http_post_answers_with_the_status_httpx_saw(status: int) -> None:
+    """`http_post`'s `-> int` against real httpx, not a stand-in: any code comes back."""
+    seen: list[httpx.Request] = []
+
+    async def body() -> int:
+        return await http_post(
+            "https://ntfy.example/hands-abc123",
+            title=TEST_TITLE,
+            message="hello",
+            transport=refusing_transport(status, seen),
+        )
+
+    assert asyncio.run(body()) == status
+    assert [request.url.path for request in seen] == ["/hands-abc123"]
+    assert seen[0].headers["Title"] == TEST_TITLE
+    assert seen[0].read() == b"hello"
+
+
+def test_send_test_reports_a_403_as_a_status_not_a_failure(
+    tmp_home: Path, workdir: Path
+) -> None:
+    """Review should-fix 7: a refusal is an answer, and the answer is the code.
+
+    The real `send_test` over the real `http_post`, with only httpx's transport
+    replaced — so `Response.status_code` is what this proves.
+    """
+    project = notify_project(tmp_home, workdir)
+    config = load_config(project)
+    post = partial(http_post, transport=refusing_transport(403))
+
+    result = asyncio.run(send_test(config, "hello", post=post))
+
+    assert result["status"] == 403
+    assert result["delivered"] is False
+    assert result["url"] == "https://ntfy.example/hands-abc123"
+
+
+def test_a_refused_publish_prints_the_code_and_exits_nonzero(
+    tmp_home: Path, workdir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`ntfy 403 <url>` is printed, and the command still fails (§4, §19)."""
+    project = notify_project(tmp_home, workdir)
+    monkeypatch.setattr("hands.notify.http_post", StatusPosts(status=403))
+
+    code, out, err = run_cli(project, "notify", "--test", "hello")
+
+    assert code == 1, err
+    assert "ntfy 403" in out
+    assert "https://ntfy.example/hands-abc123" in out
+
+
+def test_a_refused_publish_carries_the_status_in_json(
+    tmp_home: Path, workdir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project = notify_project(tmp_home, workdir)
+    monkeypatch.setattr("hands.notify.http_post", StatusPosts(status=404))
+
+    code, out, _ = run_cli(project, "--json", "notify", "--test", "hi")
+
+    assert code == 1
+    assert json.loads(out)["status"] == 404
+    assert json.loads(out)["delivered"] is False
+
+
+def test_a_background_notification_ntfy_refuses_still_fails(
+    tmp_home: Path, tmp_path: Path
+) -> None:
+    """§11 is unchanged: a non-2xx on the daemon's path is a failed delivery.
+
+    `raise_for_status` used to carry this; the status check replaces it, so the
+    inbox still records the refusal and the job still learns nothing.
+    """
+    note, _, _, spool = notifier(tmp_home, tmp_path, posts=StatusPosts(status=500))
+
+    async def body() -> None:
+        note.notify("hands: the pipeline stopped", {"reason": "blockers"})
+        await note.drain()
+
+    asyncio.run(body())
+    events = spool.events()
+    assert [event.kind for event in events] == ["notify"]
+    assert events[0].payload["delivered"] is False
+    assert "500" in events[0].payload["error"]
 
 
 def test_notify_test_is_not_delayed_by_quiet_hours(

@@ -43,6 +43,7 @@ __all__ = [
     "Notifier",
     "NotifyError",
     "QuietWindow",
+    "accepted",
     "http_post",
     "parse_quiet_hours",
     "send_test",
@@ -113,27 +114,45 @@ def parse_quiet_hours(text: str | None) -> QuietWindow | None:
 # ------------------------------------------------------------ the transport
 
 
-async def http_post(url: str, *, title: str, message: str) -> int:
+async def http_post(url: str, *, title: str, message: str, transport: Any = None) -> int:
     """Publish one ntfy message; answer with the HTTP status ntfy gave back.
 
-    The only place in hands that speaks to a network. The status is returned
-    because `hands notify --test` (§4) exists to print it — §11's own
-    notifications ignore it, since for them "it did not raise" is the whole
-    answer.
+    The only place in hands that speaks to a network. **Any** response is a
+    return, 2xx or not: a 403 from ntfy is an answer, and `hands notify --test`
+    (§4, §19) exists to print exactly that answer. Judging the code is the
+    caller's job — `accepted()` below is how both callers do it — because the two
+    callers want different things from a refusal (§11 inboxes it and is quiet;
+    `--test` prints it and exits 1). Only a request that got no response at all
+    raises here.
+
+    `transport` is a test seam and nothing more: it is handed to the client
+    unchanged, so a test can drive this very function through
+    `httpx.MockTransport` and prove the status plumbing without a network.
 
     `httpx` is imported here and not at module scope so that importing `hands`
     — which the CLI does for every command — costs nothing.
     """
     import httpx
 
-    async with httpx.AsyncClient(timeout=POST_TIMEOUT_S) as client:
+    async with httpx.AsyncClient(timeout=POST_TIMEOUT_S, transport=transport) as client:
         response = await client.post(
             url,
             content=message.encode("utf-8"),
             headers={"Title": title, "Tags": "robot"},
         )
-        response.raise_for_status()
     return int(response.status_code)
+
+
+def accepted(status: Any) -> bool:
+    """Did ntfy take the message? A 2xx is a yes; any other number is a no.
+
+    A transport that answered with no status at all — an injected publisher, a
+    recorder in a test — has said nothing about the response, and there "it did
+    not raise" stays the whole answer, which is the rule §11 has always had.
+    """
+    if isinstance(status, bool) or not isinstance(status, int):
+        return True
+    return 200 <= status < 300
 
 
 class NotifyError(Exception):
@@ -154,6 +173,11 @@ async def send_test(
     and never actions (§11), and a `--test` the human asked for at a terminal is
     an action. The transport underneath is the same `http_post` every §11
     notification uses — that is what makes this a proof of delivery.
+
+    A refusal is **returned, not raised** (§19): `delivered` is False and
+    `status` is the code ntfy answered with, so the caller can print the code and
+    still fail. `NotifyError` is kept for the two cases that have no code at all
+    — nowhere to send to, and nothing answered.
     """
     topic = config.server.ntfy_topic
     if not topic:
@@ -170,14 +194,18 @@ async def send_test(
         raise
     except Exception as exc:
         raise NotifyError(f"{url} did not take the message: {type(exc).__name__}: {exc}") from exc
-    log.info("ntfy test published to %s (%s)", url, status)
+    delivered = accepted(status)
+    if delivered:
+        log.info("ntfy test published to %s (%s)", url, status)
+    else:
+        log.warning("ntfy refused the test message at %s (%s)", url, status)
     return {
         "topic": topic,
         "url": url,
         "title": TEST_TITLE,
         "message": message,
         "status": status,
-        "delivered": True,
+        "delivered": delivered,
     }
 
 
@@ -265,24 +293,33 @@ class Notifier:
         url = f"{self.config.server.ntfy_url.rstrip('/')}/{self.config.server.ntfy_topic}"
         post = self.post if self.post is not None else http_post
         try:
-            await post(url, title=note.title, message=note.message)
+            status = await post(url, title=note.title, message=note.message)
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            log.warning("ntfy publish failed (%s): %s", type(exc).__name__, exc)
-            self.spool.append_event(
-                "notify",
-                {
-                    **note.payload,
-                    "title": note.title,
-                    "message": note.message,
-                    "delivered": False,
-                    "error": f"{type(exc).__name__}: {exc}",
-                },
-            )
-            return False
+            return self._failed(note, f"{type(exc).__name__}: {exc}")
+        # A non-2xx is a failed delivery here too. `http_post` used to raise on
+        # one; now it returns the code, so the judgement is made in the open —
+        # same outcome for §11, and `--test` gets to print the code (§19).
+        if not accepted(status):
+            return self._failed(note, f"ntfy answered {status}")
         log.info("ntfy: %s", note.title)
         return True
+
+    def _failed(self, note: Notification, error: str) -> bool:
+        """A publish that did not land: logged, written to the inbox, never raised."""
+        log.warning("ntfy publish failed: %s", error)
+        self.spool.append_event(
+            "notify",
+            {
+                **note.payload,
+                "title": note.title,
+                "message": note.message,
+                "delivered": False,
+                "error": error,
+            },
+        )
+        return False
 
     def _arm_flush(self, seconds: float) -> None:
         """One flush task for the whole queue, armed by the first quiet notification."""

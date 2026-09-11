@@ -654,6 +654,11 @@ class Api:
         through the daemon's own transport, so a test that replaced it sees this
         message too. Quiet hours are not consulted here either: §11 delays
         notifications, never actions.
+
+        A refusal by ntfy (any non-2xx) comes back as the result, with
+        `delivered: false` and the code — the same answer `hands notify --test`
+        prints (§19). `ApiError` is kept for the cases with no code to report:
+        no topic configured, and a transport that never answered.
         """
         if test is None:
             raise ApiError('notify takes --test "<message>": it has no other mode (§4)')
