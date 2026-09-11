@@ -34,3 +34,5 @@ One line per unit, appended by the builder: date, unit, sha, verdict.
 2026-09-12  U6 Guard fix and guard tests  ecdb0f3  green (603 tests); selftest 62/62 in pytest; MultiEdit rule dropped (H-010)
 2026-09-12  U7 send --prompt-file  45400e8  green (618 tests); DESIGN 19; prompt byte for byte over the socket
 2026-09-12  U8 Final report  8c365b6  green (618 tests); mission 3 finished
+2026-09-12  U0 Plan and corrections  8268539  meta only; FINAL-REPORT-3 §3 corrected (blocker 3); H-010 amended (should-fix 2)
+2026-09-12  U1 Guard scope  935a275  green (681 tests); blocker 1 closed; ADVERSARIAL table of 62 owns its own verdicts; MultiEdit back

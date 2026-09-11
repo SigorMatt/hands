@@ -1,22 +1,21 @@
 # CHECKPOINT
 
 Mission: 4 (meta/BUILDER-4-PROMPT.md) — IN PROGRESS
-Unit in progress: U1 (guard scope)
-Intent: the git subcommand allowlist applies to every `git` token anywhere in
-the command, not only at a segment's first word; `find` with `-exec`,
-`-execdir`, `-ok`, `-okdir` or `-delete` is forbidden;
-`MUTATING_GIT_SUBCOMMANDS` and the first-level-only check are gone;
-`tests/test_bash_guard.py` gains an adversarial table of ≥20 cases written
-without reading `SELFTEST`; `driver/settings.json` denies `MultiEdit` again.
-Done means: both tables green, `--selftest` green, ./scripts/check green three
-times, one commit naming which adversarial cases failed against `ecdb0f3`,
-pushed.
-Tip: U0 committed and pushed on `main` (meta only). Base 796e5ae was green
-here: ruff clean, 618 passed, cli smoke, `check: green`.
+Unit in progress: U2 (a deterministic gate)
+Intent: tests/test_daemon.py:556 asserts on the stall sentence (or its absence),
+not on the bare substring "40" in a line that also carries a tmpdir path; every
+other assertion in tests/test_daemon.py and tests/test_playbook.py that matches
+a bare number or a substring a path or a counter could contain is pinned.
+Done means: ./scripts/check run five times, 5/5 green, reported in the commit
+body; the deterministic reproduction (--basetemp with a 40-bearing name) is
+green too; one commit, pushed.
+Tip: U0 (8268539, meta only) and U1 (935a275) committed and pushed on `main`.
+U1 was green three consecutive runs, 681 passed; `bash_guard.py --selftest`
+65/65. Base 796e5ae was green here at 618 passed.
 Findings: H-001 open (needs a capture from a dotted cwd). H-009 open
-(design-side; no builder unit can close it). H-010 amended by U0 with both
-observations and the decision to keep the `MultiEdit` rule — still open until
-U1 puts it on disk. H-002..H-008 closed in missions 2 and 3.
+(design-side; no builder unit can close it). H-010 closed by U1 (935a275): the rule is back in
+`driver/settings.json` and `tests/test_docs.py` asserts it; the memo carries
+U0's amendment and U1's closing Status line. H-002..H-008 closed in missions 2 and 3.
 Not proven, carried into this mission (see meta/FINAL-REPORT-3.md §3, as
 corrected by the dated line U0 appended):
   1. Mission 3's code has never run outside the test suite — the installed
