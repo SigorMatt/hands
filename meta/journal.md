@@ -12,3 +12,4 @@ One line per unit, appended by the builder: date, unit, sha, verdict.
 2026-09-11  U7 Playbook engine  36f9bd3  green (421 tests); §10 example end to end; findings H-005, H-006
 2026-09-11  U8 Wake path and notifications  4a3d302  green (451 tests); U5 restart gap closed
 2026-09-11  U9 Job library  8cc2356  green (465 tests); tail implemented too
+2026-09-11  U10 Install surface  9096b50  green (488 tests); finding H-007 (pause writes no event)
