@@ -1,30 +1,29 @@
 # CHECKPOINT
 
 Mission: 1 (meta/BUILDER-1-PROMPT.md)
-Unit in progress: U4 Files and gates
-Intent: the human-decision boundary. Files move only inside the allowed
-roots; gated work waits in `held` until a human decision releases it, and
-nothing else can release it.
+Unit in progress: U5 Limits
+Intent: the shared-subscription fact of DESIGN §6 — a limit is a
+wall-clock event, so hands waits it out and resumes by itself rather than
+asking a human who is limited too.
 Done means:
-  - `hands put/get/ls` confined to `files.allowed_roots` (reuse
-    `spool.resolve_under_roots`), sha256 and bytes reported per §4.
-  - `--file path=content` on `send`, written before spawn, recorded in
-    `files_written`.
-  - Gate triggers: `--gate reason` or `gates.patterns` (case-sensitive
-    substring match on the prompt) put the job in `held`; U3's temporary
-    refusal of pattern-matching prompts is replaced by real gating.
-  - `cancel` gated per `roles.<role>.cancel_gated`.
-  - `approve`/`deny` with the authority table of DESIGN §8: the CLI
-    decision is final (`decided_by: cli`); `--human-confirmed` (the driver
-    path) requires `--quote "<the human's instruction>"` and stores it
-    (`decided_by: driver`); a `held` job cannot be released any other way;
-    `denied` is terminal; gating on the default patterns cannot be
-    disabled.
-  - Table-driven tests for the authority table and for confinement.
+  - Detect `limited` from a rate-limit error event or a limit notice in
+    `result`; store the raw notice always (see finding H-002 on the field
+    name).
+  - Parse a reset time defensively: ISO timestamps; "resets at <time>"
+    with and without a date; "try again in N minutes". When parseable,
+    schedule the resume at that time + 60 s, else after
+    `limits.backoff_minutes`.
+  - Builder resume = `roles.builder.resume_line` as a new `clear` job with
+    `resumed_from`; aux resume = the same prompt again.
+  - Stop after `limits.max_resumes` consecutive resumes without a `done`,
+    and notify (the inbox event now; ntfy in U8).
+  - One inbox event per limit and per resume.
+  - Tests for each notice shape, the counter, and the stop.
   - `./scripts/check` green; one commit; pushed.
 Standing constraints: execution model of BUILDER-1-PROMPT.md is binding;
 one sub-agent per unit; commit and push every unit; ./scripts/check green;
-no test may require a real `claude` binary; sub-agents never edit
-meta/plan.md, meta/CHECKPOINT.md or DESIGN.md; design changes and product
-facts that contradict the design are findings in meta/findings/FINDINGS.md
-with evidence.
+no test may require a real `claude` binary and no test may sleep for a
+real limit interval; sub-agents never edit meta/plan.md,
+meta/CHECKPOINT.md or DESIGN.md; design changes and product facts that
+contradict the design are findings in meta/findings/FINDINGS.md with
+evidence.
