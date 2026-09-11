@@ -1,17 +1,18 @@
 # CHECKPOINT
 
 Mission: 3 (meta/BUILDER-3-PROMPT.md) — IN PROGRESS
-Unit in progress: U6 Guard fix and guard tests
-Intent: fix the Bash guard's false positive and put the guard under the test
-suite (DESIGN §19, §12).
-Done means: in driver/hooks/bash_guard.py the mutating-git check leaves
-FORBIDDEN_PATTERNS for the git subcommand logic (subcommand position only),
-so `git -C ./repo rev-parse <sha>^{commit}` and `git log --grep=commit` pass
-while `git commit`, `git -C ./repo push` and `git -c x=y commit` are blocked;
-those cases are in SELFTEST; a new tests/test_bash_guard.py imports the hook
-by path and runs every SELFTEST case; driver/settings.json drops the
-MultiEdit deny rule (memo H-010 already filed). Gate green; pushed.
-Tip: 861097f (U5) — gate green, 539 passed.
+Unit in progress: U7 `hands send --prompt-file PATH`
+Intent: add `hands send --prompt-file PATH` (DESIGN §4, §12, §19) so prompts
+never travel on a command line.
+Done means: the CLI reads the prompt from the file (UTF-8, any readable path
+— the CLI is a client, not the daemon, so no root confinement) and sends it
+byte for byte; mutually exclusive with `--stdin` and the positional prompt;
+driver/CLAUDE.md rule 6 becomes "prompts and long content travel as files"
+(`--prompt-file`, `hands put`); docs/INTEGRATION.md and the driver command
+list updated; bash_guard SELFTEST gains a `--prompt-file` case. Tests include
+a prompt containing `>`, `(`, quotes and a newline arriving verbatim in the
+job record. Gate green; pushed.
+Tip: ecdb0f3 (U6) — gate green, 603 passed; guard selftest 62/62.
 Findings: H-001 open (needs a capture from a dotted cwd). H-002, H-003,
 H-005 fixed with no code change; H-004 a67c4b0, H-006 34b4ede, H-007
 267ee01, H-008 8448b6f. H-009, H-010 filed by this unit, both open and

@@ -31,3 +31,4 @@ One line per unit, appended by the builder: date, unit, sha, verdict.
 2026-09-12  U3 Pause keeps first reason  3cd2306  green (526 tests); should-fix 4 closed; no-op exits 0
 2026-09-12  U4 Empty resume_line refused  9cd6108  green (530 tests); should-fix 5 closed; whitespace-only refused too
 2026-09-12  U5 notify status on failure  861097f  green (539 tests); should-fix 7 closed; real httpx MockTransport
+2026-09-12  U6 Guard fix and guard tests  ecdb0f3  green (603 tests); selftest 62/62 in pytest; MultiEdit rule dropped (H-010)
