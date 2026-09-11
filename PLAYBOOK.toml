@@ -14,6 +14,13 @@ role = "aux"
 context = "clear"
 prompt = "Read meta/REVIEW-PROTOCOL.md and review mission {n} of this repository: the commits from {job.head_at_start} to origin/main. Follow the protocol exactly, commit only meta/reviews/REVIEW-{n}.md, and begin your reply with the VERDICT line it specifies."
 
+# A kit was applied: worth a note, not a stop.
+[[rule]]
+on = "builder.done"
+verdict = '^VERDICT: kit applied'
+then = "notify"
+message = "Kit applied; the next kickoff is the driver's"
+
 # The builder stopped for a reason → the human.
 [[rule]]
 on = "builder.done"

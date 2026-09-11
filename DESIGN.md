@@ -1,12 +1,12 @@
-# hands — DESIGN v3.2
+# hands — DESIGN v3.3
 
 Machinery that replaces the human relay between the planning brain and the two
 Claude Code roles (builder, aux) on the Ubuntu laptop, and that keeps a series
 moving without a human while everything goes by plan. Working name: `hands`.
 The method it serves is described in WORKING-MODEL.md (agile-skills) and
 OPERATING-MODEL.md (spanweave); hands changes the topology, not the method.
-v3.2 (2026-09-11) folds in the mission 2 review; changes are in §19, §18
-(mission 1 findings) and §17 (from v2).
+v3.3 (2026-09-12) folds in the mission 3 review and the driver's pipeline
+observations; changes are in §20; earlier changes in §19, §18, §17.
 
 Status: proposal, 2026-09-10. Items marked DECIDED were settled in discussion.
 
@@ -153,7 +153,7 @@ JSON with `--json` (the driver uses that) or a readable form for you.
 
 | Command | Args | Returns |
 |---|---|---|
-| `send` | `--role builder\|aux --context clear\|keep [--file path=content…] [--gate reason] [--prompt-file path\|--stdin\|prompt]` | job id, state. `--prompt-file` is the normal route for prose: the prompt never touches a command line |
+| `send` | `--role builder\|aux --context clear\|keep [--file path=content…] [--gate reason] [--prompt-file path\|--stdin\|prompt]` | job id, state. `--prompt-file` is the normal route for prose: the prompt never touches a command line; the client refuses a missing, unreadable, empty or over-10 MB file |
 | `wait` | `<job>\|--for event-kind [--timeout s]` | job record when terminal / the event; used by the driver in the background (§11) |
 | `result` | `<job>` | job record |
 | `jobs` | `[--role r] [--origin o] [--grep pat] [--since d] [-n]` | recent job summaries |
@@ -435,8 +435,13 @@ the inbox; the driver wakes (§11), reads the inbox, verifies the branch from
 its clone, and reports to you with a `VERDICT:` line and a recommendation.
 You decide with the driver (small: a `keep` answer, a run prompt) or take it
 to the architect (large: a decisions file, a corrected playbook, a scope
-call), whose output comes back as files. `hands resume` or the next `send`
-un-pauses the pipeline.
+call), whose output comes back as files. `hands resume` un-pauses the pipeline; so
+does a `cli`-origin send, but only when that job **starts** (a held or
+queued send changes nothing), and a stop is never cleared by a job the
+playbook or the limit manager started. Every stop, from any component, goes
+through one `stop()` that keeps the first reason and files one
+notification; a later stop over an existing one is recorded in the inbox
+only. `last_rule` is cleared when a different playbook file is loaded.
 
 ---
 
@@ -489,9 +494,12 @@ playbook path):
   5. Gated sends are announced before sending. `hands approve
      --human-confirmed` only when the human's message in this session
      explicitly approves that job id; quote it.
-  6. Prompts and long content travel as files: `hands send --prompt-file`
-     for the prompt, `hands put` for content the role must read, named in
-     the prompt. Nothing with shell metacharacters goes on a command line.
+  6. Prompts the architect wrote arrive as files (the human places the
+     kit under `~/Downloads`); send them with `hands send --prompt-file`.
+     Prompts you compose yourself are short and go in quotes; the guard
+     treats quoted text as text. You cannot create files, so never plan
+     on writing a prompt file yourself; if a prompt needs to be a file and
+     is not one, say so and stop.
   7. Verify milestone claims against the remote before reporting them.
   8. After every dispatch or report, re-arm `hands wait --for stop,held` in
      the background and stop talking.
@@ -500,7 +508,8 @@ playbook path):
   10. Design changes, new batches, playbook edits and decisions files are not
       yours to write; say "this is for the architect" and stop.
 - `driver/settings.json` — enforcement: `permissions.deny` for Edit, Write,
-  MultiEdit, NotebookEdit; `permissions.allow` for `Bash(hands *)`,
+  MultiEdit, NotebookEdit (MultiEdit stays: it is a known permission-rule
+  name in 2.1.x even where the CLI warns; H-010 as amended); `permissions.allow` for `Bash(hands *)`,
   `Bash(git fetch *)`, `Bash(git log *)`, `Bash(git show *)`,
   `Bash(git diff *)`, `Bash(git ls-remote *)`, `Bash(git status *)`,
   `Bash(cat *)`, `Bash(ls *)`; everything else asks. The driver's working
@@ -697,3 +706,29 @@ one-time checks in step 4.
 - Wake path: a background wait can be killed by the host under memory
   pressure; the driver's rule 2 (inbox first on every wake) is the recovery,
   observed once on 2026-09-11.
+
+---
+
+## 20. Changes from v3.2 (mission 3 review, driver observations)
+
+- Pipeline state (§10): a stop is cleared only by `hands resume` or by a
+  `cli`-origin send when it starts; never at gate time, never by a
+  playbook- or limit-started job. One `stop()` for every component; the
+  first reason is kept; `last_rule` resets on a new playbook file. (Driver
+  observations 2026-09-11/12; review 3 should-fix 4.)
+- Guard (§12): the git subcommand allowlist applies to every `git` token
+  anywhere in a command, not only at a segment's first word; `find` with
+  `-exec`/`-execdir`/`-ok`/`-delete` is forbidden. (Review 3 blocker 1.)
+- Guard tests: `tests/test_bash_guard.py` carries an adversarial table
+  written independently of `SELFTEST`. (Review 3 should-fix 1.)
+- `MultiEdit` deny rule restored (should-fix 2; H-010 amended with both
+  observations: the CLI warning and the binary's rule table).
+- Empty strings are refused wherever a key is optional (`monitor_cmd`,
+  `resume_line`, `ntfy_topic`), and `hands doctor` reports a config error
+  instead of crashing. (Should-fix 5, 8.)
+- `--prompt-file` size cap (§4). (Should-fix 9.)
+- Driver rule 6 rewritten to match what the driver can do. (Should-fix 10.)
+- Playbook example gains a `kit applied` rule so applying a kit is a notify,
+  not a stop.
+- Reports are snapshots; a report whose claim expires is corrected by an
+  appended dated line, never rewritten. (Review 3 blocker 3.)
