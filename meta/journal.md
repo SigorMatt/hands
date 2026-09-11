@@ -39,3 +39,5 @@ One line per unit, appended by the builder: date, unit, sha, verdict.
 2026-09-12  U2 Deterministic gate  667ea52  green 5/5 (682 tests); blocker 2 and should-fix 11 closed; 30 assertions pinned
 2026-09-12  U3 Pipeline state  c108bfe  green 3/3 (692 tests); should-fix 4 closed; un-pause at start; stop.suppressed; H-011 filed
 2026-09-12  U4 Optional keys and doctor  15eeb76  green 3/3 (719 tests); should-fix 5 and 8 closed; 11 optional keys refuse a blank
+2026-09-12  U5 prompt-file refusals, rule 6  2fb3b7f  green 3/3 (725 tests); should-fix 9 and 10 closed; driver rule 6 is §12's text
+2026-09-12  U5 follow-up  d348d07  green 3/3 (726 tests); the four refusals exit 2 as the brief asks; EXIT_REFUSED == EXIT_TIMEOUT == 2

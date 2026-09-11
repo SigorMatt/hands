@@ -1,18 +1,18 @@
 # CHECKPOINT
 
 Mission: 4 (meta/BUILDER-4-PROMPT.md) — IN PROGRESS
-Unit in progress: U5 (--prompt-file refusals and driver rule 6)
-Intent: the client refuses a missing, unreadable, empty or over-10 MB prompt
-file with a one-line error and exit 2, before contacting the daemon;
-`driver/CLAUDE.md` rule 6 becomes the §12 text of DESIGN v3.3, and the
-contradictory sentence about metacharacters goes.
-Done means: tests for the four refusals; `grep -rn metacharacters driver/`
-returns nothing; ./scripts/check green three times; one commit, pushed.
-Tip: U0 (8268539, meta only), U1 (935a275), U2 (667ea52), U3 (c108bfe) and
-U4 (15eeb76) committed and pushed on `main`; 719 passed at U4's tip, gate green
-three consecutive runs. U2's flake reproduction
-(`--basetemp=/tmp/pt-40/pytest-1340`) is green where it was red. Base 796e5ae
-was green here at 618 passed.
+Unit in progress: U6 (final report)
+Intent: meta/FINAL-REPORT-4.md — what changed (a sha per unit), what the tests
+prove, NOT PROVEN (mandatory), and a `## Review items` table mapping review 3's
+blockers 1-3 and should-fix 1-11 to `closed <sha>` | `deferred <mission>` |
+`not applicable <reason>`. Then the verdict line.
+Done means: the report exists, the gate is green on the pushed tip three
+consecutive runs, and the mission's five acceptance criteria are checked.
+Tip: U0 (8268539, meta only), U1 (935a275), U2 (667ea52), U3 (c108bfe),
+U4 (15eeb76) and U5 (2fb3b7f, then the follow-up d348d07) committed and pushed
+on `main`; 726 passed at U5's tip, gate green three consecutive runs. U2's
+flake reproduction (`--basetemp=/tmp/pt-40/pytest-1340`) is green where it was
+red. Base 796e5ae was green here at 618 passed.
 Findings: H-001 open (needs a capture from a dotted cwd). H-011 filed after
 U3: `stop.suppressed` falls inside `stop`'s wake namespace, so `hands wait
 --for stop` wakes on a stop that was deliberately not notified — design-side,
