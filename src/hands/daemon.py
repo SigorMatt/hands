@@ -41,6 +41,7 @@ from hands import __version__
 from hands.api import Api, ApiError, job_summary
 from hands.config import Config, ConfigError, load_config, resolve_project
 from hands.limits import LimitManager
+from hands.monitor import MonitorSupervisor
 from hands.runner import MAX_PROMPT_BYTES, Runner, RunnerError, reconcile_orphans
 from hands.spool import TERMINAL_STATES, Job, Spool, now_iso
 
@@ -80,6 +81,9 @@ class Daemon:
         #: §6's limits: it is handed every terminal job and schedules the resume.
         #: Its `sleep` and `clock` are attributes so a test never waits one out.
         self.limits = LimitManager(config, self.spool, enqueue=self._enqueue_resume)
+        #: §5's watch: one per builder job, started with the job and stopped with
+        #: it. It reports to the inbox and never touches a job (§1 invariant 4).
+        self.monitors = MonitorSupervisor(config, self.spool, ready=self.runner.wait_for_session)
         self.api = Api(self)
         self.socket_path = Path(socket_path) if socket_path else config.server.socket
         self.started: str | None = None
@@ -170,6 +174,9 @@ class Daemon:
                 task.cancel()
             await asyncio.gather(*self._workers, return_exceptions=True)
             self._workers = []
+
+        # Whatever the workers did not get to: no monitor outlives the daemon.
+        await self.monitors.stop_all()
 
         for task in list(self._conns):
             task.cancel()
@@ -302,6 +309,10 @@ class Daemon:
         await self._announce()
         stream = (self.spool.jobs_dir / f"{job_id}.stream.jsonl").open("a", encoding="utf-8")
         self._streams[job_id] = stream
+        # §5: "hands starts those with every builder job automatically". The
+        # supervisor decides which roles are watched; the queue just says "this
+        # one is running now".
+        self.monitors.start(job)
         try:
             log.info("job %s (%s) starting", job_id, role)
             finished = await self.runner.run(job)
@@ -325,6 +336,8 @@ class Daemon:
         except Exception:  # pragma: no cover - a bug here must not kill the worker
             log.exception("job %s (%s) raised", job_id, role)
         finally:
+            with contextlib.suppress(Exception):
+                await self.monitors.stop(job_id)  # §5: the watch ends with the job
             self._streams.pop(job_id, None)
             with contextlib.suppress(Exception):
                 stream.close()
@@ -452,9 +465,7 @@ class Daemon:
             },
             "roles": roles,
             "running": running,
-            # §5's monitor is U6; saying so is better than an empty dict that
-            # reads like "nothing is wrong".
-            "monitor": {"implemented": False, "note": "the monitor is unit U6 (§5)"},
+            "monitor": self.monitors.status(),
             "inbox": {"unacked": len(self.spool.unacked())},
         }
 

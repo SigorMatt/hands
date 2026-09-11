@@ -281,7 +281,11 @@ def _status_block(result: dict[str, Any]) -> str:
             f"  {role:<8} {what}; queued {queued}/{state.get('queue_depth')}  {state.get('cwd')}"
         )
     monitor = result.get("monitor", {})
-    lines.append(f"  monitor  {monitor.get('note') if not monitor.get('implemented') else 'on'}")
+    watching = monitor.get("watching") or []
+    lines.append(
+        f"  monitor  {monitor.get('source')} ({monitor.get('cmd') or 'built-in'}); "
+        f"stall after {monitor.get('stall_minutes')}m; watching {len(watching)}"
+    )
     lines.append(f"  inbox    {result.get('inbox', {}).get('unacked')} unread")
     return "\n".join(lines)
 
