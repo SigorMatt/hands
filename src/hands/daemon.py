@@ -628,7 +628,11 @@ class Daemon:
             roles[role] = {
                 "cwd": str(self.config.role(role).cwd),
                 "model": self.config.role(role).model,
+                # §4: `queue_depth` is capacity, `queued` is contents. The name
+                # is the config key (§13) and the driver reads it, so it stays;
+                # `queue_capacity` is an alias that says which one it is.
                 "queue_depth": self.config.role(role).queue_depth,
+                "queue_capacity": self.config.role(role).queue_depth,
                 "running": summary,
                 "queued": list(self._waiting[role]),
                 "last_session_id": state.last_session_id,

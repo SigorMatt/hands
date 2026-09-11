@@ -347,3 +347,25 @@ def main_capture(argv: list[str]) -> tuple[int, str, str]:
     out, err = io.StringIO(), io.StringIO()
     code = main(argv, stdout=out, stderr=err)
     return code, out.getvalue(), err.getvalue()
+
+
+def test_status_says_queue_depth_is_capacity_and_what_the_monitor_sees(project: str) -> None:
+    """U6: `queue_depth` is how many *may* be queued (§4, §13); `queued` is what
+    is waiting. The monitor line claims only what §5 claims."""
+
+    async def body(daemon: Daemon) -> None:
+        status = await ok("status")
+        builder = status["roles"]["builder"]
+        assert builder["queue_depth"] == 1
+        assert builder["queue_capacity"] == builder["queue_depth"]  # alias, §4
+        assert builder["queued"] == []
+
+        code, out, _ = await cli("status")
+        assert code == 0
+        assert "capacity" in out
+        assert "queue_depth" in out
+        # §5: a stall is no progress *and* no liveness, and nothing more.
+        assert "no progress and no liveness" in out
+        assert "busy-wait on a nested run is not a stall" in out
+
+    drive(body)

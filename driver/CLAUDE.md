@@ -68,6 +68,8 @@ design, and you do not write.
 
     hands inbox [--ack]                 unread events, verbatim; --ack marks them read
     hands status                        daemon, roles, running jobs, monitor state
+                                        (`queue_depth`/`queue_capacity` is how many
+                                        may be queued; `queued` is what is waiting)
     hands pipeline                      playbook path + sha256, paused?, auto-runs,
                                         resumes, last rule fired, stop reason
     hands send --role <r> --context <clear|keep> [--gate "<reason>"] "<prompt>"

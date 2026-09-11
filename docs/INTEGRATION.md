@@ -57,12 +57,13 @@ cwd` is optional.
     resume_line = "Resume WORKPLAN.md"   # optional, no default: sent on a limit
                                          # resume (§6). Leave it out and a limit
                                          # resume re-sends the limited prompt
-    queue_depth = 1                      # default for builder
+    queue_depth = 1                      # capacity: how many jobs may wait
     cancel_gated = true                  # default
 
     [roles.aux]
     cwd = "~/git/<project>"
-    queue_depth = 4                      # default for aux
+    queue_depth = 4                      # default for aux (builder 1); `hands
+                                         # status` reports it as queue_capacity too
 
     [ops]
     repo = "~/<project>-ops"

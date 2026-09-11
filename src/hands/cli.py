@@ -363,9 +363,20 @@ def _status_block(result: dict[str, Any]) -> str:
     watching = monitor.get("watching") or []
     lines.append(
         f"  monitor  {monitor.get('source')} ({monitor.get('cmd') or 'built-in'}); "
-        f"stall after {monitor.get('stall_minutes')}m; watching {len(watching)}"
+        f"stall = no progress and no liveness for {monitor.get('stall_minutes')}m; "
+        f"watching {len(watching)}"
     )
     lines.append(f"  inbox    {result.get('inbox', {}).get('unacked')} unread")
+    # §4: the two numbers on a role line are not the same kind of thing, and §5
+    # is narrower than "the monitor watches the run". Say both where they are read.
+    lines.append(
+        "  note     queued N/M is jobs waiting now / the configured capacity"
+        " (roles.<role>.queue_depth, in --json also queue_capacity)."
+    )
+    lines.append(
+        "  note     the monitor sees liveness and progress only: a busy-wait on"
+        " a nested run is not a stall, and it does not judge the work."
+    )
     return "\n".join(lines)
 
 
