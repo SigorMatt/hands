@@ -63,15 +63,25 @@ Always a `stop`, whatever the rules say: an event with no matching rule, a
 missing or unparseable `VERDICT:` line, an exhausted resume count, and any
 failure inside the engine itself.
 
-`hands resume`, or the next `hands send` you make yourself, un-pauses the
-pipeline — whatever stopped it. The engine's own sends do not.
+`hands resume` un-pauses the pipeline — whatever stopped it. So does a send you
+make yourself, but only when that job **starts**: a send held at a gate or
+waiting in the queue changes nothing, and a job the playbook or the limit
+manager started never clears a stop. The `pipeline.resumed` event in the inbox
+says which it was, `by = "resume"` or `by = "start"`.
+
+Every stop, from any component — a rule, the engine itself, `hands pause`, an
+exhausted `max_resumes` — goes through one `stop()`, and the first reason is the
+one that is kept. A later stop over an existing one takes nothing: no change to
+the reason or its timestamp, no second notification, and one `stop.suppressed`
+event in the inbox naming the reason it would have set and the reason that was
+kept.
 
 `hands pause` is a stop you make yourself: it files the same `stop` event
 (reason `paused by human`) and the same notification, which is what wakes a
 driver blocked on `hands wait --for stop,held`. Over a pipeline that is
-*already* stopped it does nothing at all: it prints the reason it is already
-stopped for, keeps that reason and its timestamp in `hands pipeline`, and files
-no second event and no second notification.
+*already* stopped it is that later stop: it prints the reason it is already
+stopped for, keeps that reason and its timestamp in `hands pipeline`, notifies
+nobody, and leaves only the `stop.suppressed` record.
 
 ## Verdict matching
 
@@ -127,7 +137,9 @@ its check.
 
 `hands pipeline` reports the file (path, sha256, series, rule count), whether
 the pipeline is paused and why, the stop reason, `auto_runs` used/allowed,
-resumes used per role against `max_resumes`, and the last rule that fired.
+resumes used per role against `max_resumes`, and the last rule that fired. The
+last rule is cleared when a playbook with a different sha256 is loaded: rule 3
+of the file that fired is not rule 3 of the new one.
 
 ---
 

@@ -54,9 +54,18 @@ def project(tmp_home: Path, workdir: Path) -> str:
 
 
 def test_the_driver_kit_spelling_resolves_to_real_event_kinds() -> None:
-    """§11/§12: the driver types `--for stop,held`; `held` is the kind `job.held`."""
-    assert resolve_kinds("stop,held") == frozenset({"stop", "job.held"})
-    assert resolve_kinds(" stop , job.held ") == frozenset({"stop", "job.held"})
+    """§11/§12: the driver types `--for stop,held`; `held` is the kind `job.held`.
+
+    `stop` is a kind *and* a namespace since §10 (v3.3) gained `stop.suppressed`,
+    so the namespace rule below applies to it as it does to `job`: the driver's
+    own spelling wakes it for a stop that took and for one that was suppressed —
+    both of which are it being told the pipeline is stopped.
+    """
+    assert resolve_kinds("stop,held") == frozenset({"stop", "stop.suppressed", "job.held"})
+    assert resolve_kinds("stop.suppressed") == frozenset({"stop.suppressed"})
+    assert resolve_kinds(" stop , job.held ") == frozenset(
+        {"stop", "stop.suppressed", "job.held"}
+    )
     assert resolve_kinds("job") >= frozenset({"job.done", "job.held", "job.failed"})
 
 

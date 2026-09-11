@@ -53,6 +53,7 @@ __all__ = [
     "EVENTS",
     "JOB_PLACEHOLDERS",
     "ORIGIN",
+    "UNPAUSE_ORIGINS",
     "PipelineState",
     "PlaceholderError",
     "Playbook",
@@ -92,6 +93,13 @@ JOB_PLACEHOLDERS: tuple[str, ...] = ("id", "head_at_start", "head_at_end", "sess
 
 #: §6's origin vocabulary. Every job the engine fires carries this one.
 ORIGIN = "playbook"
+
+#: §10's stop → resume cycle: the job origins whose *start* clears a stop. Only
+#: `cli` — the human answering the stop. A job the playbook started (`playbook`)
+#: or one §6 filed when a limit reset (`limit`) is the pipeline itself, and a
+#: `driver` job (in §6's vocabulary, filed by nothing today) is not the `cli`
+#: origin §10 names, so neither clears one.
+UNPAUSE_ORIGINS = frozenset({"cli"})
 
 #: The `stop` reason `hands pause` files (§11, H-007). A human, not a rule.
 PAUSE_REASON = "paused by human"
@@ -529,6 +537,10 @@ class PipelineState:
     stop_reason: str | None = None
     stopped_at: str | None = None
     last_rule: dict[str, Any] | None = None
+    #: The sha256 of the playbook `last_rule` fired under (§10): when a file with
+    #: another sha loads, the rule numbers in `last_rule` are not that file's, so
+    #: it is cleared.
+    last_rule_sha256: str | None = None
     auto_runs_used: list[int] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
@@ -538,17 +550,26 @@ class PipelineState:
             "stop_reason": self.stop_reason,
             "stopped_at": self.stopped_at,
             "last_rule": self.last_rule,
+            "last_rule_sha256": self.last_rule_sha256,
             "auto_runs_used": list(self.auto_runs_used),
         }
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> PipelineState:
+        last_rule = data.get("last_rule")
+        sha = data.get("last_rule_sha256")
+        if sha is None and isinstance(last_rule, dict):
+            # A state file written before the key existed: the rule record itself
+            # carries the sha it fired under, so an older build keeps its rule
+            # instead of having it cleared by the first load.
+            sha = last_rule.get("playbook_sha256")
         return cls(
             paused=bool(data.get("paused")),
             paused_by=data.get("paused_by"),
             stop_reason=data.get("stop_reason"),
             stopped_at=data.get("stopped_at"),
-            last_rule=data.get("last_rule"),
+            last_rule=last_rule,
+            last_rule_sha256=sha if isinstance(sha, str) else None,
             auto_runs_used=list(data.get("auto_runs_used") or []),
         )
 
@@ -596,8 +617,17 @@ class PlaybookEngine:
     # ------------------------------------------------------------- loading
 
     async def on_job_start(self, job: Job) -> None:
-        """§10: "hands loads the tracked file from `role.cwd` when a job starts"."""
+        """§10: "hands loads the tracked file from `role.cwd` when a job starts".
+
+        And, before that, §10's stop → resume cycle: a `cli`-origin send un-pauses
+        the pipeline "only when that job **starts** (a held or queued send changes
+        nothing)". The un-pause comes first so that a playbook this load cannot
+        read stops the pipeline and stays stopped, instead of being cleared by the
+        job that just started.
+        """
         log.debug("playbook: reading it for job %s (%s)", job.id, job.role)
+        if job.origin in UNPAUSE_ORIGINS:
+            self._unpause("start")
         await self._load()
 
     async def _ensure_loaded(self) -> None:
@@ -619,6 +649,14 @@ class PlaybookEngine:
             return
         self.load_error = None
         self.playbook = book
+        if book is not None and self.state.last_rule is not None:
+            # §10: "`last_rule` is cleared when a different playbook file is
+            # loaded" — rule 3 of the file that fired is not rule 3 of this one.
+            if book.sha256 != self.state.last_rule_sha256:
+                log.info("playbook: a new file (%s); last_rule is cleared", book.sha256[:12])
+                self.state.last_rule = None
+                self.state.last_rule_sha256 = None
+                self._save()
         if book is not None and book.max_resumes is not None and self.limits is not None:
             # §10 lets the playbook set §6's counter; §6 is the one that counts.
             self.limits.max_resumes = book.max_resumes
@@ -890,29 +928,40 @@ class PlaybookEngine:
         }
         self.spool.append_event("playbook.rule", payload)
         self.state.last_rule = {**payload, "fired_at": now_iso()}
+        self.state.last_rule_sha256 = book.sha256 if book else None
         self._save()
         log.info("playbook: rule %d on %s fired (%s)", rule.index, event, rule.then)
         return payload
 
     # ------------------------------------------------------ stop and pause
 
-    async def stop(
-        self, reason: str, payload: dict[str, Any] | None = None, *, write_event: bool = True
-    ) -> None:
+    async def stop(self, reason: str, payload: dict[str, Any] | None = None) -> None:
         """§10: pause the pipeline, notify, record the reason (§11's `stop` event).
 
-        `write_event=False` is for §6's limit manager, which has already written
-        its own `stop` event before calling this through its `on_stop` seam.
+        This is the one `stop()` §10 asks for: every component stops through it —
+        a rule, the engine itself, `hands pause`, and §6's limit manager through
+        the daemon's `on_stop` seam — so the rules below hold once, here.
+
+        A stop over a pipeline that is *already* stopped takes nothing: the first
+        reason is the one that explains the pipeline and it is kept, with its
+        timestamp. The stop that did not take is "recorded in the inbox only" —
+        one `stop.suppressed` event carrying the reason it would have set and the
+        reason that was kept — and notifies nobody, because the human was already
+        told. So: one `stop` event and one notification per stop that takes.
         """
-        if self.state.paused and self.state.stop_reason == reason:
-            return  # already stopped for this; one stop, one notification
+        if self.state.paused:
+            self.spool.append_event(
+                "stop.suppressed",
+                {**(payload or {}), "reason": reason, "kept": self.state.stop_reason},
+            )
+            log.info("playbook: stop suppressed (%s); kept: %s", reason, self.state.stop_reason)
+            return
         self.state.paused = True
         self.state.paused_by = "stop"
         self.state.stop_reason = reason
         self.state.stopped_at = now_iso()
         self._save()
-        if write_event:
-            self.spool.append_event("stop", {**(payload or {}), "reason": reason})
+        self.spool.append_event("stop", {**(payload or {}), "reason": reason})
         log.warning("playbook: stop — %s", reason)
         self._notify("hands: the pipeline stopped", {**(payload or {}), "reason": reason})
 
@@ -933,27 +982,29 @@ class PlaybookEngine:
         notification, and `hands pipeline` keeps showing the original stop instead
         of `paused by human`. The caller is told with `already_stopped` so it can
         print that reason rather than a silent success.
+
+        §10 (v3.3) makes that one case of a general rule, so this pause goes
+        through `stop()` like every other: over an existing stop it files the
+        `stop.suppressed` record and changes nothing else.
         """
-        if self.state.paused:
-            return {**self.pipeline(), "already_stopped": True}
+        already = self.state.paused
         await self.stop(PAUSE_REASON, {"by": "hands pause"})
+        if already:
+            return {**self.pipeline(), "already_stopped": True}
         self.state.paused_by = "cli"  # `hands pipeline` still says who paused it
         self._save()
         return self.pipeline()
 
     async def resume(self) -> dict[str, Any]:
         """`hands resume` (§4, §10's stop → resume cycle)."""
-        self._unpause("hands resume")
+        self._unpause("resume")
         return self.pipeline()
-
-    async def on_send(self, origin: str) -> None:
-        """§10: "`hands resume` or the next `send` un-pauses the pipeline"."""
-        if origin == ORIGIN or not self.state.paused:
-            return
-        self._unpause("a send")
 
     def _unpause(self, by: str) -> None:
         """Close §10's cycle, and say so in the inbox (§11's `pipeline.resumed`).
+
+        `by` is how it was un-paused, in §10's own two words: `resume` for
+        `hands resume`, `start` for a `cli` job starting.
 
         A pipeline that is not paused has nothing to resume: nothing is written,
         so `hands resume` twice (or on a running pipeline) is not an event storm.

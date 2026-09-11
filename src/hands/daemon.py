@@ -443,10 +443,12 @@ class Daemon:
     async def _limit_stop(self, reason: str, payload: dict[str, Any]) -> None:
         """§6 gave up on a role: §10's pipeline stops with it.
 
-        The `stop` inbox event is the limit manager's own (§11); this pauses the
-        engine and records the reason so `hands pipeline` says why.
+        Through the engine's `stop()` like every other component (§10), so this
+        stop writes the `stop` event of §11, notifies, records the reason for
+        `hands pipeline` — and, over a pipeline already stopped, does none of
+        that and leaves a `stop.suppressed` in the inbox instead.
         """
-        await self.playbook.stop(reason, payload, write_event=False)
+        await self.playbook.stop(reason, payload)
 
     def _monitor_event(self, kind: str, payload: dict[str, Any]) -> None:
         """§5's watch speaks to §10: `monitor.stall` and `monitor.tripwire` are events."""

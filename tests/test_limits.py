@@ -350,7 +350,12 @@ def test_resumes_stop_after_max_resumes_and_leave_a_stop_for_the_playbook(
 
         await harness.limit()  # the fourth limit with no `done` in between
         assert len(harness.resumes()) == 3  # no fourth resume
-        assert harness.kinds().count("stop") == 1
+        # §10: every stop goes through the playbook engine's one `stop()`, which
+        # the daemon wires to `on_stop`; the manager does not write the `stop`
+        # event itself, or a limit stop over an existing one would be the one
+        # stop recorded twice. `tests/test_playbook.py` pins the event and the
+        # notification over the real daemon wiring.
+        assert "stop" not in harness.kinds()
         assert len(harness.stops) == 1
         reason, payload = harness.stops[0]
         assert "max_resumes" in reason

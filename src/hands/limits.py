@@ -331,8 +331,8 @@ class LimitManager:
         #: §10 lets a playbook override it.
         self.max_resumes = config.limits.max_resumes if max_resumes is None else max_resumes
         #: The U7 seam: called with (reason, payload) when hands gives up on a
-        #: role. The `stop` inbox event is written either way (§11); the playbook
-        #: engine hangs its own rule evaluation here.
+        #: role. It is the playbook engine's `stop()` (§10), which records the
+        #: `stop` event of §11 and notifies; unwired, a stop is logged only.
         self.on_stop = on_stop
         self._tasks: set[asyncio.Task[None]] = set()
 
@@ -427,8 +427,13 @@ class LimitManager:
         return owed
 
     async def stop(self, reason: str, payload: dict[str, Any]) -> None:
-        """Give up on a role: a `stop` event (§11) and the U7 seam, nothing else."""
-        self.spool.append_event("stop", {**payload, "reason": reason})
+        """Give up on a role: §10's one `stop()`, reached through the U7 seam.
+
+        The `stop` inbox event is *not* written here. §10 (v3.3): "Every stop,
+        from any component, goes through one `stop()` that keeps the first reason
+        and files one notification" — writing the event here as well would make a
+        limit stop over an existing one the one stop that is recorded twice.
+        """
         log.warning("stop: %s", reason)
         if self.on_stop is None:
             return

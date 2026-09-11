@@ -109,6 +109,10 @@ EVENT_KINDS = frozenset(
         "monitor.event",
         "playbook.rule",
         "stop",
+        # §10: a stop over a pipeline already stopped. The first reason is kept,
+        # so this one takes nothing and notifies nobody — it is recorded here and
+        # nowhere else, which is why it is a kind of its own.
+        "stop.suppressed",
         "pipeline.resumed",  # the other half of §10's stop → resume cycle (H-007)
         "gate.decided",
         "limit",

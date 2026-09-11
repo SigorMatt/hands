@@ -142,9 +142,10 @@ class Api:
             files_written=written,
             playbook_sha256=playbook_sha256,
         )
-        # §10's stop → resume cycle: "`hands resume` or the next `send` un-pauses
-        # the pipeline". Not the engine's own sends, which are the pipeline.
-        await self.daemon.playbook.on_send(origin)
+        # §10's stop → resume cycle is not closed here: a `cli` send un-pauses the
+        # pipeline when its job *starts* (`PlaybookEngine.on_job_start`), because a
+        # send that is held at §8's gate or waiting in the queue has not yet
+        # answered the stop.
         if reason:
             self.spool.append_event(
                 "job.held",

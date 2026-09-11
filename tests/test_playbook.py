@@ -30,6 +30,7 @@ from hands.playbook import (
     ACTIONS,
     EVENTS,
     JOB_PLACEHOLDERS,
+    PipelineState,
     PlaceholderError,
     PlaybookEngine,
     PlaybookError,
@@ -150,10 +151,11 @@ def finished(
     role: str = "builder",
     state: str = "done",
     verdict: str | None = None,
+    origin: str = "cli",
     **kw: Any,
 ) -> Job:
     """A terminal job record in the spool, as the runner would leave it (§6)."""
-    job = spool.create_job(role=role, context="clear", prompt="p", origin="cli")
+    job = spool.create_job(role=role, context="clear", prompt="p", origin=origin)
     spool.transition(job, "running")
     return spool.transition(job, state, verdict=verdict, result=verdict, **kw)
 
@@ -693,11 +695,12 @@ def test_a_hand_pause_files_a_stop_event_and_notifies(tmp_home: Path, workdir: P
 def test_pausing_an_already_paused_pipeline_files_one_event(
     tmp_home: Path, workdir: Path
 ) -> None:
-    """One stop, one notification (the rule `stop()` already keeps): no event storm."""
+    """One stop, one notification: the second pause is a `stop.suppressed` record
+    in the inbox and nothing else (§10)."""
     engine, recorder = engine_for(tmp_home, workdir)
     run(engine.pause())
     run(engine.pause())
-    assert [e.kind for e in engine.spool.events()] == ["stop"]
+    assert [e.kind for e in engine.spool.events()] == ["stop", "stop.suppressed"]
     assert len(recorder.notified) == 1
 
 
@@ -717,7 +720,7 @@ def test_a_resume_files_a_pipeline_resumed_event(tmp_home: Path, workdir: Path) 
     run(engine.pause())
     run(engine.resume())
     (event,) = [e for e in engine.spool.events() if e.kind == "pipeline.resumed"]
-    assert event.payload["by"] == "hands resume"
+    assert event.payload["by"] == "resume"  # §10: `resume`, or `start` for a job
     assert event.payload["was"] == PAUSE_REASON
     assert len(recorder.notified) == 1, "a resume is not on §11's notification list"
 
@@ -737,22 +740,123 @@ def test_a_pause_survives_a_restart(tmp_home: Path, workdir: Path) -> None:
     run(engine.stop("because", {}))
     again, recorder = engine_for(tmp_home, workdir)
     assert again.pipeline()["paused"] is True
-    job = finished(again.spool, verdict="VERDICT: run 2 finished")
+    # A job the pipeline started itself, so the restart is the only thing under
+    # test: a `cli` job starting is §10's un-pause and is tested below.
+    job = finished(again.spool, verdict="VERDICT: run 2 finished", origin="playbook")
     run(again.on_job_start(job))
+    assert again.pipeline()["paused"] is True
     run(again.on_job(job))
     assert recorder.sent == []
 
 
-def test_a_hand_sent_job_unpauses_the_pipeline(tmp_home: Path, workdir: Path) -> None:
+def test_a_cli_job_un_pauses_the_pipeline_when_it_starts(
+    tmp_home: Path, workdir: Path
+) -> None:
+    """§10's stop → resume cycle: "so does a `cli`-origin send, but only when that
+    job **starts**". The start is the seam because that is the moment the human's
+    answer to the stop actually runs."""
     engine, _recorder = engine_for(tmp_home, workdir)
     run(engine.stop("because", {}))
-    run(engine.on_send("cli"))
+    job = finished(engine.spool, verdict="VERDICT: run 2 finished", origin="cli")
+    run(engine.on_job_start(job))
     assert engine.pipeline()["paused"] is False
     (resumed,) = [e for e in engine.spool.events() if e.kind == "pipeline.resumed"]
-    assert resumed.payload["by"] == "a send"  # §10: a send un-pauses, and says so
+    assert resumed.payload["by"] == "start"  # §10: how it was un-paused
+    assert resumed.payload["was"] == "because"
+
+
+@pytest.mark.parametrize("origin", ["playbook", "limit", "driver"])
+def test_a_job_the_pipeline_started_itself_never_clears_a_stop(
+    tmp_home: Path, workdir: Path, origin: str
+) -> None:
+    """§10: "a stop is never cleared by a job the playbook or the limit manager
+    started". `driver` is in §6's origin vocabulary and nothing files one today;
+    it is not the `cli` origin §10 names, so it does not clear a stop either."""
+    engine, _recorder = engine_for(tmp_home, workdir)
     run(engine.stop("because", {}))
-    run(engine.on_send("playbook"))  # its own send must not un-pause it
+    job = finished(engine.spool, verdict="VERDICT: run 2 finished", origin=origin)
+    run(engine.on_job_start(job))
     assert engine.pipeline()["paused"] is True
+    assert engine.pipeline()["stop_reason"] == "because"
+    assert [e.kind for e in engine.spool.events()] == ["stop"]
+
+
+def test_a_stop_over_a_stop_keeps_the_first_reason_and_files_it_as_suppressed(
+    tmp_home: Path, workdir: Path
+) -> None:
+    """§10: "Every stop, from any component, goes through one `stop()` that keeps
+    the first reason and files one notification; a later stop over an existing one
+    is recorded in the inbox only"."""
+    engine, recorder = engine_for(tmp_home, workdir)
+    run(engine.stop("the first reason", {"event": "aux.done"}))
+    first = engine.pipeline()
+    run(engine.stop("the second reason", {"event": "builder.failed"}))
+
+    now = engine.pipeline()
+    assert now["stop_reason"] == "the first reason"
+    assert now["stopped_at"] == first["stopped_at"]
+    kinds = [e.kind for e in engine.spool.events()]
+    assert kinds == ["stop", "stop.suppressed"]
+    suppressed = engine.spool.events()[1]
+    assert suppressed.payload["reason"] == "the second reason"  # the would-be reason
+    assert suppressed.payload["kept"] == "the first reason"
+    assert suppressed.payload["event"] == "builder.failed"  # its payload, not the first's
+    assert len(recorder.notified) == 1  # one notification per stop that takes
+
+
+def test_last_rule_is_cleared_when_a_playbook_with_another_sha_loads(
+    tmp_home: Path, workdir: Path
+) -> None:
+    """§10: "`last_rule` is cleared when a different playbook file is loaded" — the
+    rule numbers a new file uses are not the ones `last_rule` was fired under."""
+    engine, _recorder = engine_for(tmp_home, workdir)
+    job = finished(engine.spool, verdict="VERDICT: run 2 finished", head_at_start="abc")
+    run(engine.on_job_start(job))
+    run(engine.on_job(job))
+    fired = engine.pipeline()["last_rule"]
+    assert fired is not None and fired["rule"] == 0
+
+    run(engine.on_job_start(finished(engine.spool, origin="playbook")))
+    assert engine.pipeline()["last_rule"] == fired, "the same file keeps it"
+
+    (workdir / "PLAYBOOK.toml").write_text(
+        'version = 1\n[[rule]]\non = "aux.done"\nthen = "notify"\nmessage = "hi"\n'
+    )
+    run(engine.on_job_start(finished(engine.spool, origin="playbook")))
+    assert engine.pipeline()["last_rule"] is None
+    assert engine.pipeline()["playbook"]["rules"] == 1
+
+
+def test_last_rule_survives_a_restart_under_the_same_playbook(
+    tmp_home: Path, workdir: Path
+) -> None:
+    """The reset is "a different file", not "a restart": §4's `hands pipeline`
+    keeps reporting the last rule while the playbook behind it is unchanged."""
+    engine, _recorder = engine_for(tmp_home, workdir)
+    job = finished(engine.spool, verdict="VERDICT: run 2 finished", head_at_start="abc")
+    run(engine.on_job_start(job))
+    run(engine.on_job(job))
+    fired = engine.pipeline()["last_rule"]
+
+    again, _r = engine_for(tmp_home, workdir)
+    run(again.on_job_start(finished(again.spool, origin="playbook")))
+    assert again.pipeline()["last_rule"] == fired
+
+
+def test_a_state_file_from_an_older_build_keeps_its_last_rule(tmp_home: Path) -> None:
+    """The persisted state gained a key: a file written before it must not crash,
+    and must not lose `last_rule` — the sha it was fired under is in the record."""
+    state = PipelineState.from_dict(
+        {"paused": True, "last_rule": {"rule": 2, "playbook_sha256": "abc"}}
+    )
+    assert state.last_rule_sha256 == "abc"
+    assert state.paused is True
+    assert PipelineState.from_dict({}).last_rule_sha256 is None
+    round_tripped = PipelineState.from_dict(
+        PipelineState(last_rule={"rule": 1}, last_rule_sha256="def").to_dict()
+    )
+    assert round_tripped.last_rule_sha256 == "def"
+    assert round_tripped.last_rule == {"rule": 1}
 
 
 # ----------------------------------------------- the daemon path (§4, §8, §11)
@@ -852,10 +956,16 @@ def drive_notified(
     asyncio.run(scenario())
 
 
+def stop_posts(posts: Posts) -> list[str]:
+    """The stop notifications of §11, without the daemon's own start message."""
+    return [title for title in posts.sent if title == "hands: the pipeline stopped"]
+
+
 async def assert_pause_is_a_no_op(daemon: Daemon, posts: Posts, reason: str) -> None:
-    """Review should-fix 4 / §19: the pipeline is already stopped for `reason`, so
-    `hands pause` keeps it, files nothing, notifies nobody — and says the reason,
-    because a silent success reads as "I stopped it"."""
+    """Review should-fix 4 / §10: the pipeline is already stopped for `reason`, so
+    `hands pause` keeps it, notifies nobody — and says the reason, because a silent
+    success reads as "I stopped it". §10 (v3.3) adds the one thing it does write:
+    the suppressed stop is "recorded in the inbox only"."""
     was = await ok("pipeline")
     assert was["stop_reason"] == reason, was["stop_reason"]
     before = [event["id"] for event in (await ok("inbox"))["events"]]
@@ -870,7 +980,12 @@ async def assert_pause_is_a_no_op(daemon: Daemon, posts: Posts, reason: str) -> 
     now = await ok("pipeline")
     assert now["stop_reason"] == reason
     assert now["stopped_at"] == was["stopped_at"]
-    assert [event["id"] for event in (await ok("inbox"))["events"]] == before
+    after = (await ok("inbox"))["events"]
+    assert [event["id"] for event in after[: len(before)]] == before
+    added = after[len(before) :]
+    assert [event["kind"] for event in added] == ["stop.suppressed"]
+    assert added[0]["payload"]["reason"] == PAUSE_REASON  # the stop that did not take
+    assert added[0]["payload"]["kept"] == reason
     await daemon.notifier.drain()
     assert posts.sent == notified
 
@@ -911,6 +1026,124 @@ def test_a_pause_after_a_held_job_stop_keeps_the_first_reason(
         await assert_pause_is_a_no_op(daemon, posts, state["stop_reason"])
 
     drive_notified(tmp_home, workdir, body)
+
+
+def test_a_limit_stop_over_a_rule_stop_keeps_the_first_reason(
+    tmp_home: Path, workdir: Path
+) -> None:
+    """§10: "Every stop, from any component" — §6's `max_resumes` stop included.
+    It lands over a rule stop through the daemon's own wiring, so the first reason
+    survives, one notification was sent in all, and the reason that did not take is
+    in the inbox as `stop.suppressed`."""
+    write_playbook(workdir, EXAMPLE)
+
+    async def body(daemon: Daemon, posts: Posts) -> None:
+        await daemon.playbook.stop("a rule said so")
+        await daemon.notifier.drain()
+        first = await ok("pipeline")
+        assert first["stop_reason"] == "a rule said so"
+        assert stop_posts(posts) == ["hands: the pipeline stopped"]
+
+        daemon.limits.max_resumes = 0  # §6: the next limit has no resume left
+        job = daemon.spool.create_job(
+            role="builder", context="clear", prompt="work", origin="cli"
+        )
+        daemon.spool.transition(job, "running")
+        limited = daemon.spool.transition(
+            job, "limited", limit={"category": "rate_limit", "message": "", "reset_at": None}
+        )
+        await daemon.limits.on_job_finished(limited)
+        await daemon.limits.drain()
+        await daemon.notifier.drain()
+
+        now = await ok("pipeline")
+        assert now["stop_reason"] == "a rule said so"  # the first reason is kept
+        assert now["stopped_at"] == first["stopped_at"]
+        kinds = [event["kind"] for event in (await ok("inbox"))["events"]]
+        assert kinds.count("stop") == 1  # one `stop` event per stop that takes
+        assert kinds.count("stop.suppressed") == 1
+        (suppressed,) = [
+            event
+            for event in (await ok("inbox"))["events"]
+            if event["kind"] == "stop.suppressed"
+        ]
+        assert "max_resumes" in suppressed["payload"]["reason"]
+        assert suppressed["payload"]["kept"] == "a rule said so"
+        assert suppressed["payload"]["role"] == "builder"
+        # one notification per stop that takes: the rule's, and no second one
+        assert stop_posts(posts) == ["hands: the pipeline stopped"]
+
+    drive_notified(tmp_home, workdir, body)
+
+
+def test_a_limit_stop_with_no_stop_over_it_still_files_its_event_and_notifies(
+    tmp_home: Path, workdir: Path
+) -> None:
+    """The other half of the same move: §6's stop now writes its `stop` event
+    through the engine, so it must still write exactly one, and notify."""
+    write_playbook(workdir, EXAMPLE)
+
+    async def body(daemon: Daemon, posts: Posts) -> None:
+        daemon.limits.max_resumes = 0
+        job = daemon.spool.create_job(
+            role="builder", context="clear", prompt="work", origin="cli"
+        )
+        daemon.spool.transition(job, "running")
+        limited = daemon.spool.transition(
+            job, "limited", limit={"category": "rate_limit", "message": "", "reset_at": None}
+        )
+        await daemon.limits.on_job_finished(limited)
+        await daemon.limits.drain()
+        await daemon.notifier.drain()
+
+        state = await ok("pipeline")
+        assert state["paused"] is True
+        assert "max_resumes" in state["stop_reason"]
+        kinds = [event["kind"] for event in (await ok("inbox"))["events"]]
+        assert kinds.count("stop") == 1
+        assert "stop.suppressed" not in kinds
+        assert stop_posts(posts) == ["hands: the pipeline stopped"]
+
+    drive_notified(tmp_home, workdir, body)
+
+
+def test_a_send_filed_while_stopped_un_pauses_only_when_its_job_starts(
+    project: str, workdir: Path
+) -> None:
+    """§10: a `cli` send un-pauses "only when that job **starts** (a held or queued
+    send changes nothing)". The gate of §8 is what holds it: filing it leaves the
+    stop exactly as it was, and approving it is what clears it."""
+
+    async def body(daemon: Daemon) -> None:
+        await daemon.playbook.stop("a rule said so")
+        job = await ok(
+            "send", "--role", "builder", "--context", "clear", "--gate", "by hand",
+            "FAKE:result VERDICT: whatever",
+        )
+        assert job["state"] == "held"
+        held = await ok("pipeline")
+        assert held["paused"] is True, "filing a send is not an answer to the stop"
+        assert held["stop_reason"] == "a rule said so"
+        assert [event["kind"] for event in (await ok("inbox"))["events"]] == [
+            "stop",
+            "job.held",
+        ]
+
+        await ok("approve", job["id"])
+        await ok("wait", job["id"])
+
+        state = await ok("pipeline")
+        assert state["paused"] is False
+        assert state["stop_reason"] is None
+        resumed = [
+            event
+            for event in (await ok("inbox"))["events"]
+            if event["kind"] == "pipeline.resumed"
+        ]
+        assert [event["payload"]["by"] for event in resumed] == ["start"]
+        assert resumed[0]["payload"]["was"] == "a rule said so"
+
+    drive(body)
 
 
 def test_a_resume_still_clears_a_stop_whatever_its_reason(
