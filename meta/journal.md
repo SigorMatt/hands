@@ -37,3 +37,4 @@ One line per unit, appended by the builder: date, unit, sha, verdict.
 2026-09-12  U0 Plan and corrections  8268539  meta only; FINAL-REPORT-3 §3 corrected (blocker 3); H-010 amended (should-fix 2)
 2026-09-12  U1 Guard scope  935a275  green (681 tests); blocker 1 closed; ADVERSARIAL table of 62 owns its own verdicts; MultiEdit back
 2026-09-12  U2 Deterministic gate  667ea52  green 5/5 (682 tests); blocker 2 and should-fix 11 closed; 30 assertions pinned
+2026-09-12  U3 Pipeline state  c108bfe  green 3/3 (692 tests); should-fix 4 closed; un-pause at start; stop.suppressed; H-011 filed

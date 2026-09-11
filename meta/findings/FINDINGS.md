@@ -430,3 +430,43 @@ denies `Edit`, `Write`, `MultiEdit`, `NotebookEdit` again and
 line too, so it cannot name itself; `git log -1 --format=%H -- driver/settings.json`
 resolves it. The headline above stays as filed; the design side (§12 as revised
 in v3.3 keeps MultiEdit) is settled, so nothing is left open for the architect.
+
+---
+
+## H-011 — `stop.suppressed` is inside `stop`'s wake namespace, so `--for stop` wakes on it
+
+Severity: low · Component: DESIGN §10/§20 (the event name) against §11's wake
+spelling (`src/hands/spool.py:126-146`, `resolve_kinds`)
+Filed by: mission 4, after U3 (c108bfe) implemented §20's pipeline-state rules.
+
+Symptom. §10 as revised says a later stop over an existing one "is recorded in
+the inbox only" — no notification. U3 implements that with an event of the kind
+the mission brief names, `stop.suppressed`. But `hands wait --for <spec>`
+matches a name three ways, and the third is a namespace:
+
+    $ sed -n 140,144p src/hands/spool.py
+        matched = {
+            kind
+            for kind in EVENT_KINDS
+            if kind == name or kind.endswith(f".{name}") or kind.startswith(f"{name}.")
+        }
+
+so `--for stop` — which is what `driver/CLAUDE.md` rule 8 and DESIGN §12 tell
+the driver to arm — now resolves to `{stop, stop.suppressed}`. The driver wakes
+on a stop that was deliberately not notified.
+
+Why it is small. The pipeline is already stopped when a suppressed stop lands,
+so the driver it wakes is being woken about a pipeline it has already been told
+about; rule 2 sends it to `hands inbox` first, where the `stop.suppressed`
+record explains itself. Nothing is lost and nothing is silently dropped; the
+cost is one extra wake per suppressed stop.
+
+Direction. For the architect, three ways out, in increasing order of change:
+(1) accept it — a suppressed stop is still pipeline news, and the driver reads
+the inbox before acting; (2) name the kind `stop_suppressed`, outside the
+namespace, and keep `--for stop` meaning exactly one kind; (3) make the
+namespace rule opt-in (`--for 'stop.*'`). Builders do not edit `DESIGN.md`, so
+no mission unit can close this; U3 implemented the name the brief gave it.
+
+Status: open
+

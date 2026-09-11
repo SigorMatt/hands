@@ -1,23 +1,22 @@
 # CHECKPOINT
 
 Mission: 4 (meta/BUILDER-4-PROMPT.md) — IN PROGRESS
-Unit in progress: U3 (pipeline state)
-Intent: DESIGN §10 as v3.3 states it — a `cli`-origin send un-pauses only when
-the job STARTS (held or queued changes nothing, and a playbook- or
-limit-started job never clears a stop); one `stop()` for every component, the
-limit manager's `max_resumes` stop included, keeping the first reason and
-filing `stop.suppressed` (no notification) for a later stop over an existing
-one; `last_rule` reset when a playbook with a different sha256 loads;
-`pipeline.resumed` says `by: start` or `by: resume`.
-Done means: tests for gate-time no-op, start-time un-pause, a playbook job not
-un-pausing, a limit stop over a rule stop, and the `last_rule` reset; mission
-1's engine-level end-to-end still passes; ./scripts/check green three times;
-one commit, pushed.
-Tip: U0 (8268539, meta only), U1 (935a275) and U2 (667ea52) committed and
-pushed on `main`. U2's gate was five consecutive green runs at 682 passed, and
-the flake reproduction (`--basetemp=/tmp/pt-40/pytest-1340`) is green where it
-was red. Base 796e5ae was green here at 618 passed.
-Findings: H-001 open (needs a capture from a dotted cwd). H-009 open
+Unit in progress: U4 (optional keys and doctor)
+Intent: empty strings are refused at config load for `ops.monitor_cmd`,
+`server.ntfy_topic` and every other optional string key, with a message naming
+the two valid choices; `hands doctor` catches a config error and reports it as
+a failed `config` row with the message and exit 1, instead of crashing.
+Done means: a test per key and a test for doctor; ./scripts/check green three
+times; one commit, pushed.
+Tip: U0 (8268539, meta only), U1 (935a275), U2 (667ea52) and U3 (c108bfe)
+committed and pushed on `main`; 692 passed, `check: green`, re-run here at the
+tip. U2's gate was five consecutive green runs and the flake reproduction
+(`--basetemp=/tmp/pt-40/pytest-1340`) is green where it was red. Base 796e5ae
+was green here at 618 passed.
+Findings: H-001 open (needs a capture from a dotted cwd). H-011 filed after
+U3: `stop.suppressed` falls inside `stop`'s wake namespace, so `hands wait
+--for stop` wakes on a stop that was deliberately not notified — design-side,
+open. H-009 open
 (design-side; no builder unit can close it). H-010 closed by U1 (935a275): the rule is back in
 `driver/settings.json` and `tests/test_docs.py` asserts it; the memo carries
 U0's amendment and U1's closing Status line. H-002..H-008 closed in missions 2 and 3.
