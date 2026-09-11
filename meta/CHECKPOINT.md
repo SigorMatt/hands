@@ -1,15 +1,22 @@
 # CHECKPOINT
 
-Mission: 1 (meta/BUILDER-1-PROMPT.md)
-Unit in progress: U11 Final report
-Intent: an honest account of mission 1 — what changed, what the tests
-actually prove, and above all what they do not, so the human knows
-exactly which claims still need the laptop and a real `claude`.
-Done means: `meta/FINAL-REPORT-1.md` exists with what changed, what is
-proven by tests, a non-empty NOT PROVEN section (mandatory: everything
-that needs a real `claude`, the real transcript path, the real limit
-notice text, the driver wake path), honest gate verdicts, and the
-findings list; committed and pushed.
-Standing constraints: execution model of BUILDER-1-PROMPT.md is binding;
-commit and push; ./scripts/check green; sub-agents never edit
-meta/plan.md, meta/CHECKPOINT.md or DESIGN.md.
+Mission: 1 (meta/BUILDER-1-PROMPT.md) — FINISHED 2026-09-11
+Unit in progress: none
+Intent: -
+Done means: -
+Tip: all of U0..U11 committed and pushed on `main`; `./scripts/check`
+green (ruff + 488 tests + CLI smoke); `meta/FINAL-REPORT-1.md` holds the
+account, including the twelve NOT PROVEN items and the two acceptance
+checks that are the human's to run:
+  1. On the laptop with a real `claude`:
+     `hands send --role builder --context clear 'Reply with exactly this
+     line and nothing else: VERDICT: hello'` yields a record whose
+     `result` is that line.
+  2. From the driver session, the background-wake check that
+     `hands doctor` prints (note finding H-007: `hands pause` writes no
+     inbox event, so the check uses a gated send and `hands deny`).
+Open for the architect: findings H-001, H-002, H-004, H-005, H-006, H-007
+in meta/findings/FINDINGS.md.
+Standing constraints: unchanged for the next mission — one sub-agent per
+unit, commit and push every unit, ./scripts/check green, DESIGN.md is not
+edited by builders.

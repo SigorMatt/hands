@@ -15,7 +15,7 @@ commit and a push. `[x]` = done and pushed, `[b]` = blocked (two failures),
 - [x] U8 Wake path and notifications — wait --for, notify.py ntfy, quiet hours (§11)
 - [x] U9 Job library — jobs/show/open/log (§7)
 - [x] U10 Install surface — systemd unit, doctor, docs, driver/ check (§12, §14)
-- [ ] U11 Final report — meta/FINAL-REPORT-1.md
+- [x] U11 Final report — meta/FINAL-REPORT-1.md
 
 Yield order under quota pressure (BUILDER-1-PROMPT "Budget guidance"):
 U9, U10 (except README.md and the systemd unit), U6 external-monitor
