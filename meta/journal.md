@@ -28,3 +28,4 @@ One line per unit, appended by the builder: date, unit, sha, verdict.
 2026-09-12  U0 Plan  efc501b  meta only; journal sha fixed (should-fix 6); H-009, H-010 filed
 2026-09-12  U1 Status monitor  87bb7f8  green (523 tests); should-fix 2 closed; OPS_FLAGS is one list
 2026-09-12  U2 Tests that can fail  4fb1f35  green (523 tests); should-fix 3 and 8 closed; 4/4 red at 34b4ede^
+2026-09-12  U3 Pause keeps first reason  3cd2306  green (526 tests); should-fix 4 closed; no-op exits 0

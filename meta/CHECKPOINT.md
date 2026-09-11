@@ -1,14 +1,13 @@
 # CHECKPOINT
 
 Mission: 3 (meta/BUILDER-3-PROMPT.md) — IN PROGRESS
-Unit in progress: U3 Pause keeps the first reason
-Intent: `hands pause` over an already-stopped pipeline must keep the first
-stop reason (review should-fix 4, DESIGN §10, §19).
-Done means: `hands pause` on a pipeline already stopped for another reason is
-a no-op that prints the existing reason, files no event and sends no
-notification; `hands pipeline` keeps showing the original stop. Tests for
-pause-after-rule-stop and pause-after-held. Gate green; committed and pushed.
-Tip: 4fb1f35 (U2) — gate green, 523 passed.
+Unit in progress: U4 Empty `resume_line` refused
+Intent: `resume_line = ""` must be a config error, not a silent second
+behaviour (review should-fix 5, DESIGN §6, §13, §19).
+Done means: an empty `resume_line` is refused at load with a message naming
+the two valid choices (omit the key, or give a non-empty line);
+docs/INTEGRATION.md says so. Test. Gate green; committed and pushed.
+Tip: 3cd2306 (U3) — gate green, 526 passed.
 Findings: H-001 open (needs a capture from a dotted cwd). H-002, H-003,
 H-005 fixed with no code change; H-004 a67c4b0, H-006 34b4ede, H-007
 267ee01, H-008 8448b6f. H-009, H-010 filed by this unit, both open and
