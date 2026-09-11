@@ -27,6 +27,13 @@ backslash, so a multi-line result fits on one line of a test:
     FAKE:duration <ms>     duration_ms of the result event
     FAKE:denial <tool>     add a permission_denials entry (repeatable)
 
+A prompt hands writes itself (a playbook rule, DESIGN §10) carries no control
+lines, so a scripted reply can also be queued outside the prompt: point
+`$HANDS_FAKE_CLAUDE_REPLIES` at a JSON file holding a list of result strings and
+each invocation takes the next one, in order (the position is kept in a sibling
+`.used` file, under a lock). `FAKE:` directives in the prompt still win, and an
+exhausted queue falls back to the default result.
+
 The event shapes follow the schemas in the real binary (claude 2.1.268): the
 init event is `{"type":"system","subtype":"init",…}`, the retry event is
 `{"type":"system","subtype":"api_retry","error":"rate_limit",…}` where `error`
@@ -38,6 +45,7 @@ is an enum that includes `rate_limit`, and the result event is
 from __future__ import annotations
 
 import argparse
+import fcntl
 import json
 import os
 import signal
@@ -125,11 +133,36 @@ def park() -> None:
         time.sleep(0.02)
 
 
+def _scripted() -> str | None:
+    """The next reply of `$HANDS_FAKE_CLAUDE_REPLIES`, or None.
+
+    The queue is consumed in invocation order, which is what a chained playbook
+    run needs: two aux reviews can carry the same prompt and different verdicts.
+    """
+    path = os.environ.get("HANDS_FAKE_CLAUDE_REPLIES")
+    if not path:
+        return None
+    try:
+        with open(path, encoding="utf-8") as handle:
+            replies = json.load(handle)
+    except (OSError, ValueError):
+        return None
+    with open(path + ".used", "a+", encoding="utf-8") as handle:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        handle.seek(0)
+        taken = len([line for line in handle.read().splitlines() if line])
+        if taken >= len(replies):
+            return None
+        handle.write("x\n")
+        handle.flush()
+    return str(replies[taken])
+
+
 def _result(one) -> str | None:  # noqa: ANN001
     """`FAKE:cat <path>` proves a file was on disk *before* claude was spawned."""
     path = one("cat")
     if path is None:
-        return one("result", "ok")
+        return one("result") or _scripted() or "ok"
     try:
         with open(path, encoding="utf-8") as handle:
             return handle.read()

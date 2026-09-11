@@ -229,8 +229,9 @@ def test_nothing_else_releases_a_held_job(project: str) -> None:
         again = await send_gated()
         assert again["id"] != held["id"]
 
-        # not `hands resume` (the playbook engine)
-        await fails("resume")
+        # not `hands resume`: it un-pauses the playbook engine (§10) and
+        # releases nothing
+        assert (await ok("resume"))["paused"] is False
 
         # not a queue slot opening: run a job to completion on the same role
         other = await ok(*SEND, "FAKE:result unrelated")

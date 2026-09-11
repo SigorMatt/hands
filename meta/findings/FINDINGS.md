@@ -134,3 +134,63 @@ carry it. Revisit together with §10's playbook-issued sends, which will want to
 be distinguishable from limit resumes by something better than `resumed_from`.
 
 Status: open
+
+---
+
+## H-005 — §6's automatic limit resume and §10's `builder.limited → resume` are the same resume
+
+Severity: low · Component: playbook/limits (DESIGN §6 "Limits", §10 "Actions")
+
+Symptom. §6 makes the limit resume automatic and unconditional:
+
+    DESIGN.md:236  … parses the reset time, sleeps until then, and sends
+                   `role.resume_line` … as a new `clear` job for the builder
+
+and §10's example playbook *also* has a rule for the same event:
+
+    DESIGN.md:383  [[rule]]
+    DESIGN.md:384  on = "builder.limited"
+    DESIGN.md:385  then = "resume"
+
+Both fire on one `limited` job. Taken literally that is two resume jobs for one
+limit — and the playbook's one would fire immediately, before the reset §6 just
+parsed, straight back into the limit.
+
+Direction. U7 treats §6 as the owner of a limit resume: `LimitManager` schedules
+it for the reset, and a `then = "resume"` rule on a `limited` job records that
+the rule fired (one `playbook.rule` inbox event, with a note) and enqueues
+nothing. The rule is therefore the architect's *authorisation* of the resume,
+not a second mechanism, which is also the only reading under which §10's
+`max_resumes` and §6's counter are one counter. `resume` on an event that §6
+does not handle (`builder.orphaned`, the example's next rule) does enqueue, and
+counts against the same `limits.max_resumes`. Tested by
+`tests/test_playbook.py::test_a_limited_job_leaves_the_resume_to_section_6`.
+If §10 is ever revised, say which unit owns the limit resume.
+
+Status: open
+
+---
+
+## H-006 — §10 does not say which value `only_if_run_in = "auto_runs"` checks
+
+Severity: low · Component: playbook (DESIGN §10, "Example", "Placeholders")
+
+Symptom. §10 gives the check only by example:
+
+    DESIGN.md:369  prompt = "Execute WORKPLAN.md run {n+1}"
+    DESIGN.md:370  only_if_run_in = "auto_runs"   # {n+1} must be listed above, else stop
+
+"`{n+1}` must be listed above" names the placeholder of *that* prompt. Nothing
+says what is checked when the prompt has two placeholders, or none, or when the
+rule carries no `verdict` regex to take a named group from.
+
+Direction. U7 reads the run from the prompt: the value checked is the computed
+value of the prompt's single verdict-group placeholder (`{n+1}` → 4), and a
+playbook whose `only_if_run_in` rule has anything other than exactly one such
+placeholder is refused when the playbook is *loaded*, not when it fires — so the
+ambiguity can never reach a running pipeline. `only_if_run_in` also takes no
+spelling but `"auto_runs"`, and requires `[limits] auto_runs` to be non-empty.
+A cleaner spelling, if §10 is ever revised, is an explicit `run = "{n+1}"` key,
+which would need no inference at all.
+
+Status: open

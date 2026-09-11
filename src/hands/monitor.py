@@ -282,6 +282,7 @@ class MonitorSupervisor:
         spool: Spool,
         *,
         ready: Callable[[str], Awaitable[Any]] | None = None,
+        on_event: Callable[[str, dict[str, Any]], None] | None = None,
         poll_s: float = DEFAULT_POLL_S,
         clock: Callable[[], float] = time.monotonic,
         stop_grace_s: float = STOP_GRACE_S,
@@ -291,6 +292,10 @@ class MonitorSupervisor:
         #: Awaited before a watch begins: the daemon passes `runner.wait_for_session`,
         #: so `--transcript` and the pid list are real by the time they are read.
         self.ready = ready
+        #: Called with (event kind, payload) after each block is filed. The daemon
+        #: passes the playbook engine's dispatch: §10 lists `monitor.stall` and
+        #: `monitor.tripwire` among its events. Nothing here waits for it.
+        self.on_event = on_event
         self.poll_s = poll_s
         self.clock = clock
         self.stop_grace_s = stop_grace_s
@@ -377,11 +382,11 @@ class MonitorSupervisor:
     ) -> None:
         """One inbox event per block (§11), the block verbatim in `block`."""
         kind = block_kind(block) if kind is None else kind
-        self.spool.append_event(
-            f"monitor.{kind}",
-            {"job": job.id, "role": job.role, "source": source, "block": block, **extra},
-        )
+        payload = {"job": job.id, "role": job.role, "source": source, "block": block, **extra}
+        self.spool.append_event(f"monitor.{kind}", payload)
         log.info("job %s: monitor.%s", job.id, kind)
+        if self.on_event is not None:
+            self.on_event(f"monitor.{kind}", payload)
 
     # ------------------------------------------------------- the ops script
 

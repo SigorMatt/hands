@@ -103,6 +103,7 @@ class Api:
         file: list[str] | None = None,
         gate: str | None = None,
         origin: str = "cli",
+        playbook_sha256: str | None = None,
     ) -> dict[str, Any]:
         """Queue a prompt for a role (§4, §6). Returns the job record."""
         if role not in self.config.roles:
@@ -138,12 +139,19 @@ class Api:
             origin=origin,
             gate=gates.new_gate(kind="send", reason=reason) if reason else None,
             files_written=written,
+            playbook_sha256=playbook_sha256,
         )
+        # §10's stop → resume cycle: "`hands resume` or the next `send` un-pauses
+        # the pipeline". Not the engine's own sends, which are the pipeline.
+        await self.daemon.playbook.on_send(origin)
         if reason:
             self.spool.append_event(
                 "job.held",
                 {"job": job.id, "role": role, "state": "held", "reason": reason, "gate": "send"},
             )
+            # §10 lists `job.held`: a job waiting for a human is the pipeline's
+            # business, and with no rule for it the pipeline stops.
+            await self.daemon.playbook.on_event("job.held", job=job)
         return job.to_dict()
 
     def _write_files(self, specs: list[str]) -> list[dict[str, Any]]:
@@ -387,6 +395,7 @@ class Api:
                 "job.denied",
                 {"job": record.id, "role": record.role, "state": "denied", "reason": reason},
             )
+            await self.daemon.playbook.on_event("job.denied", job=out)  # §10
         self._gate_decided(out, gate)
         return out.to_dict()
 
@@ -447,16 +456,21 @@ class Api:
             },
         )
 
-    # ------------------------------------------------------ later units (§4)
+    # --------------------------------------------------- the pipeline (§10)
 
     async def pipeline(self) -> dict[str, Any]:
-        raise _later("pipeline", "U7", "the active playbook and its counters (§10)")
+        """The active playbook, paused?, auto-runs, resumes, last rule, stop reason (§4)."""
+        return self.daemon.playbook.pipeline()
 
     async def pause(self) -> dict[str, Any]:
-        raise _later("pause", "U7", "pausing the playbook engine (§10)")
+        """Pause the playbook engine: no rule fires until it is resumed (§4, §10)."""
+        return await self.daemon.playbook.pause()
 
     async def resume(self) -> dict[str, Any]:
-        raise _later("resume", "U7", "unpausing the playbook engine (§10)")
+        """Un-pause the playbook engine and clear the stop reason (§4, §10)."""
+        return await self.daemon.playbook.resume()
+
+    # ------------------------------------------------------ later units (§4)
 
     async def doctor(self) -> dict[str, Any]:
         raise _later("doctor", "U10", "the install check of §4 and §11")

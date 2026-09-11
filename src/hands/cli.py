@@ -290,6 +290,49 @@ def _status_block(result: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def _pipeline_block(result: dict[str, Any]) -> str:
+    """§4's pipeline fields, in the order §4 lists them."""
+    book = result.get("playbook") or {}
+    where = book.get("path")
+    lines = [
+        f"playbook {where}"
+        + (f"  series {book.get('series')}" if book.get("series") else "")
+        + (f"  {book.get('rules')} rule(s)" if book.get("loaded") else "  (not loaded)")
+    ]
+    if book.get("sha256"):
+        lines.append(f"  sha256   {book['sha256']}")
+    if book.get("error"):
+        lines.append(f"  error    {book['error']}")
+    paused = result.get("paused")
+    by = result.get("paused_by")
+    lines.append(f"  paused   {'yes' if paused else 'no'}" + (f" ({by})" if paused and by else ""))
+    if result.get("stop_reason"):
+        lines.append(f"  stop     {result['stop_reason']}  [{result.get('stopped_at')}]")
+    auto = result.get("auto_runs") or {}
+    used, allowed = auto.get("used") or [], auto.get("allowed") or []
+    lines.append(
+        f"  auto-runs {len(used)}/{len(allowed)} used"
+        f"  (started {_numbers(used)}; allowed {_numbers(allowed)})"
+    )
+    resumes = result.get("resumes") or {}
+    counts = ", ".join(f"{role} {n}" for role, n in (resumes.get("used") or {}).items())
+    lines.append(f"  resumes  {counts or 'none'} of max_resumes {resumes.get('max_resumes')}")
+    rule = result.get("last_rule")
+    if rule:
+        fired = f" -> job {rule['fired_job']}" if rule.get("fired_job") else ""
+        lines.append(
+            f"  last     rule {rule.get('rule')} on {rule.get('on')}: "
+            f"{rule.get('then')}{fired}  [{rule.get('fired_at')}]"
+        )
+    else:
+        lines.append("  last     no rule has fired")
+    return "\n".join(lines)
+
+
+def _numbers(values: list[Any]) -> str:
+    return ", ".join(str(value) for value in values) or "none"
+
+
 def _render(command: str, result: Any) -> str:
     if command in (
         "result", "show", "wait", "send", "cancel", "approve", "deny"
@@ -309,6 +352,8 @@ def _render(command: str, result: Any) -> str:
         )
     if command == "status" and isinstance(result, dict):
         return _status_block(result)
+    if command in ("pipeline", "pause", "resume") and isinstance(result, dict):
+        return _pipeline_block(result)
     if command == "jobs" and isinstance(result, dict):
         rows = result.get("jobs", [])
         if not rows:

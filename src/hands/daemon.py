@@ -42,6 +42,7 @@ from hands.api import Api, ApiError, job_summary
 from hands.config import Config, ConfigError, load_config, resolve_project
 from hands.limits import LimitManager
 from hands.monitor import MonitorSupervisor
+from hands.playbook import PlaybookEngine
 from hands.runner import MAX_PROMPT_BYTES, Runner, RunnerError, reconcile_orphans
 from hands.spool import TERMINAL_STATES, Job, Spool, now_iso
 
@@ -80,11 +81,24 @@ class Daemon:
         self.runner = Runner(config, self.spool, on_stream_line=self._capture)
         #: §6's limits: it is handed every terminal job and schedules the resume.
         #: Its `sleep` and `clock` are attributes so a test never waits one out.
-        self.limits = LimitManager(config, self.spool, enqueue=self._enqueue_resume)
+        self.limits = LimitManager(
+            config, self.spool, enqueue=self._enqueue_resume, on_stop=self._limit_stop
+        )
         #: §5's watch: one per builder job, started with the job and stopped with
         #: it. It reports to the inbox and never touches a job (§1 invariant 4).
-        self.monitors = MonitorSupervisor(config, self.spool, ready=self.runner.wait_for_session)
+        self.monitors = MonitorSupervisor(
+            config, self.spool, ready=self.runner.wait_for_session, on_event=self._monitor_event
+        )
         self.api = Api(self)
+        #: §10's automaton. It fires through the API's own `send`, so a job hands
+        #: starts on its own is gated by §8's patterns exactly as a human's is.
+        self.playbook = PlaybookEngine(
+            config,
+            self.spool,
+            send=self.api.send,
+            enqueue=self._enqueue_resume,
+            limits=self.limits,
+        )
         self.socket_path = Path(socket_path) if socket_path else config.server.socket
         self.started: str | None = None
 
@@ -149,8 +163,10 @@ class Daemon:
             return
         self._stopping = True
         # Before anything else: a resume scheduled for hours from now must not
-        # fire into a daemon that is going down (§6).
+        # fire into a daemon that is going down (§6), and neither must a rule
+        # still being decided (§10).
         self.limits.cancel_all()
+        self.playbook.cancel_all()
 
         if self._server is not None:
             self._server.close()
@@ -219,6 +235,7 @@ class Daemon:
         gate: dict[str, Any] | None = None,
         files_written: list[dict[str, Any]] | None = None,
         resumed_from: str | None = None,
+        playbook_sha256: str | None = None,
     ) -> Job:
         """Accept a send: create the record and either hold it or join the FIFO.
 
@@ -238,6 +255,7 @@ class Daemon:
             gate=gate,
             files_written=files_written or [],
             resumed_from=resumed_from,
+            playbook_sha256=playbook_sha256,
         )
         if gate is None:
             self._admit(job)
@@ -314,12 +332,16 @@ class Daemon:
         # one is running now".
         self.monitors.start(job)
         try:
+            # §10: the playbook is the file in the builder's repo as it is *now*.
+            await self.playbook.on_job_start(job)
             log.info("job %s (%s) starting", job_id, role)
             finished = await self.runner.run(job)
             log.info("job %s (%s) %s", job_id, role, finished.state)
             # §6: a `limited` job schedules its own resume, a `done` one clears
             # the resume counter. Both are the limit manager's, not the queue's.
             await self.limits.on_job_finished(finished)
+            # §10: and then whatever the architect pre-planned for this outcome.
+            await self.playbook.on_job(finished)
         except RunnerError as exc:
             # The job was accepted but cannot be spawned (a `keep` whose session
             # went away between the send and its turn, or an oversized prompt).
@@ -354,6 +376,18 @@ class Daemon:
         job = self.enqueue(**fields)
         await self._announce()
         return job
+
+    async def _limit_stop(self, reason: str, payload: dict[str, Any]) -> None:
+        """§6 gave up on a role: §10's pipeline stops with it.
+
+        The `stop` inbox event is the limit manager's own (§11); this pauses the
+        engine and records the reason so `hands pipeline` says why.
+        """
+        await self.playbook.stop(reason, payload, write_event=False)
+
+    def _monitor_event(self, kind: str, payload: dict[str, Any]) -> None:
+        """§5's watch speaks to §10: `monitor.stall` and `monitor.tripwire` are events."""
+        self.playbook.dispatch(kind, payload=payload)
 
     def _capture(self, job_id: str, line: str) -> None:
         """Persist one captured stdout line so `hands log` (U9) has something to read."""

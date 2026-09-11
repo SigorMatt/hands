@@ -1,0 +1,47 @@
+version = 1
+series = "audit-fixes"
+
+[limits]
+auto_runs = [2, 3]        # runs hands may start on its own; anything else stops
+max_resumes = 3           # consecutive auto-resumes before stop
+quiet_hours = "23:00-07:00"   # notifications delayed, actions not
+
+[[rule]]                  # run finished cleanly → cold review
+on = "builder.done"
+verdict = '^VERDICT: run (?P<n>\d+) finished'
+then = "send"
+role = "aux"
+context = "clear"
+prompt = "Review WORKPLAN.md commits since {job.head_at_start}"
+
+[[rule]]                  # review clean and next run pre-planned → go
+on = "aux.done"
+verdict = '^VERDICT: review run (?P<n>\d+) blockers=0'
+then = "send"
+role = "builder"
+context = "clear"
+prompt = "Execute WORKPLAN.md run {n+1}"
+only_if_run_in = "auto_runs"   # {n+1} must be listed above, else stop
+
+[[rule]]                  # blockers → you
+on = "aux.done"
+verdict = '^VERDICT: review run (?P<n>\d+) blockers=[1-9]'
+then = "stop"
+message = "Review of run {n} has blockers"
+
+[[rule]]                  # memos and questions → you
+on = "builder.done"
+verdict = '^VERDICT: (awaiting decision|question)'
+then = "stop"
+
+[[rule]]
+on = "builder.limited"
+then = "resume"
+
+[[rule]]
+on = "builder.orphaned"
+then = "resume"
+
+[[rule]]
+on = "monitor.tripwire"
+then = "stop"

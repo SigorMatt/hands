@@ -307,8 +307,6 @@ def test_help_lists_every_command_of_section_4(capsys: pytest.CaptureFixture[str
 def test_commands_of_later_units_name_their_unit(project: str) -> None:
     async def body(daemon: Daemon) -> None:
         for argv, unit in [
-            (["pipeline"], "U7"),
-            (["pause"], "U7"),
             (["doctor"], "U10"),
             (["log", "somejob"], "U9"),
             (["wait", "--for", "stop,held"], "U8"),
