@@ -1,0 +1,87 @@
+version = 1
+series = "hands-mission-2"
+
+[limits]
+max_resumes = 2
+quiet_hours = "23:30-07:00"
+
+# The builder finished a mission → cold review by aux, cold (no context).
+[[rule]]
+on = "builder.done"
+verdict = '^VERDICT: mission (?P<n>\d+) finished'
+then = "send"
+role = "aux"
+context = "clear"
+prompt = "Read meta/REVIEW-PROTOCOL.md and review mission {n} of this repository: the commits from {job.head_at_start} to origin/main. Follow the protocol exactly, commit only meta/reviews/REVIEW-{n}.md, and begin your reply with the VERDICT line it specifies."
+
+# The builder stopped for a reason → the human.
+[[rule]]
+on = "builder.done"
+verdict = '^VERDICT: mission (?P<n>\d+) blocked'
+then = "stop"
+message = "Mission {n} blocked; see the builder's reply"
+
+[[rule]]
+on = "builder.done"
+verdict = '^VERDICT: question'
+then = "stop"
+message = "The builder has a question"
+
+[[rule]]
+on = "builder.done"
+then = "stop"
+message = "Builder finished without a recognised verdict"
+
+# Review outcomes: no auto-continue in this series; every outcome is a stop
+# with a distinct message, so the notification says which.
+[[rule]]
+on = "aux.done"
+verdict = '^VERDICT: review mission (?P<n>\d+) blockers=0'
+then = "stop"
+message = "Mission {n} reviewed clean; next mission is the architect's"
+
+[[rule]]
+on = "aux.done"
+verdict = '^VERDICT: review mission (?P<n>\d+) blockers='
+then = "stop"
+message = "Mission {n} review has blockers"
+
+[[rule]]
+on = "aux.done"
+then = "stop"
+message = "Aux finished without a recognised verdict"
+
+# Process trouble: one retry each, then it stops on its own via max_resumes.
+[[rule]]
+on = "builder.orphaned"
+then = "resume"
+
+[[rule]]
+on = "builder.failed"
+then = "resume"
+
+[[rule]]
+on = "aux.failed"
+then = "stop"
+message = "Aux job failed"
+
+# Liveness: a stall is worth a look, not a stop.
+[[rule]]
+on = "monitor.stall"
+then = "notify"
+message = "Builder looks stalled"
+
+[[rule]]
+on = "monitor.tripwire"
+then = "stop"
+message = "Tripwire fired"
+
+[[rule]]
+on = "job.held"
+then = "notify"
+message = "A job is held for your decision"
+
+[[rule]]
+on = "job.denied"
+then = "notify"
+message = "A held job was denied"

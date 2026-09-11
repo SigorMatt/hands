@@ -1,11 +1,12 @@
-# hands — DESIGN v3
+# hands — DESIGN v3.1
 
 Machinery that replaces the human relay between the planning brain and the two
 Claude Code roles (builder, aux) on the Ubuntu laptop, and that keeps a series
 moving without a human while everything goes by plan. Working name: `hands`.
 The method it serves is described in WORKING-MODEL.md (agile-skills) and
 OPERATING-MODEL.md (spanweave); hands changes the topology, not the method.
-v3 supersedes v2 (2026-09-10); changes are listed in §17.
+v3.1 (2026-09-11) folds in the mission 1 findings; changes from v3 are in
+§18, changes from v2 in §17.
 
 Status: proposal, 2026-09-10. Items marked DECIDED were settled in discussion.
 
@@ -155,7 +156,7 @@ JSON with `--json` (the driver uses that) or a readable form for you.
 | `send` | `--role builder\|aux --context clear\|keep [--file path=content…] [--gate reason] [--stdin\|prompt]` | job id, state |
 | `wait` | `<job>\|--for event-kind [--timeout s]` | job record when terminal / the event; used by the driver in the background (§11) |
 | `result` | `<job>` | job record |
-| `jobs` | `[--role r] [--grep pat] [--since d] [-n]` | recent job summaries |
+| `jobs` | `[--role r] [--origin o] [--grep pat] [--since d] [-n]` | recent job summaries |
 | `show` / `open` / `log` | `<job>` / `<job>` / `<job>\|-f <role>` | record / `claude --resume` (refused while running) / captured stream |
 | `cancel` | `<job> --reason` | held for human unless `role.cancel_gated: false` |
 | `put` / `get` / `ls` | path, content or `--from file` / path / path | sha256 and bytes / content / entries — confined to allowed roots |
@@ -164,7 +165,8 @@ JSON with `--json` (the driver uses that) or a readable form for you.
 | `pipeline` | — | active playbook (path, sha256, series), paused?, auto-runs used/allowed, resumes used, last rule fired, current stop reason |
 | `approve` / `deny` | `<job> [--reason]` | per §8; from the driver only with `--human-confirmed` |
 | `pause` / `resume` | — | pause/unpause the playbook engine |
-| `status` | — | daemon, roles, running jobs, monitor state |
+| `status` | — | daemon, roles, running jobs, monitor state (`queue_depth` is capacity; `queued` is contents) |
+| `notify` | `--test "<message>"` | sends one ntfy message to the configured topic; the first real proof of delivery |
 | `doctor` | — | claude binary, ops script flags, allowed roots, one-turn `claude -p` per role, background-wake check (§11) |
 
 Gating is triggered by `--gate` or by configured prompt patterns (defaults:
@@ -210,7 +212,7 @@ States: `held` → `queued` → `running` → `done` | `failed` | `limited` |
 
 Job record (returned verbatim, stored forever):
 
-    id, role, context, created, started, ended, origin (driver|playbook|cli)
+    id, role, context, created, started, ended, origin (driver|playbook|cli|limit)
     prompt, files_written, session_id, transcript_path, pid, exit_code
     head_at_start, head_at_end
     result            # the `result` field of the final message, untouched
@@ -231,11 +233,16 @@ Rules:
 
 **Limits — DECIDED: automatic, no nudge.** All parties share one
 subscription, so the driver and architect are limited whenever the builder
-is; the reset is a wall-clock fact. hands detects a limit from the
-`api_retry` error category `rate_limit` or the limit notice in `result`,
-parses the reset time, sleeps until then, and sends `role.resume_line`
-(`Resume WORKPLAN.md`) as a new `clear` job for the builder, or re-sends the
-same prompt for aux. If no reset time is parseable, it retries on
+is; the reset is a wall-clock fact. hands detects a limit from a
+`system`/`api_retry` event whose `error` field is `rate_limit` (there is no
+`category` field on the wire; H-002) or from the limit notice in `result`,
+parses the reset time, sleeps until then, and sends a new `clear` job with
+`origin = limit` and `resumed_from` set: for the builder the prompt is
+`role.resume_line` when the config sets one (`Resume WORKPLAN.md` for the
+spanweave form), otherwise the limited job's own prompt (right for the
+agile-skills form, whose kickoff line is checkpoint-driven; H-008); for aux it
+is always the same prompt again. §6 is the sole owner of the limit resume;
+the playbook never issues a second one (H-005). If no reset time is parseable, it retries on
 `limits.backoff_minutes`. After `limits.max_resumes` consecutive resumes
 without a terminal `done`, it stops and notifies. Every resume is an inbox
 event.
@@ -330,8 +337,11 @@ with `WORKPLAN.md`.
 
 ### Actions
 
-`send` (role, context, prompt with placeholders), `resume` (the role's
-resume line, counted against `max_resumes`), `notify` (ntfy, with a
+`send` (role, context, prompt with placeholders), `resume` (the same
+prompt again, or the role's resume line when configured; counted against
+`max_resumes`; for `failed` and `orphaned` jobs only, since `limited` is
+owned by §6 and a `resume` rule on `builder.limited` is accepted as an
+authorization that enqueues nothing), `notify` (ntfy, with a
 message), `stop` (pause the pipeline, notify, record the reason). Unmatched
 events, missing or unparseable `VERDICT:` lines, and exhausted limits are
 always `stop`.
@@ -367,7 +377,7 @@ allowed: `{n+1}`), and job fields: `{job.id}`, `{job.head_at_start}`,
     role = "builder"
     context = "clear"
     prompt = "Execute WORKPLAN.md run {n+1}"
-    only_if_run_in = "auto_runs"   # {n+1} must be listed above, else stop
+    run = "{n+1}"                  # must be listed in auto_runs, else stop
 
     [[rule]]                  # blockers → you
     on = "aux.done"
@@ -380,12 +390,12 @@ allowed: `{n+1}`), and job fields: `{job.id}`, `{job.head_at_start}`,
     verdict = '^VERDICT: (awaiting decision|question)'
     then = "stop"
 
-    [[rule]]
-    on = "builder.limited"
+    [[rule]]                  # limits are §6's; nothing to say here
+    on = "builder.orphaned"
     then = "resume"
 
     [[rule]]
-    on = "builder.orphaned"
+    on = "builder.failed"
     then = "resume"
 
     [[rule]]
@@ -396,9 +406,12 @@ The `VERDICT:` line contract is the prompt contract's existing one-line
 verdict, made literal: every builder run prompt and every aux review prompt
 requires the reply's first line to begin with `VERDICT:` in the vocabulary
 the playbook matches. The architect writes both the prompts and the
-playbook, so they agree by construction. The `n+1` check does not parse
-`WORKPLAN.md`; the architect lists the pre-planned runs in `auto_runs`
-because it knows §2.
+playbook, so they agree by construction. The `run` key names the value
+checked against `auto_runs` explicitly (H-006); a rule with `run` but no
+`auto_runs`, or whose expression cannot be computed from the verdict's named
+groups, is refused when the playbook is loaded, never when it fires. hands
+does not parse `WORKPLAN.md`; the architect lists the pre-planned runs in
+`auto_runs` because it knows §2.
 
 ### What this changes in the method
 
@@ -437,8 +450,10 @@ Code *background* Bash task and goes idle. When hands emits such an event,
 the command returns, Claude Code delivers the background result to the
 driver session, and the driver acts: reads the inbox, verifies, reports,
 re-arms the wait. While the playbook is chaining runs, nothing wakes the
-driver and nothing needs to. `hands doctor` checks this path end to end on
-first install (a fake event, and the driver session confirming it woke);
+driver and nothing needs to. `hands doctor` prints the procedure for this check (a gated send, which
+files a real `job.held` without spending a turn, or `hands pause`, which
+files a `stop` event with reason `paused by human`; H-007) and the driver
+session confirming it woke;
 if background completion does not wake an idle session on your Claude Code
 version, the fallback is a `hands wait` with a long timeout re-issued by the
 driver, or you opening the Code tab after the ntfy notification.
@@ -607,8 +622,9 @@ one-time checks in step 4.
 
 ## 16. Open questions
 
-- Does background-task completion wake an idle interactive session on your
-  Claude Code version? (`hands doctor` will tell; fallback in §11.)
+- ANSWERED 2026-09-11, yes: a background `hands wait --for stop,held` woke
+  an idle driver session on Claude Code 2.1.268 within seconds of a real
+  `job.held` event (driver report, job 0mtxb7ecx-fbmx).
 - ntfy.sh with a random topic vs self-hosted ntfy.
 - Builder queue depth > 1 (a queued builder prompt is a scheduling decision
   the method currently makes in chat).
@@ -634,3 +650,24 @@ one-time checks in step 4.
   (§15).
 - Job record `origin` and `decided_by` vocab updated; `status`/`doctor`/
   `pause`/`resume` commands added (§4, §6).
+
+---
+
+## 18. Changes from v3 (mission 1 findings)
+
+- H-002: the limit event's field is `error`, not a category (§6).
+- H-004: `origin` gains `limit` (§6); `hands jobs --origin`.
+- H-005: §6 is the sole owner of the limit resume; a playbook `resume`
+  rule applies to `failed`/`orphaned`, and on `limited` is authorization
+  only (§10). The example playbook drops its `builder.limited` rule.
+- H-006: `only_if_run_in` is replaced by an explicit `run = "<expr>"` key,
+  checked at load time (§10).
+- H-007: `hands pause` files a `stop` event (`paused by human`); the wake
+  check may use it or a gated send (§11).
+- H-008 (architect): `role.resume_line` is optional; absent, a limit
+  resume re-sends the limited job's prompt, which is the agile-skills
+  kickoff line (§6).
+- `hands notify --test` added (§4); `status` documents capacity vs contents.
+- Open question on the wake path answered: proven (§16).
+- Bootstrap mode retired: `bootstrap/dispatch.sh` and the driver's
+  bootstrap section are removed (§15 stays as history).
