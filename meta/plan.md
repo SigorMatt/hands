@@ -10,7 +10,7 @@ here (ruff clean, 521 passed, cli smoke) before U0.
 Every unit but U0 closes a named should-fix of `meta/reviews/REVIEW-2.md`.
 
 - [x] U0 Plan — this file, meta/CHECKPOINT.md reset, journal.md:17 sha fixed (should-fix 6)
-- [ ] U1 Status describes the deciding monitor (should-fix 2, §4)
+- [x] U1 Status describes the deciding monitor (should-fix 2, §4)
 - [ ] U2 Tests that can fail (should-fix 3 and 8)
 - [ ] U3 Pause keeps the first reason (should-fix 4, §10, §19)
 - [ ] U4 Empty `resume_line` refused (should-fix 5, §6, §19)

@@ -1,14 +1,15 @@
 # CHECKPOINT
 
 Mission: 3 (meta/BUILDER-3-PROMPT.md) — IN PROGRESS
-Unit in progress: U1 Status describes the deciding monitor
-Intent: `hands status` must describe whichever monitor is actually deciding
-(review should-fix 2, DESIGN §4 status row, §5).
-Done means: for `monitor.source == builtin` status prints the built-in stall
-rule; for `ops` it prints the script path and the three flags it is given
-(`--pids/--transcript/--base`); for `stall_minutes = 0` it says detection is
-off. Tests for all three; gate green; committed and pushed.
-Tip: U0 pushed (meta only, gate green).
+Unit in progress: U2 Tests that can fail
+Intent: make four assertions that cannot fail actually fail (review
+should-fix 3 and 8).
+Done means: the four `BAD_PLAYBOOKS` cases in tests/test_playbook.py pin the
+refusal on `run = "..."` or on the sentence, not on the bare substring `run`;
+three of them are confirmed failing against `34b4ede^` in a worktree and the
+commit body says so; the `queue_capacity` alias test asserts on aux (queue
+depth 4), not builder (1). Gate green; committed and pushed.
+Tip: 87bb7f8 (U1) — gate green, 523 passed.
 Findings: H-001 open (needs a capture from a dotted cwd). H-002, H-003,
 H-005 fixed with no code change; H-004 a67c4b0, H-006 34b4ede, H-007
 267ee01, H-008 8448b6f. H-009, H-010 filed by this unit, both open and

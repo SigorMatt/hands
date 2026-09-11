@@ -26,3 +26,4 @@ One line per unit, appended by the builder: date, unit, sha, verdict.
 2026-09-11  U7 Retire bootstrap  d973ece  green (521 tests); dispatch.sh gone from code, docs and driver
 2026-09-11  U8 Final report  f636e81  green (521 tests); mission 2 finished
 2026-09-12  U0 Plan  efc501b  meta only; journal sha fixed (should-fix 6); H-009, H-010 filed
+2026-09-12  U1 Status monitor  87bb7f8  green (523 tests); should-fix 2 closed; OPS_FLAGS is one list
