@@ -3,6 +3,7 @@
     "deny": [
       "Edit",
       "Write",
+      "MultiEdit",
       "NotebookEdit",
       "Bash(git push:*)",
       "Bash(git commit:*)",

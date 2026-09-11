@@ -421,3 +421,12 @@ unit that restores `"MultiEdit"` to `driver/settings.json` and turns
 
 Status: open — decision taken above, not yet on disk when this amendment was
 written. The headline stays as filed and is corrected by point 2.
+
+Status: closed on disk — mission 4 U1 put the rule back: `driver/settings.json`
+denies `Edit`, `Write`, `MultiEdit`, `NotebookEdit` again and
+`tests/test_docs.py::test_the_driver_denies_every_writing_tool` asserts
+`MultiEdit` is present, citing this amendment. The sha is U1's single commit
+(`driver: the git allowlist applies to every git token …`), which carries this
+line too, so it cannot name itself; `git log -1 --format=%H -- driver/settings.json`
+resolves it. The headline above stays as filed; the design side (§12 as revised
+in v3.3 keeps MultiEdit) is settled, so nothing is left open for the architect.

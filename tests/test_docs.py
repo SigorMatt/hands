@@ -114,11 +114,12 @@ def test_the_systemd_unit_is_a_user_unit_with_the_project_in_an_environment_file
 def test_the_driver_denies_every_writing_tool() -> None:
     settings = json.loads((ROOT / "driver" / "settings.json").read_text(encoding="utf-8"))
     deny = settings["permissions"]["deny"]
-    for tool in ("Edit", "Write", "NotebookEdit"):
+    # §12/§20: MultiEdit stays. It is a known permission-rule tool name in
+    # 2.1.269 — the deny-rule normalizer maps it to Edit — so the rule costs a
+    # start-up warning and nothing else, and dropping it dropped coverage
+    # (H-010 as amended 2026-09-12; review 3 should-fix 2).
+    for tool in ("Edit", "Write", "MultiEdit", "NotebookEdit"):
         assert tool in deny, f"driver/settings.json must deny {tool} (§12)"
-    # §12 also lists MultiEdit, but Claude Code 2.1.x has no such tool: the rule
-    # denies a name nothing can call and the CLI warns at start (H-010).
-    assert "MultiEdit" not in deny
     assert "Bash(hands:*)" in settings["permissions"]["allow"]
     assert "Bash(claude:*)" in deny
     # `hands open` execs an interactive `claude --resume` (§7): not the driver's.

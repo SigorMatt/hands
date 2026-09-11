@@ -9,9 +9,14 @@ interpreters, no direct `claude`. `hands open` is blocked too: it execs an
 interactive `claude --resume`, which is a direct claude by another name.
 Quoted text is stripped before inspection: prose inside quotes is text, but
 $(...) and backticks inside double quotes are still executed and still checked.
-Git is read in the subcommand position only (after `-C <path>`, `-c k=v` and
-the other global flags): `rev-parse <sha>^{commit}` and `log --grep=push` read,
-`git -c x=y commit` and `find . -exec git push \\;` write and are blocked.
+Every `git` token is checked against the read-only subcommand allowlist,
+wherever it sits: a wrapper puts the real command in argument position, so
+`find . -exec git remote add ... \\;` is a `git remote add`. The subcommand is
+read after the global flags (`-C <path>`, `-c k=v`), so `rev-parse
+<sha>^{commit}` and `log --grep=push` still read. A path token is not an
+invocation — the human's workspace is `~/git`, and `ls ~/git` is a read.
+`find` with `-exec`, `-execdir`, `-ok`, `-okdir` or `-delete` is forbidden
+outright: those run commands (or delete) whatever the payload looks like.
 
 Self-test: python3 bash_guard.py --selftest
 """
@@ -33,14 +38,9 @@ ALLOWED_GIT_SUBCOMMANDS = {
 }
 FORBIDDEN_GIT_FLAGS = {"--prune", "--delete", "-d", "-D", "-m", "-M",
                        "add", "set-url", "remove", "rename", "--set-upstream"}
-# Verbs that write. They are checked in the subcommand position only: `commit`
-# and `push` are also ordinary words in a revision (`<sha>^{commit}`) and in a
-# pattern (`log --grep=push`), and refusing those refuses read-only reads.
-MUTATING_GIT_SUBCOMMANDS = {
-    "push", "commit", "add", "checkout", "switch", "reset", "stash", "rebase", "merge",
-    "cherry-pick", "revert", "clean", "worktree", "config", "tag", "am", "apply", "restore",
-    "rm", "mv", "init", "clone", "pull",
-}
+# `find` runs a command per match (`-exec`, `-execdir`, `-ok`, `-okdir`) or
+# deletes (`-delete`). The payload is irrelevant: the flag is the write.
+FIND_ACTION_FLAGS = {"-exec", "-execdir", "-ok", "-okdir", "-delete"}
 # git global flags that take their value as the next word, so that word is not
 # the subcommand: `git -c user.name=x commit` is still a commit.
 GIT_GLOBAL_FLAGS_WITH_ARG = {"-C", "-c", "--git-dir", "--work-tree", "--namespace",
@@ -171,17 +171,53 @@ def git_subcommand(words, start: int):
     return None
 
 
-def mutating_git(words):
-    """True if any `git` in this segment writes — first word or not.
+def invocations(words, name):
+    """Indexes of the tokens in `words` that invoke `name`.
 
-    `find . -exec git push \\;` is a git push; only the subcommand position of
-    each git invocation is read, so revisions and patterns are left alone.
+    A bare `name` counts wherever it sits: a wrapper puts the real command in
+    argument position (`find . -exec git push \\;`, `xargs git add`). A path
+    ending in `/name` counts only as the segment's first word, because the
+    human's workspace really is `~/git`: `ls ~/git` and `cat ~/git/x/DESIGN.md`
+    name a directory, not a program, and a guard that refuses them is useless
+    in a real driver session.
     """
+    out = []
     for i, w in enumerate(words):
-        if w.strip("()") == "git" or w.endswith("/git"):
-            if git_subcommand(words, i + 1) in MUTATING_GIT_SUBCOMMANDS:
-                return True
-    return False
+        bare = w.strip("()")
+        if bare == name or (i == 0 and bare.endswith("/" + name)):
+            out.append(i)
+    return out
+
+
+def git_violation(words, cmd):
+    """Reason if any `git` in this segment is not a read-only invocation.
+
+    The allowlist applies to every `git` token, not only to a segment's first
+    word: at the first word alone the check has a hole the width of every
+    wrapper (review 3 blocker 1). The subcommand position of each invocation is
+    what is read, so a revision (`<sha>^{commit}`) or a pattern
+    (`log --grep=push`) is still a word, not a verb.
+    """
+    for i in invocations(words, "git"):
+        sub = git_subcommand(words, i + 1)
+        if sub not in ALLOWED_GIT_SUBCOMMANDS:
+            return f"git subcommand not allowed: {sub!r} in {cmd!r}"
+        if any(f in words for f in FORBIDDEN_GIT_FLAGS):
+            return f"git flag not allowed in {cmd!r}"
+    return None
+
+
+def find_action(words):
+    """The `find` action flag in this segment, or None.
+
+    `-exec`/`-execdir`/`-ok`/`-okdir` run a command per match and `-delete`
+    removes files; a `find` without one of them only prints.
+    """
+    for i in invocations(words, "find"):
+        for w in words[i + 1:]:
+            if w.strip("()") in FIND_ACTION_FLAGS:
+                return w.strip("()")
+    return None
 
 
 def check(cmd: str):
@@ -198,8 +234,12 @@ def check(cmd: str):
         words = first_word(raw)
         if not words:
             continue
-        if mutating_git(words):
-            return f"mutating git: {cmd!r}"
+        reason = git_violation(words, cmd)
+        if reason:
+            return reason
+        action = find_action(words)
+        if action:
+            return f"find {action}: {cmd!r}"
         w = words[0].strip("()")
         if not w:
             continue
@@ -207,12 +247,7 @@ def check(cmd: str):
         if w.startswith("$") or re.match(r"^\d+$", w):
             continue
         if w == "git":
-            sub = git_subcommand(words, 1)
-            if sub not in ALLOWED_GIT_SUBCOMMANDS:
-                return f"git subcommand not allowed: {sub!r} in {cmd!r}"
-            if any(f in words for f in FORBIDDEN_GIT_FLAGS):
-                return f"git flag not allowed in {cmd!r}"
-            continue
+            continue  # every git token was checked above
         if w == "hands":
             sub = next((x for x in words[1:] if not x.startswith("-")), None)
             if sub in FORBIDDEN_HANDS_SUBCOMMANDS:
