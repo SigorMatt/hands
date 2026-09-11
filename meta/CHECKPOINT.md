@@ -1,16 +1,16 @@
 # CHECKPOINT
 
 Mission: 4 (meta/BUILDER-4-PROMPT.md) — IN PROGRESS
-Unit in progress: U4 (optional keys and doctor)
-Intent: empty strings are refused at config load for `ops.monitor_cmd`,
-`server.ntfy_topic` and every other optional string key, with a message naming
-the two valid choices; `hands doctor` catches a config error and reports it as
-a failed `config` row with the message and exit 1, instead of crashing.
-Done means: a test per key and a test for doctor; ./scripts/check green three
-times; one commit, pushed.
-Tip: U0 (8268539, meta only), U1 (935a275), U2 (667ea52) and U3 (c108bfe)
-committed and pushed on `main`; 692 passed, `check: green`, re-run here at the
-tip. U2's gate was five consecutive green runs and the flake reproduction
+Unit in progress: U5 (--prompt-file refusals and driver rule 6)
+Intent: the client refuses a missing, unreadable, empty or over-10 MB prompt
+file with a one-line error and exit 2, before contacting the daemon;
+`driver/CLAUDE.md` rule 6 becomes the §12 text of DESIGN v3.3, and the
+contradictory sentence about metacharacters goes.
+Done means: tests for the four refusals; `grep -rn metacharacters driver/`
+returns nothing; ./scripts/check green three times; one commit, pushed.
+Tip: U0 (8268539, meta only), U1 (935a275), U2 (667ea52), U3 (c108bfe) and
+U4 (15eeb76) committed and pushed on `main`; 719 passed at U4's tip, gate green
+three consecutive runs. U2's flake reproduction
 (`--basetemp=/tmp/pt-40/pytest-1340`) is green where it was red. Base 796e5ae
 was green here at 618 passed.
 Findings: H-001 open (needs a capture from a dotted cwd). H-011 filed after
