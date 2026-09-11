@@ -15,3 +15,4 @@ One line per unit, appended by the builder: date, unit, sha, verdict.
 2026-09-11  U10 Install surface  9096b50  green (488 tests); finding H-007 (pause writes no event)
 2026-09-11  U11 Final report  530de9d  green (488 tests); mission 1 finished
 2026-09-11  U0 Plan  857f6f2  meta only; base gate RED until U3 (§10 example fixture)
+2026-09-11  U3 Explicit run key  34b4ede  green (494 tests); H-006 fixed; base gate green again

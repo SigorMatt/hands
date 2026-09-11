@@ -194,6 +194,11 @@ A cleaner spelling, if §10 is ever revised, is an explicit `run = "{n+1}"` key,
 which would need no inference at all.
 
 Status: open
+Status: fixed 34b4ede — DESIGN v3.1 §10 took the explicit key. Mission 2 U3:
+rules carry `run = "<expr>"` (one named group from the rule's own `verdict`,
+`{n}`/`{n+1}`), refused at load when `[limits] auto_runs` is empty or the
+expression names a group the `verdict` does not define; `only_if_run_in` is
+refused at load with a message naming `run`. The inference is gone.
 
 ---
 
