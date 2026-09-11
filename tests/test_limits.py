@@ -246,7 +246,7 @@ def test_a_limited_builder_is_resumed_with_the_resume_line(harness: Harness) -> 
         assert resume.prompt == "Resume WORKPLAN.md"  # roles.builder.resume_line (§13)
         assert resume.context == "clear"
         assert resume.resumed_from == limited.id
-        assert resume.origin == "playbook"  # see H-004
+        assert resume.origin == "limit"  # §6, H-004: not a client's origin
         assert harness.delays == [3 * 3600 + RESUME_GRACE_S]
 
     run(scenario)
@@ -275,6 +275,7 @@ def test_one_inbox_event_per_limit_and_per_resume(harness: Harness) -> None:
         assert limit_event.payload["reset_at"] is not None
         assert resume_event.payload["resumed_from"] == limited.id
         assert resume_event.payload["job"] == harness.resumes()[0].id
+        assert resume_event.payload["origin"] == "limit"  # §6, H-004
 
     run(scenario)
 

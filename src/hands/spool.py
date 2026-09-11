@@ -88,7 +88,9 @@ TERMINAL_STATES = frozenset(state for state, out in TRANSITIONS.items() if not o
 INITIAL_STATES = frozenset({"held", "queued"})
 
 CONTEXTS = frozenset({"clear", "keep"})  # §2
-ORIGINS = frozenset({"driver", "playbook", "cli"})  # §6
+#: §6: the three clients that can ask for work, plus `limit` — the origin of a
+#: job hands files for itself when a rate limit resets (H-004).
+ORIGINS = frozenset({"driver", "playbook", "cli", "limit"})  # §6
 
 # §11 event kinds. Closed on purpose: a unit that needs a new kind adds it here,
 # where `hands wait --for <kind>` and the playbook can see it.

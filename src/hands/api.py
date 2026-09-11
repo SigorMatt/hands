@@ -29,7 +29,7 @@ from hands import __version__, files, gates
 from hands.doctor import report as doctor_report
 from hands.doctor import run_checks as doctor_checks
 from hands.runner import KeepRefused
-from hands.spool import TERMINAL_STATES, Event, Job, SpoolError, resolve_kinds
+from hands.spool import ORIGINS, TERMINAL_STATES, Event, Job, SpoolError, resolve_kinds
 
 if TYPE_CHECKING:  # pragma: no cover - import cycle only matters to type checkers
     from hands.daemon import Daemon
@@ -215,11 +215,17 @@ class Api:
         self,
         *,
         role: str | None = None,
+        origin: str | None = None,
         grep: str | None = None,
         since: str | None = None,
         n: int = 20,
     ) -> dict[str, Any]:
         """Recent job summaries, newest first (§4, §7).
+
+        `origin` is §6's closed vocabulary (`driver|playbook|cli|limit`), and a
+        spelling outside it is refused rather than answered with "no jobs": every
+        value is a filter that can legitimately match nothing, so silence would
+        not tell a typo from an empty result.
 
         §7: "searching prompts is searching work items". `grep` is a
         case-insensitive substring of the *prompt* only — not of `result`: the
@@ -229,10 +235,15 @@ class Api:
         result — the verdict — is on every summary line already.
         """
         cutoff = _since_cutoff(since)
+        if origin is not None and origin not in ORIGINS:
+            known = ", ".join(sorted(ORIGINS))
+            raise ApiError(f"unknown origin {origin!r}; §6's origins are: {known}")
         needle = grep.lower() if grep is not None else None
         out: list[dict[str, Any]] = []
         for record in reversed(self.spool.list_jobs()):
             if role is not None and record.role != role:
+                continue
+            if origin is not None and record.origin != origin:
                 continue
             if needle is not None and needle not in record.prompt.lower():
                 continue

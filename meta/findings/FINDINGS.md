@@ -134,6 +134,12 @@ carry it. Revisit together with §10's playbook-issued sends, which will want to
 be distinguishable from limit resumes by something better than `resumed_from`.
 
 Status: open
+Status: fixed — DESIGN v3.1 §6 spells the vocabulary `driver|playbook|cli|limit`.
+Mission 2 U1: `ORIGINS` gains `limit`, §6's limit resume is filed with
+`origin = "limit"` (a §10 `resume` rule on `failed`/`orphaned` stays
+`playbook`), both `resume` inbox events carry `origin`, and `hands jobs
+--origin <o>` filters on it and refuses a spelling outside the four.
+`resumed_from` is unchanged.
 
 ---
 

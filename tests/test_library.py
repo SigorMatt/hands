@@ -96,6 +96,43 @@ def test_jobs_refuses_a_since_it_cannot_parse(project: str) -> None:
     drive(body)
 
 
+def test_jobs_filters_by_origin(project: str) -> None:
+    """§4's `jobs [--origin o]` over §6's `driver|playbook|cli|limit` (H-004)."""
+
+    async def body(daemon: Daemon) -> None:
+        sent = await run("--role", "builder", "--context", "clear", "FAKE:result a\nfrom a human")
+        # The origins no client can produce: filed straight into the spool, the
+        # way §6's limit manager and §10's engine file theirs.
+        limit = daemon.spool.create_job(
+            role="builder", context="clear", prompt="Resume WORKPLAN.md",
+            origin="limit", resumed_from=sent["id"],
+        )  # fmt: skip
+        book = daemon.spool.create_job(
+            role="aux", context="clear", prompt="p", origin="playbook"
+        )
+
+        ids = lambda rows: [row["id"] for row in rows["jobs"]]  # noqa: E731
+        assert ids(await ok("jobs", "--origin", "cli")) == [sent["id"]]
+        assert ids(await ok("jobs", "--origin", "limit")) == [limit.id]
+        assert ids(await ok("jobs", "--origin", "playbook")) == [book.id]
+        assert ids(await ok("jobs", "--origin", "driver")) == []
+        # Composes with the other filters.
+        assert ids(await ok("jobs", "--origin", "limit", "--role", "aux")) == []
+        assert ids(await ok("jobs", "--origin", "limit", "--role", "builder")) == [limit.id]
+
+    drive(body)
+
+
+def test_jobs_refuses_an_origin_outside_section_6s_vocabulary(project: str) -> None:
+    async def body(daemon: Daemon) -> None:
+        err = await fails("jobs", "--origin", "robot")
+        assert "robot" in err
+        for known in ("cli", "driver", "limit", "playbook"):
+            assert known in err, f"the refusal must name the whole vocabulary: {err}"
+
+    drive(body)
+
+
 def test_jobs_readable_output_is_one_line_a_job(project: str) -> None:
     async def body(daemon: Daemon) -> None:
         done = await run(

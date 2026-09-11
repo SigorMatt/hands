@@ -831,6 +831,7 @@ class PlaybookEngine:
                 "role": job.role,
                 "resumed_from": job.id,
                 "context": context,
+                "origin": ORIGIN,
                 "resumes": used + 1,
                 "max_resumes": self.max_resumes,
                 "rule": rule.index,

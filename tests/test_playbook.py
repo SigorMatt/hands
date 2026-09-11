@@ -503,6 +503,9 @@ def test_a_resume_rule_on_an_orphan_resends_the_resume_line(
         }
     ]
     assert engine.spool.read_role("builder").consecutive_resumes == 1
+    (event,) = [e for e in engine.spool.events() if e.kind == "resume"]
+    # H-004: only §6's limit resume is `limit`; a rule-issued one stays playbook.
+    assert event.payload["origin"] == "playbook"
 
 
 def test_exhausted_resumes_stop(tmp_home: Path, workdir: Path) -> None:

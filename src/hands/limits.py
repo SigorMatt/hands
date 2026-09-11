@@ -67,12 +67,11 @@ RESUME_GRACE_S = 60.0
 #: misparse, and a misparse must cost `backoff_minutes`, not a week.
 MAX_AHEAD = timedelta(days=7)
 
-#: §6's origin vocabulary is `driver|playbook|cli` and a limit resume is none of
-#: the three — it is hands resuming itself. See meta/findings/FINDINGS.md H-004:
-#: `playbook` is the least wrong (it is the automatic, pre-planned kind of
-#: origin, not a human's client), and `resumed_from` is what actually identifies
-#: a resume.
-RESUME_ORIGIN = "playbook"
+#: §6's origin vocabulary is `driver|playbook|cli|limit`, and a limit resume is
+#: the fourth: not a client asking for work but hands resuming itself after a
+#: reset (H-004). `resumed_from` is unchanged — it still says which job this one
+#: resumes; `origin` now says who asked, and no playbook rule did.
+RESUME_ORIGIN = "limit"
 
 
 # ------------------------------------------------------------ the notice
@@ -475,6 +474,7 @@ class LimitManager:
                 "role": job.role,
                 "resumed_from": job.id,
                 "context": context,
+                "origin": RESUME_ORIGIN,
                 "resumes": count,
                 "max_resumes": self.max_resumes,
             },

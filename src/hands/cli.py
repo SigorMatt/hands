@@ -23,6 +23,7 @@ from typing import Any, TextIO
 from hands import __version__, doctor
 from hands.api import TIMEOUT as TIMEOUT_CODE
 from hands.config import Config, ConfigError, load_config, resolve_project
+from hands.spool import ORIGINS
 
 __all__ = [
     "EXIT_TIMEOUT",
@@ -164,6 +165,11 @@ def build_parser() -> argparse.ArgumentParser:
     jobs = command("jobs", "recent job summaries")
     jobs.add_argument("--role")
     jobs.add_argument(
+        "--origin",
+        metavar="O",
+        help=f"who asked for the job: {'|'.join(sorted(ORIGINS))} (§6)",
+    )
+    jobs.add_argument(
         "--grep", metavar="PAT", help="case-insensitive substring of the prompt (§7)"
     )
     jobs.add_argument("--since", metavar="D", help="an age (30m, 6h, 2d, 1w) or a date")
@@ -245,7 +251,9 @@ _PARAMS: dict[str, Any] = {
     "wait": lambda a: {"job": a.job, "for": a.for_, "timeout": a.timeout},
     "result": lambda a: {"job": a.job},
     "show": lambda a: {"job": a.job},
-    "jobs": lambda a: {"role": a.role, "grep": a.grep, "since": a.since, "n": a.n},
+    "jobs": lambda a: {
+        "role": a.role, "origin": a.origin, "grep": a.grep, "since": a.since, "n": a.n,
+    },  # fmt: skip
     "open": lambda a: {"job": a.job},
     "log": lambda a: {"job": a.job, "role": a.role},  # `-f` adds `offset`; see _follow
     "cancel": lambda a: {"job": a.job, "reason": a.reason},

@@ -73,7 +73,7 @@ design, and you do not write.
     hands send --role <r> --context <clear|keep> [--gate "<reason>"] "<prompt>"
     hands wait <job> [--timeout <s>] | hands wait --for stop,held --timeout 3600
     hands show <job> | hands result <job>    the record, `result` untouched
-    hands jobs [--role <r>] [--grep <pat>] [--since <2d>] [-n <n>]
+    hands jobs [--role <r>] [--origin <o>] [--grep <pat>] [--since <2d>] [-n <n>]
     hands log <job>                     the captured stream-json of a finished job
     hands tail --role <r> -n <n>        last transcript entries of its session
     hands put <path> --content "<text>" | hands get <path> | hands ls <path>
