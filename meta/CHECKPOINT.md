@@ -1,17 +1,22 @@
 # CHECKPOINT
 
 Mission: 4 (meta/BUILDER-4-PROMPT.md) — IN PROGRESS
-Unit in progress: U2 (a deterministic gate)
-Intent: tests/test_daemon.py:556 asserts on the stall sentence (or its absence),
-not on the bare substring "40" in a line that also carries a tmpdir path; every
-other assertion in tests/test_daemon.py and tests/test_playbook.py that matches
-a bare number or a substring a path or a counter could contain is pinned.
-Done means: ./scripts/check run five times, 5/5 green, reported in the commit
-body; the deterministic reproduction (--basetemp with a 40-bearing name) is
-green too; one commit, pushed.
-Tip: U0 (8268539, meta only) and U1 (935a275) committed and pushed on `main`.
-U1 was green three consecutive runs, 681 passed; `bash_guard.py --selftest`
-65/65. Base 796e5ae was green here at 618 passed.
+Unit in progress: U3 (pipeline state)
+Intent: DESIGN §10 as v3.3 states it — a `cli`-origin send un-pauses only when
+the job STARTS (held or queued changes nothing, and a playbook- or
+limit-started job never clears a stop); one `stop()` for every component, the
+limit manager's `max_resumes` stop included, keeping the first reason and
+filing `stop.suppressed` (no notification) for a later stop over an existing
+one; `last_rule` reset when a playbook with a different sha256 loads;
+`pipeline.resumed` says `by: start` or `by: resume`.
+Done means: tests for gate-time no-op, start-time un-pause, a playbook job not
+un-pausing, a limit stop over a rule stop, and the `last_rule` reset; mission
+1's engine-level end-to-end still passes; ./scripts/check green three times;
+one commit, pushed.
+Tip: U0 (8268539, meta only), U1 (935a275) and U2 (667ea52) committed and
+pushed on `main`. U2's gate was five consecutive green runs at 682 passed, and
+the flake reproduction (`--basetemp=/tmp/pt-40/pytest-1340`) is green where it
+was red. Base 796e5ae was green here at 618 passed.
 Findings: H-001 open (needs a capture from a dotted cwd). H-009 open
 (design-side; no builder unit can close it). H-010 closed by U1 (935a275): the rule is back in
 `driver/settings.json` and `tests/test_docs.py` asserts it; the memo carries
