@@ -11,18 +11,18 @@ systemd-run; conftest forces process-group mode; doctor `isolation` row);
 U4 7183478 (1367 passed; src/hands/phone.py; cmd_topic without cmd_secret
 refused at config load; `decided_by: phone` read back three ways; doctor
 notifications/who rows left to U7); U5 6fcd7d7 (1380 passed; all three
-REVIEW-3 defects present at base and fixed; monitor.ops_argv shared with
-doctor; accepted() integer 2xx only; notify socket route renders + exit 1).
-Unit in progress: U6 `hands who` and `handswho` (§4, §11, §24; backlog 6).
-Intent: port meta/prototypes/claudewho.py into src/hands/who.py — this
-daemon's jobs, held gates, pipeline and inbox from the daemon's own state
-over the socket; other `claude` processes from /proc; interactive sessions'
-state from transcripts; §24 hierarchy, labels, debounce, fingerprint rules;
-`hands who` prints once; `handswho` console script pushes on change and on
-`status`/`who`/`check`/`?` from `who_cmd_topic`; optional
-systemd/handswho.service; the prototype deleted in the unit commit.
-Done means: one unit commit, pushed; the prototype's self-test cases ported;
-a rendering test with a fixed process table and fixed daemon state;
+REVIEW-3 defects present at base and fixed); U6 a93e3a7 (1416 passed;
+src/hands/who.py, read-only `who` socket method, handswho script,
+systemd/handswho.service; prototype deleted; who_cmd_topic has no secret).
+Unit in progress: U7 Playbook and docs (backlog 4).
+Intent: root PLAYBOOK.toml gains `monitor.task_killed` and
+`monitor.orphan_processes` → `stop` and has no `quiet_hours`; the §10 example
+copies stay byte-for-byte DESIGN v3.7 §10; docs/PLAYBOOK.md,
+docs/INTEGRATION.md (optional notifications, command channel, who), README.md
+updated; `hands doctor` reports notifications, command channel and who as
+on/off, never errors; on a config without `[notify]` extras the channel and
+who are off, exit 0.
+Done means: one unit commit, pushed; the example loads; docs sweep green;
 ./scripts/check green three consecutive runs.
 Base: da8df27, green (1235 passed).
 Standing constraints: one foreground sub-agent per unit, commit and push
