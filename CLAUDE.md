@@ -18,7 +18,7 @@ Conventions:
 - Never run a background task (`run_in_background`, `nohup`, `setsid`,
   `disown`, a trailing `&`): the harness reaps them, so run it in the
   foreground with a timeout — `.claude/hooks/no_background.py` refuses the
-  rest.
+  rest. Sub-agents run in the foreground, never in the background.
 - meta/ is the builder's state (checkpoint, plan, journal, findings,
   reports). Sub-agents do not edit meta/plan.md or meta/CHECKPOINT.md.
 - DESIGN.md is not edited by builders; file a finding.

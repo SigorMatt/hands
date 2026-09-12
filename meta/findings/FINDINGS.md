@@ -633,3 +633,70 @@ refused by the client before it connects (exit 2, one line), and the answer
 carries `truncated` whenever the 1000-entry cap or `TAIL_WINDOW_BYTES` cut it
 short — including the case where the window holds only a fragment of one entry
 and the answer is empty. `tail_entries` returns the flag with the entries.
+
+---
+
+## H-014 — a harness termination of a role job is recorded as `done`
+
+Severity: high · Component: DESIGN §2, §6 against `src/hands/runner.py`
+(`_final_state`) and the role environment
+Filed by: mission 7a, U0, from the record of job `0mtygi953-ym63`.
+
+Symptom. Job `0mtygi953-ym63` (`~/.hands/jobs/0mtygi953-ym63.json`) is
+mission 6's builder kickoff: role `builder`, origin `cli`, prompt `Read
+meta/BUILDER-6-PROMPT.md and execute the mission below its divider.`, started
+`2026-09-12T14:04:33.360Z`, ended `2026-09-12T15:48:02.748Z`. Its record says
+`state done`, `exit_code 0`, `num_turns 59`, `verdict null`, and a `result`
+that is a mid-mission progress note, not a report: "U0–U5 are committed and
+pushed; the U5 follow-up (the argv prompt route's UTF-8 refusal) is running
+now. I'll continue with U6 and U7 when it reports back." Its `stderr_tail` is
+the one line that says what happened:
+
+    Background tasks still running after 600s; terminating. Set
+    CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS=0 to wait indefinitely.
+
+The session transcript (`2fb3baa0-80cf-44cf-8ca1-6f25d8f1c941.jsonl`) shows the
+cause. All five `Agent` calls pass `run_in_background: false`, and no tool call
+anywhere in it asks for background execution. At `15:37:38Z` the builder
+continued the finished U5 sub-agent with `SendMessage` ("Resuming agent
+ac9f10b"), which runs that sub-agent in the background; at `15:38:01Z` it ended
+its turn with the note above. `claude -p` stays open while a background task
+runs, up to its idle ceiling (§2: 10 minutes,
+`CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS`), and at `15:48:02Z` — 600 s later — the
+harness terminated the process and exited 0. hands saw exit 0 and a final
+result event, and `_final_state` answered `done`.
+
+Consequences. A mission that stopped at U5 of 8 is recorded as a clean finish.
+With a playbook loaded, `builder.done` with no verdict stops the pipeline (§10:
+a missing `VERDICT:` line is always `stop`), so the human is called, but for
+the wrong reason, and a `builder.failed → resume` rule never gets its event.
+Nothing but the stderr line distinguishes this record from a finished turn: the
+three checks the architect names below catch it only through that line, since
+this job did produce a final result with `num_turns`. (The installed build is
+mission 2's, which does not keep the stream file, so the result event's
+`subtype` is not on disk for this job.)
+
+Direction. Decided by the architect in DESIGN v3.6 §23 and
+`meta/BUILDER-7-PROMPT.md`; recorded here as the decision.
+
+**Decision, 2026-09-12 (DESIGN v3.6 §2, §6, §23; recorded by mission 7a U0).**
+A harness termination of a role job is `failed`, not `done`. The runner
+classifies a job as `failed` when the process ends without a final `result`
+event of subtype `success` or `error`, or when stderr carries the harness's
+`terminating` line, or when `num_turns` is absent; `stderr_tail` and a new
+`failure_reason` field say which. The runner sets
+`CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS=0` in the role environment unless the
+config sets it (a new `[roles.<r>] env` table), and `hands doctor` reports the
+effective value per role. The `.claude/hooks/no_background.py` hook covers
+the sub-agent tool as well as Bash, and root `CLAUDE.md` says sub-agents run in
+the foreground. Closed on disk by mission 7a U1 (the runner, the env, doctor)
+and U2 (the hook).
+
+Not covered by the decision as written, for the architect: the background task
+in this job came from `SendMessage` continuing a finished sub-agent, not from a
+tool input asking for background execution, so a hook that refuses only
+background-asking inputs would not have refused it. With the ceiling at 0 the
+process waits instead of being terminated; what the turn does when that
+sub-agent reports back inside `-p` is not observed.
+
+Status: decided (DESIGN v3.6 §23); fixing (mission 7a U1, U2)

@@ -113,6 +113,6 @@ The core is built and tested against the stand-ins. **No real `claude` has ever
 run under hands**, no real `watch_monitor.sh` has been driven, and no ntfy
 request has left the machine (`hands notify --test` is the command that
 changes that, and it has not been run here); `docs/INTEGRATION.md` ends with the full list of
-what is unproven. Whether a finished background task wakes an idle interactive
-Claude Code session (DESIGN §11, §16) is still an open question — `hands
-doctor` prints the procedure that answers it.
+what is unproven. Nothing wakes an idle driver session but the human's `check`,
+by decision (DESIGN §11), and `hands doctor` prints the notification check
+above, which proves a `stop` or a `held` job reaches the phone.

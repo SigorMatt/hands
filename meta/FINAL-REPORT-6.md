@@ -158,6 +158,20 @@ commits' tests are red at their parents.
   inside the wire measurement as `hands: 'utf-8' codec can't encode
   characters…` with exit 1 — review 5 blocker 1's shape, one field over.
 
+**Correction, 2026-09-12 (mission 7a U0; REVIEW-6 blocker 2).** Item 7's first
+sentence is a totality claim the disk contradicts: `_utf8_bytes` is the one
+place a string a **request** carries is refused for not being UTF-8, not the
+one place a string a human hands the client is. `hands notify --test` is a
+second site: it is client-side (`cli._notify` → `notify.send_test`), never
+reaches `call()`, and so never passes the request-wide check. The reviewer's
+reproduction at `dca0820`, `PYTHONUTF8=1`, `hands --project revprobe notify
+--test $'hi\xff'`, exits **1** with `hands: http://127.0.0.1:1/rev-probe-topic
+did not take the message: UnicodeEncodeError: 'utf-8' codec can't encode
+character '\udcff' …` — a codec message that blames the ntfy URL for a
+client-side encoding fault, the shape REVIEW-5 should-fix 7 objected to. The
+commit title (`every string a request carries`) is the true scope. The report
+is a snapshot and is not rewritten (DESIGN §20); this line is the correction.
+
 **U6 — `56bef53` `docs: the driver arms no background wait; doctor checks the
 doorbell instead`, then `3dd3403` `docs: the sentences outside the grep that
 still said the driver waits`.** Not a REVIEW-5 item: the
