@@ -35,7 +35,7 @@ import sys
 from collections import deque
 from collections.abc import Sequence
 from pathlib import Path
-from typing import Any, TextIO
+from typing import Any
 
 from hands import __version__
 from hands.api import Api, ApiError, job_summary
@@ -99,7 +99,7 @@ class Daemon:
         self.config = config
         # The spool lives beside the config: `~/.hands/<project>.toml` → `~/.hands`.
         self.spool = Spool(config.path.parent)
-        self.runner = Runner(config, self.spool, on_stream_line=self._capture)
+        self.runner = Runner(config, self.spool)
         #: §6's limits: it is handed every terminal job and schedules the resume.
         #: Its `sleep` and `clock` are attributes so a test never waits one out.
         self.limits = LimitManager(
@@ -145,7 +145,6 @@ class Daemon:
         self.pending_cancels: dict[str, dict[str, Any]] = {}
         self._workers: list[asyncio.Task[None]] = []
         self._conns: set[asyncio.Task[None]] = set()
-        self._streams: dict[str, TextIO] = {}
         self._changed = asyncio.Condition()
         self._server: asyncio.Server | None = None
         self._stopping = False
@@ -248,11 +247,6 @@ class Daemon:
         await self.monitors.stop_all()
 
         await self._close_conns()
-
-        for stream in self._streams.values():
-            with contextlib.suppress(Exception):
-                stream.close()
-        self._streams.clear()
 
         # Anything ntfy has not taken by now goes down with the daemon (§11): a
         # notification is a message to a human, not a durable queue.
@@ -392,8 +386,6 @@ class Daemon:
             return
         self._running[role] = job_id
         await self._announce()
-        stream = (self.spool.jobs_dir / f"{job_id}.stream.jsonl").open("a", encoding="utf-8")
-        self._streams[job_id] = stream
         # §5: "hands starts those with every builder job automatically". The
         # supervisor decides which roles are watched; the queue just says "this
         # one is running now".
@@ -427,9 +419,6 @@ class Daemon:
         finally:
             with contextlib.suppress(Exception):
                 await self.monitors.stop(job_id)  # §5: the watch ends with the job
-            self._streams.pop(job_id, None)
-            with contextlib.suppress(Exception):
-                stream.close()
             self._running[role] = None
             await self._announce()
 
@@ -457,17 +446,6 @@ class Daemon:
     def _monitor_event(self, kind: str, payload: dict[str, Any]) -> None:
         """§5's watch speaks to §10: `monitor.stall` and `monitor.tripwire` are events."""
         self.playbook.dispatch(kind, payload=payload)
-
-    def _capture(self, job_id: str, line: str) -> None:
-        """Persist one captured stdout line so `hands log` (U9) has something to read."""
-        stream = self._streams.get(job_id)
-        if stream is None:  # pragma: no cover - the job is not ours
-            return
-        try:
-            stream.write(line + "\n")
-            stream.flush()
-        except OSError as exc:  # pragma: no cover - a full disk must not kill the job
-            log.warning("job %s: cannot write its stream: %s", job_id, exc)
 
     # ------------------------------------------------------------ job waiting
 

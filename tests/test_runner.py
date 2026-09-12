@@ -7,8 +7,10 @@ no test needs the real binary.
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import subprocess
+import time
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -501,3 +503,85 @@ def test_is_running_tracks_the_process(runner: Runner, spool: Spool) -> None:
         assert not runner.is_running(job.id)
 
     asyncio.run(scenario())
+
+
+# ------------------------------------------------- the stream is a file (§21)
+
+#: The gate of DESIGN §21: a transcript far larger than any real mission.
+HUGE = 200_000
+
+
+def test_the_stream_is_written_to_the_job_log_file_as_it_arrives(
+    runner: Runner, spool: Spool
+) -> None:
+    """§7's captured stream is a file the runner appends to, line by line."""
+    job = send(runner, spool, "FAKE:junk not json\nFAKE:result written")
+
+    path = spool.stream_path(job.id)
+    lines = path.read_text(encoding="utf-8").splitlines()
+    kinds = [json.loads(line).get("type") for line in lines if line.startswith("{")]
+    assert kinds == ["system", "result"]
+    # Verbatim, including a line that is not an event at all (§7).
+    assert lines.count("not json") == 1
+
+
+def test_a_huge_stream_is_never_retained_by_the_runner(runner: Runner, spool: Spool) -> None:
+    """§21: 200 000 events on disk, and nothing per-event in the runner.
+
+    The design's claim is about resident size, but RSS is a property of the
+    machine, not of the code: what is asserted here is the *length* of every
+    structure the runner keeps. Each is one-per-job or empty while a job with
+    200 000 events in its log is running, so none of them can grow with a
+    transcript. The counts are read mid-run, which is where the 959 MB of §21
+    was observed — not after the process is gone.
+    """
+
+    async def scenario() -> Job:
+        job = spool.create_job(
+            role="builder",
+            context="clear",
+            prompt=f"FAKE:events {HUGE}\nFAKE:block",
+            origin="cli",
+        )
+        task = asyncio.create_task(runner.run(job))
+        await runner.wait_for_session(job.id, timeout=60)
+        path = spool.stream_path(job.id)
+        deadline = time.monotonic() + 120
+        while path.read_bytes().count(b"\n") <= HUGE:  # init + HUGE events
+            assert time.monotonic() < deadline, "the stream never reached the whole run"
+            await asyncio.sleep(0.02)
+        assert runner.retained() == {
+            "cancelled": 0,
+            "last_argv": 1,
+            "logs": 1,
+            "procs": 1,
+            "running": 1,
+            "session_ready": 1,
+        }
+        await runner.cancel(job.id)
+        return await task
+
+    job = asyncio.run(scenario())
+
+    assert job.state == "killed"
+    # Everything per-job is released with the job; `last_argv` is `hands status`'.
+    assert runner.retained() == {
+        "cancelled": 0,
+        "last_argv": 1,
+        "logs": 0,
+        "procs": 0,
+        "running": 0,
+        "session_ready": 0,
+    }
+    assert spool.stream_path(job.id).read_bytes().count(b"\n") > HUGE
+
+
+def test_the_final_result_is_the_only_event_kept_after_a_huge_run(
+    runner: Runner, spool: Spool
+) -> None:
+    """§21's other half: of 200 000 events, the record keeps the last one's text."""
+    job = send(runner, spool, f"FAKE:events {HUGE}\nFAKE:result the last word")
+
+    assert job.state == "done"
+    assert job.result == "the last word"
+    assert spool.stream_path(job.id).read_bytes().count(b"\n") == HUGE + 2

@@ -15,6 +15,7 @@ backslash, so a multi-line result fits on one line of a test:
     FAKE:cat <path>        result is that file's content, or MISSING:<path>
     FAKE:stderr <text>     write this to stderr before anything else
     FAKE:junk <text>       emit this as a raw, non-JSON stdout line
+    FAKE:events <n>        emit n small `assistant` events after the init event
     FAKE:sleep <seconds>   sleep this long after the init event
     FAKE:block             block until SIGINT (exit 130) or SIGTERM (exit 143)
     FAKE:ignore-int        with FAKE:block, ignore SIGINT so only SIGTERM ends it
@@ -89,6 +90,24 @@ def parse_directives(prompt: str) -> dict[str, list[str]]:
 
 def emit(event: dict[str, object]) -> None:
     sys.stdout.write(json.dumps(event) + "\n")
+    sys.stdout.flush()
+
+
+def emit_many(count: int, session_id: str) -> None:
+    """`FAKE:events <n>`: n minimal `assistant` events, as cheaply as possible.
+
+    The memory gate of DESIGN §21 needs a transcript of 200 000 events and the
+    suite has to stay fast, so these are built by string concatenation from one
+    prefix rather than by `json.dumps` per event, and flushed once at the end.
+    They are still well-formed stream-json lines carrying the session id, which
+    is all the runner reads from an event it has no rule for.
+    """
+    if count <= 0:
+        return
+    prefix = '{"type":"assistant","session_id":"' + session_id + '","n":'
+    write = sys.stdout.write
+    for n in range(count):
+        write(prefix + str(n) + "}\n")
     sys.stdout.flush()
 
 
@@ -217,6 +236,8 @@ def main(argv: list[str]) -> int:
     for text in directives.get("junk", []):
         sys.stdout.write(text + "\n")
         sys.stdout.flush()
+
+    emit_many(int(one("events", "0") or 0), session_id)
 
     if "sleep" in directives:
         time.sleep(float(one("sleep", "0") or 0))

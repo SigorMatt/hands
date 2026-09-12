@@ -535,3 +535,42 @@ spell the wire measurement into §4, or raise the line room to six times the
 cap and let the daemon refuse the escaped monsters itself.
 
 Status: open (design wording; the behaviour is implemented and tested at U4)
+
+---
+
+## H-013 — `hands log <job>` still answers a whole transcript in one message
+
+Severity: low · Component: DESIGN §7 (`log` row) and §21 (daemon memory)
+against `src/hands/api.py` (`Api.log`, `_read_from`) and `src/hands/cli.py`
+(`_follow`)
+Filed by: mission 5, U6 (daemon memory), while implementing §21's
+"the daemon's resident size must not grow with a job's transcript".
+
+Symptom. U6 makes the *running* half of §21 true: the runner writes each
+stream-json line to `~/.hands/jobs/<job>.stream.jsonl` as it arrives and keeps
+nothing per event, and `tail` reads a bounded window from the end of the
+transcript instead of the whole file. One reader is still unbounded.
+`Api.log(job=…)` with the default `offset = 0` reads the entire stream file,
+splits it into a list of lines and returns all of them in one JSON-RPC
+response: for a 60-turn mission that is the transcript in the daemon's heap,
+again on the client's, and in one line on the socket. `hands log -f` does not
+have the problem after its first request — it pages by `offset` — but its
+first request is `offset = 0` too.
+
+Why U6 did not close it. Bounding it means capping the bytes one `log` answer
+carries, and that changes what `hands log <job>` *is*: today one call returns
+the whole captured stream, and driver/CLAUDE.md tells the driver to read a job
+that way. Capping it silently truncates that answer unless the caller pages,
+and §7 describes no paging contract for `log` (the `offset` field is an
+implementation detail of `-f`, not something §7 names). That is a spec
+decision, not a builder's.
+
+What the architect may want to say. Either (a) §7 gains a paging contract for
+`log` — one answer is at most N bytes of complete lines plus the `offset` to
+continue from, and the CLI loops for the non-`--json` route so a human still
+sees the whole stream — or (b) §7 states that `log` is deliberately unbounded
+and §21's claim is about a job *running*, not about a human asking for its
+transcript. The measurable difference is one `hands log` of a 60-turn job.
+
+Status: open (design decision; the running-job half of §21 is implemented and
+tested at U6)

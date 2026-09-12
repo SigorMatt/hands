@@ -18,6 +18,7 @@ from typing import Any
 import pytest
 
 from conftest import strip_paths
+from hands.api import MAX_TAIL_ENTRIES, TAIL_WINDOW_BYTES, tail_entries
 from hands.cli import main
 from hands.daemon import Daemon
 from harness import BLOCK, PROJECT, cli, config_body, drive, fails, ok, poll, running_job
@@ -311,6 +312,60 @@ def test_tail_reads_the_transcript_claude_code_wrote(project: str) -> None:
         assert [json.loads(line)["n"] for line in record["entries"]] == [3, 4]
 
     drive(body)
+
+
+def test_tail_reads_only_the_end_of_a_transcript(project: str) -> None:
+    """§21: `tail` holds a window over the end of the file, never the file.
+
+    The transcript here is bigger than the window, so a whole-file read would
+    return the first entry as easily as the last. Only the last ones come back,
+    and the read is bounded by `TAIL_WINDOW_BYTES` however long the file gets.
+    """
+
+    async def body(daemon: Daemon) -> None:
+        done = await run("--role", "builder", "--context", "clear", "FAKE:result big")
+        transcript = Path(done["transcript_path"])
+        transcript.parent.mkdir(parents=True, exist_ok=True)
+        pad = "x" * 1000
+        with transcript.open("w", encoding="utf-8") as handle:
+            for n in range(10_000):  # ~10 MB, more than the window
+                handle.write(json.dumps({"type": "user", "n": n, "pad": pad}) + "\n")
+        assert transcript.stat().st_size > TAIL_WINDOW_BYTES
+
+        record = await ok("tail", "--role", "builder", "-n", "3")
+        assert [json.loads(line)["n"] for line in record["entries"]] == [9997, 9998, 9999]
+
+    drive(body)
+
+
+def test_tail_returns_at_most_the_entry_cap(project: str) -> None:
+    """`-n` is bounded: `tail` is a peek, and the daemon answers it from memory."""
+
+    async def body(daemon: Daemon) -> None:
+        done = await run("--role", "builder", "--context", "clear", "FAKE:result capped")
+        transcript = Path(done["transcript_path"])
+        transcript.parent.mkdir(parents=True, exist_ok=True)
+        transcript.write_text(
+            "".join(json.dumps({"n": n}) + "\n" for n in range(MAX_TAIL_ENTRIES + 500))
+        )
+        record = await ok("tail", "--role", "builder", "-n", str(MAX_TAIL_ENTRIES + 400))
+        assert len(record["entries"]) == MAX_TAIL_ENTRIES
+        assert json.loads(record["entries"][-1])["n"] == MAX_TAIL_ENTRIES + 499
+        # n = 0 asks for "everything"; it gets the cap, not the file.
+        every = await ok("tail", "--role", "builder", "-n", "0")
+        assert len(every["entries"]) == MAX_TAIL_ENTRIES
+
+    drive(body)
+
+
+def test_tail_of_a_transcript_of_one_huge_entry_is_still_bounded(tmp_path: Path) -> None:
+    """A single entry wider than the window is not read whole (§21)."""
+    path = tmp_path / "t.jsonl"
+    with path.open("w", encoding="utf-8") as handle:
+        handle.write("a" * (TAIL_WINDOW_BYTES * 2) + "\n")
+        handle.write("last\n")
+
+    assert tail_entries(path, 5) == ["last"], "the window ends at the last complete lines"
 
 
 def test_tail_says_plainly_when_there_is_no_transcript_file(project: str) -> None:

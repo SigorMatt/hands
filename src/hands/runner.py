@@ -1,7 +1,9 @@
 """The runner — one `claude -p` process per job (DESIGN §2, §6).
 
 This module owns exactly one job at a time: spawn it, parse its stream-json,
-fill the record of §6, move it to a terminal state, and cancel it on request.
+write that stream to the job's log file as it arrives (§7, §21 — it is never
+collected in memory), fill the record of §6, move it to a terminal state, and
+cancel it on request.
 Queueing, the one-running-job-per-role rule and everything else about *which*
 job runs next belong to the daemon (§3), which drives this as a library.
 
@@ -19,14 +21,15 @@ All six flags were checked against the installed binary (claude 2.1.268,
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
+import logging
 import os
 import re
 import signal
-from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, TextIO
 
 from hands.config import Config, RoleConfig
 from hands.limits import is_limit_notice, parse_reset_at, to_iso
@@ -43,6 +46,9 @@ __all__ = [
     "reconcile_orphans",
     "transcript_path_for",
 ]
+
+
+log = logging.getLogger("hands.runner")
 
 
 class RunnerError(Exception):
@@ -208,25 +214,39 @@ class Runner:
     `cancel()` is safe to call from another task while `run()` is in flight.
     """
 
-    def __init__(
-        self,
-        config: Config,
-        spool: Spool,
-        *,
-        on_stream_line: Callable[[str, str], None] | None = None,
-    ) -> None:
+    def __init__(self, config: Config, spool: Spool) -> None:
         self.config = config
         self.spool = spool
-        #: Called with (job id, line) for every stdout line of a run, before it is
-        #: parsed and whether or not it parses. The daemon (§3) uses it to keep
-        #: the captured stream `hands log` reads; nothing here depends on it.
-        self.on_stream_line = on_stream_line
         self._procs: dict[str, asyncio.subprocess.Process] = {}
         self._cancelled: set[str] = set()
         self._running: dict[str, asyncio.Event] = {}
         self._session_ready: dict[str, asyncio.Event] = {}
+        #: job id → the open append handle of its stream log, for the length of
+        #: the run and no longer (§21). Every structure on this object is keyed by
+        #: job, never by event: the stream-json goes to the file as it arrives and
+        #: is not collected anywhere, so a 60-turn transcript costs the daemon the
+        #: same resident bytes as a one-turn one. `retained()` states that as a
+        #: number a test can assert on.
+        self._logs: dict[str, TextIO] = {}
         #: job id → the argv it was spawned with, for `hands status`/tests.
         self.last_argv: dict[str, list[str]] = {}
+
+    def retained(self) -> dict[str, int]:
+        """How many items this runner is still holding, by structure (§21).
+
+        §21 forbids the daemon's resident size growing with a job's transcript.
+        RSS is a property of the machine and cannot be asserted; the length of
+        what is held is a property of the code and can be. Nothing counted here
+        is per-event, so every count is bounded by the number of jobs in flight.
+        """
+        return {
+            "cancelled": len(self._cancelled),
+            "last_argv": len(self.last_argv),
+            "logs": len(self._logs),
+            "procs": len(self._procs),
+            "running": len(self._running),
+            "session_ready": len(self._session_ready),
+        }
 
     # ------------------------------------------------------------ sessions
 
@@ -315,6 +335,7 @@ class Runner:
 
         parsed = _Parsed()
         stderr_lines: list[str] = []
+        self._open_log(job.id)
         try:
             await asyncio.gather(
                 self._write_prompt(proc, job.prompt),
@@ -323,6 +344,7 @@ class Runner:
             )
             exit_code = await proc.wait()
         finally:
+            self._close_log(job.id)
             self._procs.pop(job.id, None)
             self._running.pop(job.id, None)
             self._session_ready.pop(job.id, None)
@@ -364,6 +386,36 @@ class Runner:
             except (BrokenPipeError, ConnectionResetError):  # pragma: no cover
                 pass
 
+    def _open_log(self, job_id: str) -> None:
+        """Open the job's stream log for the run (§7, §21)."""
+        try:
+            self._logs[job_id] = self.spool.stream_path(job_id).open("a", encoding="utf-8")
+        except (OSError, SpoolError) as exc:  # pragma: no cover - unwritable spool
+            log.warning("job %s: cannot open its stream log: %s", job_id, exc)
+
+    def _close_log(self, job_id: str) -> None:
+        handle = self._logs.pop(job_id, None)
+        if handle is not None:
+            with contextlib.suppress(Exception):
+                handle.close()
+
+    def _write_log(self, job_id: str, line: str) -> None:
+        """Append one captured line, flushed so `hands log -f` sees it (§7, §21).
+
+        A write that fails closes the log for the rest of the run: a full disk
+        must not kill the job, and must not put one warning per event in the
+        daemon's log either.
+        """
+        handle = self._logs.get(job_id)
+        if handle is None:
+            return
+        try:
+            handle.write(line + "\n")
+            handle.flush()
+        except OSError as exc:  # pragma: no cover - a full disk must not kill the job
+            log.warning("job %s: cannot write its stream, dropping the rest: %s", job_id, exc)
+            self._close_log(job_id)
+
     async def _read_stdout(
         self, proc: asyncio.subprocess.Process, job: Job, role: RoleConfig, parsed: _Parsed
     ) -> None:
@@ -374,8 +426,8 @@ class Runner:
             line = raw.decode("utf-8", errors="replace").rstrip("\n")
             if not line.strip():
                 continue
-            if self.on_stream_line is not None:
-                self.on_stream_line(job.id, line)
+            # §21: written as it arrives, and then only the line at hand is held.
+            self._write_log(job.id, line)
             line = line.strip()
             try:
                 event = json.loads(line)

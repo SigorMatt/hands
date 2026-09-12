@@ -407,6 +407,16 @@ class Spool:
             raise SpoolError(f"bad job id {job_id!r}")
         return self.jobs_dir / f"{job_id}.json"
 
+    def stream_path(self, job_id: str) -> Path:
+        """`~/.hands/jobs/<job>.stream.jsonl` — the captured stream-json of §7.
+
+        The runner appends to this file as each event arrives and never keeps the
+        events (§21); `hands log <job>` and `hands log -f` read it back. It is
+        the one spool file hands does not write through `_append_line`: an fsync
+        per stream-json line would cost a disk write per token.
+        """
+        return self.job_path(job_id).with_name(f"{job_id}.stream.jsonl")
+
     def create_job(
         self,
         *,

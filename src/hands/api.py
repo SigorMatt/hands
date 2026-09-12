@@ -35,7 +35,29 @@ from hands.spool import ORIGINS, TERMINAL_STATES, Event, Job, SpoolError, resolv
 if TYPE_CHECKING:  # pragma: no cover - import cycle only matters to type checkers
     from hands.daemon import Daemon
 
-__all__ = ["Api", "ApiError", "Timeout", "job_summary"]
+__all__ = [
+    "MAX_TAIL_ENTRIES",
+    "TAIL_WINDOW_BYTES",
+    "Api",
+    "ApiError",
+    "Timeout",
+    "job_summary",
+    "tail_entries",
+]
+
+#: §21: `tail` must not read a whole transcript into the daemon. A 60-turn
+#: mission's transcript ran to hundreds of megabytes, and every `hands tail`
+#: poll used to copy all of it; these two bounds are what the daemon holds
+#: instead, whatever the file grows to. 4 MiB is the window read back from the
+#: end of the file — comfortably more than a thousand ordinary entries, so the
+#: answer to `-n 20` is unchanged — and 1000 is the most entries any one answer
+#: carries, because `tail` is a peek at the end of a session and a caller that
+#: wants the session reads the transcript itself (§7: it is Claude Code's file).
+TAIL_WINDOW_BYTES = 4 * 1024 * 1024
+MAX_TAIL_ENTRIES = 1000
+#: How much of the window is read per seek. The file is being read backwards,
+#: so it is read in blocks and joined once, never re-copied per block.
+_TAIL_CHUNK = 64 * 1024
 
 # JSON-RPC 2.0 reserves -32768..-32000 for the protocol; -32000..-32099 is the
 # implementation-defined server-error range, which is where these live.
@@ -322,7 +344,7 @@ class Api:
         if role is not None and job:
             raise ApiError(f"hands log takes a job id or -f <role>, not both (got {job!r})")
         record = self._role_job(role) if role is not None else self._log_job(job)
-        path = self.spool.jobs_dir / f"{record.id}.stream.jsonl"
+        path = self.spool.stream_path(record.id)
         lines, end = _read_from(path, offset)
         return {
             "job": record.id,
@@ -368,6 +390,10 @@ class Api:
         files under `~/.claude/projects/`; hands stores their paths"), so the
         lines come back verbatim and unparsed — hands does not own that format
         and will not pretend to.
+
+        Only the end of it is read: `n` is capped at `MAX_TAIL_ENTRIES` and the
+        read at `TAIL_WINDOW_BYTES` from the end, so the daemon's resident size
+        does not grow with the transcript (§21).
         """
         if role not in self.config.roles:
             known = ", ".join(sorted(self.config.roles))
@@ -380,21 +406,20 @@ class Api:
             )
         path = Path(record.transcript_path).expanduser()
         try:
-            text = path.read_text(encoding="utf-8", errors="replace")
+            entries = tail_entries(path, n)
         except OSError as exc:
             raise ApiError(
                 f"cannot read the transcript of job {record.id} at {path}: {exc}. "
                 "Claude Code writes that file, not hands, and only for a session "
                 "that really ran on this machine"
             ) from exc
-        entries = [line for line in text.splitlines() if line.strip()]
         return {
             "role": role,
             "job": record.id,
             "state": record.state,
             "session_id": record.session_id,
             "path": str(path),
-            "entries": entries[-n:] if n else entries,
+            "entries": entries,
         }
 
     # ---------------------------------------------------------------- cancel
@@ -728,6 +753,38 @@ def _since_cutoff(since: str | None) -> str | None:
         f"--since {since!r} is not a time hands can read; give an age (30s, 30m, "
         "6h, 2d, 1w) or a date (2026-09-01)"
     )
+
+
+def tail_entries(path: Path, n: int) -> list[str]:
+    """The last `n` non-empty lines of `path`, read from the end (§4, §21).
+
+    Bounded twice over: at most `MAX_TAIL_ENTRIES` lines come back, and at most
+    `TAIL_WINDOW_BYTES` are ever read, from the end of the file backwards in
+    chunks. The whole-file read this replaces put a mission's entire transcript
+    in the daemon's heap on every poll. A first line that is cut by the window is
+    dropped rather than returned half — an entry is a JSON object, and half of
+    one is not one — so a file whose entries are wider than the window answers
+    with fewer than `n` of them.
+    """
+    want = MAX_TAIL_ENTRIES if n <= 0 else min(int(n), MAX_TAIL_ENTRIES)
+    chunks: list[bytes] = []
+    read = newlines = 0
+    with path.open("rb") as handle:
+        start = handle.seek(0, os.SEEK_END)
+        while start > 0 and read < TAIL_WINDOW_BYTES and newlines <= want:
+            step = min(_TAIL_CHUNK, start, TAIL_WINDOW_BYTES - read)
+            start -= step
+            handle.seek(start)
+            block = handle.read(step)
+            chunks.append(block)
+            read += len(block)
+            newlines += block.count(b"\n")
+    raw = b"".join(reversed(chunks))
+    if start > 0:
+        # The first line in the window began before it: it is a fragment.
+        raw = raw[raw.find(b"\n") + 1 :] if b"\n" in raw else b""
+    lines = [line for line in raw.decode("utf-8", errors="replace").splitlines() if line.strip()]
+    return lines[-want:]
 
 
 def _read_from(path: Path, offset: int) -> tuple[list[str], int]:
