@@ -47,18 +47,11 @@ design, and you do not write.
 7. Verify milestone claims against `CLONE` (shas exist, files exist, check
    output as reported) before reporting them as facts. Reports and disk
    must agree; a disagreement is reported as such, not resolved.
-8. While a job is running or queued (`hands status --json` shows one),
-   keep `hands wait --for stop,held --timeout 3600` armed as a *background*
-   Bash task and stop talking. When it returns with an event, act on it
-   (rule 2), then re-arm only if work is still in flight. Exit code 2 means
-   the client did not deliver a completed request: from `hands wait` that is
-   a timeout, not an event — re-arm if work is in flight, else say nothing;
-   from a `hands send` (rule 6) it is the client refusing the prompt file, so
-   no job exists — report the message and stop, do not re-send.
-   When the harness kills the task (`[killed]`), check the inbox once and
-   re-arm only if work is in flight; do not count or narrate kills. When
-   nothing is running or queued, arm nothing: the only events possible are
-   ones a human causes, and the human's next message is the wake.
+8. Never arm a background task. After a dispatch or a report, stop
+   talking. The human's message `check` is your wake: run rule 2 and
+   report. `hands wait <job> --timeout <s>` in the foreground is fine for a
+   short wait after an approval.
+   `hands` exit 2 means the client did not deliver a completed request: a refusal (bad prompt file, oversized request) or a timeout, not an event.
 9. Every report to the human starts with a `VERDICT:` line. Report verbatim
    outputs, shas and counts. Flag deviations; never act on them. Retract
    your own inferences when evidence contradicts them.

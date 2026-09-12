@@ -1,12 +1,12 @@
-# hands — DESIGN v3.4
+# hands — DESIGN v3.5
 
 Machinery that replaces the human relay between the planning brain and the two
 Claude Code roles (builder, aux) on the Ubuntu laptop, and that keeps a series
 moving without a human while everything goes by plan. Working name: `hands`.
 The method it serves is described in WORKING-MODEL.md (agile-skills) and
 OPERATING-MODEL.md (spanweave); hands changes the topology, not the method.
-v3.4 (2026-09-12) folds in the mission 4 review; changes are in §21;
-earlier changes in §20, §19, §18, §17.
+v3.5 (2026-09-12) folds in the mission 5 review and retires the driver's
+background wait; changes are in §22; earlier changes in §21–§17.
 
 Status: proposal, 2026-09-10. Items marked DECIDED were settled in discussion.
 
@@ -153,14 +153,14 @@ JSON with `--json` (the driver uses that) or a readable form for you.
 
 | Command | Args | Returns |
 |---|---|---|
-| `send` | `--role builder\|aux --context clear\|keep [--file path=content…] [--gate reason] [--prompt-file path\|--stdin\|prompt]` | job id, state. `--prompt-file` is the normal route for prose: the prompt never touches a command line; the client refuses a missing, unreadable, non-regular, empty or over-10 MB file on either route (`--prompt-file` or `--stdin`), and the wire carries UTF-8 unescaped so the daemon's line room (cap plus one quarter) fits any accepted prompt; exit 2 means "the client did not deliver a completed request" (a refusal or a timeout) |
+| `send` | `--role builder\|aux --context clear\|keep [--file path=content…] [--gate reason] [--prompt-file path\|--stdin\|prompt]` | job id, state. `--prompt-file` is the normal route for prose: the prompt never touches a command line; the client refuses a missing, unreadable, non-regular, empty or over-10 MB file on either route (`--prompt-file` or `--stdin`); the client then measures the **whole request** as it will go on the wire (prompt, `--file` payloads, gate, envelope) and refuses before connecting if it exceeds the daemon's line room, so a request never fails inside the socket (H-012); exit 2 means "the client did not deliver a completed request" (a refusal or a timeout) |
 | `wait` | `<job>\|--for event-kind [--timeout s]` | job record when terminal / the event; used by the driver in the background (§11) |
 | `result` | `<job>` | job record |
 | `jobs` | `[--role r] [--origin o] [--grep pat] [--since d] [-n]` | recent job summaries |
-| `show` / `open` / `log` | `<job>` / `<job>` / `<job>\|-f <role>` | record / `claude --resume` (refused while running) / captured stream |
+| `show` / `open` / `log` | `<job>` / `<job>` / `<job>\|-f <role>` | record / `claude --resume` (refused while running) / captured stream, delivered in pages so a whole transcript is never one message (H-013) |
 | `cancel` | `<job> --reason` | held for human unless `role.cancel_gated: false` |
 | `put` / `get` / `ls` | path, content or `--from file` / path / path | sha256 and bytes / content / entries — confined to allowed roots |
-| `tail` | `--role r -n` | last n transcript entries of the role's current or last session |
+| `tail` | `--role r -n` (n ≥ 1; capped at 1000) | last n transcript entries of the role's current or last session; `truncated: true` when the cap or the read window cut the answer short |
 | `inbox` | `[--ack]` | unread events, verbatim (§11) |
 | `pipeline` | — | active playbook (path, sha256, series), paused?, auto-runs used/allowed, resumes used, last rule fired, current stop reason |
 | `approve` / `deny` | `<job> [--reason]` | per §8; from the driver only with `--human-confirmed` |
@@ -469,9 +469,13 @@ Observed 2026-09-12 on Claude Code 2.1.268: the harness kills idle
 background tasks intermittently (a control `sleep 3600` died alongside the
 wait, with 70% of memory free; the "low memory" text it prints does not
 describe the machine). Each kill wakes the session for one recovery turn.
-So the wait is armed only while a job is running or queued; when the
-pipeline is idle or stopped, nothing is armed and the human's next message,
-prompted by the ntfy notification, is the wake.
+Narrowing the wait to in-flight work still cost a driver turn every few
+minutes during a mission (the reaper fires regardless), and a turn is the
+only thing in hands that costs tokens. So the driver arms no background
+wait at all. ntfy is the human's doorbell; the human's `check` is the
+driver's; `hands wait <job>` remains a foreground tool for short waits
+(after an approval). The wake-path question is answered: it works, and it
+is not worth its price on Claude Code 2.1.x.
 if background completion does not wake an idle session on your Claude Code
 version, the fallback is a `hands wait` with a long timeout re-issued by the
 driver, or you opening the Code tab after the ntfy notification.
@@ -510,12 +514,30 @@ playbook path):
      on writing a prompt file yourself; if a prompt needs to be a file and
      is not one, say so and stop.
   7. Verify milestone claims against the remote before reporting them.
-  8. After every dispatch or report, re-arm `hands wait --for stop,held` in
-     the background and stop talking.
+  8. Never arm a background task. After a dispatch or a report, stop
+     talking. The human's message `check` is your wake: run rule 2 and
+     report. `hands wait <job> --timeout <s>` in the foreground is fine for
+     a short wait after an approval.
   9. Reports to the human start with a `VERDICT:` line; deviations are
      flagged, not acted on; retract on contradicting evidence.
   10. Design changes, new batches, playbook edits and decisions files are not
       yours to write; say "this is for the architect" and stop.
+- The Bash guard treats git as an allowlist of options per subcommand:
+  each allowed subcommand carries the exact options the driver needs
+  (`log`: `--oneline`, `-n`, `--grep=`, `--format=`, `--stat`,
+  `--name-status`, revisions and paths; `show`: `--stat`, `--name-status`,
+  `rev:path`; `fetch`: `-q`, a remote name; `ls-remote`: `--heads`,
+  `--tags`, a remote; `rev-parse`: `--verify`, `--short`; `diff`:
+  `--stat`, `--name-status`, `--name-only`; `grep`: `-n`, `-c`, `-l`,
+  `-i`, `-e`; `cat-file`: `-t`, `-p`, `-e`; `ls-files`, `ls-tree`,
+  `branch --list`, `remote -v`, `status`) and anything else, including
+  every option that names a program or a file to write
+  (`--upload-pack`, `--exec`, `--output`, `--ext-diff`, `--textconv`,
+  `--config-env`, `-c`, `--edit-description`), is refused because it is
+  not listed. The `-C` value must be a path that does not begin with `-`.
+  The remaining surface is the listed options themselves, which the report
+  enumerates. (Review 5 should-fix 1: denylists of git options lost three
+  rounds.)
 - `driver/settings.json` — enforcement: `permissions.deny` for Edit, Write,
   MultiEdit, NotebookEdit (MultiEdit stays: it is a known permission-rule
   name in 2.1.x even where the CLI warns; H-010 as amended); `permissions.allow` for `Bash(hands *)`,
@@ -778,3 +800,17 @@ one-time checks in step 4.
   `run_in_background` and hand-rolled daemonization; foreground Bash with a
   timeout is the only way to run something long. Hooks run under
   `--dangerously-skip-permissions`, so this holds for builder and aux.
+
+---
+
+## 22. Changes from v3.4 (mission 5 review, wait retired)
+
+- Driver wait retired (§11, §12 rule 8): the human's `check` is the wake.
+- Guard git policy becomes a per-subcommand option allowlist (§12).
+- Prompt cap: the client measures the whole request on the wire before
+  connecting (§4; review 5 blocker 1, H-012).
+- `tail`: `n ≥ 1`, cap 1000, `truncated: true` when cut (§4; review 5
+  blocker 2). `log` pages (H-013).
+- Backlog items 1–4 (harness-kill detection, per-job scope and orphan
+  accounting, REVIEW-3 deferrals, playbook rules) move to mission 7 so
+  mission 6 stays a review-closing mission.
