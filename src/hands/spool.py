@@ -128,7 +128,7 @@ EVENT_KINDS = frozenset(
 def resolve_kinds(spec: str) -> frozenset[str]:
     """The kinds `hands wait --for <spec>` waits for (§11).
 
-    The driver kit types `hands wait --for stop,held` (§11, §12) and the kind it
+    `hands wait --for stop,held` (§4, §11) is typed at the laptop and the kind it
     means is `job.held`, so a name is matched three ways, in this order: the kind
     itself (`job.held`), the part after the dot (`held`), and a namespace
     (`job` → every `job.*`). A name that no kind can have is refused here rather

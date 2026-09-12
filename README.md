@@ -76,7 +76,8 @@ Then check the install and send one prompt:
     hands show <job>
 
 `hands doctor` also prints the one check it cannot run itself: the §11
-background-wake procedure, for you to run from the driver session.
+notification check, which you run once at the laptop and watch land on your
+phone.
 
 ## The command surface
 
@@ -91,7 +92,7 @@ Three commands are worth knowing before the rest:
     hands send --role builder --context clear "Execute WORKPLAN.md run 2"
     hands send --role builder --context clear --prompt-file ./run-3.txt   # prose: the
                                                 # prompt is the file, sent byte for byte
-    hands wait --for stop,held --timeout 3600   # the driver's wake path (§11)
+    hands wait --for stop,held --timeout 3600   # a foreground wait at the laptop (§11)
     hands approve <job> --human-confirmed --quote "<your own words>"
 
 A gated send (decisions files, playbooks, PR opening, cancels, and anything

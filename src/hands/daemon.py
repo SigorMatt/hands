@@ -499,10 +499,10 @@ class Daemon:
         read, so an event that arrives in between is delivered and not lost.
 
         An *unacked* event that is already in the inbox counts as a match and is
-        returned at once. §11 acks per event and the driver acks what it has
-        acted on, so "unacked" is exactly "the driver has not handled this yet" —
-        and the driver re-arms the wait after acting, which is the moment an
-        event raised while it was reporting would otherwise be lost forever.
+        returned at once. §11 acks per event and a reader acks what it has acted
+        on, so "unacked" is exactly "nobody has handled this yet" — and a waiter
+        that acts and then waits again is the moment an event raised while it
+        was busy would otherwise be lost forever.
         """
         loop = asyncio.get_running_loop()
         deadline = None if timeout is None else loop.time() + float(timeout)

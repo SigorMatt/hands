@@ -205,11 +205,12 @@ class Api:
     ) -> dict[str, Any]:
         """A job's record once it is terminal, or the first event of `--for` (§4, §11).
 
-        `--for` is the driver's wake path: it blocks on a subscription, returns
-        the event *unacked* (the driver acks it with `hands inbox --ack` once it
-        has acted), and answers a timeout with a `Timeout` error, which the CLI
-        turns into its own exit code so a background wait can be told apart from
-        a failure.
+        `--for` blocks on a subscription, returns the event *unacked* (whoever
+        waited acks it with `hands inbox --ack` once it has acted), and answers
+        a timeout with a `Timeout` error, which the CLI turns into its own exit
+        code so a wait that gave up can be told apart from a failure. §11
+        retired the driver's standing wait, so the caller here is a human at the
+        laptop or a short foreground wait after an approval (§12 rule 8).
         """
         if for_:
             if job:

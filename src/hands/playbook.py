@@ -949,8 +949,9 @@ class PlaybookEngine:
         and the reason that was kept — and notifies nobody, because the human was already
         told. So: one `stop` event and one notification per stop that takes.
 
-        The kind is in the `pipeline` namespace (H-011, §21) so that the driver
-        kit's `hands wait --for stop,held` is not woken by it.
+        The kind is in the `pipeline` namespace (H-011, §21) so that a
+        `hands wait --for stop,held` is not woken by it; `--for pipeline` is how
+        a caller asks for them.
         """
         if self.state.paused:
             self.spool.append_event(
@@ -973,11 +974,11 @@ class PlaybookEngine:
 
         H-007: a pause is a stop like any other, so it goes through `stop()` —
         the `stop` event of §11 (reason `paused by human`) and its notification,
-        not a silent flag. That event is what wakes a driver blocked on
-        `hands wait --for stop,held`, which makes `hands pause` the one command
-        §11's background-wake check needs: no job, no turn, nothing to clean up
-        but `hands resume`. No playbook has to be loaded: the wake check runs at
-        install time (§14 step 1).
+        not a silent flag. Notifying is what makes `hands pause` the one command
+        §11's notification check needs — the check `hands doctor` prints, which
+        proves an event reaches the human's phone: no job, no turn, nothing to
+        clean up but `hands resume`. No playbook has to be loaded: that check
+        runs at install time (§14 step 1).
 
         §19: a pause over a pipeline *already* stopped — by a rule, by a held job,
         by an earlier pause — is a no-op. The first reason is the one that explains

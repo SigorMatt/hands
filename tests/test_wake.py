@@ -54,8 +54,8 @@ def project(tmp_home: Path, workdir: Path) -> str:
 # ------------------------------------------------------- the kind vocabulary
 
 
-def test_the_driver_kit_spelling_resolves_to_real_event_kinds() -> None:
-    """§11/§12: the driver types `--for stop,held`; `held` is the kind `job.held`."""
+def test_the_stop_held_spelling_resolves_to_real_event_kinds() -> None:
+    """§4/§11: `--for stop,held` is what a human types; `held` is the kind `job.held`."""
     assert resolve_kinds("stop,held") == frozenset({"stop", "job.held"})
     assert resolve_kinds(" stop , job.held ") == frozenset({"stop", "job.held"})
     assert resolve_kinds("job") >= frozenset({"job.done", "job.held", "job.failed"})
@@ -65,10 +65,10 @@ def test_for_stop_is_the_stop_kind_and_nothing_else() -> None:
     """H-011 (§21): `--for stop` resolves to exactly `{stop}`.
 
     A suppressed stop is "recorded in the inbox only" (§10) — no notification —
-    so waking the driver on it is the one thing the record must not do. The kind
+    so waking a waiter on it is the one thing the record must not do. The kind
     is `pipeline.stop_suppressed`, in the `pipeline` namespace beside
-    `pipeline.resumed` and outside `stop`'s, which is what makes the driver kit's
-    own `--for stop,held` immune to it. A session that does want them arms
+    `pipeline.resumed` and outside `stop`'s, which is what makes a plain
+    `--for stop,held` immune to it. A caller that does want them asks for
     `--for pipeline`.
     """
     assert resolve_kinds("stop") == frozenset({"stop"})
@@ -90,7 +90,7 @@ def test_a_kind_no_event_can_have_is_refused() -> None:
 
 
 def test_wait_for_returns_the_event_it_was_armed_for(project: str, tmp_home: Path) -> None:
-    """The driver arms the wait and goes idle; the event returns it."""
+    """A `--for` wait blocks until the event it named arrives, then returns it."""
 
     async def body(daemon: Daemon) -> None:
         waiting = asyncio.create_task(ok("wait", "--for", "stop,held", "--timeout", "30"))
@@ -105,7 +105,7 @@ def test_wait_for_returns_the_event_it_was_armed_for(project: str, tmp_home: Pat
 
 
 def test_wait_for_does_not_ack_the_event_it_returns(project: str, tmp_home: Path) -> None:
-    """§11: the event is returned, not acked — the driver acks with `inbox --ack`."""
+    """§11: the event is returned, not acked — whoever waited acks it with `inbox --ack`."""
 
     async def body(daemon: Daemon) -> None:
         await daemon.playbook.stop("stopped for a human")
@@ -121,8 +121,8 @@ def test_wait_for_does_not_ack_the_event_it_returns(project: str, tmp_home: Path
 def test_wait_for_returns_an_event_that_arrived_before_the_wait(
     project: str, tmp_home: Path
 ) -> None:
-    """An unacked match is returned at once: an event between acting and re-arming
-    must not be lost, and unacked is exactly "the driver has not handled it"."""
+    """An unacked match is returned at once: an event between acting and waiting
+    again must not be lost, and unacked is exactly "nobody has handled it yet"."""
 
     async def body(daemon: Daemon) -> None:
         await daemon.playbook.stop("arrived while the driver was reporting")
@@ -153,7 +153,7 @@ def test_wait_for_times_out_with_a_distinguishable_exit_code(
         code, out, err = await cli("wait", "--for", "stop,held", "--timeout", "0.3")
         assert code == 2, f"{out}{err}"
         assert "timeout" in strip_paths(err.lower())
-        # An ordinary refusal is still 1, so the driver can tell them apart.
+        # An ordinary refusal is still 1, so a caller can tell them apart.
         code, _, err = await cli("wait", "--for", "banana", "--timeout", "0.3")
         assert code == 1, err
 

@@ -207,10 +207,50 @@ ARMED_WAIT = (
 )
 
 
-def test_no_shipped_document_tells_anyone_to_arm_a_background_wait() -> None:
-    """§11, §22: the driver arms no background wait, so the three documents a
-    driver or an installer reads may not describe one — not as a rule, not as a
-    first-run step, and not as the wake check doctor prints (§12 rule 8).
+#: The other half of the same retired claim, one phrase per sentence that was
+#: on disk: not "arm a wait" but "the driver is the one waiting". These are
+#: comments, docstrings and prose — `hands wait --for` itself is unchanged and
+#: still right for a human at the laptop, so what is pinned is who is said to
+#: run it, and the list is the sentences that were there, not a general rule.
+DRIVER_WAITS = (
+    "driver's wake path",
+    "driver blocked on",
+    "wakes a driver",
+    "waking the driver",
+    "the driver arms the wait",
+    "driver re-arms",
+    "the driver runs `hands wait",
+    "the driver types `--for",
+    "the driver kit types",
+    "driver kit's `hands wait",
+    "driver kit's own `--for",
+    "a background wait can be told apart",
+    "a background `wait --for`",
+)
+
+#: Every file that carried one of the two families above. The docs a driver or
+#: an installer reads, the three modules whose comments explained `--for` and
+#: exit 2 by the driver's wait, and the test file whose prose did the same.
+WAKE_PATH_TEXT = (
+    "README.md",
+    "docs/INTEGRATION.md",
+    "docs/PLAYBOOK.md",
+    "driver/CLAUDE.md",
+    "driver/README.md",
+    "src/hands/api.py",
+    "src/hands/cli.py",
+    "src/hands/daemon.py",
+    "src/hands/playbook.py",
+    "src/hands/spool.py",
+    "tests/test_wake.py",
+)
+
+
+def test_nothing_shipped_says_the_driver_arms_or_blocks_on_a_wait() -> None:
+    """§11, §22: the driver arms no background wait and blocks on nothing, so
+    no shipped sentence may say it does — not as a rule, not as a first-run
+    step, not as the wake check doctor prints (§12 rule 8), and not as the
+    reason a comment gives for `--for`, for exit 2 or for a `pipeline` kind.
 
     `docs/INTEGRATION.md`'s "No background tasks in a role session (§21)"
     section and the `no_background.py` recipe are about the hook that *refuses*
@@ -218,18 +258,14 @@ def test_no_shipped_document_tells_anyone_to_arm_a_background_wait() -> None:
     appear in them.
     """
     offenders = [
-        f"{path.relative_to(ROOT).as_posix()}: {phrase!r}"
-        for path in (
-            ROOT / "driver" / "CLAUDE.md",
-            ROOT / "driver" / "README.md",
-            ROOT / "docs" / "INTEGRATION.md",
-        )
-        for flat in [flattened(path.read_text(encoding="utf-8")).lower()]
-        for phrase in ARMED_WAIT
+        f"{where}: {phrase!r}"
+        for where in WAKE_PATH_TEXT
+        for flat in [flattened((ROOT / where).read_text(encoding="utf-8")).lower()]
+        for phrase in ARMED_WAIT + DRIVER_WAITS
         if phrase in flat
     ]
-    assert not offenders, "a document still arms the retired wait (§11, §22):\n" + "\n".join(
-        offenders
+    assert not offenders, "a shipped sentence still arms the retired wait (§11, §22):\n" + (
+        "\n".join(offenders)
     )
     # The driver in particular waits for nothing it was not told to wait for:
     # §12 rule 8 leaves it `hands wait <job>` in the foreground after an

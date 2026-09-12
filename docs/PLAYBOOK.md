@@ -79,8 +79,9 @@ not in `stop`'s, so `hands wait --for stop,held` is not woken by a stop that was
 deliberately not notified; `--for pipeline` waits for them.
 
 `hands pause` is a stop you make yourself: it files the same `stop` event
-(reason `paused by human`) and the same notification, which is what wakes a
-driver blocked on `hands wait --for stop,held`. Over a pipeline that is
+(reason `paused by human`) and the same notification, which is what a
+`hands wait --for stop,held` is woken by and what `hands doctor`'s
+notification check (§11) uses to put an event on your phone. Over a pipeline that is
 *already* stopped it is that later stop: it prints the reason it is already
 stopped for, keeps that reason and its timestamp in `hands pipeline`, notifies
 nobody, and leaves only the `pipeline.stop_suppressed` record.

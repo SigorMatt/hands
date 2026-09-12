@@ -46,10 +46,10 @@ __all__ = [
 #: Exit 2: §4's "the client did not deliver a completed request" — a `hands
 #: wait` that gave up waiting, and a `hands send` that refused its prompt
 #: (`--prompt-file` or `--stdin`) before the daemon was contacted. Nothing
-#: changed either way. Every other failure is 1. The driver runs `hands wait
-#: --for stop,held` in the background (§11) and has to know whether it was
-#: woken or simply gave up waiting (rule 8); a refused send is the same answer
-#: at the other end — no job was dispatched.
+#: changed either way. Every other failure is 1. A `hands wait <job>` in the
+#: foreground — §12 rule 8's remaining use for it, after an approval — has to
+#: say whether the job ended or the wait simply gave up; a refused send is the
+#: same answer at the other end — no job was dispatched.
 EXIT_REFUSED = 2
 
 #: `hands wait`'s timeout under the name its readers know it by. One value,
@@ -719,8 +719,8 @@ def main(
         return EXIT_REFUSED
     except ClientError as exc:
         print(f"hands: {exc}", file=err)
-        # §11: a background `wait --for` that timed out is not a failure of hands,
-        # and the driver re-arms rather than reporting it.
+        # §11: a `wait` that timed out is not a failure of hands — nothing
+        # happened yet — so it gets its own code rather than 1.
         return EXIT_TIMEOUT if exc.code == TIMEOUT_CODE else 1
     except (ConfigError, ValueError, OSError, notify_mod.NotifyError) as exc:
         print(f"hands: {exc}", file=err)
