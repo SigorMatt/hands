@@ -15,6 +15,7 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
+from conftest import strip_paths
 from hands.config import Config, parse_config
 from hands.limits import (
     RESUME_GRACE_S,
@@ -358,7 +359,7 @@ def test_resumes_stop_after_max_resumes_and_leave_a_stop_for_the_playbook(
         assert "stop" not in harness.kinds()
         assert len(harness.stops) == 1
         reason, payload = harness.stops[0]
-        assert "max_resumes" in reason
+        assert "max_resumes" in strip_paths(reason)
         assert payload["role"] == "builder"
         assert payload["resumes"] == 3
 

@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 import hands
+from conftest import strip_paths
 from hands.cli import main
 
 
@@ -38,11 +39,11 @@ def test_cli_help_exits_zero(capsys: pytest.CaptureFixture[str]) -> None:
     with pytest.raises(SystemExit) as exc:
         main(["--help"])
     assert exc.value.code == 0
-    assert "usage: hands" in capsys.readouterr().out
+    assert "usage: hands" in strip_paths(capsys.readouterr().out)
 
 
 def test_cli_with_no_arguments_prints_help_and_returns_zero(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     assert main([]) == 0
-    assert "usage: hands" in capsys.readouterr().out
+    assert "usage: hands" in strip_paths(capsys.readouterr().out)

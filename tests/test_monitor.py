@@ -18,6 +18,7 @@ from typing import Any
 
 import pytest
 
+from conftest import strip_paths
 from fake_monitor import FAREWELL, FIRST, SECOND, THIRD
 from hands.config import Config, parse_config
 from hands.monitor import BlockBuffer, MonitorSupervisor, block_kind, descendants_of, pid_list
@@ -221,7 +222,7 @@ def test_a_missing_monitor_script_is_an_inbox_event_and_not_a_fallback(
         events = monitor_events(spool)
         assert len(events) == 1
         assert events[0].kind == "monitor.event"
-        assert "not_there.sh" in events[0].payload["block"]
+        assert "not_there.sh" in strip_paths(events[0].payload["block"])
         # No silent fallback: the built-in monitor would have stalled by now.
         await asyncio.sleep(1.0)
         assert [event.kind for event in monitor_events(spool)] == ["monitor.event"]
@@ -246,7 +247,7 @@ def test_a_monitor_script_that_is_not_executable_is_an_inbox_event(
         events = monitor_events(spool)
         assert len(events) == 1
         assert events[0].kind == "monitor.event"
-        assert "not executable" in events[0].payload["block"]
+        assert "not executable" in strip_paths(events[0].payload["block"])
 
     run(body)
 
@@ -266,8 +267,8 @@ def test_a_monitor_script_that_dies_on_its_own_says_so(
         events = monitor_events(spool)
         assert blocks(events)[:3] == [FIRST, SECOND, THIRD]  # everything it wrote is drained
         assert events[-1].kind == "monitor.event"
-        assert "exited with code 3" in events[-1].payload["block"]
-        assert "giving up" in events[-1].payload["block"]  # its stderr tail
+        assert "exited with code 3" in strip_paths(events[-1].payload["block"])
+        assert "giving up" in strip_paths(events[-1].payload["block"])  # its stderr tail
 
     run(body)
 

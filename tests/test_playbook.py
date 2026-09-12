@@ -24,6 +24,7 @@ from typing import Any
 
 import pytest
 
+from conftest import strip_paths
 from hands.config import Config, load_config, parse_config
 from hands.daemon import Daemon
 from hands.playbook import (
@@ -318,7 +319,7 @@ def test_an_invalid_playbook_is_an_error_not_a_half_read_file(
 ) -> None:
     with pytest.raises(PlaybookError) as caught:
         parse_playbook(body, path=tmp_path / "PLAYBOOK.toml")
-    assert expected in str(caught.value)
+    assert expected in strip_paths(str(caught.value))
 
 
 def _refusal(body: str, tmp_path: Path) -> str:
@@ -340,11 +341,15 @@ def test_every_bad_playbook_is_pinned_to_a_refusal_only_it_makes(tmp_path: Path)
     """
     refusals = {name: _refusal(body, tmp_path) for name, body, _expected in BAD_PLAYBOOKS}
     for name, _body, expected in BAD_PLAYBOOKS:
-        assert expected in refusals[name], f"{name}: the expectation is not its own refusal"
+        assert expected in strip_paths(refusals[name]), (
+            f"{name}: the expectation is not its own refusal"
+        )
         for other, refusal in refusals.items():
             if other == name or refusal == refusals[name]:
                 continue  # one sentence for two inputs is the loader's answer, not a loose pin
-            assert expected not in refusal, f"{name}'s expectation also matches {other}"
+            assert expected not in strip_paths(refusal), (
+                f"{name}'s expectation also matches {other}"
+            )
 
 
 def test_an_unparseable_playbook_stops_and_notifies_and_fires_nothing(
@@ -356,7 +361,7 @@ def test_an_unparseable_playbook_stops_and_notifies_and_fires_nothing(
     assert engine.pipeline()["paused"] is True
     # U2: not the bare word "playbook" — the tmpdir path in the reason carries that.
     assert "the playbook cannot be read, so no rule can be trusted to fire" in (
-        engine.pipeline()["stop_reason"]
+        strip_paths(engine.pipeline()["stop_reason"])
     )
     assert [event.kind for event in engine.spool.events()] == ["stop"]
     assert recorder.notified
@@ -419,7 +424,7 @@ def test_a_placeholder_that_cannot_be_resolved_is_an_error(
     )
     with pytest.raises(PlaceholderError) as caught:
         render(text, groups={"n": "3", "word": "two"}, job=job)
-    assert expected in str(caught.value)
+    assert expected in strip_paths(str(caught.value))
 
 
 # ------------------------------------------------------- the rule table (§10)
@@ -497,7 +502,7 @@ def test_stop_is_the_default(
     assert recorder.sent == []
     state = engine.pipeline()
     assert state["paused"] is True
-    assert expected in state["stop_reason"]
+    assert expected in strip_paths(state["stop_reason"])
     assert [event.kind for event in engine.spool.events()] == ["stop"]
     assert recorder.notified  # §11: a stop notifies
 
@@ -511,7 +516,7 @@ def test_a_run_outside_auto_runs_stops(tmp_home: Path, workdir: Path) -> None:
     # U2: the run number is a bare digit that the rule index, the allowed list and a
     # job id in the reason could all supply; pin the sentence that names run 4.
     assert "would start run 4, which [limits] auto_runs does not list ([2, 3])" in (
-        engine.pipeline()["stop_reason"]
+        strip_paths(engine.pipeline()["stop_reason"])
     )
 
 
@@ -549,7 +554,7 @@ def test_a_monitor_tripwire_stops_the_pipeline(tmp_home: Path, workdir: Path) ->
     run(engine.on_job_start(job))
     run(engine.on_event("monitor.tripwire", payload={"job": job.id, "block": "TRIPWIRE main"}))
     assert engine.pipeline()["paused"] is True
-    assert "monitor.tripwire" in engine.pipeline()["stop_reason"]
+    assert "monitor.tripwire" in strip_paths(engine.pipeline()["stop_reason"])
 
 
 def test_a_held_job_stops_the_pipeline(tmp_home: Path, workdir: Path) -> None:
@@ -561,7 +566,7 @@ def test_a_held_job_stops_the_pipeline(tmp_home: Path, workdir: Path) -> None:
     run(engine.on_job_start(job))
     run(engine.on_event("job.held", job=job))
     assert engine.pipeline()["paused"] is True
-    assert "job.held" in engine.pipeline()["stop_reason"]
+    assert "job.held" in strip_paths(engine.pipeline()["stop_reason"])
 
 
 def test_a_resume_rule_on_an_orphan_resends_the_resume_line(
@@ -609,7 +614,7 @@ def test_exhausted_resumes_stop(tmp_home: Path, workdir: Path) -> None:
     run(engine.on_job_start(job))
     run(engine.on_job(job))
     assert recorder.enqueued == []
-    assert "max_resumes" in engine.pipeline()["stop_reason"]
+    assert "max_resumes" in strip_paths(engine.pipeline()["stop_reason"])
 
 
 LIMITED_BOOK = '''version = 1
@@ -656,7 +661,7 @@ def test_a_refused_send_stops_rather_than_losing_the_step(
     run(engine.on_job_start(job))
     run(engine.on_job(job))
     assert engine.pipeline()["paused"] is True
-    assert "4 job(s) queued" in engine.pipeline()["stop_reason"]
+    assert "4 job(s) queued" in strip_paths(engine.pipeline()["stop_reason"])
 
 
 # ------------------------------------------------------- pause / resume (§10)
@@ -905,7 +910,7 @@ def test_pipeline_reports_section_4s_fields(project: str, workdir: Path) -> None
 
         code, out, _err = await cli("pipeline")
         assert code == 0
-        assert "audit-fixes" in out and "paused" in out
+        assert "audit-fixes" in strip_paths(out) and "paused" in strip_paths(out)
 
     drive(body)
 
@@ -975,8 +980,8 @@ async def assert_pause_is_a_no_op(daemon: Daemon, posts: Posts, reason: str) -> 
     code, out, err = await cli("pause")
 
     assert code == 0, err  # a no-op, not a failure
-    assert reason in out, out  # the human learns why it was already stopped
-    assert "already stopped" in out, out  # …and that this pause did nothing
+    assert reason in strip_paths(out), out  # the human learns why it was already stopped
+    assert "already stopped" in strip_paths(out), out  # …and that this pause did nothing
     now = await ok("pipeline")
     assert now["stop_reason"] == reason
     assert now["stopped_at"] == was["stopped_at"]
@@ -1022,7 +1027,7 @@ def test_a_pause_after_a_held_job_stop_keeps_the_first_reason(
     async def body(daemon: Daemon, posts: Posts) -> None:
         await ok("send", "--role", "builder", "--context", "clear", "--gate", "by hand", "hi")
         state = await wait_for_stop()
-        assert "job.held" in state["stop_reason"]
+        assert "job.held" in strip_paths(state["stop_reason"])
         await assert_pause_is_a_no_op(daemon, posts, state["stop_reason"])
 
     drive_notified(tmp_home, workdir, body)
@@ -1067,7 +1072,7 @@ def test_a_limit_stop_over_a_rule_stop_keeps_the_first_reason(
             for event in (await ok("inbox"))["events"]
             if event["kind"] == "stop.suppressed"
         ]
-        assert "max_resumes" in suppressed["payload"]["reason"]
+        assert "max_resumes" in strip_paths(suppressed["payload"]["reason"])
         assert suppressed["payload"]["kept"] == "a rule said so"
         assert suppressed["payload"]["role"] == "builder"
         # one notification per stop that takes: the rule's, and no second one
@@ -1098,7 +1103,7 @@ def test_a_limit_stop_with_no_stop_over_it_still_files_its_event_and_notifies(
 
         state = await ok("pipeline")
         assert state["paused"] is True
-        assert "max_resumes" in state["stop_reason"]
+        assert "max_resumes" in strip_paths(state["stop_reason"])
         kinds = [event["kind"] for event in (await ok("inbox"))["events"]]
         assert kinds.count("stop") == 1
         assert "stop.suppressed" not in kinds
@@ -1157,7 +1162,7 @@ def test_a_resume_still_clears_a_stop_whatever_its_reason(
         await daemon.playbook.stop("a rule said so")
         code, out, err = await cli("pause")
         assert code == 0, err
-        assert "a rule said so" in out
+        assert "a rule said so" in strip_paths(out)
         assert (await ok("resume"))["paused"] is False
         assert (await ok("pipeline"))["stop_reason"] is None
 
@@ -1183,10 +1188,10 @@ def test_a_job_the_engine_fires_is_still_gated_by_the_default_patterns(
         assert record["state"] == "held"
         assert record["origin"] == "playbook"
         assert record["playbook_sha256"]
-        assert "decisions-" in record["gate"]["reason"]
+        assert "decisions-" in strip_paths(record["gate"]["reason"])
         # …and the held job is itself a §10 event with no rule: hands stops.
         state = await wait_for_stop()
-        assert "job.held" in state["stop_reason"]
+        assert "job.held" in strip_paths(state["stop_reason"])
 
     drive(body)
 
@@ -1200,7 +1205,7 @@ def test_the_daemon_stops_the_pipeline_on_an_unmatched_event(
         job = await ok("send", "--role", "builder", "--context", "clear", "FAKE:result ok")
         await ok("wait", job["id"])
         state = await wait_for_stop()
-        assert "builder.done" in state["stop_reason"]
+        assert "builder.done" in strip_paths(state["stop_reason"])
         events = (await ok("inbox"))["events"]
         assert [event["kind"] for event in events][-1] == "stop"
 
@@ -1254,7 +1259,7 @@ def test_the_section_10_example_end_to_end(
 
         assert state["auto_runs"] == {"allowed": [2, 3], "used": [3]}
         assert "would start run 4, which [limits] auto_runs does not list ([2, 3])" in (
-            state["stop_reason"]
+            strip_paths(state["stop_reason"])
         )
         kinds = [event["kind"] for event in (await ok("inbox"))["events"]]
         assert kinds.count("playbook.rule") == 3

@@ -16,6 +16,7 @@ from pathlib import Path
 
 import pytest
 
+from conftest import strip_paths
 from hands import cli as cli_mod
 from hands.cli import EXIT_REFUSED, EXIT_TIMEOUT, main
 from hands.config import load_config
@@ -72,9 +73,9 @@ def test_send_wait_result_end_to_end(project: str, tmp_home: Path) -> None:
         # readable form, not JSON
         code, out, _ = await cli("result", job_id)
         assert code == 0
-        assert job_id in out
-        assert "done" in out
-        assert "VERDICT: PASS" in out
+        assert job_id in strip_paths(out)
+        assert "done" in strip_paths(out)
+        assert "VERDICT: PASS" in strip_paths(out)
 
     drive(body)
 
@@ -88,7 +89,7 @@ def test_a_second_send_to_a_busy_role_queues_and_a_third_is_refused(project: str
         assert second["state"] == "queued"
 
         err = await fails("send", "--role", "builder", "--context", "clear", "FAKE:result third")
-        assert "queue" in err.lower()
+        assert "queue" in strip_paths(err.lower())
 
         status = await ok("status")
         assert status["roles"]["builder"]["queued"] == [second["id"]]
@@ -116,7 +117,7 @@ def test_the_aux_queue_accepts_four(project: str) -> None:
         assert (await ok("status"))["roles"]["aux"]["queued"] == queued
 
         err = await fails("send", "--role", "aux", "--context", "clear", "FAKE:result fifth")
-        assert "queue" in err.lower()
+        assert "queue" in strip_paths(err.lower())
 
     drive(body)
 
@@ -196,10 +197,10 @@ def test_status_reports_daemon_roles_and_monitor(project: str) -> None:
         assert status["daemon"]["socket"].endswith("handsd.sock")
         assert set(status["roles"]) == {"builder", "aux"}
         assert status["roles"]["builder"]["running"] is None
-        assert "monitor" in status
+        assert "monitor" in status  # the status record, not text
         code, out, _ = await cli("status")
         assert code == 0
-        assert "builder" in out
+        assert "builder" in strip_paths(out)
 
     drive(body)
 
@@ -226,7 +227,7 @@ def test_wait_reports_a_timeout_rather_than_hanging(project: str) -> None:
         sent = await ok("send", "--role", "builder", "--context", "clear", BLOCK)
         await running_job("builder")
         err = await fails("wait", sent["id"], "--timeout", "0.2")
-        assert "timeout" in err.lower()
+        assert "timeout" in strip_paths(err.lower())
 
     drive(body)
 
@@ -234,9 +235,9 @@ def test_wait_reports_a_timeout_rather_than_hanging(project: str) -> None:
 def test_send_refuses_an_unknown_role_and_a_keep_with_no_session(project: str) -> None:
     async def body(daemon: Daemon) -> None:
         err = await fails("send", "--role", "nobody", "--context", "clear", "x")
-        assert "nobody" in err
+        assert "nobody" in strip_paths(err)
         err = await fails("send", "--role", "builder", "--context", "keep", "x")
-        assert "clear" in err  # "send --context clear" is the advice §6 gives
+        assert "clear" in strip_paths(err)  # "send --context clear" is the advice §6 gives
 
     drive(body)
 
@@ -338,14 +339,14 @@ def test_send_refuses_a_prompt_file_together_with_stdin_or_a_prompt(
         )
         assert code == 1, "a bad command line is a plain failure, not a refused file"
         for named in ("--prompt-file", "--stdin", "prompt"):
-            assert named in err, f"the refusal must name all three routes: {err!r}"
+            assert named in strip_paths(err), f"the refusal must name all three routes: {err!r}"
 
 
 def test_send_with_no_prompt_at_all_names_every_route(project: str) -> None:
     code, _, err = send_cli("--role", "aux", "--context", "clear")
     assert code == 1, "a bad command line is a plain failure, not a refused file"
     for named in ("--prompt-file", "--stdin", "prompt"):
-        assert named in err
+        assert named in strip_paths(err)
 
 
 def test_a_refused_prompt_file_and_a_wait_timeout_share_one_exit_code() -> None:
@@ -359,13 +360,13 @@ def test_send_refuses_a_missing_prompt_file(project: str, tmp_path: Path) -> Non
     missing = tmp_path / "nope.txt"
     code, _, err = send_cli("--role", "aux", "--context", "clear", "--prompt-file", str(missing))
     assert code == EXIT_REFUSED
-    assert str(missing) in err and "No such file" in err
+    assert str(missing) in err and "No such file" in strip_paths(err)
 
 
 def test_send_refuses_a_directory_as_a_prompt_file(project: str, tmp_path: Path) -> None:
     code, _, err = send_cli("--role", "aux", "--context", "clear", "--prompt-file", str(tmp_path))
     assert code == EXIT_REFUSED
-    assert str(tmp_path) in err and "directory" in err.lower()
+    assert str(tmp_path) in err and "directory" in strip_paths(err.lower())
 
 
 def test_send_refuses_a_prompt_file_that_is_not_utf8(project: str, tmp_path: Path) -> None:
@@ -373,7 +374,7 @@ def test_send_refuses_a_prompt_file_that_is_not_utf8(project: str, tmp_path: Pat
     path.write_bytes(b"a prompt\xff\xfe and then some")
     code, _, err = send_cli("--role", "aux", "--context", "clear", "--prompt-file", str(path))
     assert code == EXIT_REFUSED
-    assert str(path) in err and "UTF-8" in err
+    assert str(path) in err and "UTF-8" in strip_paths(err)
 
 
 def test_send_refuses_an_empty_prompt_file(project: str, tmp_path: Path) -> None:
@@ -384,7 +385,7 @@ def test_send_refuses_an_empty_prompt_file(project: str, tmp_path: Path) -> None
         path.write_text(body_text, encoding="utf-8")
         code, _, err = send_cli("--role", "aux", "--context", "clear", "--prompt-file", str(path))
         assert code == EXIT_REFUSED
-        assert str(path) in err and "empty" in err
+        assert str(path) in err and "empty" in strip_paths(err)
 
 
 def test_send_refuses_an_oversized_prompt_file(project: str, tmp_path: Path) -> None:
@@ -462,7 +463,7 @@ def test_send_help_lists_the_prompt_file_route(capsys: pytest.CaptureFixture[str
     with pytest.raises(SystemExit) as exc:
         main(["send", "--help"])
     assert exc.value.code == 0
-    assert "--prompt-file" in capsys.readouterr().out
+    assert "--prompt-file" in strip_paths(capsys.readouterr().out)
 
 
 def test_global_flags_work_before_and_after_the_command(project: str) -> None:
@@ -509,7 +510,9 @@ def test_help_lists_every_command_of_section_4(capsys: pytest.CaptureFixture[str
     assert exc.value.code == 0
     printed = capsys.readouterr().out
     for command in SECTION_4:
-        assert command in printed, f"`{command}` (DESIGN §4) is missing from hands --help"
+        assert command in strip_paths(printed), (
+            f"`{command}` (DESIGN §4) is missing from hands --help"
+        )
 
 
 # Every command of §4 is implemented: the last stub (`doctor`, U10) landed with
@@ -549,7 +552,7 @@ def test_the_cli_says_so_when_no_daemon_is_listening(project: str) -> None:
     code, _out, err = main_capture(["--project", PROJECT, "status"])
     assert code != 0
     # U2: the socket path ends in `handsd.sock`, so the bare word proved nothing.
-    assert "is handsd running?" in err
+    assert "is handsd running?" in strip_paths(err)
 
 
 def main_capture(argv: list[str]) -> tuple[int, str, str]:
@@ -578,15 +581,15 @@ def test_status_says_queue_depth_is_capacity_and_what_the_monitor_sees(project: 
 
         code, out, _ = await cli("status")
         assert code == 0
-        assert "capacity" in out
-        assert "queue_depth" in out
+        assert "capacity" in strip_paths(out)
+        assert "queue_depth" in strip_paths(out)
         # §5: a stall is no progress *and* no liveness, and nothing more.
-        assert "no progress and no liveness" in out
-        assert "busy-wait on a nested run is not a stall" in out
+        assert "no progress and no liveness" in strip_paths(out)
+        assert "busy-wait on a nested run is not a stall" in strip_paths(out)
         # U1: the built-in monitor is the one deciding here; there is no script.
         assert (await ok("status"))["monitor"]["source"] == "builtin"
-        assert "for 40m" in out  # the §13 default, spelled as it is configured
-        assert "--pids" not in out
+        assert "for 40m" in strip_paths(out)  # the §13 default, spelled as it is configured
+        assert "--pids" not in strip_paths(out)
 
     drive(body)
 
@@ -630,15 +633,15 @@ def test_status_names_the_ops_script_and_its_flags_when_ops_decides(
         assert code == 0
         assert str(script) in out
         for flag in ("--pids", "--transcript", "--base"):
-            assert flag in out
+            assert flag in strip_paths(out)
         # The built-in rule is not the one deciding here, and stall_minutes
         # never reaches the script. U2 (review blocker 2): this is asserted on
         # the stall sentence, never on a bare "40" — the monitor line carries the
         # ops script's path as well, so under `--basetemp .../pytest-1340` the
         # substring matched the path and the gate went red about one run in ten.
-        assert "no progress and no liveness" not in out
-        assert "for 40m" not in out
-        assert "the script decides; hands fills --pids --transcript --base" in out
+        assert "no progress and no liveness" not in strip_paths(out)
+        assert "for 40m" not in strip_paths(out)
+        assert "the script decides; hands fills --pids --transcript --base" in strip_paths(out)
 
     drive(body)
 
@@ -656,8 +659,8 @@ def test_status_says_stall_detection_is_off_at_zero_minutes(tmp_home: Path, work
         assert code == 0
         # U2: the sentence, not "off" and not a bare "0m" — every line of `status`
         # carries a tmpdir path, and the monitor line is one of them.
-        assert "stall detection off (monitor.stall_minutes = 0)" in out
-        assert "for 0m" not in out
-        assert "no progress and no liveness" not in out
+        assert "stall detection off (monitor.stall_minutes = 0)" in strip_paths(out)
+        assert "for 0m" not in strip_paths(out)
+        assert "no progress and no liveness" not in strip_paths(out)
 
     drive(body)

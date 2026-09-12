@@ -17,6 +17,7 @@ from typing import Any
 
 import pytest
 
+from conftest import strip_paths
 from hands.cli import main
 from hands.daemon import Daemon
 from harness import BLOCK, PROJECT, cli, config_body, drive, fails, ok, poll, running_job
@@ -90,8 +91,8 @@ def test_jobs_filters_by_role_grep_and_since(project: str) -> None:
 def test_jobs_refuses_a_since_it_cannot_parse(project: str) -> None:
     async def body(daemon: Daemon) -> None:
         err = await fails("jobs", "--since", "yesterday")
-        assert "yesterday" in err
-        assert "2d" in err, "the refusal must show the forms --since does take"
+        assert "yesterday" in strip_paths(err)
+        assert "2d" in strip_paths(err), "the refusal must show the forms --since does take"
 
     drive(body)
 
@@ -126,9 +127,9 @@ def test_jobs_filters_by_origin(project: str) -> None:
 def test_jobs_refuses_an_origin_outside_section_6s_vocabulary(project: str) -> None:
     async def body(daemon: Daemon) -> None:
         err = await fails("jobs", "--origin", "robot")
-        assert "robot" in err
+        assert "robot" in strip_paths(err)
         for known in ("cli", "driver", "limit", "playbook"):
-            assert known in err, f"the refusal must name the whole vocabulary: {err}"
+            assert known in strip_paths(err), f"the refusal must name the whole vocabulary: {err}"
 
     drive(body)
 
@@ -144,17 +145,21 @@ def test_jobs_readable_output_is_one_line_a_job(project: str) -> None:
         assert len(lines) == 1
         line = lines[0]
         assert done["id"] in line
-        assert "builder" in line
-        assert "done" in line
+        assert "builder" in strip_paths(line)
+        assert "done" in strip_paths(line)
         assert line.endswith("VERDICT: PASS"), "the verdict is what the human is looking for"
-        assert "FAKE:" not in line, "the verdict replaces the prompt line, it does not follow it"
-        assert re.search(r"\b\d+[smhd]\b", line), f"the line must carry the job's age: {line}"
+        assert "FAKE:" not in strip_paths(line), (
+            "the verdict replaces the prompt line, it does not follow it"
+        )
+        assert re.search(r"\b\d+[smhd]\b", strip_paths(line)), (
+            f"the line must carry the job's age: {line}"
+        )
 
         # With no verdict, the first line of the prompt stands in for one.
         other = await run("--role", "aux", "--context", "clear", "hello there")
         code, out, _ = await cli("jobs", "--role", "aux")
         assert other["id"] in out
-        assert "hello there" in out
+        assert "hello there" in strip_paths(out)
 
     drive(body)
 
@@ -198,8 +203,10 @@ def test_open_refuses_a_running_job(project: str) -> None:
         sent = await ok("send", "--role", "builder", "--context", "clear", BLOCK)
         running = await running_job("builder")
         err = await fails("open", running["id"])
-        assert "running" in err
-        assert "log -f" in err, "§2: for a live job the answer is `hands log -f <role>`"
+        assert "running" in strip_paths(err)
+        assert "log -f" in strip_paths(err), (
+            "§2: for a live job the answer is `hands log -f <role>`"
+        )
         await ok("cancel", sent["id"])
 
     drive(body)
@@ -212,7 +219,7 @@ def test_open_refuses_a_job_that_has_no_session(project: str) -> None:
         )
         assert held["state"] == "held"
         err = await fails("open", held["id"])
-        assert "session" in err
+        assert "session" in strip_paths(err)
 
     drive(body)
 
@@ -247,7 +254,7 @@ def test_log_of_a_job_that_never_ran_says_so(project: str) -> None:
         assert record["lines"] == []
         code, out, _ = await cli("log", held["id"])
         assert code == 0
-        assert "no captured stream" in out
+        assert "no captured stream" in strip_paths(out)
 
     drive(body)
 
@@ -279,10 +286,10 @@ async def _has_init(daemon: Daemon, job_id: str) -> bool:
 def test_log_follow_refuses_a_role_with_no_running_job(project: str) -> None:
     async def body(daemon: Daemon) -> None:
         err = await fails("log", "-f", "builder")
-        assert "builder" in err
-        assert "running" in err
+        assert "builder" in strip_paths(err)
+        assert "running" in strip_paths(err)
         # A job id and -f are two different questions; asking both is a mistake.
-        assert "not both" in await fails("log", "somejob", "-f", "builder")
+        assert "not both" in strip_paths(await fails("log", "somejob", "-f", "builder"))
 
     drive(body)
 
@@ -311,7 +318,7 @@ def test_tail_says_plainly_when_there_is_no_transcript_file(project: str) -> Non
         done = await run("--role", "builder", "--context", "clear", "FAKE:result no file")
         err = await fails("tail", "--role", "builder")
         assert done["transcript_path"] in err
-        assert "Claude Code" in err, "the file is Claude Code's, not hands' (§7)"
+        assert "Claude Code" in strip_paths(err), "the file is Claude Code's, not hands' (§7)"
 
     drive(body)
 
@@ -319,6 +326,6 @@ def test_tail_says_plainly_when_there_is_no_transcript_file(project: str) -> Non
 def test_tail_of_a_role_that_never_ran_says_so(project: str) -> None:
     async def body(daemon: Daemon) -> None:
         err = await fails("tail", "--role", "aux")
-        assert "aux" in err
+        assert "aux" in strip_paths(err)
 
     drive(body)

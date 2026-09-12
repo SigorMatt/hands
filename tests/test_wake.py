@@ -19,6 +19,7 @@ from typing import Any
 import httpx
 import pytest
 
+from conftest import strip_paths
 from hands.cli import main
 from hands.config import Config, load_config, parse_config
 from hands.daemon import Daemon
@@ -72,7 +73,7 @@ def test_the_driver_kit_spelling_resolves_to_real_event_kinds() -> None:
 def test_a_kind_no_event_can_have_is_refused() -> None:
     with pytest.raises(Exception) as exc:
         resolve_kinds("stop,banana")
-    assert "banana" in str(exc.value)
+    assert "banana" in strip_paths(str(exc.value))
 
 
 # ---------------------------------------------------------- wait --for (§11)
@@ -130,7 +131,7 @@ def test_an_acked_event_does_not_wake_the_re_armed_wait(project: str, tmp_home: 
         await ok("inbox", "--ack")
         code, _, err = await cli("wait", "--for", "stop", "--timeout", "0.3", "--json")
         assert code == 2, err
-        assert "timeout" in err.lower()
+        assert "timeout" in strip_paths(err.lower())
 
     drive(body)
 
@@ -141,7 +142,7 @@ def test_wait_for_times_out_with_a_distinguishable_exit_code(
     async def body(daemon: Daemon) -> None:
         code, out, err = await cli("wait", "--for", "stop,held", "--timeout", "0.3")
         assert code == 2, f"{out}{err}"
-        assert "timeout" in err.lower()
+        assert "timeout" in strip_paths(err.lower())
         # An ordinary refusal is still 1, so the driver can tell them apart.
         code, _, err = await cli("wait", "--for", "banana", "--timeout", "0.3")
         assert code == 1, err
@@ -196,7 +197,7 @@ def test_wait_needs_a_job_or_for_but_not_both(project: str, tmp_home: Path) -> N
     async def body(daemon: Daemon) -> None:
         code, _, err = await cli("wait", "somejob", "--for", "stop")
         assert code == 1
-        assert "--for" in err
+        assert "--for" in strip_paths(err)
 
     drive(body)
 
@@ -298,7 +299,7 @@ def test_a_notification_is_published_to_the_configured_topic(
     assert len(posts.sent) == 1
     assert posts.sent[0]["url"] == "https://ntfy.example/hands-abc123"
     assert posts.sent[0]["title"] == "hands: the pipeline stopped"
-    assert "blockers" in posts.sent[0]["message"]
+    assert "blockers" in strip_paths(posts.sent[0]["message"])
 
 
 def test_with_no_topic_nothing_is_published(tmp_home: Path, tmp_path: Path) -> None:
@@ -325,7 +326,7 @@ def test_a_failed_publish_is_inboxed_and_never_raised(tmp_home: Path, tmp_path: 
     events = spool.events()
     assert [event.kind for event in events] == ["notify"]
     assert events[0].payload["delivered"] is False
-    assert "unreachable" in events[0].payload["error"]
+    assert "unreachable" in strip_paths(events[0].payload["error"])
 
 
 # ----------------------------------------------------------- quiet hours §10
@@ -420,8 +421,8 @@ def test_a_stop_notifies_and_a_held_job_notifies(tmp_home: Path, workdir: Path) 
         finally:
             await daemon.stop()
         titles = [item["title"] for item in posts.sent]
-        assert any("held" in title for title in titles), titles
-        assert any("stopped" in title for title in titles), titles
+        assert any("held" in strip_paths(title) for title in titles), titles
+        assert any("stopped" in strip_paths(title) for title in titles), titles
 
     asyncio.run(scenario())
 
@@ -444,8 +445,8 @@ def test_a_hand_pause_notifies_like_any_other_stop(tmp_home: Path, workdir: Path
         finally:
             await daemon.stop()
         titles = [item["title"] for item in posts.sent]
-        assert any("stopped" in title for title in titles), titles
-        assert sum("stopped" in title for title in titles) == 1, titles
+        assert any("stopped" in strip_paths(title) for title in titles), titles
+        assert sum("stopped" in strip_paths(title) for title in titles) == 1, titles
 
     asyncio.run(scenario())
 
@@ -465,7 +466,7 @@ def test_the_daemon_announces_its_start(tmp_home: Path, workdir: Path) -> None:
             await daemon.stop()
 
     asyncio.run(scenario())
-    assert any("started" in item["title"] for item in posts.sent), posts.sent
+    assert any("started" in strip_paths(item["title"]) for item in posts.sent), posts.sent
 
 
 # -------------------------------------------------------------- heartbeat §11
@@ -617,7 +618,7 @@ def test_the_event_stream_of_a_wait_is_json_on_stdout(project: str, tmp_home: Pa
         await daemon.playbook.stop("again")
         code, out, err = await cli("wait", "--for", "stop", "--timeout", "30")
         assert code == 0, err
-        assert "stop" in out and "again" in out
+        assert "stop" in strip_paths(out) and "again" in strip_paths(out)
 
     drive(body)
 
@@ -668,7 +669,7 @@ def test_notify_test_publishes_one_message_and_prints_the_status(
     assert len(posts.sent) == 1, "exactly one message, to the configured topic"
     assert posts.sent[0]["url"] == "https://ntfy.example/hands-abc123"
     assert posts.sent[0]["message"] == "hands is wired up"
-    assert "200" in out and "https://ntfy.example/hands-abc123" in out
+    assert "200" in strip_paths(out) and "https://ntfy.example/hands-abc123" in strip_paths(out)
 
 
 def test_notify_test_prints_the_delivery_as_json(
@@ -714,7 +715,7 @@ def test_notify_refuses_when_no_topic_is_configured(
 
     assert code == 1
     assert posts.sent == [], "nothing may be sent when there is nowhere to send it"
-    assert "ntfy_topic" in err and "demo.toml" in err
+    assert "ntfy_topic" in strip_paths(err) and "demo.toml" in strip_paths(err)
 
 
 def test_notify_without_test_says_what_the_command_takes(
@@ -727,7 +728,7 @@ def test_notify_without_test_says_what_the_command_takes(
     code, _, err = run_cli(project, "notify")
 
     assert code == 1
-    assert "--test" in err
+    assert "--test" in strip_paths(err)
     assert posts.sent == []
 
 
@@ -745,9 +746,9 @@ def test_a_failed_publish_is_reported_and_exits_nonzero(
     code, out, err = run_cli(project, "notify", "--test", "hello")
 
     assert code == 1
-    assert "https://ntfy.example/hands-abc123 did not take the message" in err
-    assert "OSError: no route to host" in err
-    assert "ntfy " not in out, "no response, so there is no code to print"
+    assert "https://ntfy.example/hands-abc123 did not take the message" in strip_paths(err)
+    assert "OSError: no route to host" in strip_paths(err)
+    assert "ntfy " not in strip_paths(out), "no response, so there is no code to print"
 
 
 # ------------------------------- should-fix 7: the status on the failure path
@@ -812,8 +813,8 @@ def test_a_refused_publish_prints_the_code_and_exits_nonzero(
     code, out, err = run_cli(project, "notify", "--test", "hello")
 
     assert code == 1, err
-    assert "ntfy 403" in out
-    assert "https://ntfy.example/hands-abc123" in out
+    assert "ntfy 403" in strip_paths(out)
+    assert "https://ntfy.example/hands-abc123" in strip_paths(out)
 
 
 def test_a_refused_publish_carries_the_status_in_json(
@@ -847,7 +848,7 @@ def test_a_background_notification_ntfy_refuses_still_fails(
     events = spool.events()
     assert [event.kind for event in events] == ["notify"]
     assert events[0].payload["delivered"] is False
-    assert "500" in events[0].payload["error"]
+    assert "500" in strip_paths(events[0].payload["error"])
 
 
 def test_notify_test_is_not_delayed_by_quiet_hours(

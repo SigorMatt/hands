@@ -14,6 +14,7 @@ from pathlib import Path
 
 import pytest
 
+from conftest import strip_paths
 from hands.config import Config, parse_config
 from hands.limits import from_iso
 from hands.runner import (
@@ -209,7 +210,7 @@ def test_a_rate_limit_retry_event_makes_the_job_limited(runner: Runner, spool: S
     assert job.state == "limited"
     assert job.limit is not None
     assert job.limit["category"] == "rate_limit"
-    assert "rate_limit" in job.limit["message"]
+    assert "rate_limit" in strip_paths(job.limit["message"])
     # "slow down" names no reset time, and U5's parser does not invent one.
     assert job.limit["reset_at"] is None
 
@@ -265,7 +266,7 @@ def test_an_error_result_fails_and_stderr_tail_is_kept(runner: Runner, spool: Sp
     job = send(runner, spool, "FAKE:error boom\nFAKE:stderr trouble here")
     assert job.state == "failed"
     assert job.stderr_tail is not None
-    assert "trouble here" in job.stderr_tail
+    assert "trouble here" in strip_paths(job.stderr_tail)
 
 
 def test_stderr_tail_keeps_only_the_last_50_lines(runner: Runner, spool: Spool) -> None:

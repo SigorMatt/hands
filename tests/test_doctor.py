@@ -18,6 +18,7 @@ from typing import Any
 
 import pytest
 
+from conftest import strip_paths
 from hands.cli import call, main
 from hands.daemon import Daemon
 from harness import PROJECT, config_body, drive, write_project
@@ -119,9 +120,9 @@ def test_doctor_is_green_in_fake_mode(tmp_home: Path, tmp_path: Path, fake_mode:
     code, out, err = run()
     assert code == 0, f"doctor was not green:\n{out}\n{err}"
     assert out.strip().endswith("doctor: green"), out
-    assert "0 failed" in out
+    assert "0 failed" in strip_paths(out)
     for expected in ("config", "claude", "ops script", "allowed roots", "playbook", "daemon"):
-        assert expected in out, f"doctor printed no {expected!r} check:\n{out}"
+        assert expected in strip_paths(out), f"doctor printed no {expected!r} check:\n{out}"
 
 
 def test_every_check_is_reported_with_a_status_and_a_detail(
@@ -149,7 +150,7 @@ def test_the_live_turn_is_not_run_without_the_flag(tmp_home: Path, tmp_path: Pat
     for role in ("builder", "aux"):
         check = found[f"live {role}"]
         assert check["status"] == "skip"
-        assert "--live" in check["detail"]
+        assert "--live" in strip_paths(check["detail"])
 
 
 def test_fake_mode_refuses_the_live_turn_and_spawns_nothing(
@@ -168,11 +169,11 @@ def test_fake_mode_refuses_the_live_turn_and_spawns_nothing(
 
     assert not sentinel.exists(), "doctor spawned a turn in fake mode"
     assert code == 0
-    assert "9.9.9" in found["claude"]["detail"]
+    assert "9.9.9" in strip_paths(found["claude"]["detail"])
     for role in ("builder", "aux"):
         check = found[f"live {role}"]
         assert check["status"] == "skip"
-        assert "HANDS_DOCTOR_FAKE" in check["detail"]
+        assert "HANDS_DOCTOR_FAKE" in strip_paths(check["detail"])
 
 
 # ---------------------------------------------------------- the free checks
@@ -186,9 +187,10 @@ def test_the_role_check_names_the_limit_resume_behaviour(
     code, found = checks()
     assert code == 0
     detail = found["role builder"]["detail"]
-    assert "limit resume: re-sends the limited job's own prompt" in detail
-    assert "resume_line" in detail
-    assert "limit resume: re-sends the limited job's own prompt" in found["role aux"]["detail"]
+    assert "limit resume: re-sends the limited job's own prompt" in strip_paths(detail)
+    assert "resume_line" in strip_paths(detail)
+    aux = found["role aux"]["detail"]
+    assert "limit resume: re-sends the limited job's own prompt" in strip_paths(aux)
 
 
 def test_the_role_check_names_a_configured_resume_line(
@@ -198,9 +200,10 @@ def test_the_role_check_names_a_configured_resume_line(
     code, found = checks()
     assert code == 0
     detail = found["role builder"]["detail"]
-    assert 'limit resume: sends resume_line "Resume WORKPLAN.md"' in detail
+    assert 'limit resume: sends resume_line "Resume WORKPLAN.md"' in strip_paths(detail)
     # aux is unchanged either way (§6)
-    assert "limit resume: re-sends the limited job's own prompt" in found["role aux"]["detail"]
+    aux = found["role aux"]["detail"]
+    assert "limit resume: re-sends the limited job's own prompt" in strip_paths(aux)
 
 
 def test_a_missing_claude_binary_fails(tmp_home: Path, tmp_path: Path, fake_mode: None) -> None:
@@ -219,7 +222,7 @@ def test_the_ops_script_is_probed_for_the_three_flags(
     detail = found["ops script"]["detail"]
     assert found["ops script"]["status"] == "ok", detail
     for flag in ("--pids", "--transcript", "--base"):
-        assert flag in detail
+        assert flag in strip_paths(detail)
 
 
 def ops_script(tmp_path: Path, body: str) -> None:
@@ -243,7 +246,7 @@ def test_a_script_that_has_no_help_is_probed_with_an_impossible_pid(
     code, found = checks()
     assert code == 0
     assert found["ops script"]["status"] == "ok"
-    assert "exited 0" in found["ops script"]["detail"]
+    assert "exited 0" in strip_paths(found["ops script"]["detail"])
 
 
 def test_a_script_that_refuses_the_flags_fails(
@@ -254,7 +257,7 @@ def test_a_script_that_refuses_the_flags_fails(
     code, found = checks()
     assert code == 1
     assert found["ops script"]["status"] == "fail"
-    assert "§14" in found["ops script"]["detail"]
+    assert "§14" in strip_paths(found["ops script"]["detail"])
 
 
 def test_a_missing_ops_script_is_refused_before_doctor_can_report_on_it(
@@ -269,7 +272,7 @@ def test_a_missing_ops_script_is_refused_before_doctor_can_report_on_it(
     assert code == 1
     assert found["config"]["status"] == "fail"
     detail = found["config"]["detail"]
-    assert "monitor_cmd" in detail and "watch_monitor.sh" in detail
+    assert "monitor_cmd" in strip_paths(detail) and "watch_monitor.sh" in strip_paths(detail)
 
 
 def test_no_ops_script_configured_is_a_skip_not_a_failure(
@@ -286,7 +289,7 @@ def test_a_missing_allowed_root_fails(tmp_home: Path, tmp_path: Path, fake_mode:
     code, found = checks()
     assert code == 1
     assert found["allowed roots"]["status"] == "fail"
-    assert "not-there" in found["allowed roots"]["detail"]
+    assert "not-there" in strip_paths(found["allowed roots"]["detail"])
 
 
 def test_the_playbook_is_loaded_when_there_is_one(
@@ -297,7 +300,7 @@ def test_the_playbook_is_loaded_when_there_is_one(
     code, found = checks()
     assert code == 0
     assert found["playbook"]["status"] == "ok"
-    assert "audit-fixes" in found["playbook"]["detail"]
+    assert "audit-fixes" in strip_paths(found["playbook"]["detail"])
 
 
 def test_an_unparseable_playbook_fails(tmp_home: Path, tmp_path: Path, fake_mode: None) -> None:
@@ -316,7 +319,7 @@ def test_a_daemon_that_is_not_running_is_a_warning(
     code, found = checks()
     assert code == 0
     assert found["daemon"]["status"] == "warn"
-    assert "handsd" in found["daemon"]["detail"]
+    assert "handsd" in strip_paths(found["daemon"]["detail"])
 
 
 # ------------------------------------------------- the background-wake check
@@ -328,10 +331,10 @@ def test_doctor_prints_the_background_wake_procedure(
     """§11: hands cannot run this one; it hands the human the exact commands."""
     write_config(tmp_home, tmp_path)
     _code, out, _err = run()
-    assert "hands wait --for stop,held" in out
-    assert "--gate" in out  # the free event that wakes the driver: a held job
-    assert "deny <job>" in out  # and how to clear it without spending a turn
-    assert "§11" in out
+    assert "hands wait --for stop,held" in strip_paths(out)
+    assert "--gate" in strip_paths(out)  # the free event that wakes the driver: a held job
+    assert "deny <job>" in strip_paths(out)  # and how to clear it without spending a turn
+    assert "§11" in strip_paths(out)
 
 
 def test_the_wake_procedure_offers_hands_pause(
@@ -342,9 +345,10 @@ def test_the_wake_procedure_offers_hands_pause(
     real `job.held`."""
     write_config(tmp_home, tmp_path)
     _code, out, _err = run()
-    assert "pause" in out and "paused by human" in out
-    assert "hands --project demo resume" in out  # how to clear it
-    assert "--gate" in out and "deny <job>" in out  # the job.held variant is kept
+    assert "pause" in strip_paths(out) and "paused by human" in strip_paths(out)
+    assert "hands --project demo resume" in strip_paths(out)  # how to clear it
+    # the job.held variant is kept
+    assert "--gate" in strip_paths(out) and "deny <job>" in strip_paths(out)
 
 
 def test_the_wake_procedure_is_in_the_json_too(
@@ -353,7 +357,7 @@ def test_the_wake_procedure_is_in_the_json_too(
     write_config(tmp_home, tmp_path)
     _code, out, _err = run("--json")
     report = json.loads(out)
-    assert any("hands wait --for stop,held" in line for line in report["wake_check"])
+    assert any("hands wait --for stop,held" in strip_paths(line) for line in report["wake_check"])
     assert report["green"] is True
 
 
@@ -381,10 +385,12 @@ def test_doctor_reports_a_config_error_as_a_failed_check(
     code, out, err = run()
 
     assert code == 1
-    assert "hands doctor — project demo" in out  # the normal report, not a bare message
-    assert "ntfy_topic" in out, out  # the ConfigError's own words
-    assert "omit" in out and "non-empty" in out  # including both valid choices
-    assert "fail" in out and "config" in out
+    # the normal report, not a bare message
+    assert "hands doctor — project demo" in strip_paths(out)
+    assert "ntfy_topic" in strip_paths(out), out  # the ConfigError's own words
+    # including both valid choices
+    assert "omit" in strip_paths(out) and "non-empty" in strip_paths(out)
+    assert "fail" in strip_paths(out) and "config" in strip_paths(out)
     assert out.strip().splitlines()[-1] == "doctor: 1 check(s) failed"
     assert err == "", err
 
@@ -404,15 +410,15 @@ def test_the_failed_config_check_has_the_same_shape_in_json(
     assert report["project"] == "demo"
     assert report["config"] == path
     assert found["config"]["status"] == "fail"
-    assert "ntfy_topic" in found["config"]["detail"]
-    assert any("hands wait --for stop,held" in line for line in report["wake_check"])
+    assert "ntfy_topic" in strip_paths(found["config"]["detail"])
+    assert any("hands wait --for stop,held" in strip_paths(line) for line in report["wake_check"])
 
 
 def test_doctor_reports_a_missing_config_too(tmp_home: Path) -> None:
     """§14 step 1 runs doctor on a config that may not be there yet."""
     code, out, err = run()
     assert code == 1
-    assert "demo.toml" in out
+    assert "demo.toml" in strip_paths(out)
     assert err == ""
 
 
@@ -428,7 +434,7 @@ def test_other_commands_still_exit_with_the_bare_config_error(
     assert code == 1
     assert out.getvalue() == ""
     assert err.getvalue().startswith("hands: ")
-    assert "ntfy_topic" in err.getvalue()
+    assert "ntfy_topic" in strip_paths(err.getvalue())
 
 
 # ------------------------------------------------- the same surface over §9
@@ -455,6 +461,8 @@ def test_the_daemon_answers_doctor_over_the_api(
         assert found["daemon"]["status"] == "ok"
         assert str(daemon.socket_path) in found["daemon"]["detail"]
         assert found["live builder"]["status"] == "skip"
-        assert any("hands wait --for stop,held" in line for line in report["wake_check"])
+        assert any(
+            "hands wait --for stop,held" in strip_paths(line) for line in report["wake_check"]
+        )
 
     drive(body)

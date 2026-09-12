@@ -12,6 +12,7 @@ from pathlib import Path
 
 import pytest
 
+from conftest import strip_paths
 from hands.config import DEFAULT_GATE_PATTERNS
 from hands.daemon import Daemon
 from hands.gates import DECIDERS
@@ -71,7 +72,7 @@ def test_each_default_pattern_holds_the_job(project: str, pattern: str) -> None:
     async def body(daemon: Daemon) -> None:
         job = await send_gated(f"please {pattern} today")
         assert job["gate"]["reason"]
-        assert pattern in job["gate"]["reason"]
+        assert pattern in strip_paths(job["gate"]["reason"])
         assert job["gate"]["decided_by"] is None
         assert job["gate"]["decided_at"] is None
         kinds = [event["kind"] for event in (await ok("inbox"))["events"]]
@@ -211,7 +212,7 @@ def test_a_denied_job_is_terminal(project: str) -> None:
             ["cancel", job["id"]],
         ):
             err = await fails(*argv)
-            assert "denied" in err, err
+            assert "denied" in strip_paths(err), err
         assert (await ok("result", job["id"]))["state"] == "denied"
         kinds = [event["kind"] for event in (await ok("inbox"))["events"]]
         assert "job.denied" in kinds
@@ -239,7 +240,7 @@ def test_nothing_else_releases_a_held_job(project: str) -> None:
 
         # not cancel — it is pointed back at the decision
         err = await fails("cancel", held["id"])
-        assert "approve" in err and "deny" in err
+        assert "approve" in strip_paths(err) and "deny" in strip_paths(err)
 
         assert (await ok("result", held["id"]))["state"] == "held"
 
@@ -287,7 +288,7 @@ def test_approval_respects_the_roles_queue_depth(project: str) -> None:
 
         held = await send_gated("open the PR\nFAKE:result late")
         err = await fails("approve", held["id"])
-        assert "queue" in err.lower()
+        assert "queue" in strip_paths(err.lower())
         assert (await ok("result", held["id"]))["state"] == "held"
 
     drive(body)
@@ -325,7 +326,7 @@ def test_a_denied_cancel_leaves_the_job_running(project: str) -> None:
 
         # and the gate is spent: a new cancel must be asked for again
         err = await fails("approve", job["id"])
-        assert "no gate" in err.lower() or "nothing" in err.lower()
+        assert "no gate" in strip_paths(err.lower()) or "nothing" in strip_paths(err.lower())
 
     drive(body)
 
@@ -344,7 +345,7 @@ def test_approve_needs_something_to_decide(project: str) -> None:
         done = await ok(*SEND, "FAKE:result fine")
         await ok("wait", done["id"])
         err = await fails("approve", done["id"])
-        assert "no gate" in err.lower() or "nothing" in err.lower()
+        assert "no gate" in strip_paths(err.lower()) or "nothing" in strip_paths(err.lower())
 
     drive(body)
 
@@ -354,13 +355,13 @@ def test_the_readable_form_shows_the_gate(project: str) -> None:
         job = await send_gated()
         code, out, _ = await cli("result", job["id"])
         assert code == 0
-        assert "held" in out
-        assert "waiting for a human" in out
+        assert "held" in strip_paths(out)
+        assert "waiting for a human" in strip_paths(out)
 
         await ok("approve", job["id"], "--human-confirmed", "--quote", QUOTE)
         code, out, _ = await cli("result", job["id"])
-        assert "approved by driver" in out
-        assert QUOTE in out, "the human's instruction is stored verbatim (§8)"
+        assert "approved by driver" in strip_paths(out)
+        assert QUOTE in strip_paths(out), "the human's instruction is stored verbatim (§8)"
 
     drive(body)
 

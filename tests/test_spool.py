@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+from conftest import strip_paths
 from hands import spool as spool_mod
 from hands.spool import (
     INITIAL_STATES,
@@ -192,7 +193,7 @@ def test_every_illegal_transition_is_refused(tmp_home: Path, start: str, end: st
     before = (spool.jobs_dir / f"{job.id}.json").read_bytes()
     with pytest.raises(IllegalTransition) as exc:
         spool.transition(job, end)
-    assert start in str(exc.value) and end in str(exc.value)
+    assert start in strip_paths(str(exc.value)) and end in strip_paths(str(exc.value))
     assert (spool.jobs_dir / f"{job.id}.json").read_bytes() == before
     assert spool.load_job(job.id).state == start
 

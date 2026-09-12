@@ -12,6 +12,7 @@ from pathlib import Path
 
 import pytest
 
+from conftest import strip_paths
 from hands.daemon import Daemon
 from harness import PROJECT, cli, config_body, drive, fails, ok
 
@@ -121,10 +122,10 @@ def test_put_refuses_content_and_from_together(project: str, workdir: Path, drop
 
     async def body(daemon: Daemon) -> None:
         err = await fails("put", str(workdir / "t"), "--content", "x", "--from", str(drop / "src"))
-        assert "--content" in err and "--from" in err
+        assert "--content" in strip_paths(err) and "--from" in strip_paths(err)
         assert not (workdir / "t").exists()
         err = await fails("put", str(workdir / "t"))
-        assert "--content" in err or "--from" in err
+        assert "--content" in strip_paths(err) or "--from" in strip_paths(err)
 
     drive(body)
 
@@ -157,7 +158,11 @@ def test_every_file_command_is_confined_to_the_allowed_roots(
         for label, path in cases:
             argv = [command, path] + (["--content", "written!"] if command == "put" else [])
             err = await fails(*argv)
-            assert "allowed root" in err or "relative" in err or ".." in err, f"{label}: {err}"
+            assert (
+                "allowed root" in strip_paths(err)
+                or "relative" in strip_paths(err)
+                or ".." in strip_paths(err)
+            ), f"{label}: {err}"
         assert (outside / "secret.txt").read_text() == "do not read me"
 
     drive(body)
@@ -168,7 +173,7 @@ def test_put_from_outside_the_roots_is_refused(
 ) -> None:
     async def body(daemon: Daemon) -> None:
         err = await fails("put", str(workdir / "copy"), "--from", str(outside / "secret.txt"))
-        assert "allowed root" in err
+        assert "allowed root" in strip_paths(err)
         assert not (workdir / "copy").exists()
 
     drive(body)
@@ -210,7 +215,7 @@ def test_send_file_outside_the_roots_refuses_the_whole_send(
             "--file", f"{bad}=bad",
             "FAKE:result never",
         )
-        assert "allowed root" in err
+        assert "allowed root" in strip_paths(err)
         assert not good.exists(), "a refused send must not half-write its files"
         assert not bad.exists()
         assert (await ok("jobs"))["jobs"] == [], "no job may be created by a refused send"
@@ -225,7 +230,7 @@ def test_send_file_needs_a_path_equals_content_pair(project: str) -> None:
             "--file", "no-equals-sign",
             "FAKE:result never",
         )
-        assert "path=content" in err
+        assert "path=content" in strip_paths(err)
 
     drive(body)
 
@@ -234,12 +239,12 @@ def test_the_readable_form_of_put_get_and_ls(project: str, workdir: Path) -> Non
     async def body(daemon: Daemon) -> None:
         code, out, _ = await cli("put", str(workdir / "n.md"), "--content", "hello")
         assert code == 0
-        assert sha("hello") in out and "5 bytes" in out
+        assert sha("hello") in out and "5 bytes" in strip_paths(out)
 
         code, out, _ = await cli("get", str(workdir / "n.md"))
-        assert code == 0 and "hello" in out
+        assert code == 0 and "hello" in strip_paths(out)
 
         code, out, _ = await cli("ls", str(workdir))
-        assert code == 0 and "n.md" in out and "file" in out
+        assert code == 0 and "n.md" in strip_paths(out) and "file" in strip_paths(out)
 
     drive(body)

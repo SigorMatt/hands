@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+from conftest import strip_paths
 from hands.config import (
     DEFAULT_GATE_PATTERNS,
     ConfigError,
@@ -61,7 +62,7 @@ def test_config_path_is_under_the_hands_dir(tmp_home: Path) -> None:
 def test_missing_config_is_an_error(tmp_home: Path) -> None:
     with pytest.raises(ConfigError) as exc:
         load_config("nope")
-    assert "nope.toml" in str(exc.value)
+    assert "nope.toml" in strip_paths(str(exc.value))
 
 
 def test_unparseable_toml_is_an_error(write_config) -> None:
@@ -194,7 +195,7 @@ def test_roles_table_is_required(write_config) -> None:
     write_config("[server]\nntfy_topic = 'x'\n")
     with pytest.raises(ConfigError) as exc:
         load_config("demo")
-    assert "roles.builder" in str(exc.value)
+    assert "roles.builder" in strip_paths(str(exc.value))
 
 
 def test_unknown_role_is_refused(write_config) -> None:
@@ -208,21 +209,21 @@ cwd = "~/git/demo"
     )
     with pytest.raises(ConfigError) as exc:
         load_config("demo")
-    assert "helper" in str(exc.value)
+    assert "helper" in strip_paths(str(exc.value))
 
 
 def test_role_without_cwd_is_refused(write_config) -> None:
     write_config("[roles.builder]\nmodel = 'opus'\n")
     with pytest.raises(ConfigError) as exc:
         load_config("demo")
-    assert "cwd" in str(exc.value)
+    assert "cwd" in strip_paths(str(exc.value))
 
 
 def test_relative_role_cwd_is_refused(write_config) -> None:
     write_config("[roles.builder]\ncwd = 'git/demo'\n")
     with pytest.raises(ConfigError) as exc:
         load_config("demo")
-    assert "absolute" in str(exc.value)
+    assert "absolute" in strip_paths(str(exc.value))
 
 
 def test_relative_allowed_root_is_refused(write_config) -> None:
@@ -236,7 +237,7 @@ allowed_roots = ["git/demo"]
     )
     with pytest.raises(ConfigError) as exc:
         load_config("demo")
-    assert "absolute" in str(exc.value)
+    assert "absolute" in strip_paths(str(exc.value))
 
 
 def test_empty_allowed_roots_is_refused(write_config) -> None:
@@ -263,11 +264,11 @@ def test_an_empty_resume_line_is_refused(write_config) -> None:
     with pytest.raises(ConfigError) as exc:
         load_config("demo")
     message = str(exc.value)
-    assert "demo.toml" in message  # the `path` context every config error carries
-    assert "[roles.builder]" in message
-    assert "resume_line" in message
-    assert "omit" in message  # choice 1: leave the key out
-    assert "non-empty" in message  # choice 2: give a real line
+    assert "demo.toml" in strip_paths(message)  # the `path` context every config error carries
+    assert "[roles.builder]" in strip_paths(message)
+    assert "resume_line" in strip_paths(message)
+    assert "omit" in strip_paths(message)  # choice 1: leave the key out
+    assert "non-empty" in strip_paths(message)  # choice 2: give a real line
 
 
 def test_a_whitespace_only_resume_line_is_refused(write_config) -> None:
@@ -275,8 +276,8 @@ def test_a_whitespace_only_resume_line_is_refused(write_config) -> None:
     write_config("[roles.aux]\ncwd = '~/g'\n[roles.builder]\ncwd = '~/g'\nresume_line = '   '\n")
     with pytest.raises(ConfigError) as exc:
         load_config("demo")
-    assert "resume_line" in str(exc.value)
-    assert "non-empty" in str(exc.value)
+    assert "resume_line" in strip_paths(str(exc.value))
+    assert "non-empty" in strip_paths(str(exc.value))
 
 
 def test_an_empty_resume_line_on_aux_is_refused_too(write_config) -> None:
@@ -284,8 +285,8 @@ def test_an_empty_resume_line_on_aux_is_refused_too(write_config) -> None:
     write_config("[roles.builder]\ncwd = '~/g'\n[roles.aux]\ncwd = '~/g'\nresume_line = ''\n")
     with pytest.raises(ConfigError) as exc:
         load_config("demo")
-    assert "[roles.aux]" in str(exc.value)
-    assert "resume_line" in str(exc.value)
+    assert "[roles.aux]" in strip_paths(str(exc.value))
+    assert "resume_line" in strip_paths(str(exc.value))
 
 
 #: Every optional string key of §13, with `{v}` where the blank value goes.
@@ -378,10 +379,10 @@ def test_an_optional_string_key_refuses_a_blank_value(
     with pytest.raises(ConfigError) as exc:
         load_config("demo")
     message = str(exc.value)
-    assert "demo.toml" in message  # the `path` context every config error carries
-    assert where in message and key in message
-    assert "omit" in message  # choice 1: leave the key out
-    assert "non-empty" in message  # choice 2: give a real value
+    assert "demo.toml" in strip_paths(message)  # the `path` context every config error carries
+    assert where in strip_paths(message) and key in strip_paths(message)
+    assert "omit" in strip_paths(message)  # choice 1: leave the key out
+    assert "non-empty" in strip_paths(message)  # choice 2: give a real value
 
 
 def test_an_empty_monitor_cmd_cannot_make_the_ops_repo_the_monitor(write_config) -> None:
@@ -394,7 +395,7 @@ def test_an_empty_monitor_cmd_cannot_make_the_ops_repo_the_monitor(write_config)
     write_config("[roles.builder]\ncwd = '~/g'\n[ops]\nrepo = '~/ops'\nmonitor_cmd = ''\n")
     with pytest.raises(ConfigError) as exc:
         load_config("demo")
-    assert "monitor_cmd" in str(exc.value)
+    assert "monitor_cmd" in strip_paths(str(exc.value))
 
 
 @pytest.fixture
@@ -451,10 +452,10 @@ def test_a_monitor_cmd_that_is_not_a_script_in_the_ops_repo_is_refused_at_load(
     with pytest.raises(ConfigError) as exc:
         load_config("demo")
     message = str(exc.value)
-    assert "demo.toml" in message  # the `path` context every config error carries
-    assert "[ops]" in message and "monitor_cmd" in message
-    assert expected in message  # what is wrong with the value
-    assert advice in message  # what to do about it
+    assert "demo.toml" in strip_paths(message)  # the `path` context every config error carries
+    assert "[ops]" in strip_paths(message) and "monitor_cmd" in strip_paths(message)
+    assert expected in strip_paths(message)  # what is wrong with the value
+    assert advice in strip_paths(message)  # what to do about it
 
 
 @pytest.mark.parametrize("monitor_cmd", ["watch_monitor.sh", "sub/nested.sh"])
@@ -479,7 +480,7 @@ def test_the_ops_repo_directory_can_never_be_the_monitor_script() -> None:
     for cmd in (".", "./", "..", "../watch_monitor.sh", "/usr/bin/watch_monitor.sh"):
         with pytest.raises(ConfigError) as exc:
             OpsConfig(repo=Path("/x/ops"), monitor_cmd=cmd)
-        assert "monitor_cmd" in str(exc.value)
+        assert "monitor_cmd" in strip_paths(str(exc.value))
     ops = OpsConfig(repo=Path("/x/ops"), monitor_cmd="watch_monitor.sh")
     assert ops.monitor_path == Path("/x/ops/watch_monitor.sh")
 
@@ -495,21 +496,21 @@ def test_unknown_section_is_refused(write_config) -> None:
     write_config("[roles.builder]\ncwd = '~/git/demo'\n[nonsense]\nx = 1\n")
     with pytest.raises(ConfigError) as exc:
         load_config("demo")
-    assert "nonsense" in str(exc.value)
+    assert "nonsense" in strip_paths(str(exc.value))
 
 
 def test_unknown_key_in_a_known_section_is_refused(write_config) -> None:
     write_config("[roles.builder]\ncwd = '~/git/demo'\n[monitor]\nstall_secconds = 4\n")
     with pytest.raises(ConfigError) as exc:
         load_config("demo")
-    assert "stall_secconds" in str(exc.value)
+    assert "stall_secconds" in strip_paths(str(exc.value))
 
 
 def test_unknown_key_in_a_role_is_refused(write_config) -> None:
     write_config("[roles.builder]\ncwd = '~/git/demo'\nmodl = 'opus'\n")
     with pytest.raises(ConfigError) as exc:
         load_config("demo")
-    assert "modl" in str(exc.value)
+    assert "modl" in strip_paths(str(exc.value))
 
 
 @pytest.mark.parametrize(
