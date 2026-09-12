@@ -319,13 +319,14 @@ MID_MISSION_NOTE = (
 )
 
 
-def test_the_exact_shape_of_job_0mtygi953_is_failed_harness_terminated(
+def test_the_exact_shape_of_job_0mtygi953_is_done_under_the_section_6_precedence(
     runner: Runner, spool: Spool
 ) -> None:
-    """H-014: a final success result, num_turns 59, exit 0 — and the terminating line.
-
-    Only the stderr line tells this record apart from a finished turn, so that
-    line alone has to make it `failed`.
+    """H-014's record: a final success result, num_turns 59, exit 0 — and the
+    terminating line. DESIGN v3.7 §6: "a job with a `success` result, turns and
+    exit 0 is `done` whatever else stderr says" (review 7 should-fix 2). Mission
+    7a pinned this shape as `failed`; §6 now decides it the other way, and the
+    line stays in `stderr_tail` for a human to read.
     """
     job = send(
         runner,
@@ -335,11 +336,50 @@ def test_the_exact_shape_of_job_0mtygi953_is_failed_harness_terminated(
     assert job.exit_code == 0
     assert job.num_turns == 59
     assert job.result == MID_MISSION_NOTE
+    assert job.state == "done"
+    assert job.failure_reason is None
+    assert job.stderr_tail is not None and TERMINATING in strip_paths(job.stderr_tail)
+    assert spool.load_job(job.id).failure_reason is None
+    assert [event.kind for event in spool.events()] == ["job.done"]
+
+
+@pytest.mark.parametrize(
+    "missing",
+    [
+        "FAKE:no-turns",  # a success result, exit 0, no num_turns
+        "FAKE:exit 3",  # a success result with turns, exit non-zero
+        "FAKE:subtype error_during_execution",  # a result that is not `success`
+        "FAKE:error stopped",  # an error result
+        "FAKE:no-result",  # no result event at all
+    ],
+    ids=["no-turns", "nonzero-exit", "not-success-subtype", "error-result", "no-result"],
+)
+def test_the_terminating_line_fails_a_job_missing_any_of_success_turns_and_exit_0(
+    runner: Runner, spool: Spool, missing: str
+) -> None:
+    """§6: only the full `success` + turns + exit 0 shape overrides the line; take
+    away any one of the three and the recorded reason is `harness_terminated`."""
+    job = send(runner, spool, f"FAKE:stderr {TERMINATING}\nFAKE:result a note\n{missing}")
     assert job.state == "failed"
     assert job.failure_reason == "harness_terminated"
-    assert job.stderr_tail is not None and TERMINATING in strip_paths(job.stderr_tail)
-    assert spool.load_job(job.id).failure_reason == "harness_terminated"
-    assert [event.kind for event in spool.events()] == ["job.failed"]
+
+
+#: Review 7 should-fix 2, verbatim: the two lines the unanchored matcher took.
+REVIEW_7_OVER_MATCHES = (
+    "background tasks still running after 3 retries; terminating the loop",
+    "grep said: Background tasks still running after 600s; terminating.",
+)
+
+
+@pytest.mark.parametrize("line", REVIEW_7_OVER_MATCHES)
+def test_review_7s_over_match_lines_do_not_set_the_failure_reason(
+    runner: Runner, spool: Spool, line: str
+) -> None:
+    """On a run that fails for another reason, the review's lines are not read as
+    the harness's: the reason is the one the run itself earns."""
+    job = send(runner, spool, f"FAKE:stderr {line}\nFAKE:no-result")
+    assert job.state == "failed"
+    assert job.failure_reason == "no_final_result"
 
 
 def test_a_mid_turn_exit_with_no_result_event_is_failed(runner: Runner, spool: Spool) -> None:
@@ -444,18 +484,39 @@ def test_a_cancel_wins_over_the_terminating_line(runner: Runner, spool: Spool) -
         TERMINATING,
         "Background tasks still running after 1200s; terminating. "
         "Set CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS=0 to wait indefinitely.",
-        "Background tasks still running after 5s; terminating.",
-        "  background tasks still running after 90 s; Terminating",
-        "\x1b[33mBackground task still running after 600s; terminating.\x1b[0m",
+        "Background tasks still running after 0s; terminating. "
+        "Set CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS=0 to wait indefinitely.",
     ],
 )
-def test_the_terminating_line_is_matched_by_its_shape(line: str) -> None:
+def test_the_terminating_line_is_matched_by_its_exact_shape(line: str) -> None:
+    """The harness's message, one line (claude 2.1.270 writes it as one string):
+    line start, digits, the `s;` unit, and the `Set …_CEILING_MS` tail."""
     assert is_harness_termination(line)
 
 
 @pytest.mark.parametrize(
     "line",
     [
+        *REVIEW_7_OVER_MATCHES,
+        # Missing tail: the message without its `Set …` sentence.
+        "Background tasks still running after 5s; terminating.",
+        # H-014's display wrap: the tail on the next line is not on this one.
+        "Background tasks still running after 600s; terminating. Set",
+        # Leading text: whitespace, a terminal colour code, a quoting prefix.
+        " " + TERMINATING,
+        "\x1b[33m" + TERMINATING,
+        "stderr: " + TERMINATING,
+        # Wrong unit, a spaced unit, a non-integer count.
+        TERMINATING.replace("600s;", "600ms;"),
+        TERMINATING.replace("600s;", "600 s;"),
+        TERMINATING.replace("600s;", "1.5s;"),
+        TERMINATING.replace("600s;", "s;"),
+        # Case and wording: the harness's text is matched as it is written.
+        TERMINATING.lower(),
+        TERMINATING.replace("tasks", "task"),
+        TERMINATING.replace("terminating.", "Terminating."),
+        TERMINATING.replace("CEILING_MS", "CEILING"),
+        "  background tasks still running after 90 s; Terminating",
         "Background tasks still running after 600s; waiting.",
         "terminating",
         "the builder is terminating the U5 follow-up",

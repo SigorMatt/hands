@@ -17,6 +17,8 @@ import textwrap
 import tomllib
 from pathlib import Path
 
+import pytest
+
 from hands.api import Api
 from hands.config import parse_config
 from hands.playbook import ACTIONS, EVENTS
@@ -260,22 +262,50 @@ WAKE_STILL_OPEN = (
     "prints the procedure that answers it",
 )
 
-#: The sweep reads tracked text: these suffixes, plus any extensionless file
-#: whose first bytes are a `#!` line (a script such as `scripts/check`).
-#: `uv.lock` and `.gitignore` are data, not sentences, and are not read.
-SWEPT_SUFFIXES = (".md", ".py", ".toml", ".json", ".txt", ".service")
+#: Text-ness is decided by content, not by name (review 7 should-fix 4): a file
+#: is binary when its first block holds a NUL byte, and every other tracked file
+#: is read, whatever its suffix — a `.sh`, `.yml`, `.rst`, `uv.lock` or
+#: `.gitignore` alike.
+SNIFF_BYTES = 8192
 
-#: Tracked text the sweep does not read, by path class, each for a reason:
+#: Tracked text the sweep does not read, by path, each for a reason. `meta/`
+#: history is excluded class by class rather than `meta/` whole, so a live
+#: instruction file under `meta/` (`BUILDER-*-PROMPT.md`, `REVIEW-PROTOCOL.md`,
+#: `BACKLOG.md`, `ROADMAP.md`, or one added later) is read by default.
 SWEEP_EXCLUDED = (
-    # The builder's historical state: reports, reviews, findings and prompts
-    # quote the retired sentences verbatim, and §20 forbids rewriting a report.
-    "meta/",
+    # The builder's historical state: reports, reviews, findings, the journal,
+    # plan and checkpoint, prototypes and drafts quote the retired sentences
+    # verbatim, and §20 forbids rewriting a report.
+    "meta/reviews/",
+    "meta/findings/",
+    "meta/prototypes/",
+    "meta/drafts/",
+    "meta/journal.md",
+    "meta/plan.md",
+    "meta/CHECKPOINT.md",
+    "meta/FINAL-REPORT-",
     # §11's History paragraph and the changelogs quote the retired model, and
     # builders do not edit DESIGN.md (CLAUDE.md).
     "DESIGN.md",
     # This file: it holds the phrase lists, so every phrase is a hit in it.
     "tests/test_docs.py",
 )
+
+#: A live file that may carry one retired phrase, narrowly: (path, phrase) →
+#: reason. Architect files are not edited by builders, so a hit in one that is
+#: history-in-a-live-file is allowed here by name, never by path class.
+SWEEP_ALLOWED = {
+    ("meta/BUILDER-1-PROMPT.md", "background-wake check"): (
+        "mission 1's brief specifies the doctor output of its own U10, which §11 "
+        "and §22 later retired; the brief is the architect's, and mission 1 is done"
+    ),
+}
+
+
+def is_swept(where: str, head: bytes) -> bool:
+    """Is the tracked file at repo-relative `where`, whose first bytes are `head`,
+    read by the sweep? Text by content; excluded only by `SWEEP_EXCLUDED`."""
+    return not where.startswith(SWEEP_EXCLUDED) and b"\0" not in head[:SNIFF_BYTES]
 
 
 def swept_files() -> list[str]:
@@ -287,13 +317,57 @@ def swept_files() -> list[str]:
     swept = []
     for path in tracked_files():
         where = path.relative_to(ROOT).as_posix()
-        if where.startswith(SWEEP_EXCLUDED):
-            continue
-        if path.suffix in SWEPT_SUFFIXES or (
-            path.suffix == "" and path.is_file() and path.read_bytes()[:2] == b"#!"
-        ):
+        if not path.is_file():
+            continue  # a tracked path deleted in the working tree
+        with path.open("rb") as handle:
+            head = handle.read(SNIFF_BYTES)
+        if is_swept(where, head):
             swept.append(where)
     return swept
+
+
+@pytest.mark.parametrize(
+    ("where", "head", "swept"),
+    [
+        # Any suffix, or none, is read when its content is text.
+        ("scripts/new.sh", b"#!/bin/sh\necho hi\n", True),
+        (".github/workflows/ci.yml", b"on: push\n", True),
+        ("docs/NOTES.rst", b"Notes\n=====\n", True),
+        ("setup.cfg", b"[metadata]\n", True),
+        ("tox.ini", b"[tox]\n", True),
+        ("uv.lock", b"version = 1\n", True),
+        (".gitignore", b".venv/\n", True),
+        ("empty.txt", b"", True),
+        # A NUL in the first block is binary, whatever the name says.
+        ("docs/logo.png", b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR", False),
+        ("README.md", b"text then a NUL\0", False),
+        ("late.bin", b"a" * (SNIFF_BYTES - 1) + b"\0", False),
+        # Live instruction files under meta/ are read.
+        ("meta/REVIEW-PROTOCOL.md", b"# protocol\n", True),
+        ("meta/BUILDER-8-PROMPT.md", b"# mission 8\n", True),
+        ("meta/BUILDER-12-PROMPT.md", b"# a later mission\n", True),
+        ("meta/BACKLOG.md", b"# backlog\n", True),
+        ("meta/ROADMAP.md", b"# roadmap\n", True),
+        # meta/ history is not.
+        ("meta/journal.md", b"# journal\n", False),
+        ("meta/reviews/REVIEW-7.md", b"# review\n", False),
+        ("meta/findings/FINDINGS.md", b"# findings\n", False),
+        ("meta/prototypes/claudewho.py", b"import os\n", False),
+        ("meta/drafts/FINAL-REPORT-8.md", b"# draft\n", False),
+        ("meta/plan.md", b"# plan\n", False),
+        ("meta/CHECKPOINT.md", b"# checkpoint\n", False),
+        ("meta/FINAL-REPORT-7.md", b"# report\n", False),
+        ("DESIGN.md", b"# design\n", False),
+        ("tests/test_docs.py", b"import re\n", False),
+    ],
+    ids=lambda value: value if isinstance(value, str) else None,
+)
+def test_the_sweep_decides_text_by_content_and_excludes_meta_history_by_path(
+    where: str, head: bytes, swept: bool
+) -> None:
+    """Review 7 should-fix 4: text by a NUL in the first block, not a suffix list;
+    `meta/` history out by path, live `meta/` instructions in."""
+    assert is_swept(where, head) is swept
 
 
 def test_the_sweep_reads_every_tracked_text_file_and_only_excludes_path_classes() -> None:
@@ -310,11 +384,27 @@ def test_the_sweep_reads_every_tracked_text_file_and_only_excludes_path_classes(
         "tests/test_doctor.py",
         "systemd/handsd.service",
         "scripts/check",
+        "uv.lock",
+        ".gitignore",
+        "meta/REVIEW-PROTOCOL.md",
+        "meta/BUILDER-8-PROMPT.md",
+        "meta/BACKLOG.md",
+        "meta/ROADMAP.md",
     ):
         assert must in swept, f"the sweep does not read {must}"
-    assert len(swept) >= 40, f"the sweep read only {len(swept)} files: {swept}"
+    assert len(swept) >= 60, f"the sweep read only {len(swept)} files: {swept}"
     assert not [where for where in swept if where.startswith(SWEEP_EXCLUDED)]
-    assert "uv.lock" not in swept
+    for never in ("meta/journal.md", "meta/plan.md", "meta/CHECKPOINT.md", "DESIGN.md"):
+        assert never not in swept
+    # Every tracked file is either read or excluded by a named path class: no
+    # third group of silently skipped text.
+    unread = [
+        where
+        for path in tracked_files()
+        for where in [path.relative_to(ROOT).as_posix()]
+        if where not in swept and not where.startswith(SWEEP_EXCLUDED)
+    ]
+    assert not unread, f"tracked files neither swept nor excluded by path: {unread}"
 
 
 def test_nothing_shipped_says_the_driver_arms_or_blocks_on_a_wait() -> None:
@@ -335,16 +425,24 @@ def test_nothing_shipped_says_the_driver_arms_or_blocks_on_a_wait() -> None:
     background tasks; they are untouched by this, and the phrases below do not
     appear in them.
     """
-    offenders = [
-        f"{where}: {phrase!r}"
+    hits = [
+        (where, phrase)
         for where in swept_files()
-        for flat in [flattened((ROOT / where).read_text(encoding="utf-8")).lower()]
+        for flat in [
+            flattened((ROOT / where).read_text(encoding="utf-8", errors="replace")).lower()
+        ]
         for phrase in ARMED_WAIT + DRIVER_WAITS + WAKE_STILL_OPEN
         if phrase in flat
+    ]
+    offenders = [
+        f"{where}: {phrase!r}" for where, phrase in hits if (where, phrase) not in SWEEP_ALLOWED
     ]
     assert not offenders, "a shipped sentence still arms the retired wait (§11, §22):\n" + (
         "\n".join(offenders)
     )
+    # An allowance names a hit that is on disk; one that no longer hits is removed.
+    stale = sorted(set(SWEEP_ALLOWED) - set(hits))
+    assert not stale, f"sweep allowances that no longer match anything: {stale}"
     # The driver in particular waits for nothing it was not told to wait for:
     # §12 rule 8 leaves it `hands wait <job>` in the foreground after an
     # approval, and `--for stop,held` is the event wait it no longer arms. The

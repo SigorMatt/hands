@@ -744,6 +744,17 @@ the hook against a real `Agent` or `Task` call, so that the harness delivers
 those payloads to it, and blocks on exit 2, is read from the binary, not
 observed.
 
+**Status: precedence changed (mission 8 U1, the commit that carries this
+paragraph; DESIGN v3.7 §6, review 7 should-fix 2).** §6 now says "a job with a
+`success` result, turns and exit 0 is `done` whatever else stderr says", so the
+recorded shape of `0mtygi953-ym63` (success result, `num_turns` 59, exit 0, the
+terminating line) is `done` again, and the test that pinned it `failed` now pins
+it `done`. The terminating line still makes a job `failed`/`harness_terminated`
+when any one of the three is missing, and it is matched only in the harness's
+exact one-line shape, case-sensitive, from the line start through `Set
+CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS=`. For this finding's own case the defence
+is now the ceiling at 0 and the hook (§2), not the runner's classification.
+
 ## H-015 — a held job can be decided from the phone only by a declaration
 
 Severity: medium · Component: DESIGN §8 (human gates), §11 (notifications),

@@ -42,7 +42,8 @@ each invocation takes the next one, in order (the position is kept in a sibling
 exhausted queue falls back to the default result. An entry may also be an object,
 `{"result": <text>, "stderr": <text>}`: its `stderr` is written to stderr when the
 entry is taken, which is how a playbook-issued job ends the way the harness ends
-one it terminates (H-014). A reply is taken only on the path that emits a
+one it terminates (H-014); `"no_turns": true` in it leaves `num_turns` out of the
+result event, as `FAKE:no-turns` does. A reply is taken only on the path that emits a
 successful result, so a prompt with `FAKE:error`, `FAKE:no-result` or
 `FAKE:rate-limit` leaves the queue where it was.
 
@@ -188,8 +189,9 @@ def _scripted() -> object | None:
     return replies[taken]
 
 
-def _reply() -> str | None:
-    """The next scripted reply's result text, writing its `stderr` first if it has one."""
+def _reply() -> tuple[str | None, dict[str, object]]:
+    """The next scripted reply's result text and its entry (`{}` for a bare string),
+    writing its `stderr` first if it has one."""
     entry = _scripted()
     if isinstance(entry, dict):
         stderr = entry.get("stderr")
@@ -197,23 +199,29 @@ def _reply() -> str | None:
             sys.stderr.write(stderr if stderr.endswith("\n") else stderr + "\n")
             sys.stderr.flush()
         result = entry.get("result")
-        return None if result is None else str(result)
-    return None if entry is None else str(entry)
+        return (None if result is None else str(result)), entry
+    return (None if entry is None else str(entry)), {}
 
 
-def _result(one) -> str | None:  # noqa: ANN001
-    """`FAKE:cat <path>` proves a file was on disk *before* claude was spawned."""
+def _result(one) -> tuple[str, dict[str, object]]:  # noqa: ANN001
+    """The result text, and the scripted reply entry it came from (`{}` if none).
+
+    `FAKE:cat <path>` proves a file was on disk *before* claude was spawned."""
     name = one("env")
     if name is not None:
-        return os.environ.get(name, f"UNSET:{name}")
+        return os.environ.get(name, f"UNSET:{name}"), {}
     path = one("cat")
     if path is None:
-        return one("result") or _reply() or "ok"
+        given = one("result")
+        if given:
+            return given, {}
+        text, entry = _reply()
+        return text or "ok", entry
     try:
         with open(path, encoding="utf-8") as handle:
-            return handle.read()
+            return handle.read(), {}
     except OSError:
-        return f"MISSING:{path}"
+        return f"MISSING:{path}", {}
 
 
 #: What `claude --version` prints, in the shape the real binary uses
@@ -322,7 +330,10 @@ def main(argv: list[str]) -> int:
         emit(subtyped({**common, "is_error": True, "errors": [one("error", "") or ""]},
                       "error_during_execution"))
         return exit_code or 1
-    emit(subtyped({**common, "is_error": False, "result": _result(one)}, "success"))
+    text, entry = _result(one)
+    if entry.get("no_turns") is True:
+        common.pop("num_turns", None)
+    emit(subtyped({**common, "is_error": False, "result": text}, "success"))
     return exit_code
 
 

@@ -115,15 +115,18 @@ _RATE_LIMIT = "rate_limit"
 # evidence in meta/findings/FINDINGS.md H-001).
 _NON_ALNUM_RE = re.compile(r"[^a-zA-Z0-9]")
 
-# §23 (H-014). claude 2.1.269 writes, when its bg-wait ceiling ends a `-p` run:
-#   `Background tasks still running after ${Math.round(ms/1000)}s; terminating.
-#    Set CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS=0 to wait indefinitely.`
-# (read from the binary; the job 0mtygi953-ym63 line is that, with 600). Matched on
-# its shape, so neither the number, its unit, the case, a singular "task" nor
-# terminal colour codes around it change the answer.
+# §6 (H-014, review 7 should-fix 2). claude 2.1.269 and 2.1.270 write, when the
+# bg-wait ceiling ends a `-p` run, one string with no newline in it:
+#   `Background tasks still running after ${Math.round(A/1000)}s; terminating.`
+#   ` Set CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS=0 to wait indefinitely.`
+# (shown in two pieces here for width only; read from the binary; job
+# 0mtygi953-ym63's line is that, with 600). Anchored to that exact shape,
+# case-sensitive as written: the line starts with it, the count is digits, the
+# unit is `s;`, and the `Set CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS=` tail is on
+# the same line. What follows the `=` is not read.
 _TERMINATING_RE = re.compile(
-    r"background tasks? still running after\s+\d[\d.,]*\s*[a-z]*\s*;\s*terminating\b",
-    re.IGNORECASE,
+    r"Background tasks still running after [0-9]+s; terminating\. "
+    r"Set CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS="
 )
 
 #: Every `failure_reason` the runner writes, in the order it checks them (§23):
@@ -135,6 +138,8 @@ _TERMINATING_RE = re.compile(
 #:   spawn_error         the process could not be started at all
 #: The first that holds is the one recorded. A cancel (`killed`) and a detected
 #: limit (`limited`) are decided before any of these, and their reason is null.
+#: The terminating line never overrides a `success` result with `num_turns` and
+#: exit 0: that job is `done` whatever else stderr says (DESIGN v3.7 §6).
 FAILURE_REASONS: tuple[str, ...] = (
     "harness_terminated",
     "no_final_result",
@@ -174,8 +179,8 @@ def extract_verdict(result: str | None) -> str | None:
 
 
 def is_harness_termination(line: str) -> bool:
-    """Does this stderr line say the harness terminated the `-p` process? (§23)"""
-    return _TERMINATING_RE.search(line) is not None
+    """Does this stderr line say the harness terminated the `-p` process? (§6)"""
+    return _TERMINATING_RE.match(line) is not None
 
 
 def _is_final_subtype(subtype: str | None) -> bool:
@@ -647,7 +652,14 @@ def _final_state(
 
 def _failure_reason(parsed: _Parsed, exit_code: int | None) -> str | None:
     """The first of `FAILURE_REASONS` that holds for a finished run, or None."""
-    if parsed.harness_terminated:
+    succeeded = (
+        parsed.saw_result
+        and parsed.subtype == "success"
+        and not parsed.is_error
+        and parsed.num_turns is not None
+        and exit_code == 0
+    )
+    if parsed.harness_terminated and not succeeded:
         return "harness_terminated"
     if not parsed.saw_result or not _is_final_subtype(parsed.subtype):
         return "no_final_result"
