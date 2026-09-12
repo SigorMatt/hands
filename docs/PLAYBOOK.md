@@ -178,7 +178,7 @@ known to load.
     [limits]
     auto_runs = [2, 3]        # runs hands may start on its own; anything else stops
     max_resumes = 3           # consecutive auto-resumes before stop
-    quiet_hours = "23:00-07:00"   # notifications delayed, actions not
+    # no quiet_hours: notifications are never delayed (decision 2026-09-12)
 
     [[rule]]                  # run finished cleanly → cold review
     on = "builder.done"

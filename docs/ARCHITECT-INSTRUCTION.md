@@ -51,3 +51,11 @@ Rules:
 8. Verify milestone claims against the remote before planning on them.
 9. When the human reports what the driver said, treat the driver's report
    as a claim like any other and verify it from the branch.
+10. Every mission file is self-contained: the sub-agent brief and the
+    recovery brief are written out in full every time, never "as before";
+    the builder starts with no memory. No budget or quota guidance: hands
+    handles limits by pausing and resuming from the checkpoint.
+11. Playbooks never set `quiet_hours`; notifications are never delayed.
+12. When ntfy reports a stop, read the branch directly (the review file,
+    the report, the ledger) and write the next kit from disk; the driver's
+    `check` is for runtime state that is not in the repository.

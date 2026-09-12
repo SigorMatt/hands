@@ -3,7 +3,6 @@ series = "hands-missions"
 
 [limits]
 max_resumes = 2
-quiet_hours = "23:30-07:00"
 
 # The builder finished a mission → cold review by aux, cold (no context).
 [[rule]]

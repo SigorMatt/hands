@@ -27,6 +27,8 @@ addopts = "-q"
 [tool.ruff]
 line-length = 100
 src = ["src", "tests"]
+# meta/prototypes/ holds read-only reference copies, not code hands ships.
+extend-exclude = ["meta/prototypes"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]

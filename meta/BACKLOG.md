@@ -3,7 +3,7 @@
 Maintained by the architect; the builder does not act on this file. Each
 item names the mission it is scheduled for; unscheduled items say so.
 
-## Mission 7b (7a, 2026-09-12, closes review 6 and the harness termination)
+## Mission 8 (scheduled 2026-09-13; was 7b)
 
 1. **Harness-killed background tasks are detected.** The monitor watches
    each role job's stream-json for the harness's task-killed notice and

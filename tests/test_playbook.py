@@ -190,7 +190,7 @@ def test_the_example_parses_into_the_rules_of_section_10(tmp_home: Path, workdir
     assert book.series == "audit-fixes"
     assert book.auto_runs == (2, 3)
     assert book.max_resumes == 3
-    assert book.quiet_hours == "23:00-07:00"
+    assert book.quiet_hours is None
     assert [(rule.on, rule.then) for rule in book.rules] == [
         ("builder.done", "send"),
         ("aux.done", "send"),

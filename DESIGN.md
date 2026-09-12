@@ -1,12 +1,13 @@
-# hands — DESIGN v3.6
+# hands — DESIGN v3.7
 
 Machinery that replaces the human relay between the planning brain and the two
 Claude Code roles (builder, aux) on the Ubuntu laptop, and that keeps a series
 moving without a human while everything goes by plan. Working name: `hands`.
 The method it serves is described in WORKING-MODEL.md (agile-skills) and
 OPERATING-MODEL.md (spanweave); hands changes the topology, not the method.
-v3.6 (2026-09-12) folds in the mission 6 review and the first harness
-termination of a role job; changes are in §23; earlier changes in §22–§17.
+v3.7 (2026-09-13) folds in the mission 7a review and specifies mission 8
+(detectors, the phone channel, `hands who`); changes are in §24; earlier
+changes in §23–§17.
 
 Status: proposal, 2026-09-10. Items marked DECIDED were settled in discussion.
 
@@ -103,6 +104,15 @@ Consequences:
 - Never pass `--bare`: CLAUDE.md, agents, hooks and the sub-agent model must
   load exactly as they do today.
 - Monitoring is done by hands from outside the process (§5).
+- Sub-agents run in the foreground. `claude -p` waits for a *background*
+  sub-agent at most `CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS` (600 s by
+  default) and then terminates the whole session with a progress note as
+  its result (observed 2026-09-12, mission 6, job `0mtygi953-ym63`). hands
+  sets that variable to `0` in every role job's environment unless the
+  config's `[roles.<r>] env` table overrides it; the `PreToolUse` hook in
+  every driven repository refuses background sub-agents as it refuses
+  background Bash; and a session the harness terminates is filed `failed`
+  (§6), so the playbook's `resume` rule applies.
 - Cancel = SIGINT, wait, then SIGTERM. Resuming after a cancel is allowed.
 - Never resume a session whose job is still running. For a live job use
   `hands log -f <role>`; for a finished one, `hands open <job>` (§7).
@@ -167,6 +177,7 @@ JSON with `--json` (the driver uses that) or a readable form for you.
 | `pause` / `resume` | — | pause/unpause the playbook engine |
 | `status` | — | daemon, roles, running jobs, monitor state (`queue_depth` is capacity; `queued` is contents) |
 | `notify` | `--test "<message>"` | sends one ntfy message to the configured topic; the first real proof of delivery |
+| `who` | `[--daemon]` | the one-screen picture: this daemon's jobs and pipeline, every other `claude` process from /proc, interactive sessions' waiting/working state from their transcripts; `--daemon` (also the `handswho` entry point) pushes it on change and on request (§11) |
 | `doctor` | — | claude binary, ops script flags, allowed roots, one-turn `claude -p` per role, background-wake check (§11) |
 
 Gating is triggered by `--gate` or by configured prompt patterns (defaults:
@@ -220,10 +231,18 @@ Job record (returned verbatim, stored forever):
     stderr_tail       # last 50 lines
     permission_denials, num_turns, duration_ms, total_cost_usd
     limit             # {category, message, reset_at} when state == limited
+    failure_reason    # harness_terminated | nonzero_exit | no_result, when failed
     gate              # {reason, decided_by: cli|driver|button, decided_at}
     resumed_from      # job id, when this job is an auto-resume
 
 Rules:
+- A job is `failed` when the process ends without a final `result` event
+  of subtype `success` or `error` (`no_result`), when it exits non-zero
+  without a limit (`nonzero_exit`), or when stderr carries the harness's
+  own termination line, anchored to its exact shape (`harness_terminated`).
+  Precedence: a cancel stays `killed` and a limit stays `limited` even when
+  the termination line is present; a job with a `success` result, turns
+  and exit 0 is `done` whatever else stderr says.
 - One running job per role. A `send` to a busy role is queued (FIFO);
   builder queue depth 1, aux 4 (configurable).
 - `keep` resumes `roles/<role>.json: last_session_id`; refused if absent or
@@ -364,7 +383,7 @@ allowed: `{n+1}`), and job fields: `{job.id}`, `{job.head_at_start}`,
     [limits]
     auto_runs = [2, 3]        # runs hands may start on its own; anything else stops
     max_resumes = 3           # consecutive auto-resumes before stop
-    quiet_hours = "23:00-07:00"   # notifications delayed, actions not
+    # no quiet_hours: notifications are never delayed (decision 2026-09-12)
 
     [[rule]]                  # run finished cleanly → cold review
     on = "builder.done"
@@ -474,7 +493,8 @@ and it is not worth its price on Claude Code 2.1.x.
 
 **Notifications** (ntfy, in scope — it is how you learn you are needed):
 `stop`, `job.held`, `max_resumes` exhausted, daemon start/crash. Not for
-routine progress. `quiet_hours` delays them; actions are never delayed.
+routine progress. `quiet_hours` exists but no playbook of this project sets it; notifications
+are never delayed (decision 2026-09-12).
 Topic: random, private; ntfy.sh or self-hosted (§16).
 
 ---
@@ -569,6 +589,8 @@ playbook path):
     model = "opus"
     permission_flags = "--dangerously-skip-permissions"
     queue_depth = 4
+    # [roles.aux.env] overrides the environment hands gives the role; hands
+    # sets CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS=0 unless a table sets it.
 
     [ops]
     repo = "~/spanweave-ops"
@@ -827,3 +849,64 @@ one-time checks in step 4.
   blocker 1, should-fix 1); positionals are refused under the name the
   human typed (should-fix 5); the UTF-8 check walks the same tree the size
   measurement walks (should-fix 4).
+
+---
+
+## 24. Changes from v3.6 (mission 7a review; mission 8 specification)
+
+Review 7a items:
+- §2, §6, §13 now carry the harness-termination rule the changelog claimed
+  (review 7 should-fix 1); the terminating-line matcher is anchored to the
+  harness's exact message and never overrides a successful result
+  (should-fix 2); a mission's U0 commit uses the `plan:` prefix, since it
+  changes gate inputs (should-fix 3); the doc sweep reads every tracked
+  file except binary ones, with `meta/` history excluded by path but live
+  instruction files under `meta/` included (should-fix 4); `hands show`'s
+  `failure` line is pinned by a test (review 7 blocker 1).
+
+Mission 8, the detectors:
+- `monitor.task_killed`: the monitor watches each role job's stream-json
+  for the harness's task-killed notice and files the event with the task's
+  command line.
+- Per-job scope: the runner starts each `claude -p` inside a transient
+  systemd user scope (`systemd-run --user --scope`) when available, else a
+  new process group; the monitor reads the scope's `cgroup.procs` for the
+  live pid set (and passes it as `--pids`); at job end anything still in
+  the scope is filed as `monitor.orphan_processes` with its command lines,
+  then the scope is killed. Cgroup membership survives double forks; the
+  process-group fallback does not, and `hands doctor` says which is in
+  force.
+- The example playbook maps `monitor.task_killed` and
+  `monitor.orphan_processes` to `stop`.
+
+Mission 8, the phone channel (§8, §11):
+- `[notify]` config section: `ntfy_url`, `ntfy_topic` (events, as today),
+  `cmd_topic` (commands, optional), `cmd_secret` (required when `cmd_topic`
+  is set), `who_topic`, `who_cmd_topic` (optional). All topics random.
+- `handsd` subscribes to `cmd_topic` (outbound long-poll; no ingress) and
+  accepts `approve <job>`, `deny <job> [reason]`, `pause`, `resume`,
+  `status` (answered by publishing a status summary to `ntfy_topic`).
+  Typed commands carry `cmd_secret` as their last word; a held-job
+  notification carries Approve/Deny action buttons that publish
+  `approve <job> <nonce>` / `deny <job> <nonce>` where the nonce is 32
+  random bytes minted per held job, single-use, dying with the job; the
+  long-term secret is never placed in a notification. Decisions taken this
+  way are `decided_by: phone`, the first authenticated approval path
+  (§8's declaration limitation applies to the driver only).
+- Nothing but commands and status lines ever travels either topic.
+
+Mission 8, `hands who` (§4, §11): the claudewho prototype (2026-09-12)
+folded in; reads this daemon's state in-process; labels roles `role <r>`,
+the human's own interactive session in a role directory `(your session)`,
+driver directories `driver:<project>`; a hierarchy of daemon → jobs →
+processes and session → processes; session states debounced over two
+scans; the human's own sessions shown but never fingerprinted; pushes on
+change and on a `status`/`who`/`check`/`?` command on `who_cmd_topic`;
+ships as an optional user unit `handswho.service`, off unless enabled;
+`hands doctor` reports notifications, the command channel and who as
+on/off, never as errors.
+
+Conventions (docs/ARCHITECT-INSTRUCTION.md): mission files are
+self-contained (the sub-agent brief and §R written out every time); no
+budget guidance, since limits pause and resume; no `quiet_hours`; the
+architect reads the branch on ntfy and writes the next kit from disk.

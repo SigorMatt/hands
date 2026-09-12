@@ -7,12 +7,13 @@ then an install (`uv tool install --force`) and a driver-kit refresh.
   limits, monitor, inbox, ntfy, driver kit.
 - **M2 Shakeout on hands itself** — DONE 2026-09-11 (mission 2). A run
   chained into a cold review with no human action between; ntfy proven.
-- **M3 Hardening by review** — missions 3–6, IN PROGRESS. Each review's
+- **M3 Hardening by review** — missions 3–7a, DONE 2026-09-12: the
+  mission-7a build is installed; reviews now find claims, not code. Each review's
   blockers closed by the next mission; the Bash guard converges on a
   per-subcommand option allowlist; the driver's background wait retired;
   determinism as a property. Gate: a mission whose cold review has zero
   blockers, so a build can be installed and the driver kit refreshed.
-- **M4 Detectors and the phone channel** — mission 7. Harness-killed
+- **M4 Detectors and the phone channel** — mission 8. Harness-killed
   background tasks detected from the stream; per-job systemd scope with
   orphan accounting; ntfy command channel with authenticated approvals
   (`decided_by: phone`); REVIEW-3's deferred items. Gate: clean review,
