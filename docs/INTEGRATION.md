@@ -232,9 +232,12 @@ file, and one over the 10 MB cap are each refused by the client, before the
 daemon is contacted, with one line naming the file. `--stdin` gets the same
 size, emptiness and encoding refusals, in the same place, with the same message
 and the same exit code: one prompt cannot get two answers by changing route.
-(Under `PYTHONUTF8=1` stdin decodes bad bytes to lone surrogates rather than
-failing, so the client checks the text it was handed, not the route it came
-by.)
+Bytes that are not UTF-8 are refused the same way on all three routes,
+including a prompt typed as an argument — Python decodes `argv` and stdin with
+`surrogateescape`, so those bytes arrive as text the client cannot encode
+rather than as a read that fails, and every string a request carries (`--gate`,
+`--file`, `--content`) is checked the same way before the request is
+measured.
 
 The cap is counted as the prompt appears **on the wire**: the request is JSON,
 and JSON spends two bytes on a `"` or a `\` and six on a control byte, so a

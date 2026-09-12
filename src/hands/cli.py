@@ -924,6 +924,30 @@ def _wire_bytes(text: str) -> int:
 _PART_LABELS = {"prompt": "the prompt", "gate": "--gate", "content": "--content"}
 
 
+def _utf8_bytes(text: str, where: str) -> bytes:
+    """`text` as the bytes it will go on the wire as, or §4's refusal of it.
+
+    The one place a string a human handed the client is refused for not being
+    UTF-8 (review 5 should-fix 7, and blocker 1's shape one field over). Under
+    `PYTHONUTF8=1` the interpreter decodes stdin *and* `argv` with
+    `errors="surrogateescape"`, so bytes that `--prompt-file` refuses by reading
+    them arrive through the other routes as lone surrogates — text everywhere
+    else in the client, and unencodable at the one step that has to encode it.
+    Unrefused, that surfaced as a bare `hands: 'utf-8' codec can't encode
+    characters…` with exit 1, from inside the wire measurement, for a string the
+    human typed at the command line.
+
+    `where` is the name the human knows the string by, and it is made printable
+    first: a `--file` label carries the path it was given, which is exactly the
+    kind of string that may be unprintable here.
+    """
+    try:
+        return text.encode("utf-8")
+    except UnicodeEncodeError as exc:
+        named = where.encode("utf-8", "backslashreplace").decode("utf-8")
+        raise PromptError(f"{named}: not UTF-8 text ({exc})") from exc
+
+
 def _hollow(value: Any) -> Any:
     """`value` with every string emptied: its shape, without its content.
 
@@ -968,11 +992,8 @@ def _wire_size(request: Mapping[str, Any]) -> int:
     return len(shape) + sum(_wire_bytes(text) for text in _strings(request))
 
 
-def _wire_parts(params: Mapping[str, Any]) -> list[tuple[str, int]]:
-    """What each string a request carries costs on the wire, under the name the
-    human typed it as. Only ever used to say which part of an over-long request
-    is the largest, so they know which one to move out of the command line."""
-    parts: list[tuple[str, int]] = []
+def _labelled_strings(params: Mapping[str, Any]) -> Iterator[tuple[str, str]]:
+    """Every string a request carries, under the name the human typed it as."""
     for key, value in params.items():
         for item in value if isinstance(value, list) else [value]:
             if not isinstance(item, str):
@@ -980,8 +1001,14 @@ def _wire_parts(params: Mapping[str, Any]) -> list[tuple[str, int]]:
             label = _PART_LABELS.get(key, f"--{key}")
             if key == "file":  # `--file path=content`: the path is the name of it
                 label = f"--file {item.split('=', 1)[0]}"
-            parts.append((label, _wire_bytes(item)))
-    return parts
+            yield label, item
+
+
+def _wire_parts(params: Mapping[str, Any]) -> list[tuple[str, int]]:
+    """What each string a request carries costs on the wire. Only ever used to
+    say which part of an over-long request is the largest, so the human knows
+    which one to move out of the command line."""
+    return [(label, _wire_bytes(text)) for label, text in _labelled_strings(params)]
 
 
 def _checked_request(request: Mapping[str, Any]) -> None:
@@ -991,11 +1018,19 @@ def _checked_request(request: Mapping[str, Any]) -> None:
     big" without a size says nothing about what to drop. The envelope is what
     the total is not: the method, the id, the keys, the role, the context — so a
     request that is over the limit on those alone still names something.
+
+    Measuring means encoding, so every string is checked for being UTF-8 at all
+    first, under its own name: the prompt is not the only one argv carries, and
+    `--gate`, `--file` and `--content` used to die inside the measurement with a
+    codec message and exit 1 (review 5 should-fix 7).
     """
+    params = request.get("params")
+    if isinstance(params, Mapping):
+        for label, text in _labelled_strings(params):
+            _utf8_bytes(text, label)
     total = _wire_size(request)
     if total <= LINE_LIMIT:
         return
-    params = request.get("params")
     parts = _wire_parts(params) if isinstance(params, Mapping) else []
     parts.append(("the envelope", total - sum(size for _, size in parts)))
     label, size = max(parts, key=lambda part: part[1])
@@ -1026,10 +1061,7 @@ def _checked_prompt(text: str, where: str) -> str:
     'utf-8' codec can't encode characters…` with exit 1, from inside the wire
     measurement, for a prompt the human named at the command line.
     """
-    try:
-        raw = text.encode("utf-8")
-    except UnicodeEncodeError as exc:
-        raise PromptError(f"{where}: not UTF-8 text ({exc})") from exc
+    raw = _utf8_bytes(text, where)
     if not text.strip():
         raise PromptError(f"{where} is empty; refusing to send an empty prompt")
     size = len(raw)
@@ -1125,4 +1157,9 @@ def _prompt_of(args: argparse.Namespace, stdin: TextIO) -> str:
         return _checked_prompt(stdin.read(), "--stdin")
     if args.prompt is None:
         raise ValueError(f"send needs a prompt: {_PROMPT_ROUTES}")
+    # §4 names three routes and `_checked_prompt`'s refusals are written for the
+    # two that carry a whole file. The one an argument shares with them is this:
+    # argv is decoded with `surrogateescape` too, so a prompt pasted at the
+    # command line can be un-encodable text (review 5 should-fix 7).
+    _utf8_bytes(args.prompt, "a prompt argument")
     return args.prompt

@@ -393,34 +393,58 @@ def test_send_refuses_a_prompt_file_that_is_not_utf8(project: str, tmp_path: Pat
     assert str(path) in err and "UTF-8" in strip_paths(err)
 
 
-@pytest.mark.parametrize("route", ["--prompt-file", "--stdin"])
-def test_every_prompt_route_refuses_bytes_that_are_not_utf8_the_same_way(
-    project: str, tmp_path: Path, route: str
+def test_every_prompt_route_refuses_the_same_not_utf8_bytes_the_same_way(
+    project: str, tmp_path: Path
 ) -> None:
-    """§4 (review 5 should-fix 7): one prompt, one refusal, on either route.
+    """§4 (review 5 should-fix 7): one prompt, one refusal, on all three routes.
 
-    `--prompt-file` read bytes and refused them itself. `--stdin` never saw
-    bytes: under `PYTHONUTF8=1` the interpreter reads stdin with
-    `errors="surrogateescape"`, so the same file piped in arrives as lone
-    surrogates, and nothing looked at them until the request was measured for
-    the wire — where the encode raised, the human got `hands: 'utf-8' codec
-    can't encode characters…` and the exit code was 1, not 2. That is "fails
-    somewhere other than at the place the human named", one route over. Both
-    routes now carry their text into the same check and get the same sentence.
+    `--prompt-file` read bytes and refused them itself. The other two never see
+    bytes: under `PYTHONUTF8=1` the interpreter decodes both stdin and `argv`
+    with `errors="surrogateescape"`, so the same file piped in — or pasted on
+    the command line — arrives as lone surrogates, and nothing looked at them
+    until the request was measured for the wire. There the encode raised, the
+    human got `hands: 'utf-8' codec can't encode characters…`, and the exit code
+    was 1, not 2: "fails somewhere other than at the place the human named", one
+    route over, which is review 5 blocker 1's shape. All three carry their text
+    into one check now and come back with one sentence.
     """
     raw = b"a prompt\xff\xfe and then some"
+    # What `PYTHONUTF8=1` hands the client for those bytes, on stdin or in argv.
+    text = raw.decode("utf-8", "surrogateescape")
+    path = tmp_path / "prompt.bin"
+    path.write_bytes(raw)
     argv = ["--role", "aux", "--context", "clear"]
-    if route == "--prompt-file":
-        path = tmp_path / "prompt.bin"
-        path.write_bytes(raw)
-        code, _, err = send_cli(*argv, "--prompt-file", str(path))
-    else:
-        # What PYTHONUTF8=1 hands the client for those bytes, spelled out.
-        code, _, err = send_cli(*argv, "--stdin", stdin=raw.decode("utf-8", "surrogateescape"))
+    answers = {
+        "--prompt-file": send_cli(*argv, "--prompt-file", str(path)),
+        "--stdin": send_cli(*argv, "--stdin", stdin=text),
+        "a prompt argument": send_cli(*argv, text),
+    }
+
+    tails = set()
+    for route, (code, _out, err) in answers.items():
+        assert code == EXIT_REFUSED, f"{route}: {err}"
+        assert err.startswith(f"hands: {route}"), err  # the route names itself first
+        _head, sep, tail = err.partition(": not UTF-8 text ")
+        assert sep, f"{route} refused it as something else: {err!r}"
+        tails.add(tail)
+    assert len(tails) == 1, f"the routes give different reasons for the same bytes: {tails}"
+
+
+def test_a_gate_reason_that_is_not_utf8_is_refused_where_the_prompt_would_be(
+    project: str
+) -> None:
+    """The prompt is not the only string argv carries (§4, H-012).
+
+    `--gate`, `--file` and `--content` reach the wire measurement the same way,
+    so the same bytes in any of them used to die there with a codec message and
+    exit 1 while the prompt beside them was refused politely. Every string in a
+    request is checked before it is measured, under the name it was typed as.
+    """
+    reason = b"why\xff".decode("utf-8", "surrogateescape")
+    code, _out, err = send_cli("--role", "aux", "--context", "clear", "--gate", reason, "go")
     assert code == EXIT_REFUSED, err
     assert "not UTF-8 text" in strip_paths(err)
-    # The route it refused is the first thing the sentence says, on both of them.
-    assert err.startswith(f"hands: {route}"), err
+    assert err.startswith("hands: --gate"), err
 
 
 def test_send_refuses_an_empty_prompt_file(project: str, tmp_path: Path) -> None:
