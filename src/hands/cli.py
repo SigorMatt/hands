@@ -24,6 +24,7 @@ from typing import Any, TextIO
 
 from hands import __version__, doctor
 from hands import notify as notify_mod
+from hands.api import MAX_TAIL_ENTRIES, TAIL_WINDOW_BYTES
 from hands.api import TIMEOUT as TIMEOUT_CODE
 from hands.config import Config, ConfigError, config_path, load_config, resolve_project
 from hands.runner import LINE_LIMIT, MAX_PROMPT_BYTES
@@ -35,6 +36,7 @@ __all__ = [
     "FOLLOW_INTERVAL_S",
     "ClientError",
     "PromptError",
+    "Refused",
     "build_parser",
     "call",
     "exec_session",
@@ -61,14 +63,22 @@ EXIT_TIMEOUT = EXIT_REFUSED
 FOLLOW_INTERVAL_S = 0.2
 
 
-class PromptError(ValueError):
-    """§4: the prompt itself is one the client refuses, on either route.
+class Refused(ValueError):
+    """§4: the client refused the command line itself, before contacting the daemon.
 
     A `ValueError` like every other bad command line, and told apart from them
-    only by its exit code: `EXIT_REFUSED`, because the refusal is complete
-    before the daemon is contacted — §4's refusals for `send` (missing,
-    unreadable, non-regular, empty, over the cap, on `--prompt-file` or
-    `--stdin`) all arrive here.
+    only by its exit code: `EXIT_REFUSED`, because nothing was sent and nothing
+    changed. `hands tail -n 0` is one of these (§4: `-n` is `n >= 1`).
+    """
+
+
+class PromptError(Refused):
+    """§4: the prompt itself is one the client refuses, on either route.
+
+    §4's refusals for `send` (missing, unreadable, non-regular, empty, over the
+    cap, on `--prompt-file` or `--stdin`) all arrive here, and carry the same
+    `EXIT_REFUSED` as every other refusal that happens before the daemon is
+    contacted.
     """
 
 
@@ -246,6 +256,16 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="ROLE",
         help="follow the role's running job, printing each stream-json line as it is written",
     )
+    log.add_argument(
+        "--offset",
+        type=int,
+        default=0,
+        help=(
+            "start this many bytes into the captured stream. One answer carries at most "
+            "a page of it (§4), so a --json caller reads the next page from the `offset` "
+            "the last one returned; without --json the client walks the pages itself"
+        ),
+    )
 
     cancel = command("cancel", "stop a job")
     cancel.add_argument("job")
@@ -262,7 +282,15 @@ def build_parser() -> argparse.ArgumentParser:
 
     tail = command("tail", "the last transcript entries of a role's session")
     tail.add_argument("--role", required=True)
-    tail.add_argument("-n", type=int, default=20)
+    tail.add_argument(
+        "-n",
+        type=int,
+        default=20,
+        help=(
+            f"how many entries to answer with: 1 or more, capped at {MAX_TAIL_ENTRIES} "
+            "(§4). The answer carries `truncated` when that cap or the read window cut it"
+        ),
+    )
 
     command("inbox", "unread events").add_argument(
         "--ack", action="store_true", help="mark the events it printed as read"
@@ -320,7 +348,7 @@ _PARAMS: dict[str, Any] = {
         "role": a.role, "origin": a.origin, "grep": a.grep, "since": a.since, "n": a.n,
     },  # fmt: skip
     "open": lambda a: {"job": a.job},
-    "log": lambda a: {"job": a.job, "role": a.role},  # `-f` adds `offset`; see _follow
+    "log": lambda a: {"job": a.job, "role": a.role, "offset": a.offset},  # see _pages/_follow
     "cancel": lambda a: {"job": a.job, "reason": a.reason},
     "put": lambda a: {"path": a.path, "content": a.content, "from": a.from_},
     "get": lambda a: {"path": a.path},
@@ -577,7 +605,16 @@ def _render(command: str, result: Any) -> str:
     if command == "tail" and isinstance(result, dict):
         entries = result.get("entries") or []
         header = f"transcript {result.get('path')}  (job {result.get('job')})"
-        return "\n".join([header, *entries])
+        lines = [header, *entries]
+        if result.get("truncated"):
+            # §4: say it, in one line. A cut answer that looks whole is the
+            # silence review 5's blocker 2 was about.
+            lines.append(
+                f"(truncated: {len(entries)} entries — hands reads at most "
+                f"{MAX_TAIL_ENTRIES} from the last {TAIL_WINDOW_BYTES // (1024 * 1024)} MiB "
+                "of the transcript, and there is more of it than that)"
+            )
+        return "\n".join(lines)
     if command == "inbox" and isinstance(result, dict):
         events = result.get("events", [])
         if not events:
@@ -651,6 +688,19 @@ def main(
                     f"hands log takes a job id or -f <role>, not both (got {args.job!r})"
                 )
             return _follow(socket_path, args.role, project=project, out=out)
+        # §4's `log` row: one answer is one page, so the human route asks for as
+        # many as the stream has (H-013). A `--json` caller gets the page it
+        # asked for and continues from its `offset` — one message, never a
+        # transcript.
+        if command == "log" and not as_json:
+            return _pages(socket_path, args.job, args.offset, project=project, out=out)
+        # §4: `tail -n` is `n >= 1`. Refused here, before the daemon is
+        # contacted, because "the last 0 entries" is not a question.
+        if command == "tail" and args.n < 1:
+            raise Refused(
+                f"tail -n takes 1 or more, not {args.n}; "
+                f"the answer is capped at {MAX_TAIL_ENTRIES} entries (§4)"
+            )
         params = {
             key: value for key, value in _PARAMS[command](args).items() if value is not None
         }
@@ -660,10 +710,11 @@ def main(
         if command == "open" and not as_json:
             (exec_fn or exec_session)(result["argv"], result["cwd"])
             return 0
-    except PromptError as exc:
-        # §4: the client refused the prompt itself. Nothing was sent, so this is
-        # not a failure of the run — it is the same "nothing happened" that a
-        # timed-out `wait` reports, and it carries the same code.
+    except Refused as exc:
+        # §4: the client refused the command line itself (a prompt it will not
+        # read, a `tail -n` below 1). Nothing was sent, so this is not a failure
+        # of the run — it is the same "nothing happened" that a timed-out `wait`
+        # reports, and it carries the same code.
         print(f"hands: {exc}", file=err)
         return EXIT_REFUSED
     except ClientError as exc:
@@ -765,6 +816,32 @@ def _notify_block(result: dict[str, Any]) -> str:
             last,
         ]
     )
+
+
+def _pages(
+    socket_path: Path, job: str | None, offset: int, *, project: str, out: TextIO
+) -> int:
+    """`hands log <job>` without `--json`: the captured stream, page by page (§4, §7).
+
+    One request per page, printed in the order the daemon read them, so the human
+    sees the whole stream and no single message carries it (H-013). The loop ends
+    at the first page the daemon has nothing more to add to — and at a page with
+    no complete lines, which is a job still writing one.
+    """
+    params: dict[str, Any] = {"job": job, "offset": max(0, int(offset))}
+    first = True
+    while True:
+        result = call(socket_path, "log", params, project=project)
+        for line in result["lines"]:
+            print(line, file=out, flush=True)
+        if first and not result["lines"]:
+            # Nothing captured at this offset: say which job and what state, the
+            # one answer `log` has always given for a job that never ran.
+            print(_render("log", result), file=out)
+        first = False
+        if not result["more"] or not result["lines"]:
+            return 0
+        params = {"job": result["job"], "offset": result["offset"]}
 
 
 def _follow(socket_path: Path, role: str, *, project: str, out: TextIO) -> int:

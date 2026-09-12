@@ -61,9 +61,10 @@ design, and you do not write.
 11. Never run `hands open <job>`: it replaces the Bash call with an
     interactive `claude --resume`, which is a session you cannot drive. Read a
     job with `hands show <job>`, its captured stream with `hands log <job>`,
-    and a role's transcript with `hands tail --role <r> -n <n>`. Do not run
-    `hands log -f <role>` in the foreground — it follows a running job and
-    does not return.
+    and a role's transcript with `hands tail --role <r> -n <n>` (`-n` is 1 or
+    more, capped at 1000; the answer says `truncated` when that cap or the read
+    window cut it). Do not run `hands log -f <role>` in the foreground — it
+    follows a running job and does not return.
 12. Do not run `hands inbox` or fetch for messages unrelated to the project.
 
 ## The commands you have
@@ -81,7 +82,10 @@ design, and you do not write.
     hands wait <job> [--timeout <s>] | hands wait --for stop,held --timeout 3600
     hands show <job> | hands result <job>    the record, `result` untouched
     hands jobs [--role <r>] [--origin <o>] [--grep <pat>] [--since <2d>] [-n <n>]
-    hands log <job>                     the captured stream-json of a finished job
+    hands log <job> [--offset <n>]      the captured stream-json of a finished job,
+                                        one page an answer: with --json, read the
+                                        next page from the `offset` it returned
+                                        while `more` is true
     hands tail --role <r> -n <n>        last transcript entries of its session
     hands put <path> --content "<text>" | hands get <path> | hands ls <path>
     hands approve <job> --human-confirmed --quote "<the human's words>"

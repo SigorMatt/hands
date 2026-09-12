@@ -163,6 +163,16 @@ def test_the_driver_kit_sends_prompts_as_files() -> None:
     assert "--prompt-file" in (ROOT / "docs" / "INTEGRATION.md").read_text(encoding="utf-8")
 
 
+def test_the_driver_kit_says_how_a_paged_log_and_a_cut_tail_read() -> None:
+    """§4's `log` and `tail` rows (H-013): the driver reads `--json`, and one
+    `log` answer is one page, so the kit has to say how to read the rest of a
+    stream and when a `tail` answer was cut."""
+    kit = (ROOT / "driver" / "CLAUDE.md").read_text(encoding="utf-8")
+    assert "--offset" in kit, "the kit must say how a --json caller reads the next page"
+    assert "`more`" in kit, "and what says there is one"
+    assert "truncated" in kit, "and that `tail` marks an answer its bounds cut (§4)"
+
+
 def test_driver_rule_6_is_the_design_section_12_rule_6() -> None:
     """§20 (review 3 should-fix 10): v3.3 rewrote rule 6 "to match what the
     driver can do", so the kit carries that text and not a paraphrase of it."""

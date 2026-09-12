@@ -604,3 +604,32 @@ transcript. The measurable difference is one `hands log` of a 60-turn job.
 
 Status: open (design decision; the running-job half of §21 is implemented and
 tested at U6)
+
+**Decision, 2026-09-12 (DESIGN v3.5 §4 `log` row, §22; recorded by mission 6
+U2).** The architect took branch (a): `log` is "captured stream, delivered in
+pages so a whole transcript is never one message (H-013)".
+
+Status: decided (DESIGN v3.5 §4); closed on disk by mission 6 U2
+
+Status: closed on disk, 2026-09-12 (mission 6 U2). `hands.api._read_from` reads
+one page — at most `LOG_PAGE_BYTES` (256 KiB) of complete lines, plus the rest
+of a single line wider than that — and `Api.log` answers with that page, the
+`offset` it ends at and `more`. `hands log <job>` without `--json` walks the
+pages itself (`cli._pages`) and prints them in order, so a human still sees the
+whole stream in one command; a `--json` caller gets one page and continues with
+`hands log <job> --json --offset <offset>` while `more` is true (driver/CLAUDE.md
+says so). `hands log -f` is unchanged in shape and its first request is now a
+page too. Tested in tests/test_library.py: `test_log_is_delivered_in_pages` (a
+~800 KB stream: every page is within the bound, the pages concatenate to the
+stream in order, the last has `more: false`, and the human route prints all of
+it) and `test_log_of_a_huge_stream_is_read_in_bounded_memory` (64 MB of stream
+read through `daemon.api.log` in >200 pages with a `tracemalloc` peak under
+8 MiB, every line once, up to the end of the file). Not closed by this: the
+daemon's other whole-file readers named in mission 5's U6 report
+(`spool.events()`, `list_jobs()`).
+
+The same unit made §4's `tail` row true (review 5 blocker 2): `-n` is `n >= 1`,
+refused by the client before it connects (exit 2, one line), and the answer
+carries `truncated` whenever the 1000-entry cap or `TAIL_WINDOW_BYTES` cut it
+short — including the case where the window holds only a fragment of one entry
+and the answer is empty. `tail_entries` returns the flag with the entries.

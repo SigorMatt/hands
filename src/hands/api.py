@@ -36,6 +36,7 @@ if TYPE_CHECKING:  # pragma: no cover - import cycle only matters to type checke
     from hands.daemon import Daemon
 
 __all__ = [
+    "LOG_PAGE_BYTES",
     "MAX_TAIL_ENTRIES",
     "TAIL_WINDOW_BYTES",
     "Api",
@@ -55,6 +56,15 @@ __all__ = [
 #: wants the session reads the transcript itself (§7: it is Claude Code's file).
 TAIL_WINDOW_BYTES = 4 * 1024 * 1024
 MAX_TAIL_ENTRIES = 1000
+
+#: §4's `log` row: "delivered in pages so a whole transcript is never one
+#: message (H-013)". One answer carries at most this many bytes of *complete*
+#: lines — and, when a single line is wider than that, exactly that one line,
+#: because a line is the unit hands captured and half of one is not an event.
+#: The caller continues from the `offset` the answer ends at; the CLI's human
+#: route loops over the pages itself, so `hands log <job>` still prints the
+#: whole stream (§7).
+LOG_PAGE_BYTES = 256 * 1024
 #: How much of the window is read per seek. The file is being read backwards,
 #: so it is read in blocks and joined once, never re-copied per block.
 _TAIL_CHUNK = 64 * 1024
@@ -333,19 +343,22 @@ class Api:
     async def log(
         self, *, job: str | None = None, role: str | None = None, offset: int = 0
     ) -> dict[str, Any]:
-        """The captured stream of a job, from `offset` bytes on (§7).
+        """One page of the captured stream of a job, from `offset` bytes on (§4, §7).
 
         The lines are the `--output-format stream-json` lines of §2, verbatim:
-        hands captured them, it does not re-render them. `offset` is what makes
-        `hands log -f` a follow rather than a re-print — the CLI asks again from
-        where the last answer ended — and a half-written trailing line is never
-        returned, so a follower never sees a fragment of an event.
+        hands captured them, it does not re-render them. One answer carries at
+        most `LOG_PAGE_BYTES` of them and says in `more` whether the file holds
+        any further bytes, so a whole transcript is never one message (§4's
+        `log` row, H-013); the caller continues from `offset`, which is also
+        what makes `hands log -f` a follow rather than a re-print. A half-written
+        trailing line is never returned, so neither a follower nor a pager sees a
+        fragment of an event.
         """
         if role is not None and job:
             raise ApiError(f"hands log takes a job id or -f <role>, not both (got {job!r})")
         record = self._role_job(role) if role is not None else self._log_job(job)
         path = self.spool.stream_path(record.id)
-        lines, end = _read_from(path, offset)
+        lines, end, more = _read_from(path, offset)
         return {
             "job": record.id,
             "role": record.role,
@@ -354,6 +367,7 @@ class Api:
             "path": str(path),
             "exists": path.exists(),
             "offset": end,
+            "more": more,
             "lines": lines,
         }
 
@@ -393,8 +407,12 @@ class Api:
 
         Only the end of it is read: `n` is capped at `MAX_TAIL_ENTRIES` and the
         read at `TAIL_WINDOW_BYTES` from the end, so the daemon's resident size
-        does not grow with the transcript (§21).
+        does not grow with the transcript (§21). §4 asks for `n >= 1` and for a
+        `truncated` flag whenever either bound cut the answer short, so a caller
+        is never told "these are the last n entries" when they are not.
         """
+        if int(n) < 1:
+            raise ApiError(f"hands tail takes -n 1 or more, not {n} (§4: n >= 1)")
         if role not in self.config.roles:
             known = ", ".join(sorted(self.config.roles))
             raise ApiError(f"unknown role {role!r}; this project configures: {known}")
@@ -406,7 +424,7 @@ class Api:
             )
         path = Path(record.transcript_path).expanduser()
         try:
-            entries = tail_entries(path, n)
+            entries, truncated = tail_entries(path, n)
         except OSError as exc:
             raise ApiError(
                 f"cannot read the transcript of job {record.id} at {path}: {exc}. "
@@ -420,6 +438,7 @@ class Api:
             "session_id": record.session_id,
             "path": str(path),
             "entries": entries,
+            "truncated": truncated,
         }
 
     # ---------------------------------------------------------------- cancel
@@ -755,8 +774,11 @@ def _since_cutoff(since: str | None) -> str | None:
     )
 
 
-def tail_entries(path: Path, n: int) -> list[str]:
-    """The last `n` non-empty lines of `path`, read from the end (§4, §21).
+def tail_entries(path: Path, n: int) -> tuple[list[str], bool]:
+    """The last `n` non-empty lines of `path`, read from the end, and whether that is all (§4, §21).
+
+    `n` is `n >= 1` (§4); anything less is a `ValueError`, because "all of it" is
+    not something a bounded read can answer.
 
     Bounded twice over: at most `MAX_TAIL_ENTRIES` lines come back, and at most
     `TAIL_WINDOW_BYTES` are ever read, from the end of the file backwards in
@@ -764,9 +786,17 @@ def tail_entries(path: Path, n: int) -> list[str]:
     in the daemon's heap on every poll. A first line that is cut by the window is
     dropped rather than returned half — an entry is a JSON object, and half of
     one is not one — so a file whose entries are wider than the window answers
-    with fewer than `n` of them.
+    with fewer than `n` of them, and a file whose *last* entry is wider than the
+    window answers with none.
+
+    The second value is §4's `truncated`: true when either bound cut the answer
+    short — the cap, when `n` was above it and the file had that many entries, or
+    the window, when fewer than `n` entries came back and the file goes on before
+    them. It is what review 5's blocker 2 asked for: both cuts used to be silent.
     """
-    want = MAX_TAIL_ENTRIES if n <= 0 else min(int(n), MAX_TAIL_ENTRIES)
+    if int(n) < 1:
+        raise ValueError(f"tail takes n >= 1, not {n}")
+    want = min(int(n), MAX_TAIL_ENTRIES)
     chunks: list[bytes] = []
     read = newlines = 0
     with path.open("rb") as handle:
@@ -780,30 +810,53 @@ def tail_entries(path: Path, n: int) -> list[str]:
             read += len(block)
             newlines += block.count(b"\n")
     raw = b"".join(reversed(chunks))
-    if start > 0:
+    cut = start > 0  # the window stopped before the start of the file
+    if cut:
         # The first line in the window began before it: it is a fragment.
         raw = raw[raw.find(b"\n") + 1 :] if b"\n" in raw else b""
     lines = [line for line in raw.decode("utf-8", errors="replace").splitlines() if line.strip()]
-    return lines[-want:]
+    truncated = want < int(n) if len(lines) >= want else cut
+    return lines[-want:], truncated
 
 
-def _read_from(path: Path, offset: int) -> tuple[list[str], int]:
-    """The complete lines of `path` after `offset` bytes, and where they end (§7).
+def _read_from(
+    path: Path, offset: int, limit: int = LOG_PAGE_BYTES
+) -> tuple[list[str], int, bool]:
+    """One page of `path` after `offset`: its complete lines, its end, is there more (§4, §7).
+
+    At most `limit` bytes of complete lines are read (plus the remainder of one
+    line that is itself wider than `limit` — the runner's reader bounds a
+    captured line at `_STREAM_LIMIT`), so neither the daemon nor the socket ever
+    carries a whole transcript — H-013, closed by §4's `log` row.
+    `more` is true when bytes remain after the page; the caller asks again from
+    the returned offset.
 
     A trailing partial line is left for the next read: the daemon appends to this
     file while the job runs, so a follower that took one would print half an event
     and then its other half.
     """
     start = max(0, int(offset))
+    chunks: list[bytes] = []
+    taken = 0
     try:
         with path.open("rb") as handle:
             handle.seek(start)
-            raw = handle.read()
+            while True:
+                raw = handle.readline()
+                if not raw.endswith(b"\n"):
+                    break  # a half-written line: it is the next page's problem
+                if chunks and taken + len(raw) > limit:
+                    break  # this line starts the next page; the page ends whole
+                chunks.append(raw)
+                taken += len(raw)
+                if taken >= limit:
+                    break
+            end = start + taken
+            more = handle.seek(0, os.SEEK_END) > end
     except FileNotFoundError:
-        return [], start
+        return [], start, False
     except OSError as exc:  # pragma: no cover - unreadable spool file
         raise ApiError(f"cannot read {path}: {exc}") from exc
-    cut = raw.rfind(b"\n") + 1
-    if cut == 0:
-        return [], start
-    return raw[:cut].decode("utf-8", errors="replace").splitlines(), start + cut
+    if not chunks:
+        return [], start, more
+    return b"".join(chunks).decode("utf-8", errors="replace").splitlines(), end, more
