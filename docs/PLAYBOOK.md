@@ -166,7 +166,7 @@ known to load.
     then = "send"
     role = "aux"
     context = "clear"
-    prompt = "Review WORKPLAN.md commits since {job.head_at_start}"
+    prompt = "Review WORKPLAN.md commits since the last review: commit on the branch"
 
     [[rule]]                  # review clean and next run pre-planned → go
     on = "aux.done"

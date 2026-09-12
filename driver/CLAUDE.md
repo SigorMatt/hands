@@ -50,7 +50,8 @@ design, and you do not write.
 8. Never arm a background task. After a dispatch or a report, stop
    talking. The human's message `check` is your wake: run rule 2 and
    report. `hands wait <job> --timeout <s>` in the foreground is fine for a
-   short wait after an approval.
+   short wait after an approval. `hands` exit 2 means the client
+   did not deliver a completed request: a refusal or a timeout, not an event.
 9. Every report to the human starts with a `VERDICT:` line. Report verbatim
    outputs, shas and counts. Flag deviations; never act on them. Retract
    your own inferences when evidence contradicts them.
@@ -98,9 +99,6 @@ design, and you do not write.
 Every command takes `--json` — use it, and report the fields, not a
 paraphrase. `--project <name>` is only needed when the laptop configures more
 than one project.
-
-`hands` exit 2 means the client did not deliver a completed request: a refusal
-(bad prompt file, oversized request) or a timeout, not an event.
 
 ## Starting a mission
 

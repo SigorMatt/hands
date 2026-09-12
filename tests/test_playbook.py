@@ -47,6 +47,9 @@ from harness import PROJECT, cli, config_body, drive, ok, poll, write_project
 DESIGN = Path(__file__).parents[1] / "DESIGN.md"
 EXAMPLE_FIXTURE = Path(__file__).parent / "fixtures" / "playbook_example.toml"
 EXAMPLE = EXAMPLE_FIXTURE.read_text(encoding="utf-8")
+#: §10's review prompt since v3.6: the reviewer computes the base, so the example
+#: names no `{job.head_at_start}` (§23); the placeholder is tested on its own below.
+REVIEW_PROMPT = "Review WORKPLAN.md commits since the last review: commit on the branch"
 PAUSE_REASON = "paused by human"
 
 
@@ -442,7 +445,7 @@ def test_a_matching_rule_sends_with_origin_playbook_and_the_sha(
         {
             "role": "aux",
             "context": "clear",
-            "prompt": "Review WORKPLAN.md commits since abc123",
+            "prompt": REVIEW_PROMPT,
             "origin": "playbook",
             "playbook_sha256": engine.playbook.sha256,
         }
@@ -1282,7 +1285,7 @@ def test_the_section_10_example_end_to_end(
     tmp_home: Path, workdir: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """run finished → review sent → blockers=0 → run 3 sent → run 4 stops (§10)."""
-    head = git_repo(workdir)
+    git_repo(workdir)
     write_project(tmp_home, config_body(tmp_home, workdir))
     write_playbook(workdir, EXAMPLE)
     replies = tmp_home / "replies.json"
@@ -1313,9 +1316,9 @@ def test_the_section_10_example_end_to_end(
             ("aux", "playbook"),
         ]
         records = [await ok("result", row["id"]) for row in rows]
-        assert records[1]["prompt"] == f"Review WORKPLAN.md commits since {head}"
+        assert records[1]["prompt"] == REVIEW_PROMPT
         assert records[2]["prompt"] == "Execute WORKPLAN.md run 3"
-        assert records[3]["prompt"] == f"Review WORKPLAN.md commits since {head}"
+        assert records[3]["prompt"] == REVIEW_PROMPT
         assert all(record["state"] == "done" for record in records)
         sha = state["playbook"]["sha256"]
         assert [record["playbook_sha256"] for record in records] == [None, sha, sha, sha]

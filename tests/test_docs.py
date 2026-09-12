@@ -183,8 +183,8 @@ def test_driver_rule_6_is_the_design_section_12_rule_6() -> None:
 def test_driver_rule_8_is_the_design_section_12_rule_8() -> None:
     """§22 (the v3.5 change): rule 8 became "never arm a background task; the
     human's `check` is your wake", so the kit carries DESIGN §12's words for it
-    and not the v3.4 procedure. The exit-2 sentence the kit used to end this
-    rule with lives elsewhere in the document (see the test below)."""
+    and not the v3.4 procedure. v3.6 put the exit-2 sentence back at the end
+    of the rule, so the kit's rule ends with it too (see the test below)."""
     assert design_rule(8), "DESIGN §12 has no rule 8 to pin the kit to"
     assert kit_rule(8) == design_rule(8)
 
