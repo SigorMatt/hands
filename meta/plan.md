@@ -1,58 +1,61 @@
-# plan — mission 5 (review 4 and the daemon's memory)
+# plan — mission 6 (close review 5)
 
-Source: meta/BUILDER-5-PROMPT.md. Units run in order; each ends with a
+Source: meta/BUILDER-6-PROMPT.md. Units run in order; each ends with a
 commit and a push. `[x]` = done and pushed, `[b]` = blocked (two failures),
 `[y]` = yielded under budget pressure.
 
-Base of the mission: 6c9440d (`plan: mission 5 kit (DESIGN v3.4, backlog)`),
-green here before U0 — ruff clean, 726 passed in 28.72s, cli smoke,
-`check: green`.
+Base of the mission: b950956 (`plan: mission 6 kit (DESIGN v3.5)`), green
+here before U0 — ruff clean, 929 passed in 39.78s, cli smoke, `check: green`.
 
-Every unit closes a named item of `meta/reviews/REVIEW-4.md`
-(`VERDICT: review mission 4 blockers=2 should-fix=8`), except U6 and U7,
-which are DESIGN §21 items the review did not raise.
+Every unit closes a named item of `meta/reviews/REVIEW-5.md`
+(`VERDICT: review mission 5 blockers=2 should-fix=7`), except U6, which is
+the DESIGN v3.5 wait retirement (§11, §12 rule 8) the review did not raise.
 
-- [x] U0 Plan and corrections — this file, meta/CHECKPOINT.md, the dated
-      correction of `meta/FINAL-REPORT-4.md` §3 item 15 (blocker 1), the
-      H-011 decision line (`pipeline.stop_suppressed`)
-- [x] U1 Blocker 1 — git option policy in the guard, `find -fprint*`/`-fls`,
-      the reviewer's exact probes in the adversarial table (§12, §21)
-- [x] U2 Blocker 2 — `ops.monitor_cmd` shape refused at load (§21)
-- [x] U3 Determinism as a property — one path-stripping helper in
-      `tests/conftest.py` used by every negative assertion; 5 runs of
-      `./scripts/check` under 5 crafted `--basetemp` values (should-fix 1, 2)
-- [x] U4 Prompt delivery — `ensure_ascii=False`, line room, `--stdin`
-      symmetry, `S_ISREG`, the exit-2 sentence in the docs (should-fix 3, 4,
-      5; §4)
-- [x] U5 Pipeline and config edges — `last_rule` `stale: true`, the
-      `pipeline.stop_suppressed` rename, the two config edges (should-fix 7,
-      8; H-011)
-- [x] U6 Daemon memory — stream-json streamed to the job log, bounded
-      retention (§21)
-- [x] U7 No background tasks in role sessions — `.claude/settings.json` +
-      `.claude/hooks/no_background.py` in this repository (§2, §21)
-- [x] U8 Final report — meta/FINAL-REPORT-5.md, then the verdict line
+- [ ] U0 Plan and corrections — this file, meta/CHECKPOINT.md, three dated
+      corrections in `meta/FINAL-REPORT-5.md` §3 (blocker 1: should-fix 3 of
+      review 4 was closed for the prompt, not the request; blocker 2:
+      `tail -n 0` changed meaning and a wide trailing entry answers `[]`;
+      should-fix 2: the three hook bypasses the report did not list), and
+      the H-012 decision line (the client measures the whole request)
+- [ ] U1 Blocker 1 — the whole request measured on the wire before
+      connecting, both prompt routes; the two sentences rewritten (§4, H-012)
+- [ ] U2 Blocker 2 — `tail -n` requires n ≥ 1, `truncated: true` when the
+      cap or the window cut the answer, `log` pages (§4, §7, H-013)
+- [ ] U3 Should-fix 1 — the guard's git policy becomes a per-subcommand
+      option allowlist (§12)
+- [ ] U4 Should-fix 2 — the three hook bypasses: closed with a test, or
+      documented under "what the hook cannot see"
+- [ ] U5 Should-fix 3–7 — `retained()` counts `last_argv`; U2-of-mission-5's
+      containment test becomes a real path-resolution test; the config
+      helper scan binds every section; the audits exempt by type; both
+      prompt routes refuse invalid UTF-8 at the same place
+- [ ] U6 Driver kit and doctor text — rule 8 in `driver/CLAUDE.md`, the
+      doctor's wake-path text, `docs/INTEGRATION.md`, `driver/README.md`
+      (§11, §12)
+- [ ] U7 Final report — meta/FINAL-REPORT-6.md, then the verdict line
 
 No order deviation is planned: the base is green, so every unit is gated
-normally and runs in the order above. U1 and U2 are independent; U3 runs
-before U4–U6 because a gate that a crafted path can flip makes every later
-unit's green a sample rather than a property, and U4–U6 all add tests that
-compare against text carrying a tmpdir path.
+normally and runs in the order above. U1 and U2 are independent of each
+other; both touch the client/daemon seam, so they run before U5, whose
+item 7 (the two routes' encoding refusal) sits on the same seam U1 rewrites.
+U3 and U4 are hook/guard work and touch no `src/` file. U6 is documentation
+plus `doctor.py`'s wake-path text.
 
-Yield order under quota pressure (BUILDER-5-PROMPT "Budget guidance"): U6,
-then U5's config edges. Never yield U0–U4, U7, U8.
+Yield order under quota pressure (BUILDER-6-PROMPT "Budget guidance"): U5
+items 5 and 6, then U4's documentation half. Never yield U0–U3, U6, U7.
 
-Review items by unit. Blocker 1 → U1 (the code) and U0 (the report's
-correction). Blocker 2 → U2. Should-fix 1 and 2 → U3. Should-fix 3, 4, 5 →
-U4. Should-fix 7 → U5; should-fix 8 → U5. Should-fix 6 (`ADVERSARIAL`'s
-independence) is **answered by U3's independent table** per the brief and is
-a note on method, not a code item; U8 records it as such. REVIEW-3's
-should-fix 3 (doctor's probe argv hardcodes the three flags), 6
-(`accepted()` treats a non-integer status as delivered) and 7 (`Api.notify`'s
-failure shape has no client test) stay **deferred by the brief**; U8 lists
-them again as deferred.
+Review items by unit. Blocker 1 → U1 (the code and the two sentences) and U0
+(the report's correction). Blocker 2 → U2 (the code) and U0 (the
+correction). Should-fix 1 → U3. Should-fix 2 → U4 (the code and the doc) and
+U0 (the correction). Should-fix 3, 4, 5, 6, 7 → U5, one test per item.
 
-Findings. H-011 is closed on disk by U0's appended decision (the event is
-renamed `pipeline.stop_suppressed`) and by U5's rename in code, tests and
-docs. H-001 stays open (it needs a capture from a dotted cwd). H-009 stays
-open — design-side, and builders do not edit DESIGN.md.
+Findings. H-012 is decided by U0's appended line (the client measures the
+whole request as it goes on the wire) and closed on disk by U1. H-013 is
+decided by DESIGN §4's `log` row in v3.5 (delivered in pages) and closed on
+disk by U2. H-001 stays open (it needs a capture from a dotted cwd). H-009
+stays open — design-side, and builders do not edit DESIGN.md.
+
+Not this mission, by the brief: the backlog's mission-7 items (harness-kill
+detection, per-job scope and orphan accounting, REVIEW-3's should-fix 3, 6
+and 7, playbook rules). U7 lists them as deferred to mission 7, which is
+where DESIGN §22 puts them.

@@ -536,6 +536,20 @@ cap and let the daemon refuse the escaped monsters itself.
 
 Status: open (design wording; the behaviour is implemented and tested at U4)
 
+**Decision, 2026-09-12 (DESIGN v3.5 §4 `send` row, §22; recorded by mission 6
+U0).** The architect took the first branch: the wire measurement is spelled
+into §4, and it is widened from the prompt to the **whole request**. The client
+builds the request, measures the exact bytes it will write (prompt, `--file`
+payloads, gate, envelope), and refuses before connecting when the total exceeds
+the daemon's line room — "so a request never fails inside the socket (H-012)".
+The line room is not raised. The second meaning of "10 MB" the finding names
+stays: the client's cap is on wire bytes, `Runner.run`'s is on raw UTF-8, and
+the client is the stricter of the two by design. Mission 6 U1 implements this
+on both prompt routes and rewrites the two sentences (`docs/INTEGRATION.md`,
+`src/hands/daemon.py`) that said the envelope could not overflow.
+
+Status: decided (DESIGN v3.5 §4); closed on disk by mission 6 U1
+
 ---
 
 ## H-013 — `hands log <job>` still answers a whole transcript in one message

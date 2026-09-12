@@ -269,6 +269,70 @@ sub-agent ran `./scripts/check` three consecutive times before committing.
     `>= 20 / >= 10 / >= 10`** (REVIEW-4 should-fix 6). The tables grew to 102
     and 77 and nothing asserts they stay independent.
 
+**Correction 1, 2026-09-12 (mission 6 U0; REVIEW-5 blocker 1).** §4's row for
+review 4's should-fix 3 reads `closed 6d9664d`, and §3 carries no item
+narrowing it. That is too wide: `6d9664d` closed the fault class **for the
+prompt**, not for the request. The client measures the prompt as it appears on
+the wire; it does not measure the `--file` payloads, the gate, or the envelope
+that travel on the same line. So the shape should-fix 3 named — a request that
+"fails somewhere other than at the path the human named" — is still reachable
+one field over, by combining an accepted prompt with `--file` values that JSON
+doubles. The reviewer's arithmetic, re-checked here: an at-cap prompt plus
+twelve `--file` values of backslashes is 13 630 051 bytes against the daemon's
+13 107 200 byte line room, and the U4 sub-agent drove the same shape end to end
+against a real `handsd`: `hands: [Errno 32] Broken pipe`, exit 1, nothing in
+the daemon log, while each half alone exits 0. Two shipped sentences say
+otherwise and are false as written: `docs/INTEGRATION.md:238-240` ("the
+daemon's line room is the cap plus a quarter, so anything the client accepts
+fits") and `src/hands/daemon.py:60-66` ("A quarter of the cap is 2.5 MiB, more
+than a command line can hold" — `execve` on this machine accepts 1 572 000
+bytes of argv in one call, and JSON doubles a backslash). The report is a
+snapshot and is not rewritten (DESIGN §20); this line is the correction.
+Mission 6 U1 measures the **whole request** on the wire before connecting and
+rewrites both sentences; what remains open after it is stated in
+`meta/FINAL-REPORT-6.md` §3.
+
+**Correction 2, 2026-09-12 (mission 6 U0; REVIEW-5 blocker 2).** §3 item 14's
+clause "No caller today asks for more than 20, so no answer changes" is false,
+and so is `53bb986`'s "no answer a caller sees today changes". Two answers
+changed at that commit, both reproduced here today against the tip's
+`hands.api.tail_entries`:
+
+    2000-entry transcript, n = 0     -> 1000 entries (first: {"i": 1000})
+    2000-entry transcript, n = 5000  -> 1000 entries
+    trailing entry wider than the 4 MiB window, n = 20 -> []
+
+At the parent, `Api.tail` ended `entries[-n:] if n else entries`, so `n = 0`
+was an explicit branch meaning *every* entry, and `hands tail -n` is
+`type=int` with no lower bound (`src/hands/cli.py:261`) — `hands tail --role
+builder -n 0` is a caller, and its answer silently became the last 1000. The
+second line is the other end: a transcript whose trailing entry is wider than
+`TAIL_WINDOW_BYTES` answers `[]` with nothing saying an entry was dropped. The
+bound itself is right, and the measurement behind it (tracemalloc peak 272 KB
+vs 139.8 MB against a 64 MB transcript) stands; what was wrong is the claim of
+no visible change. Mission 6 U2 refuses `n < 1`, carries `truncated: true`
+whenever the cap or the window cut the answer, and pages `log` (DESIGN v3.5 §4,
+H-013).
+
+**Correction 3, 2026-09-12 (mission 6 U0; REVIEW-5 should-fix 2).** §3 item 3
+lists what `.claude/hooks/no_background.py` cannot see — `screen -dmS`,
+`tmux new -d`, `at`, `systemd-run`, a forking script, `echo a&b` — and that
+list is incomplete. Three more bypasses, each driven through `main()` here
+today, each exiting **0** (allowed):
+
+    sleep 30 &# note            # `#` is not in the after-set; bash still backgrounds it
+    /usr/bin/nohup ./long.sh    # the token match is unqualified `nohup` only
+    bash -c 'sleep 30 &'        # and `eval 'sleep 9 &'` — quoted text is blanked
+
+The first two are inside the hook's own model and are defects; the third is the
+model's boundary (quoted text is treated as text), but a role session writes
+that spelling. Separately, a `tool_input` that is a list, or a `command` that is
+not a string, raises and exits **1** with a traceback — non-blocking in Claude
+Code, and the only input shape that fails open, against a commit body that says
+"exit 2 … for input it cannot parse". Not reachable from the real Bash tool
+today. Mission 6 U4 closes what a hook can close and lists the rest in
+`docs/INTEGRATION.md` under "what the hook cannot see".
+
 ---
 
 ## 4. Review items
