@@ -42,3 +42,4 @@ One line per unit, appended by the builder: date, unit, sha, verdict.
 2026-09-12  U5 prompt-file refusals, rule 6  2fb3b7f  green 3/3 (725 tests); should-fix 9 and 10 closed; driver rule 6 is §12's text
 2026-09-12  U5 follow-up  d348d07  green 3/3 (726 tests); the four refusals exit 2 as the brief asks; EXIT_REFUSED == EXIT_TIMEOUT == 2
 2026-09-12  U6 Final report  f9d353d  green 3/3 (726 tests); mission 4 finished
+2026-09-12  m5 U0 Plan and corrections  068a091  meta only; FINAL-REPORT-4 item 15 corrected (blocker 1); H-011 decided: pipeline.stop_suppressed
