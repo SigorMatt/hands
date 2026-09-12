@@ -689,9 +689,9 @@ def test_while_paused_no_rule_fires_and_resume_unpauses(tmp_home: Path, workdir:
 
 def test_a_hand_pause_files_a_stop_event_and_notifies(tmp_home: Path, workdir: Path) -> None:
     """H-007, §11: a pause is a stop like any other, so it files the `stop` event
-    (`paused by human`) and notifies. Without the event, a driver blocked on
-    `hands wait --for stop,held` is not woken by a pause and §11's wake check has
-    no one-command event behind it."""
+    (`paused by human`) and notifies. Without the event, a pause never reaches
+    the human's phone, and §11's notification check has no one-command event
+    behind it."""
     engine, recorder = engine_for(tmp_home, workdir)
     state = run(engine.pause())
     (event,) = [e for e in engine.spool.events() if e.kind == "stop"]

@@ -226,24 +226,74 @@ DRIVER_WAITS = (
     "driver kit's own `--for",
     "a background wait can be told apart",
     "a background `wait --for`",
+    # tests/test_playbook.py's pause test (review 6 should-fix 1).
+    "not woken by a pause",
 )
 
-#: Every file that carried one of the two families above. The docs a driver or
-#: an installer reads, the three modules whose comments explained `--for` and
-#: exit 2 by the driver's wait, and the test file whose prose did the same.
-WAKE_PATH_TEXT = (
-    "README.md",
-    "docs/INTEGRATION.md",
-    "docs/PLAYBOOK.md",
-    "driver/CLAUDE.md",
-    "driver/README.md",
-    "src/hands/api.py",
-    "src/hands/cli.py",
-    "src/hands/daemon.py",
-    "src/hands/playbook.py",
-    "src/hands/spool.py",
-    "tests/test_wake.py",
+#: The retired claim that the wake path was still an open question, which
+#: README.md kept after §11 answered it and doctor stopped printing the
+#: procedure (review 6 blocker 1). Specific enough that §16's own open
+#: questions, which are legitimate, do not match.
+WAKE_STILL_OPEN = (
+    "wakes an idle interactive claude code session",
+    "prints the procedure that answers it",
 )
+
+#: The sweep reads tracked text: these suffixes, plus any extensionless file
+#: whose first bytes are a `#!` line (a script such as `scripts/check`).
+#: `uv.lock` and `.gitignore` are data, not sentences, and are not read.
+SWEPT_SUFFIXES = (".md", ".py", ".toml", ".json", ".txt", ".service")
+
+#: Tracked text the sweep does not read, by path class, each for a reason:
+SWEEP_EXCLUDED = (
+    # The builder's historical state: reports, reviews, findings and prompts
+    # quote the retired sentences verbatim, and §20 forbids rewriting a report.
+    "meta/",
+    # §11's History paragraph and the changelogs quote the retired model, and
+    # builders do not edit DESIGN.md (CLAUDE.md).
+    "DESIGN.md",
+    # This file: it holds the phrase lists, so every phrase is a hit in it.
+    "tests/test_docs.py",
+)
+
+
+def swept_files() -> list[str]:
+    """Every tracked text file outside `SWEEP_EXCLUDED`, repo-relative.
+
+    `git ls-files` is the source: without git, or outside a checkout, the
+    subprocess raises and the test errors — it never passes on an empty list.
+    """
+    swept = []
+    for path in tracked_files():
+        where = path.relative_to(ROOT).as_posix()
+        if where.startswith(SWEEP_EXCLUDED):
+            continue
+        if path.suffix in SWEPT_SUFFIXES or (
+            path.suffix == "" and path.is_file() and path.read_bytes()[:2] == b"#!"
+        ):
+            swept.append(where)
+    return swept
+
+
+def test_the_sweep_reads_every_tracked_text_file_and_only_excludes_path_classes() -> None:
+    """Review 6 should-fix 1: a pinned phrase survived in a file the pin did not
+    read. The sweep's reach is the tracked tree, so a new file is read the day it
+    is added; this asserts the tree really was read, not an empty listing."""
+    swept = swept_files()
+    for must in (
+        "README.md",
+        "docs/INTEGRATION.md",
+        "driver/CLAUDE.md",
+        "src/hands/doctor.py",
+        "tests/test_playbook.py",
+        "tests/test_doctor.py",
+        "systemd/handsd.service",
+        "scripts/check",
+    ):
+        assert must in swept, f"the sweep does not read {must}"
+    assert len(swept) >= 40, f"the sweep read only {len(swept)} files: {swept}"
+    assert not [where for where in swept if where.startswith(SWEEP_EXCLUDED)]
+    assert "uv.lock" not in swept
 
 
 def test_nothing_shipped_says_the_driver_arms_or_blocks_on_a_wait() -> None:
@@ -251,6 +301,13 @@ def test_nothing_shipped_says_the_driver_arms_or_blocks_on_a_wait() -> None:
     no shipped sentence may say it does — not as a rule, not as a first-run
     step, not as the wake check doctor prints (§12 rule 8), and not as the
     reason a comment gives for `--for`, for exit 2 or for a `pipeline` kind.
+    Nor may one say the wake path is still an open question (§11 answered it).
+
+    Every tracked text file is read (`swept_files`), so a phrase cannot survive
+    in a file a list forgot. The phrases were taken from the sentences that were
+    on disk, so this proves those do not come back, not that no new spelling of
+    the claim exists; the rendered doctor output and rule 8 are pinned by what
+    they must say (below, and in tests/test_doctor.py).
 
     `docs/INTEGRATION.md`'s "No background tasks in a role session (§21)"
     section and the `no_background.py` recipe are about the hook that *refuses*
@@ -259,9 +316,9 @@ def test_nothing_shipped_says_the_driver_arms_or_blocks_on_a_wait() -> None:
     """
     offenders = [
         f"{where}: {phrase!r}"
-        for where in WAKE_PATH_TEXT
+        for where in swept_files()
         for flat in [flattened((ROOT / where).read_text(encoding="utf-8")).lower()]
-        for phrase in ARMED_WAIT + DRIVER_WAITS
+        for phrase in ARMED_WAIT + DRIVER_WAITS + WAKE_STILL_OPEN
         if phrase in flat
     ]
     assert not offenders, "a shipped sentence still arms the retired wait (§11, §22):\n" + (
@@ -279,22 +336,32 @@ def test_nothing_shipped_says_the_driver_arms_or_blocks_on_a_wait() -> None:
 
 def test_the_docs_say_the_humans_check_is_the_drivers_wake() -> None:
     """The other half of §11's decision: having removed the wait, the documents
-    have to say what replaced it — ntfy for the human, `check` for the driver."""
+    have to say what replaced it — ntfy for the human, `check` for the driver.
+
+    Review 6 should-fix 2: "check" appearing anywhere in a document was already
+    true before the change, so the driver's rule is asserted on rule 8's own
+    words and the two human-facing documents on `check` standing within a few
+    words before the wake it is said to be (driver/README.md shows `check` as a
+    code block and calls it "the driver's wake" right after)."""
+    rule = kit_rule(8)
+    assert rule.startswith("Never arm a background task."), f"rule 8 does not forbid it: {rule}"
+    assert "`check` is your wake" in rule, f"rule 8 does not name `check` as the wake: {rule}"
+    assert "hands wait --for" not in rule, "rule 8 still offers the event wait"
     driver = (ROOT / "driver" / "CLAUDE.md").read_text(encoding="utf-8")
     readme = (ROOT / "driver" / "README.md").read_text(encoding="utf-8")
     integration = (ROOT / "docs" / "INTEGRATION.md").read_text(encoding="utf-8")
-    for where, text in (
-        ("driver/CLAUDE.md", driver),
-        ("driver/README.md", readme),
-        ("docs/INTEGRATION.md", integration),
-    ):
-        assert "check" in flattened(text).lower(), f"{where} never names the `check` wake (§11)"
+    for where, text in (("driver/README.md", readme), ("docs/INTEGRATION.md", integration)):
+        # `check`, then at most four words, then the wake: "`check` is its
+        # wake", "check That is the driver's wake".
+        assert re.search(r"\bcheck\b`?\W{0,3}(?:[\w'’]+\W+){0,4}[\w'’]*wake", flattened(text)), (
+            f"{where} never says `check` is the driver's wake (§11)"
+        )
     assert "ntfy" in flattened(readme).lower(), "driver/README.md never names the doorbell (§11)"
     # The kickoff walk-through is where the retired "arm the background wait"
-    # stood; it now sends the reader to rule 8.
+    # stood; it now sends the reader to rule 8 and names `check` as the wake.
     kickoff = driver.split("## Starting a mission")[1]
     assert "rule 8" in kickoff, "the kickoff walk-through does not cite rule 8"
-    assert "check" in kickoff, "the kickoff walk-through does not say what the wake is"
+    assert "`check`" in kickoff, "the kickoff walk-through does not say what the wake is"
 
 
 def test_the_docs_say_what_exit_2_means() -> None:

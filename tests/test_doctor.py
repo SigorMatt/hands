@@ -447,12 +447,41 @@ def test_a_daemon_that_is_not_running_is_a_warning(
 
 # ------------------------------------------------ the notification check (§11)
 
-#: The retired v3.4 procedure: doctor used to tell the human to have the driver
-#: arm `hands wait --for stop,held` as a background Bash task and watch it wake.
-#: §11's decision paragraph and §22's first bullet retire it — "the driver arms
-#: no background wait at all" — so its marks must not come back into the output
-#: doctor prints. Both spellings of the word: it led a line of the old text.
-RETIRED = ("hands wait --for stop,held", "background", "Background")
+#: The `hands` subcommands §11's notification check may tell the human to run:
+#: the two events that file without a turn (`pause`, a gated `send`), their
+#: clear-ups (`resume`, `deny`), and where to look (`inbox`, `notify --test`).
+#: Not a list of retired phrases: what the output instructs is compared with
+#: what §11 allows, so an arming step spelled any new way is still a `wait`.
+NOTIFICATION_COMMANDS = {"pause", "send", "resume", "deny", "inbox", "notify"}
+
+
+def assert_is_the_notification_check(text: str) -> None:
+    """What §11 says doctor prints, asserted on the rendered text itself."""
+    flat = " ".join(text.split())
+    assert "Notification check (§11)" in strip_paths(flat)
+    # It tells the human to fire an event — a pause or a gated send — ...
+    assert "hands --project demo pause" in strip_paths(flat)
+    sends = re.findall(r"hands --project demo send [^`]*?--gate", strip_paths(flat))
+    assert sends, "no gated send in the notification check"
+    # ... and to watch the phone for it.
+    assert "phone" in strip_paths(flat)
+    # Every `hands` command it tells the human to type — a code span or an
+    # indented command line, not prose ("hands cannot run this one") — is one
+    # §11 allows; none of them is a wait.
+    typed = re.findall(r"`([^`]+)`", strip_paths(text)) + [
+        line.strip() for line in strip_paths(text).splitlines() if line.strip().startswith("hands ")
+    ]
+    named = [
+        found
+        for span in typed
+        for found in re.findall(r"^hands (?:--project demo )?([a-z-]+)", span.strip())
+    ]
+    assert named and set(named) <= NOTIFICATION_COMMANDS, sorted(set(named))
+    # Any sentence that speaks of arming or of the background says it is not
+    # done: the check never instructs either.
+    for sentence in re.split(r"(?<=[.:;—])\s", flat):
+        if re.search(r"\barms?\b|\barming\b|background", sentence, re.IGNORECASE):
+            assert re.search(r"\b(no|not|never)\b", sentence), sentence
 
 
 def test_the_wake_check_is_a_notification_test_not_an_armed_wait(
@@ -461,14 +490,15 @@ def test_the_wake_check_is_a_notification_test_not_an_armed_wait(
     """§11, §22: the driver arms no background wait, so what doctor prints is
     the one check hands still cannot run itself — the event has to reach the
     human's phone over ntfy. ntfy is the human's doorbell; the human's `check`
-    is the driver's."""
+    is the driver's. Asserted on the real CLI's rendered output (review 6
+    should-fix 2), not on phrases taken from the old text."""
     write_config(tmp_home, tmp_path)
     _code, out, _err = run()
-    for retired in RETIRED:
-        assert retired not in strip_paths(out), f"doctor still prints {retired!r} (§22)"
+    section = out.split("Notification check (§11)", 1)
+    assert len(section) == 2, "doctor prints no notification check"
+    assert_is_the_notification_check("Notification check (§11)" + section[1])
     assert "ntfy" in strip_paths(out)  # the doorbell it now checks
     assert "`check`" in strip_paths(out)  # and what wakes the driver instead
-    assert "§11" in strip_paths(out)
 
 
 def test_the_notification_check_offers_a_pause_or_a_gated_send(
@@ -492,10 +522,8 @@ def test_the_notification_check_is_in_the_json_too(
     _code, out, _err = run("--json")
     report = json.loads(out)
     joined = "\n".join(report["wake_check"])
+    assert_is_the_notification_check(joined)
     assert "ntfy" in strip_paths(joined)
-    assert "--gate" in strip_paths(joined)
-    for retired in RETIRED:
-        assert retired not in strip_paths(joined), retired
     assert report["green"] is True
 
 
