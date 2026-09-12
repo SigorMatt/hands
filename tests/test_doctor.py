@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import io
 import json
+import re
 import shutil
 from pathlib import Path
 from typing import Any
@@ -43,6 +44,7 @@ def write_config(
     roots: list[str] | None = None,
     project: str = "demo",
     resume_line: str | None = None,
+    builder_extra: str = "",
 ) -> Path:
     """A whole, valid `~/.hands/<project>.toml` (§13) pointing at the stand-ins."""
     work = tmp_path / "work"
@@ -69,6 +71,7 @@ ntfy_topic = "hands-test"
 [roles.builder]
 cwd = "{work}"
 {resume_block}
+{builder_extra}
 
 [roles.aux]
 cwd = "{work}"
@@ -211,6 +214,81 @@ def test_the_role_check_names_a_configured_resume_line(
     # aux is unchanged either way (§6)
     aux = found["role aux"]["detail"]
     assert "limit resume: re-sends the limited job's own prompt" in strip_paths(aux)
+
+
+CEILING = "CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS"
+
+
+def text_row(out: str, name: str) -> str:
+    """One check's lines in the text report: its row and the rows under it."""
+    lines = out.splitlines()
+    for i, line in enumerate(lines):
+        if re.match(rf"^  \S+\s+{re.escape(name)}  ", line):
+            rows = [line]
+            for more in lines[i + 1 :]:
+                if not more.startswith(" " * 8) or not more.strip():
+                    break
+                rows.append(more)
+            return "\n".join(rows)
+    raise AssertionError(f"the text report has no {name!r} row:\n{out}")
+
+
+def test_doctor_shows_the_bg_wait_ceiling_is_0_for_both_roles_by_default(
+    tmp_home: Path, tmp_path: Path, fake_mode: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Mission 7a's acceptance: a config that does not set it shows `=0` per role (§23).
+
+    The daemon's own environment is given a different value on purpose: the role
+    job does not inherit it, so doctor must not report it either.
+    """
+    monkeypatch.setenv(CEILING, "600000")
+    write_config(tmp_home, tmp_path)
+    code, out, err = run()
+    assert code == 0, f"{out}\n{err}"
+    for role in ("builder", "aux"):
+        assert f"{CEILING}=0" in strip_paths(text_row(out, f"role {role}"))
+    code, found = checks()
+    assert code == 0
+    for role in ("builder", "aux"):
+        assert f"{CEILING}=0" in strip_paths(found[f"role {role}"]["detail"])
+
+
+def test_doctor_shows_a_configured_ceiling_for_the_role_that_sets_it(
+    tmp_home: Path, tmp_path: Path, fake_mode: None
+) -> None:
+    write_config(
+        tmp_home, tmp_path, builder_extra=f'[roles.builder.env]\n{CEILING} = "1800000"'
+    )
+    code, out, err = run()
+    assert code == 0, f"{out}\n{err}"
+    assert f"{CEILING}=1800000" in strip_paths(text_row(out, "role builder"))
+    assert f"{CEILING}=0" in strip_paths(text_row(out, "role aux"))
+    code, found = checks()
+    assert f"{CEILING}=1800000" in strip_paths(found["role builder"]["detail"])
+    assert f"{CEILING}=0" not in strip_paths(found["role builder"]["detail"])
+    assert f"{CEILING}=0" in strip_paths(found["role aux"]["detail"])
+
+
+def test_the_live_turn_runs_with_the_role_environment(
+    tmp_home: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`--live` spawns §2's invocation with the same environment a role job gets."""
+    monkeypatch.setenv(CEILING, "600000")
+    binary = tmp_path / "env_claude.sh"
+    binary.write_text(
+        "#!/bin/sh\n"
+        'if [ "$1" = "--version" ]; then echo "9.9.9 (env probe)"; exit 0; fi\n'
+        "cat >/dev/null\n"
+        "printf '{\"type\":\"result\",\"subtype\":\"success\",\"is_error\":false,"
+        "\"result\":\"ceiling=%s\",\"num_turns\":1}\\n' "
+        f'"${CEILING}"\n'
+    )
+    binary.chmod(0o755)
+    write_config(tmp_home, tmp_path, claude=binary)
+    code, found = checks("--live")
+    assert code == 0, found
+    for role in ("builder", "aux"):
+        assert "ceiling=0" in strip_paths(found[f"live {role}"]["detail"]), found[f"live {role}"]
 
 
 def test_a_missing_claude_binary_fails(tmp_home: Path, tmp_path: Path, fake_mode: None) -> None:

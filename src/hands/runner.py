@@ -16,6 +16,14 @@ The invocation is §2, verbatim:
 All six flags were checked against the installed binary (claude 2.1.268,
 `claude --help`) before this was written; each exists with that spelling, and
 `--permission-prompts` does take `none`.
+
+The process runs in handsd's environment plus the role's `spawn_env` (§23):
+`CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS=0` unless `[roles.<r>] env` sets it.
+
+A job is `done` only when the process ends cleanly with a final `result` event
+of subtype `success` (or the `error_*` family) that carries `num_turns`, and
+stderr never said the harness terminated it (§2, §6, §23; H-014). Anything else
+is `failed`, and `failure_reason` names which — see `FAILURE_REASONS`.
 """
 
 from __future__ import annotations
@@ -36,6 +44,7 @@ from hands.limits import is_limit_notice, parse_reset_at, to_iso
 from hands.spool import TERMINAL_STATES, Job, Spool, SpoolError
 
 __all__ = [
+    "FAILURE_REASONS",
     "LINE_LIMIT",
     "MAX_PROMPT_BYTES",
     "KeepRefused",
@@ -43,6 +52,7 @@ __all__ = [
     "RunnerError",
     "build_argv",
     "extract_verdict",
+    "is_harness_termination",
     "project_dir_name",
     "reconcile_orphans",
     "transcript_path_for",
@@ -105,6 +115,35 @@ _RATE_LIMIT = "rate_limit"
 # evidence in meta/findings/FINDINGS.md H-001).
 _NON_ALNUM_RE = re.compile(r"[^a-zA-Z0-9]")
 
+# §23 (H-014). claude 2.1.269 writes, when its bg-wait ceiling ends a `-p` run:
+#   `Background tasks still running after ${Math.round(ms/1000)}s; terminating.
+#    Set CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS=0 to wait indefinitely.`
+# (read from the binary; the job 0mtygi953-ym63 line is that, with 600). Matched on
+# its shape, so neither the number, its unit, the case, a singular "task" nor
+# terminal colour codes around it change the answer.
+_TERMINATING_RE = re.compile(
+    r"background tasks? still running after\s+\d[\d.,]*\s*[a-z]*\s*;\s*terminating\b",
+    re.IGNORECASE,
+)
+
+#: Every `failure_reason` the runner writes, in the order it checks them (§23):
+#:   harness_terminated  stderr carried the harness's `terminating` line
+#:   no_final_result     no `result` event, or its subtype is not success/error_*
+#:   error_result        the final result says `is_error`
+#:   nonzero_exit        a clean result, but the process exited non-zero
+#:   no_num_turns        a clean result with no `num_turns`
+#:   spawn_error         the process could not be started at all
+#: The first that holds is the one recorded. A cancel (`killed`) and a detected
+#: limit (`limited`) are decided before any of these, and their reason is null.
+FAILURE_REASONS: tuple[str, ...] = (
+    "harness_terminated",
+    "no_final_result",
+    "error_result",
+    "nonzero_exit",
+    "no_num_turns",
+    "spawn_error",
+)
+
 
 # ------------------------------------------------------------- pure helpers
 
@@ -132,6 +171,19 @@ def extract_verdict(result: str | None) -> str | None:
         if _VERDICT_RE.match(line):
             return line.rstrip()
     return None
+
+
+def is_harness_termination(line: str) -> bool:
+    """Does this stderr line say the harness terminated the `-p` process? (§23)"""
+    return _TERMINATING_RE.search(line) is not None
+
+
+def _is_final_subtype(subtype: str | None) -> bool:
+    """§23's "subtype `success` or `error`": `error` is claude's `error_*` family
+    (`error_during_execution`, `error_max_turns`, `error_max_budget_usd`, …)."""
+    if not isinstance(subtype, str):
+        return False
+    return subtype in ("success", "error") or subtype.startswith("error_")
 
 
 def build_argv(config: Config, role: RoleConfig, *, resume: str | None = None) -> list[str]:
@@ -200,6 +252,8 @@ class _Parsed:
     result: str | None = None
     is_error: bool = False
     saw_result: bool = False
+    subtype: str | None = None  # of the last `result` event
+    harness_terminated: bool = False  # stderr carried the terminating line (§23)
     num_turns: int | None = None
     duration_ms: int | None = None
     total_cost_usd: float | None = None
@@ -357,12 +411,15 @@ class Runner:
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 limit=_STREAM_LIMIT,
+                env={**os.environ, **role.spawn_env},  # §23
             )
         except OSError as exc:
             # The one dispatch failure that never produces a process. `failed` is
             # the only terminal state §6 offers for it.
             reason = f"cannot spawn {argv[0]}: {exc}"
-            return await self._finish(job, role, "failed", _Parsed(), None, reason)
+            return await self._finish(
+                job, role, "failed", _Parsed(), None, reason, failure_reason="spawn_error"
+            )
 
         self._procs[job.id] = proc
         job.pid = proc.pid
@@ -376,7 +433,7 @@ class Runner:
             await asyncio.gather(
                 self._write_prompt(proc, job.prompt),
                 self._read_stdout(proc, job, role, parsed),
-                self._read_stderr(proc, stderr_lines),
+                self._read_stderr(proc, stderr_lines, parsed),
             )
             exit_code = await proc.wait()
         finally:
@@ -387,9 +444,11 @@ class Runner:
 
         cancelled = job.id in self._cancelled
         self._cancelled.discard(job.id)
-        state = _final_state(parsed, exit_code, cancelled=cancelled)
+        state, failure_reason = _final_state(parsed, exit_code, cancelled=cancelled)
         tail = "\n".join(stderr_lines[-_STDERR_TAIL_LINES:]) or None
-        return await self._finish(job, role, state, parsed, exit_code, tail)
+        return await self._finish(
+            job, role, state, parsed, exit_code, tail, failure_reason=failure_reason
+        )
 
     async def cancel(self, job_id: str, *, grace_s: float | None = None) -> bool:
         """SIGINT, wait `cancel_grace_s`, then SIGTERM (§2). False if not running."""
@@ -498,6 +557,8 @@ class Runner:
             return
 
         parsed.saw_result = True
+        subtype = event.get("subtype")
+        parsed.subtype = subtype if isinstance(subtype, str) else None
         parsed.is_error = bool(event.get("is_error"))
         result = event.get("result")
         if isinstance(result, str):
@@ -514,12 +575,19 @@ class Runner:
             parsed.limit_message = result
 
     @staticmethod
-    async def _read_stderr(proc: asyncio.subprocess.Process, sink: list[str]) -> None:
+    async def _read_stderr(
+        proc: asyncio.subprocess.Process, sink: list[str], parsed: _Parsed
+    ) -> None:
         stream = proc.stderr
         if stream is None:  # pragma: no cover
             return
         async for raw in stream:
-            sink.append(raw.decode("utf-8", errors="replace").rstrip("\n"))
+            line = raw.decode("utf-8", errors="replace").rstrip("\n")
+            # Checked on every line, not on the tail: 50 later lines must not
+            # hide the one that says why the process ended (§23).
+            if is_harness_termination(line):
+                parsed.harness_terminated = True
+            sink.append(line)
             del sink[:-_STDERR_TAIL_LINES]
 
     async def _finish(
@@ -530,6 +598,8 @@ class Runner:
         parsed: _Parsed,
         exit_code: int | None,
         stderr_tail: str | None,
+        *,
+        failure_reason: str | None = None,
     ) -> Job:
         limit = None
         if state == "limited":
@@ -552,6 +622,7 @@ class Runner:
             "duration_ms": parsed.duration_ms,
             "total_cost_usd": parsed.total_cost_usd,
             "limit": limit,
+            "failure_reason": failure_reason if state == "failed" else None,
         }
         updates["head_at_end"] = await _git_head(role.cwd)
         finished = self.spool.transition(job, state, **updates)
@@ -559,14 +630,34 @@ class Runner:
         return finished
 
 
-def _final_state(parsed: _Parsed, exit_code: int | None, *, cancelled: bool) -> str:
+def _final_state(
+    parsed: _Parsed, exit_code: int | None, *, cancelled: bool
+) -> tuple[str, str | None]:
+    """The terminal state and, for `failed`, its `failure_reason` (§6, §23)."""
     if cancelled:
-        return "killed"  # a human asked; nothing the process said changes that
+        return "killed", None  # a human asked; nothing the process said changes that
     if parsed.limit_category is not None:
-        return "limited"
-    if exit_code == 0 and parsed.saw_result and not parsed.is_error:
-        return "done"
-    return "failed"
+        # Decided in U1 of mission 7a: a limit wins over the terminating line. §6
+        # owns the limit resume and waits out the reset; `failed` would hand the
+        # playbook a `builder.failed → resume` straight back into the limit (H-005).
+        return "limited", None
+    reason = _failure_reason(parsed, exit_code)
+    return ("failed", reason) if reason is not None else ("done", None)
+
+
+def _failure_reason(parsed: _Parsed, exit_code: int | None) -> str | None:
+    """The first of `FAILURE_REASONS` that holds for a finished run, or None."""
+    if parsed.harness_terminated:
+        return "harness_terminated"
+    if not parsed.saw_result or not _is_final_subtype(parsed.subtype):
+        return "no_final_result"
+    if parsed.is_error:
+        return "error_result"
+    if exit_code != 0:
+        return "nonzero_exit"
+    if parsed.num_turns is None:
+        return "no_num_turns"
+    return None
 
 
 def _signal(proc: asyncio.subprocess.Process, signum: int) -> None:

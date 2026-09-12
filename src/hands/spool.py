@@ -193,6 +193,11 @@ class Job:
     gate: dict[str, Any] | None = None
     resumed_from: str | None = None
     playbook_sha256: str | None = None
+    #: §23 (H-014): why a job is `failed`, as one short stable value —
+    #: `harness_terminated`, `no_final_result`, `error_result`, `nonzero_exit`,
+    #: `no_num_turns` or `spawn_error` (`hands.runner.FAILURE_REASONS`). Null for
+    #: every job that is not `failed`, and for a record kept from before §23.
+    failure_reason: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {name: getattr(self, name) for name in JOB_FIELDS}

@@ -700,3 +700,21 @@ process waits instead of being terminated; what the turn does when that
 sub-agent reports back inside `-p` is not observed.
 
 Status: decided (DESIGN v3.6 §23); fixing (mission 7a U1, U2)
+
+**Status: closed on disk for the U1 half (mission 7a U1, the commit that
+carries this paragraph).** `src/hands/runner.py` records `failed` with a new
+job-record field `failure_reason` — `harness_terminated`, `no_final_result`,
+`error_result`, `nonzero_exit`, `no_num_turns`, `spawn_error`, the first that
+holds — and null for every other state. The terminating line is matched by
+shape on every stderr line, not on the tail. `error` in the decision is read as
+claude's `error_*` subtype family. Decided in U1: a cancel stays `killed` and a
+detected limit stays `limited` even with the terminating line, because §6's
+limit resume waits out the reset and a `builder.failed → resume` would not
+(H-005). Every role job gets `CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS=0` unless
+`[roles.<r>] env` sets it, and `hands doctor` prints the effective value per
+role. Tests prove these with `tests/fake_claude.py`, including the recorded
+shape of `0mtygi953-ym63` (success result, `num_turns` 59, exit 0, the
+terminating line) and `builder.failed → resume` over the §10 example in a real
+daemon. They do not prove that a real claude binary run with the ceiling at 0
+waits instead of terminating, or what the turn does when the sub-agent reports
+back; neither was observed. The hook half stays open for U2.

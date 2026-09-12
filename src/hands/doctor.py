@@ -45,7 +45,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from hands.config import Config, RoleConfig
+from hands.config import BG_WAIT_CEILING_ENV, Config, RoleConfig
 from hands.monitor import OPS_FLAGS
 from hands.playbook import PlaybookError, load_playbook, playbook_path
 from hands.runner import build_argv
@@ -193,10 +193,17 @@ def _role_check(role: RoleConfig) -> Check:
     if not role.cwd.is_dir():
         return Check(name, FAIL, f"cwd {role.cwd} does not exist; §13 [roles.{role.name}] cwd")
     flags = role.permission_flags or "(none)"
+    # §23 (H-014): the ceiling a role job really runs with, not handsd's own.
+    source = (
+        f"set by [roles.{role.name}] env"
+        if BG_WAIT_CEILING_ENV in role.env
+        else "hands' default: claude -p waits for the tasks it started, never terminates"
+    )
     # H-008: the two limit-resume behaviours are invisible until a limit is hit.
     detail = (
         f"{role.cwd}  model {role.model}; permission_flags {flags}"
         f"\n{role.resume_behaviour} (§6)"
+        f"\nenv {BG_WAIT_CEILING_ENV}={role.spawn_env[BG_WAIT_CEILING_ENV]} ({source}; §23)"
     )
     if not (role.cwd / ".git").exists():
         return Check(
@@ -369,6 +376,7 @@ def _live_check(config: Config, role: RoleConfig, *, live: bool) -> Check:
             argv,
             input=LIVE_PROMPT,
             cwd=str(role.cwd),
+            env={**os.environ, **role.spawn_env},  # the environment a role job gets (§23)
             capture_output=True,
             text=True,
             timeout=LIVE_S,

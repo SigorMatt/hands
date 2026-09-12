@@ -1334,6 +1334,78 @@ def test_the_section_10_example_end_to_end(
     drive(body)
 
 
+#: The harness's terminating line, verbatim from job 0mtygi953-ym63 (H-014).
+TERMINATING = (
+    "Background tasks still running after 600s; terminating. "
+    "Set CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS=0 to wait indefinitely."
+)
+
+
+def test_a_harness_terminated_builder_job_is_failed_and_the_example_resumes_it(
+    tmp_home: Path, workdir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """§23, H-014: `builder.failed → resume`, over the §10 example in a real daemon.
+
+    The first builder job ends the way job 0mtygi953-ym63 did: a final result
+    with no verdict, exit 0, and the terminating line on stderr. Before §23 that
+    was `done` and the missing VERDICT stopped the pipeline; now it is `failed`,
+    the example's `builder.failed` rule resumes it, and the resumed job's own
+    `VERDICT: question` is what stops the pipeline.
+    """
+    git_repo(workdir)
+    write_project(tmp_home, config_body(tmp_home, workdir))
+    write_playbook(workdir, EXAMPLE)
+    replies = tmp_home / "replies.json"
+    replies.write_text(
+        json.dumps(
+            [
+                {
+                    "result": "U0–U5 are committed; I'll continue with U6 when it reports back.",
+                    "stderr": TERMINATING,
+                },
+                "VERDICT: question resumed after the termination",
+            ]
+        )
+    )
+    monkeypatch.setenv("HANDS_FAKE_CLAUDE_REPLIES", str(replies))
+
+    async def body(daemon: Daemon) -> None:
+        first = await ok(
+            "send", "--role", "builder", "--context", "clear", "Execute WORKPLAN.md run 2"
+        )
+        await ok("wait", first["id"])
+        state = await wait_for_stop()
+
+        rows = sorted((await ok("jobs", "-n", "50"))["jobs"], key=lambda row: row["id"])
+        assert [(row["role"], row["origin"]) for row in rows] == [
+            ("builder", "cli"),
+            ("builder", "playbook"),
+        ]
+        failed, resumed = [await ok("result", row["id"]) for row in rows]
+        assert failed["state"] == "failed"
+        assert failed["failure_reason"] == "harness_terminated"
+        assert failed["exit_code"] == 0
+        assert failed["num_turns"] == 1  # a final result event was there
+        assert TERMINATING in strip_paths(failed["stderr_tail"])
+
+        assert resumed["resumed_from"] == failed["id"]
+        assert resumed["context"] == "clear"
+        assert resumed["prompt"] == failed["prompt"]  # no resume_line configured (H-008)
+        assert resumed["playbook_sha256"] == state["playbook"]["sha256"]
+        assert resumed["state"] == "done"
+        assert resumed["failure_reason"] is None
+
+        events = (await ok("inbox"))["events"]
+        kinds = [event["kind"] for event in events]
+        assert kinds.index("job.failed") < kinds.index("resume")
+        resume = next(event for event in events if event["kind"] == "resume")
+        assert resume["payload"]["resumed_from"] == failed["id"]
+        assert resume["payload"]["job"] == resumed["id"]
+        assert kinds[-1] == "stop"
+
+    drive(body)
+
+
 def test_the_chain_does_not_restart_after_a_stop(tmp_home: Path, workdir: Path) -> None:
     """A stopped pipeline is stopped: the jobs already queued may finish, but
     nothing new is chained until a human resumes (§10, stop → resume cycle)."""

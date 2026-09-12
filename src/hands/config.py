@@ -9,14 +9,17 @@ otherwise, and this file is edited by hand.
 from __future__ import annotations
 
 import os
+import re
 import shlex
 import tomllib
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 __all__ = [
+    "BG_WAIT_CEILING_ENV",
     "DEFAULT_GATE_PATTERNS",
+    "DEFAULT_ROLE_ENV",
     "Config",
     "ConfigError",
     "FilesConfig",
@@ -61,6 +64,15 @@ DEFAULT_PLAYBOOK_PATH = "PLAYBOOK.toml"  # §10, relative to roles.builder.cwd
 DEFAULT_CLAUDE = "claude"
 DEFAULT_CANCEL_GRACE_S = 20.0  # §2: SIGINT, wait, SIGTERM
 
+#: §2's "10-minute idle ceiling": how long `claude -p` stays open for a background
+#: task before it terminates the process and exits 0 (H-014).
+BG_WAIT_CEILING_ENV = "CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS"
+#: What every role job's environment carries unless `[roles.<r>] env` sets the
+#: same name (§23): `0` is the harness's own "wait indefinitely".
+DEFAULT_ROLE_ENV: dict[str, str] = {BG_WAIT_CEILING_ENV: "0"}
+#: A name `[roles.<r>] env` may set: what a POSIX shell accepts as a variable name.
+_ENV_NAME_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+
 #: What leaving [ops] out means (§5).
 _BUILT_IN_MONITOR = "hands then watches builder jobs with its built-in stall detector"
 
@@ -91,6 +103,18 @@ class RoleConfig:
     resume_line: str | None  # §6, H-008: optional, no default
     queue_depth: int
     cancel_gated: bool
+    #: `[roles.<r>] env` as written (§23); `spawn_env` is what a job gets. Not
+    #: part of the hash: a dict cannot be hashed, and the name identifies a role.
+    env: dict[str, str] = field(default_factory=dict, hash=False)
+
+    @property
+    def spawn_env(self) -> dict[str, str]:
+        """What the runner adds to handsd's environment for this role's jobs (§23).
+
+        `DEFAULT_ROLE_ENV` under the configured table, so a configured value
+        wins and an unset ceiling is `0` — whatever handsd itself inherited.
+        """
+        return {**DEFAULT_ROLE_ENV, **self.env}
 
     @property
     def permission_argv(self) -> tuple[str, ...]:
@@ -502,7 +526,7 @@ def _role(name: str, table: Any, path: Path) -> RoleConfig:
         raise ConfigError(f"{path}: {where} must be a table")
     _check_keys(
         table,
-        ("cwd", "model", "permission_flags", "resume_line", "queue_depth", "cancel_gated"),
+        ("cwd", "model", "permission_flags", "resume_line", "queue_depth", "cancel_gated", "env"),
         where,
         path,
     )
@@ -540,6 +564,17 @@ def _role(name: str, table: Any, path: Path) -> RoleConfig:
             table, "queue_depth", DEFAULT_QUEUE_DEPTH.get(name, 1), where, path, minimum=1
         ),
         cancel_gated=_bool(table, "cancel_gated", True, where, path),
+        env=_str_table(
+            table,
+            "env",
+            where,
+            path,
+            blank=_omit(
+                f"the job inherits it from handsd, except {BG_WAIT_CEILING_ENV}, "
+                "which hands sets to 0",
+                "value",
+            ),
+        ),
     )
 
 
@@ -659,6 +694,34 @@ def _str_list(table: dict[str, Any], key: str, where: str, path: Path, *, blank:
             f"{path}: {where} {key} must not contain an empty string, got {value!r}; {blank}"
         )
     return [item.strip() for item in value]  # §21: as in `_str`, the value is not its padding
+
+
+def _str_table(
+    table: dict[str, Any], key: str, where: str, path: Path, *, blank: str
+) -> dict[str, str]:
+    """A table of strings keyed by environment variable name — `[roles.<r>] env` (§23).
+
+    Each value goes through `_str`, so a blank one is refused with both choices
+    named and padding is stripped, as for every other string of §13. A name that
+    no environment can carry (`1X`, `A=B`, `""`) and a value with a NUL byte are
+    refused here rather than by `exec` at the first job.
+    """
+    value = table.get(key, {})
+    if not isinstance(value, dict):
+        raise ConfigError(f"{path}: {where} {key} must be a table of strings, got {value!r}")
+    out: dict[str, str] = {}
+    for name, item in value.items():
+        if not _ENV_NAME_RE.fullmatch(name):
+            raise ConfigError(
+                f"{path}: {where} {key}: {name!r} is not an environment variable name "
+                "(letters, digits and _, not starting with a digit)"
+            )
+        if not isinstance(item, str):
+            raise ConfigError(f"{path}: {where} {key} {name} must be a string, got {item!r}")
+        if "\0" in item:
+            raise ConfigError(f"{path}: {where} {key} {name} must not contain a NUL byte")
+        out[name] = _str(value, name, "", f"{where} {key}", path, blank=blank)
+    return out
 
 
 def _path(

@@ -21,6 +21,12 @@ backslash, so a multi-line result fits on one line of a test:
     FAKE:ignore-int        with FAKE:block, ignore SIGINT so only SIGTERM ends it
     FAKE:rate-limit <msg>  emit system/api_retry with error "rate_limit", then exit
     FAKE:no-result         exit without emitting a `result` event
+    FAKE:no-turns          leave `num_turns` out of the result event
+    FAKE:subtype <s>       the result event's subtype (default "success", or
+                           "error_during_execution" with FAKE:error); with no
+                           argument the event carries no subtype at all
+    FAKE:env <NAME>        result is the value of $NAME as this process saw it,
+                           or UNSET:<NAME> (proves what the runner passed)
     FAKE:error <msg>       emit an error-subtype `result` (is_error true)
     FAKE:exit <code>       exit with this code (default 0)
     FAKE:turns <n>         num_turns of the result event
@@ -33,7 +39,12 @@ lines, so a scripted reply can also be queued outside the prompt: point
 `$HANDS_FAKE_CLAUDE_REPLIES` at a JSON file holding a list of result strings and
 each invocation takes the next one, in order (the position is kept in a sibling
 `.used` file, under a lock). `FAKE:` directives in the prompt still win, and an
-exhausted queue falls back to the default result.
+exhausted queue falls back to the default result. An entry may also be an object,
+`{"result": <text>, "stderr": <text>}`: its `stderr` is written to stderr when the
+entry is taken, which is how a playbook-issued job ends the way the harness ends
+one it terminates (H-014). A reply is taken only on the path that emits a
+successful result, so a prompt with `FAKE:error`, `FAKE:no-result` or
+`FAKE:rate-limit` leaves the queue where it was.
 
 The event shapes follow the schemas in the real binary (claude 2.1.268): the
 init event is `{"type":"system","subtype":"init",…}`, the retry event is
@@ -152,7 +163,7 @@ def park() -> None:
         time.sleep(0.02)
 
 
-def _scripted() -> str | None:
+def _scripted() -> object | None:
     """The next reply of `$HANDS_FAKE_CLAUDE_REPLIES`, or None.
 
     The queue is consumed in invocation order, which is what a chained playbook
@@ -174,14 +185,30 @@ def _scripted() -> str | None:
             return None
         handle.write("x\n")
         handle.flush()
-    return str(replies[taken])
+    return replies[taken]
+
+
+def _reply() -> str | None:
+    """The next scripted reply's result text, writing its `stderr` first if it has one."""
+    entry = _scripted()
+    if isinstance(entry, dict):
+        stderr = entry.get("stderr")
+        if isinstance(stderr, str) and stderr:
+            sys.stderr.write(stderr if stderr.endswith("\n") else stderr + "\n")
+            sys.stderr.flush()
+        result = entry.get("result")
+        return None if result is None else str(result)
+    return None if entry is None else str(entry)
 
 
 def _result(one) -> str | None:  # noqa: ANN001
     """`FAKE:cat <path>` proves a file was on disk *before* claude was spawned."""
+    name = one("env")
+    if name is not None:
+        return os.environ.get(name, f"UNSET:{name}")
     path = one("cat")
     if path is None:
-        return one("result") or _scripted() or "ok"
+        return one("result") or _reply() or "ok"
     try:
         with open(path, encoding="utf-8") as handle:
             return handle.read()
@@ -271,7 +298,7 @@ def main(argv: list[str]) -> int:
         {"tool_name": tool, "tool_use_id": f"toolu_{n}", "tool_input": {}}
         for n, tool in enumerate(directives.get("denial", []))
     ]
-    common = {
+    common: dict[str, object] = {
         "type": "result",
         "duration_ms": int(one("duration", "1234") or 1234),
         "duration_api_ms": 1000,
@@ -284,11 +311,18 @@ def main(argv: list[str]) -> int:
         "session_id": session_id,
         "uuid": str(uuid.uuid4()),
     }
+    if "no-turns" in directives:
+        del common["num_turns"]
+
+    def subtyped(event: dict[str, object], default: str) -> dict[str, object]:
+        subtype = one("subtype", default)
+        return {**event, "subtype": subtype} if subtype else event
+
     if "error" in directives:
-        emit({**common, "subtype": "error_during_execution", "is_error": True,
-              "errors": [one("error", "") or ""]})
+        emit(subtyped({**common, "is_error": True, "errors": [one("error", "") or ""]},
+                      "error_during_execution"))
         return exit_code or 1
-    emit({**common, "subtype": "success", "is_error": False, "result": _result(one)})
+    emit(subtyped({**common, "is_error": False, "result": _result(one)}, "success"))
     return exit_code
 
 

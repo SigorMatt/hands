@@ -136,6 +136,9 @@ def test_every_optional_key_has_a_default(write_config, tmp_home: Path) -> None:
     assert builder.resume_prompt("the limited prompt") == "the limited prompt"
     assert builder.queue_depth == 1
     assert builder.cancel_gated is True
+    # §23: no env table, and the one variable hands sets for every role job.
+    assert builder.env == {}
+    assert builder.spawn_env == {"CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS": "0"}
 
     assert cfg.ops.repo is None
     assert cfg.ops.monitor_cmd is None
@@ -327,6 +330,12 @@ OPTIONAL_STRING_KEYS = [
         "[roles.builder]\ncwd = '~/g'\nresume_line = {v}\n",
         "[roles.builder]",
         "resume_line",
+    ),
+    (
+        "roles.builder.env",
+        "[roles.builder]\ncwd = '~/g'\n[roles.builder.env]\nHANDS_X = {v}\n",
+        "[roles.builder]",
+        "env",
     ),
     ("ops.repo", "[roles.builder]\ncwd = '~/g'\n[ops]\nrepo = {v}\n", "[ops]", "repo"),
     (
@@ -593,6 +602,60 @@ def test_bad_values_are_refused(write_config, body: str) -> None:
         load_config("demo")
 
 
+# ------------------------------------------------ [roles.<r>] env (§23, H-014)
+
+
+def test_a_role_env_table_loads_as_strings(write_config) -> None:
+    write_config(
+        """
+[roles.builder]
+cwd = "~/g"
+[roles.builder.env]
+CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS = "1800000"
+HANDS_EXTRA = "yes"
+
+[roles.aux]
+cwd = "~/g"
+env = { HANDS_AUX_ONLY = "1" }
+"""
+    )
+    cfg = load_config("demo")
+    builder, aux = cfg.role("builder"), cfg.role("aux")
+    assert builder.env == {"CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS": "1800000", "HANDS_EXTRA": "yes"}
+    # the configured value wins over hands' default of 0
+    assert builder.spawn_env == builder.env
+    assert aux.env == {"HANDS_AUX_ONLY": "1"}
+    # a role that does not set the ceiling still gets 0, alongside its own keys
+    assert aux.spawn_env == {"CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS": "0", "HANDS_AUX_ONLY": "1"}
+
+
+@pytest.mark.parametrize(
+    "env,said",
+    [
+        ("env = 'CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS=0'", "table"),
+        ("env = ['A']", "table"),
+        ("[roles.builder.env]\nHANDS_X = 0", "string"),
+        ("[roles.builder.env]\nHANDS_X = true", "string"),
+        ("[roles.builder.env.nested]\nHANDS_X = 'a'", "string"),
+        ("[roles.builder.env]\n'1HANDS' = 'a'", "name"),
+        ("[roles.builder.env]\n'HANDS=X' = 'a'", "name"),
+        ("[roles.builder.env]\n'HANDS X' = 'a'", "name"),
+        ("[roles.builder.env]\n'' = 'a'", "name"),
+        ('[roles.builder.env]\nHANDS_X = "a\\u0000b"', "NUL"),
+    ],
+)
+def test_a_bad_role_env_is_refused_with_its_section_and_key(
+    write_config, env: str, said: str
+) -> None:
+    write_config(f"[roles.builder]\ncwd = '~/g'\n{env}\n")
+    with pytest.raises(ConfigError) as exc:
+        load_config("demo")
+    message = str(exc.value)
+    assert "demo.toml" in strip_paths(message)
+    assert "[roles.builder]" in strip_paths(message) and "env" in strip_paths(message)
+    assert said in strip_paths(message)
+
+
 def test_gates_patterns_may_be_extended_but_never_reduced(write_config) -> None:
     """§8: "gating on the default patterns cannot be disabled"."""
     write_config(
@@ -678,6 +741,7 @@ cwd = "  ~/g  "
 model = "  opus  "
 permission_flags = "  --dangerously-skip-permissions  "
 resume_line = "  Resume WORKPLAN.md  "
+env = { HANDS_PADDED = "  1  " }
 
 [roles.aux]
 cwd = "  ~/g  "
@@ -737,6 +801,7 @@ def test_every_accepted_string_value_is_stored_stripped(write_config, ops_repo: 
     assert padded_values(cfg) == []
     # …and the stripped values are the ones the rest of hands then uses.
     assert cfg.role("builder").resume_line == "Resume WORKPLAN.md"
+    assert cfg.role("builder").env == {"HANDS_PADDED": "1"}
     assert cfg.playbook.path == "P.toml"
     assert cfg.ops.monitor_path == ops_repo / "watch_monitor.sh"
     assert cfg.role("builder").cwd.is_absolute()
@@ -754,8 +819,9 @@ HELPER_WHERE = {
     "_int": 3,
     "_number": 3,
     "_bool": 3,
+    "_str_table": 2,
 }
-STRING_HELPERS = ("_str", "_opt_str", "_path", "_str_list")
+STRING_HELPERS = ("_str", "_opt_str", "_path", "_str_list", "_str_table")
 #: `_role` and `_resume_line` take `where` as a parameter (`[roles.builder]` or
 #: `[roles.aux]`, decided at run time), so every such call shares one scope here.
 ROLE_SCOPE = "[roles.<name>]"
@@ -847,6 +913,7 @@ def test_every_key_the_config_admits_is_read_through_a_loader_helper() -> None:
     # …and the scan tells the string keys from the rest, which is what the two
     # tests around this one lean on.
     assert ("[ops]", "monitor_cmd") in scan.strings
+    assert (ROLE_SCOPE, "env") in scan.strings  # §23: a table of strings, through a helper
     assert (ROLE_SCOPE, "queue_depth") in scan.read.difference(scan.strings)
 
 

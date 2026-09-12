@@ -60,6 +60,10 @@ cwd` is optional.
     queue_depth = 1                      # capacity: how many jobs may wait
     cancel_gated = true                  # default
 
+    [roles.builder.env]                  # optional: added to handsd's environment
+    CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS = "0"  # for this role's jobs. hands sets
+                                         # this one to "0" unless you set it here
+
     [roles.aux]
     cwd = "~/git/<project>"
     queue_depth = 4                      # default for aux (builder 1); `hands
@@ -98,6 +102,24 @@ Notes that are easy to get wrong:
   `decisions-`, `playbook-`, `gh pr create`, `open the PR`). A config can only
   widen the gate, never disable it (§8).
 - `roles` are exactly `builder` and `aux`; `[roles.builder]` is required.
+- **`[roles.<role>] env`** (§23, H-014) is a table of environment variables for
+  that role's `claude -p` jobs, on top of handsd's own environment. Names are
+  environment variable names (letters, digits, `_`); values are non-empty
+  strings. Every role job gets `CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS=0` unless
+  this table sets that name — even when handsd's own environment carries another
+  value. With Claude Code's default ceiling (600 s), a `claude -p` whose turn
+  ended while a sub-agent it started was still running is terminated and exits 0.
+  `hands doctor` prints the effective value on each role's row.
+- **How a job ends** (§6, §23). A job is `done` only when claude exits 0 with a
+  final `result` event of subtype `success` (or an `error_*` subtype) that
+  carries `num_turns`, and stderr never carried the harness's "Background tasks
+  still running after …; terminating." line. Otherwise it is `failed`, and the
+  record's `failure_reason` says why, one value each: `harness_terminated`,
+  `no_final_result`, `error_result`, `nonzero_exit`, `no_num_turns`,
+  `spawn_error` — the first that holds, in that order; `stderr_tail` has the
+  evidence. `failure_reason` is null for every other state. A cancel is still
+  `killed` and a detected limit still `limited`, terminating line or not: §6's
+  limit resume waits out the reset, and a `builder.failed → resume` would not.
 - **An empty string is refused at load, for every optional key** (§20): `""` or
   blanks only is neither the key's absent meaning nor a usable value — an empty
   `ops.monitor_cmd` would have made the *ops directory* the monitor script. The

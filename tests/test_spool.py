@@ -70,8 +70,9 @@ def test_job_record_has_exactly_the_design_fields(tmp_home: Path) -> None:
         "resumed_from",
     }
     # `state` and `playbook_sha256` are carried too: §6 names the states and §10
-    # requires the playbook sha on every job the playbook fires.
-    assert set(JOB_FIELDS) == design | {"state", "playbook_sha256"}
+    # requires the playbook sha on every job the playbook fires. `failure_reason`
+    # is §23's (H-014): which of the failure causes made a job `failed`.
+    assert set(JOB_FIELDS) == design | {"state", "playbook_sha256", "failure_reason"}
 
     spool = Spool()
     job = make(spool)
@@ -519,6 +520,17 @@ def test_a_record_written_before_a_later_field_existed_still_loads(tmp_home: Pat
     del data["playbook_sha256"]
     path.write_text(json.dumps(data))
     assert spool.load_job(job.id).playbook_sha256 is None
+
+
+def test_a_record_written_before_failure_reason_existed_still_loads(tmp_home: Path) -> None:
+    """§23 added `failure_reason`; every record kept from before has none (§7)."""
+    spool = Spool()
+    job = make(spool)
+    path = spool.jobs_dir / f"{job.id}.json"
+    data = json.loads(path.read_text())
+    del data["failure_reason"]
+    path.write_text(json.dumps(data))
+    assert spool.load_job(job.id).failure_reason is None
 
 
 def test_a_record_missing_a_required_field_is_refused(tmp_home: Path) -> None:

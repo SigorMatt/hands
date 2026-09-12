@@ -391,6 +391,7 @@ def _job_block(record: dict[str, Any]) -> str:
         ("ended", "ended"),
         ("session", "session_id"),
         ("exit", "exit_code"),
+        ("failure", "failure_reason"),
         ("verdict", "verdict"),
     ):
         value = record.get(key)

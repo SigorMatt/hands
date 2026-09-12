@@ -25,6 +25,7 @@ from hands.runner import (
     Runner,
     RunnerError,
     extract_verdict,
+    is_harness_termination,
     project_dir_name,
     reconcile_orphans,
     transcript_path_for,
@@ -83,6 +84,7 @@ def test_clear_job_runs_and_records_the_whole_record(runner: Runner, spool: Spoo
     assert job.total_cost_usd == 0.25
     assert job.duration_ms == 4242
     assert job.started and job.ended
+    assert job.failure_reason is None  # §23: null for every job that is not failed
     # persisted, not just returned
     assert spool.load_job(job.id).state == "done"
 
@@ -263,11 +265,13 @@ def test_a_nonzero_exit_without_a_result_fails(runner: Runner, spool: Spool) -> 
     job = send(runner, spool, "FAKE:no-result\nFAKE:exit 7")
     assert job.state == "failed"
     assert job.exit_code == 7
+    assert job.failure_reason == "no_final_result"
 
 
 def test_an_error_result_fails_and_stderr_tail_is_kept(runner: Runner, spool: Spool) -> None:
     job = send(runner, spool, "FAKE:error boom\nFAKE:stderr trouble here")
     assert job.state == "failed"
+    assert job.failure_reason == "error_result"
     assert job.stderr_tail is not None
     assert "trouble here" in strip_paths(job.stderr_tail)
 
@@ -297,6 +301,209 @@ def test_a_missing_claude_binary_fails_the_job(
     job = send(runner, spool, "FAKE:result ok")
     assert job.state == "failed"
     assert job.stderr_tail is not None
+    assert job.failure_reason == "spawn_error"
+
+
+# ------------------------------------------ harness termination (§2, §6, §23, H-014)
+
+#: The line claude 2.1.x writes when its bg-wait ceiling ends a `-p` process,
+#: verbatim from job 0mtygi953-ym63's stderr_tail (H-014).
+TERMINATING = (
+    "Background tasks still running after 600s; terminating. "
+    "Set CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS=0 to wait indefinitely."
+)
+#: That job's `result`: a progress note, not a report.
+MID_MISSION_NOTE = (
+    "U0–U5 are committed and pushed; the U5 follow-up is running now. "
+    "I'll continue with U6 and U7 when it reports back."
+)
+
+
+def test_the_exact_shape_of_job_0mtygi953_is_failed_harness_terminated(
+    runner: Runner, spool: Spool
+) -> None:
+    """H-014: a final success result, num_turns 59, exit 0 — and the terminating line.
+
+    Only the stderr line tells this record apart from a finished turn, so that
+    line alone has to make it `failed`.
+    """
+    job = send(
+        runner,
+        spool,
+        f"FAKE:stderr {TERMINATING}\nFAKE:result {MID_MISSION_NOTE}\nFAKE:turns 59\nFAKE:exit 0",
+    )
+    assert job.exit_code == 0
+    assert job.num_turns == 59
+    assert job.result == MID_MISSION_NOTE
+    assert job.state == "failed"
+    assert job.failure_reason == "harness_terminated"
+    assert job.stderr_tail is not None and TERMINATING in strip_paths(job.stderr_tail)
+    assert spool.load_job(job.id).failure_reason == "harness_terminated"
+    assert [event.kind for event in spool.events()] == ["job.failed"]
+
+
+def test_a_mid_turn_exit_with_no_result_event_is_failed(runner: Runner, spool: Spool) -> None:
+    """Assistant events, then the process ends with exit 0 and no `result` (§23)."""
+    job = send(runner, spool, "FAKE:events 3\nFAKE:no-result\nFAKE:exit 0")
+    assert job.exit_code == 0
+    assert job.session_id
+    assert job.state == "failed"
+    assert job.failure_reason == "no_final_result"
+
+
+def test_a_clean_exit_stays_done_with_no_failure_reason(runner: Runner, spool: Spool) -> None:
+    job = send(runner, spool, "FAKE:events 3\nFAKE:stderr an ordinary warning\nFAKE:result fin")
+    assert job.state == "done"
+    assert job.failure_reason is None
+    assert job.num_turns == 1
+
+
+def test_a_result_without_num_turns_is_failed(runner: Runner, spool: Spool) -> None:
+    job = send(runner, spool, "FAKE:result looks finished\nFAKE:no-turns")
+    assert job.exit_code == 0
+    assert job.num_turns is None
+    assert job.state == "failed"
+    assert job.failure_reason == "no_num_turns"
+
+
+@pytest.mark.parametrize("subtype", ["progress", "success_partial", ""], ids=repr)
+def test_a_result_whose_subtype_is_not_success_or_error_is_not_a_final_result(
+    runner: Runner, spool: Spool, subtype: str
+) -> None:
+    """`""` is the event with no subtype key at all (fake_claude's bare FAKE:subtype)."""
+    job = send(runner, spool, f"FAKE:result ok\nFAKE:subtype {subtype}".rstrip())
+    assert job.state == "failed"
+    assert job.failure_reason == "no_final_result"
+
+
+@pytest.mark.parametrize(
+    "subtype", ["error_during_execution", "error_max_turns", "error_max_budget_usd"]
+)
+def test_an_error_subtype_is_a_final_result_and_fails_as_an_error(
+    runner: Runner, spool: Spool, subtype: str
+) -> None:
+    """The error family of claude 2.1.x's result subtypes counts as §23's `error`."""
+    job = send(runner, spool, f"FAKE:error stopped\nFAKE:subtype {subtype}")
+    assert job.state == "failed"
+    assert job.failure_reason == "error_result"
+
+
+def test_a_success_result_with_a_nonzero_exit_is_failed_nonzero_exit(
+    runner: Runner, spool: Spool
+) -> None:
+    job = send(runner, spool, "FAKE:result ok\nFAKE:exit 3")
+    assert job.state == "failed"
+    assert job.failure_reason == "nonzero_exit"
+
+
+def test_the_terminating_line_wins_over_every_other_failure_reason(
+    runner: Runner, spool: Spool
+) -> None:
+    job = send(runner, spool, f"FAKE:stderr {TERMINATING}\nFAKE:events 2\nFAKE:no-result")
+    assert job.state == "failed"
+    assert job.failure_reason == "harness_terminated"
+
+
+def test_a_limit_wins_over_the_terminating_line(runner: Runner, spool: Spool) -> None:
+    """Decided (U1): `limited`, not `failed`. §6 owns the limit resume and waits out
+    the reset; a `failed` here would hand the playbook a `builder.failed → resume`
+    that sends a job straight back into the same limit (H-005)."""
+    retry = send(runner, spool, f"FAKE:stderr {TERMINATING}\nFAKE:rate-limit slow down")
+    assert retry.state == "limited"
+    assert retry.failure_reason is None
+    notice = send(
+        runner,
+        spool,
+        f"FAKE:stderr {TERMINATING}\nFAKE:result Usage limit reached. Try later.",
+    )
+    assert notice.state == "limited"
+    assert notice.failure_reason is None
+
+
+def test_a_cancel_wins_over_the_terminating_line(runner: Runner, spool: Spool) -> None:
+    async def scenario() -> Job:
+        job = spool.create_job(
+            role="builder",
+            context="clear",
+            prompt=f"FAKE:stderr {TERMINATING}\nFAKE:block",
+            origin="cli",
+        )
+        task = asyncio.create_task(runner.run(job))
+        await runner.wait_for_session(job.id)
+        await runner.cancel(job.id)
+        return await task
+
+    job = asyncio.run(scenario())
+    assert job.state == "killed"
+    assert job.failure_reason is None
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        TERMINATING,
+        "Background tasks still running after 1200s; terminating. "
+        "Set CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS=0 to wait indefinitely.",
+        "Background tasks still running after 5s; terminating.",
+        "  background tasks still running after 90 s; Terminating",
+        "\x1b[33mBackground task still running after 600s; terminating.\x1b[0m",
+    ],
+)
+def test_the_terminating_line_is_matched_by_its_shape(line: str) -> None:
+    assert is_harness_termination(line)
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "Background tasks still running after 600s; waiting.",
+        "terminating",
+        "the builder is terminating the U5 follow-up",
+        "Set CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS=0 to wait indefinitely.",
+        "",
+    ],
+)
+def test_a_line_without_that_shape_is_not_a_termination(line: str) -> None:
+    assert not is_harness_termination(line)
+
+
+# --------------------------------------------------- the role environment (§23)
+
+CEILING = "CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS"
+
+
+def test_the_bg_wait_ceiling_reaches_the_process_as_0_by_default(
+    runner: Runner, spool: Spool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Even when the daemon's own environment carries a ceiling: the config did not
+    set one, so the role job gets `0` (§23)."""
+    monkeypatch.setenv(CEILING, "600000")
+    monkeypatch.setenv("HANDS_TEST_INHERITED", "kept")
+    assert send(runner, spool, f"FAKE:env {CEILING}").result == "0"
+    # the rest of the daemon's environment is still inherited
+    assert send(runner, spool, "FAKE:env HANDS_TEST_INHERITED").result == "kept"
+
+
+def test_a_configured_role_env_wins_and_reaches_the_process(
+    tmp_home: Path, workdir: Path, spool: Spool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(CEILING, "600000")
+    cfg = parse_config(
+        {
+            "roles": {
+                "builder": {
+                    "cwd": str(workdir),
+                    "env": {CEILING: "1800000", "HANDS_ROLE_EXTRA": "yes"},
+                }
+            },
+            "runner": {"claude": str(FAKE)},
+        },
+        project="demo",
+        path=tmp_home / ".hands" / "demo.toml",
+    )
+    runner = Runner(cfg, spool)
+    assert send(runner, spool, f"FAKE:env {CEILING}").result == "1800000"
+    assert send(runner, spool, "FAKE:env HANDS_ROLE_EXTRA").result == "yes"
 
 
 def test_non_json_lines_in_the_stream_are_ignored(runner: Runner, spool: Spool) -> None:
