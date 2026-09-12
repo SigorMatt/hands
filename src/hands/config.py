@@ -61,8 +61,18 @@ DEFAULT_PLAYBOOK_PATH = "PLAYBOOK.toml"  # §10, relative to roles.builder.cwd
 DEFAULT_CLAUDE = "claude"
 DEFAULT_CANCEL_GRACE_S = 20.0  # §2: SIGINT, wait, SIGTERM
 
-#: What leaving [ops] out means (§5): both keys, or neither.
+#: What leaving [ops] out means (§5).
 _BUILT_IN_MONITOR = "hands then watches builder jobs with its built-in stall detector"
+
+#: The other half of the pair (§21, review 4 should-fix 8): a `monitor_cmd` with
+#: no `repo` has nothing to be resolved against, so `monitor_path` was `None` and
+#: the script the config named was silently never run — while `hands status` said
+#: the built-in detector was deciding. `repo` on its own stays legal: it names the
+#: directory, and hands watches with its own detector until a script is named.
+_MONITOR_CMD_NEEDS_REPO = (
+    "names a script inside ops.repo, but [ops] repo is not set; either set "
+    f"ops.repo or omit monitor_cmd ({_BUILT_IN_MONITOR})"
+)
 
 
 @dataclass(frozen=True)
@@ -169,6 +179,8 @@ class OpsConfig:
         """
         if self.monitor_cmd is None:
             return
+        if self.repo is None:
+            raise ConfigError(f"[ops] monitor_cmd {_MONITOR_CMD_NEEDS_REPO}")
         problem = _monitor_cmd_shape(self.monitor_cmd)
         if problem is not None:
             raise ConfigError(f"[ops] monitor_cmd {problem}")
@@ -346,10 +358,9 @@ def parse_config(data: dict[str, Any], *, project: str, path: Path) -> Config:
 
     ops_t = _table(data, "ops", path)
     _check_keys(ops_t, ("repo", "monitor_cmd"), "[ops]", path)
-    repo_value = ops_t.get("repo")
     ops_repo = (
         None
-        if repo_value is None
+        if "repo" not in ops_t
         else _abs(
             _path(ops_t, "repo", "", "[ops]", path, blank=_omit(_BUILT_IN_MONITOR, "path")),
             "ops.repo",
@@ -363,6 +374,8 @@ def parse_config(data: dict[str, Any], *, project: str, path: Path) -> Config:
         ops_t, "monitor_cmd", "[ops]", path, blank=_omit(_BUILT_IN_MONITOR, "script name")
     )
     if monitor_cmd is not None:
+        if ops_repo is None:
+            raise ConfigError(f"{path}: [ops] monitor_cmd {_MONITOR_CMD_NEEDS_REPO}")
         problem = _monitor_cmd_problem(ops_repo, monitor_cmd)
         if problem is not None:
             raise ConfigError(f"{path}: [ops] monitor_cmd {problem}")
@@ -567,18 +580,26 @@ def _table(data: dict[str, Any], name: str, path: Path) -> dict[str, Any]:
 def _str(
     table: dict[str, Any], key: str, default: str, where: str, path: Path, *, blank: str | None
 ) -> str:
-    """One string key. `blank` is the hint printed when the value is empty.
+    """One string key, stripped. `blank` is the hint printed when the value is empty.
 
     `blank=None` is the explicit "an empty string is a legal value here" — it is
     a required argument precisely so that a new key cannot acquire the §20 hole
     by omission: whoever adds the key has to answer the question.
+
+    Stripping is here for the same reason (§21, review 4 should-fix 8): the blank
+    check strips and the store did not, so `playbook.path = " P.toml "` passed as
+    non-empty and kept its padding — a path nothing on disk matches, and
+    `" ~/g "` is not even expanded. Every string key of §13 is read through this
+    function or `_str_list`, so the padding cannot survive any of them and a new
+    key cannot forget to ask. The refusals above quote the value as it was
+    written, since that is what the human has to find in the file.
     """
     value = table.get(key, default)
     if not isinstance(value, str):
         raise ConfigError(f"{path}: {where} {key} must be a string, got {value!r}")
     if blank is not None and not value.strip():
         raise ConfigError(f"{path}: {where} {key} must not be empty, got {value!r}; {blank}")
-    return value
+    return value.strip()
 
 
 def _opt_str(
@@ -624,7 +645,7 @@ def _str_list(table: dict[str, Any], key: str, where: str, path: Path, *, blank:
         raise ConfigError(
             f"{path}: {where} {key} must not contain an empty string, got {value!r}; {blank}"
         )
-    return value
+    return [item.strip() for item in value]  # §21: as in `_str`, the value is not its padding
 
 
 def _path(

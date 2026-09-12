@@ -55,19 +55,29 @@ def project(tmp_home: Path, workdir: Path) -> str:
 
 
 def test_the_driver_kit_spelling_resolves_to_real_event_kinds() -> None:
-    """§11/§12: the driver types `--for stop,held`; `held` is the kind `job.held`.
-
-    `stop` is a kind *and* a namespace since §10 (v3.3) gained `stop.suppressed`,
-    so the namespace rule below applies to it as it does to `job`: the driver's
-    own spelling wakes it for a stop that took and for one that was suppressed —
-    both of which are it being told the pipeline is stopped.
-    """
-    assert resolve_kinds("stop,held") == frozenset({"stop", "stop.suppressed", "job.held"})
-    assert resolve_kinds("stop.suppressed") == frozenset({"stop.suppressed"})
-    assert resolve_kinds(" stop , job.held ") == frozenset(
-        {"stop", "stop.suppressed", "job.held"}
-    )
+    """§11/§12: the driver types `--for stop,held`; `held` is the kind `job.held`."""
+    assert resolve_kinds("stop,held") == frozenset({"stop", "job.held"})
+    assert resolve_kinds(" stop , job.held ") == frozenset({"stop", "job.held"})
     assert resolve_kinds("job") >= frozenset({"job.done", "job.held", "job.failed"})
+
+
+def test_for_stop_is_the_stop_kind_and_nothing_else() -> None:
+    """H-011 (§21): `--for stop` resolves to exactly `{stop}`.
+
+    A suppressed stop is "recorded in the inbox only" (§10) — no notification —
+    so waking the driver on it is the one thing the record must not do. The kind
+    is `pipeline.stop_suppressed`, in the `pipeline` namespace beside
+    `pipeline.resumed` and outside `stop`'s, which is what makes the driver kit's
+    own `--for stop,held` immune to it. A session that does want them arms
+    `--for pipeline`.
+    """
+    assert resolve_kinds("stop") == frozenset({"stop"})
+    assert resolve_kinds("stop,held") == frozenset({"stop", "job.held"})
+    assert resolve_kinds("pipeline") == frozenset(
+        {"pipeline.resumed", "pipeline.stop_suppressed"}
+    )
+    assert resolve_kinds("stop_suppressed") == frozenset({"pipeline.stop_suppressed"})
+    assert resolve_kinds("pipeline.stop_suppressed") == frozenset({"pipeline.stop_suppressed"})
 
 
 def test_a_kind_no_event_can_have_is_refused() -> None:

@@ -72,16 +72,18 @@ says which it was, `by = "resume"` or `by = "start"`.
 Every stop, from any component — a rule, the engine itself, `hands pause`, an
 exhausted `max_resumes` — goes through one `stop()`, and the first reason is the
 one that is kept. A later stop over an existing one takes nothing: no change to
-the reason or its timestamp, no second notification, and one `stop.suppressed`
-event in the inbox naming the reason it would have set and the reason that was
-kept.
+the reason or its timestamp, no second notification, and one
+`pipeline.stop_suppressed` event in the inbox naming the reason it would have
+set and the reason that was kept. That kind is in the `pipeline` namespace and
+not in `stop`'s, so `hands wait --for stop,held` is not woken by a stop that was
+deliberately not notified; `--for pipeline` waits for them.
 
 `hands pause` is a stop you make yourself: it files the same `stop` event
 (reason `paused by human`) and the same notification, which is what wakes a
 driver blocked on `hands wait --for stop,held`. Over a pipeline that is
 *already* stopped it is that later stop: it prints the reason it is already
 stopped for, keeps that reason and its timestamp in `hands pipeline`, notifies
-nobody, and leaves only the `stop.suppressed` record.
+nobody, and leaves only the `pipeline.stop_suppressed` record.
 
 ## Verdict matching
 

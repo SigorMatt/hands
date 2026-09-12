@@ -450,7 +450,7 @@ class Daemon:
         Through the engine's `stop()` like every other component (§10), so this
         stop writes the `stop` event of §11, notifies, records the reason for
         `hands pipeline` — and, over a pipeline already stopped, does none of
-        that and leaves a `stop.suppressed` in the inbox instead.
+        that and leaves a `pipeline.stop_suppressed` in the inbox instead.
         """
         await self.playbook.stop(reason, payload)
 

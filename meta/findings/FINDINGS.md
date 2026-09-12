@@ -478,6 +478,17 @@ makes the rename in code, tests and docs; the acceptance is that
 
 Status: closed by mission 5 U5 (the decision above; see meta/FINAL-REPORT-5.md)
 
+Status: closed on disk, 2026-09-12 — mission 5 U5 made the rename: `EVENT_KINDS`
+in `src/hands/spool.py`, `stop()` in `src/hands/playbook.py`, the `_limit_stop`
+docstring in `src/hands/daemon.py`, `docs/PLAYBOOK.md` and every test that named
+the kind. `grep -rn 'stop\.suppressed' src tests docs driver` returns nothing,
+and `tests/test_wake.py::test_for_stop_is_the_stop_kind_and_nothing_else` pins
+`resolve_kinds("stop") == {"stop"}` with `resolve_kinds("pipeline") ==
+{"pipeline.resumed", "pipeline.stop_suppressed"}` beside it, so the namespace
+cannot be re-entered without a red test. The unit commit carries this line, so
+it cannot name itself; `git log -1 --format=%H -- src/hands/spool.py` resolves
+it.
+
 ---
 
 ## H-012 — "cap plus one quarter" does not cover JSON escaping; the cap is measured on the wire

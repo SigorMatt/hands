@@ -111,8 +111,10 @@ EVENT_KINDS = frozenset(
         "stop",
         # §10: a stop over a pipeline already stopped. The first reason is kept,
         # so this one takes nothing and notifies nobody — it is recorded here and
-        # nowhere else, which is why it is a kind of its own.
-        "stop.suppressed",
+        # nowhere else, which is why it is a kind of its own. In the `pipeline`
+        # namespace and not in `stop`'s (H-011, §21): `--for stop` must not wake a
+        # driver on a stop that was deliberately not notified.
+        "pipeline.stop_suppressed",
         "pipeline.resumed",  # the other half of §10's stop → resume cycle (H-007)
         "gate.decided",
         "limit",

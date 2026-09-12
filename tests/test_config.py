@@ -1,9 +1,13 @@
 """U1: the project config of DESIGN §13 — shape, expansion, validation, defaults."""
 
+import ast
+import dataclasses
 from pathlib import Path
+from typing import Any
 
 import pytest
 
+import hands.config
 from conftest import strip_paths
 from hands.config import (
     DEFAULT_GATE_PATTERNS,
@@ -573,3 +577,193 @@ def test_unknown_role_lookup_raises(write_config) -> None:
     cfg = load_config("demo")
     with pytest.raises(KeyError):
         cfg.role("aux")
+
+
+# ------------------- the loader's helpers are the mechanism (§21, review 4 should-fix 8)
+
+
+def test_monitor_cmd_without_an_ops_repo_is_refused(write_config, ops_repo: Path) -> None:
+    """§5/§13: `[ops]` is both keys or neither — the half-set pair is a mistake.
+
+    `monitor_cmd` with no `repo` loaded clean and was then silently ignored:
+    `monitor_path` is None, so `hands status` says the built-in detector is
+    deciding while the config names a script it will never run. The refusal names
+    the two ways out, like every other §13 refusal.
+    """
+    write_config("[roles.builder]\ncwd = '~/g'\n[ops]\nmonitor_cmd = 'watch_monitor.sh'\n")
+    with pytest.raises(ConfigError) as exc:
+        load_config("demo")
+    message = str(exc.value)
+    assert "demo.toml" in strip_paths(message)  # the `path` context every config error carries
+    assert "[ops]" in strip_paths(message) and "monitor_cmd" in strip_paths(message)
+    assert "repo" in strip_paths(message)  # what to add
+    assert "omit" in strip_paths(message)  # or what to drop
+
+
+def test_a_monitor_cmd_with_no_repo_is_unreachable_as_a_value_too() -> None:
+    """The invariant lives on `OpsConfig`, as blocker 2's shape check does.
+
+    `monitor_path`'s callers read it without re-checking, so the state where a
+    script is configured and cannot be run is refused where it would be created.
+    """
+    with pytest.raises(ConfigError) as exc:
+        OpsConfig(repo=None, monitor_cmd="watch_monitor.sh")
+    assert "monitor_cmd" in strip_paths(str(exc.value))
+    assert OpsConfig(repo=None, monitor_cmd=None).monitor_path is None
+
+
+#: Every string key of §13 at once, each value padded with blanks. Loading this
+#: is the test: `Path('  ~/g  ').expanduser()` does not expand, `'  P.toml  '`
+#: names a file nobody wrote, and `[' x ']` gates on a pattern with a space in it.
+PADDED = """
+[server]
+socket = "  ~/.hands/handsd.sock  "
+ntfy_topic = "  hands-abc123  "
+ntfy_url = "  https://ntfy.sh  "
+
+[roles.builder]
+cwd = "  ~/g  "
+model = "  opus  "
+permission_flags = "  --dangerously-skip-permissions  "
+resume_line = "  Resume WORKPLAN.md  "
+
+[roles.aux]
+cwd = "  ~/g  "
+model = "  sonnet  "
+
+[ops]
+repo = "  ~/ops  "
+monitor_cmd = "  watch_monitor.sh  "
+
+[playbook]
+path = "  P.toml  "
+
+[files]
+allowed_roots = ["  ~/g  ", "  ~/ops  "]
+
+[gates]
+patterns = ["  gh pr create  ", "  decisions-  "]
+
+[runner]
+claude = "  /usr/local/bin/claude  "
+"""
+
+
+def padded_values(value: Any, where: str = "config") -> list[str]:
+    """Every string in a loaded `Config` that kept a blank at either end."""
+    if isinstance(value, str):
+        return [] if value == value.strip() else [f"{where} = {value!r}"]
+    if isinstance(value, Path):
+        kept = [part for part in value.parts if part != part.strip()]
+        return [f"{where} = {str(value)!r}"] if kept else []
+    if isinstance(value, (list, tuple)):
+        return [
+            bad for i, item in enumerate(value) for bad in padded_values(item, f"{where}[{i}]")
+        ]
+    if isinstance(value, dict):
+        return [bad for k, v in value.items() for bad in padded_values(v, f"{where}[{k!r}]")]
+    if dataclasses.is_dataclass(value) and not isinstance(value, type):
+        return [
+            bad
+            for field in dataclasses.fields(value)
+            for bad in padded_values(getattr(value, field.name), f"{where}.{field.name}")
+        ]
+    return []
+
+
+def test_every_accepted_string_value_is_stored_stripped(write_config, ops_repo: Path) -> None:
+    """§21 (review 4 should-fix 8): a padded value is the value, not a new key.
+
+    The blank check of §20 used `strip()` and then stored the raw string, so
+    `playbook.path = " P.toml "` and `gates.patterns = [" x "]` kept their
+    padding: a path nothing on disk matches and a gate pattern that never fires.
+    Stripping is in the loader's string helpers, so every key has it and the walk
+    below covers the ones a future unit adds.
+    """
+    write_config(PADDED)
+    cfg = load_config("demo")
+    assert padded_values(cfg) == []
+    # …and the stripped values are the ones the rest of hands then uses.
+    assert cfg.role("builder").resume_line == "Resume WORKPLAN.md"
+    assert cfg.playbook.path == "P.toml"
+    assert cfg.ops.monitor_path == ops_repo / "watch_monitor.sh"
+    assert cfg.role("builder").cwd.is_absolute()
+    assert cfg.gates.patterns.count("gh pr create") == 1  # a default, not a second copy
+    assert cfg.gates.patterns.count("decisions-") == 1
+
+
+#: How each loader helper is called: the position of the `where` argument, so a
+#: call can be tied to the section whose keys it reads.
+HELPER_WHERE = {
+    "_str": 3,
+    "_opt_str": 2,
+    "_path": 3,
+    "_str_list": 2,
+    "_int": 3,
+    "_number": 3,
+    "_bool": 3,
+}
+STRING_HELPERS = ("_str", "_opt_str", "_path", "_str_list")
+#: `_role` and `_resume_line` take `where` as a parameter (`[roles.builder]` or
+#: `[roles.aux]`, decided at run time), so every such call shares one scope here.
+ROLE_SCOPE = "[roles.<name>]"
+
+
+def config_keys() -> tuple[set[tuple[str, str]], set[tuple[str, str]], set[tuple[str, str]]]:
+    """Read `config.py`: the keys it admits, the keys it reads, and the string ones."""
+    tree = ast.parse(Path(hands.config.__file__).read_text())
+    admitted: set[tuple[str, str]] = set()
+    read: set[tuple[str, str]] = set()
+    strings: set[tuple[str, str]] = set()
+    for func in [n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)]:
+        for node in ast.walk(func):
+            if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Name):
+                continue
+            name = node.func.id
+            if name == "_check_keys":
+                where = node.args[2]
+                scope = where.value if isinstance(where, ast.Constant) else ROLE_SCOPE
+                if scope == "config":
+                    continue  # the section names, not keys
+                admitted |= {(scope, item.value) for item in node.args[1].elts}
+            elif name in HELPER_WHERE:
+                key = node.args[1]
+                if not isinstance(key, ast.Constant):
+                    continue  # a helper delegating to another with its own argument
+                where = node.args[HELPER_WHERE[name]]
+                scope = where.value if isinstance(where, ast.Constant) else ROLE_SCOPE
+                read.add((scope, key.value))
+                if name in STRING_HELPERS:
+                    strings.add((scope, key.value))
+    return admitted, read, strings
+
+
+def test_every_key_the_config_admits_is_read_through_a_loader_helper() -> None:
+    """§21 (review 4 should-fix 8): the mechanism, asserted instead of assumed.
+
+    `blank=` is a required keyword of the string helpers and stripping is inside
+    them, so no key that goes through them can skip either — but a key added with
+    a raw `table.get(...)` skips the helpers themselves, which is how
+    `monitor_cmd` skipped mission 3's check. `_check_keys` is the list of keys the
+    config admits at all; every one of them must be read by a helper, and nothing
+    else may be read, so the two lists cannot drift apart unnoticed.
+    """
+    admitted, read, strings = config_keys()
+    assert admitted, "the parse found no keys at all — the scan is broken, not the loader"
+    assert read - admitted == set(), "a key is read that no section admits"
+    assert admitted - read == set(), "a key is admitted that no helper reads"
+    # …and the scan tells the string keys from the rest, which is what the two
+    # tests around this one lean on.
+    assert ("[ops]", "monitor_cmd") in strings
+    assert (ROLE_SCOPE, "queue_depth") in read.difference(strings)
+
+
+def test_the_padded_config_names_every_string_key_the_loader_reads() -> None:
+    """The walk above only proves what the config it loads actually sets.
+
+    So the string keys are read out of `config.py` itself: a new one that this
+    file does not exercise fails here rather than passing silently.
+    """
+    _admitted, _read, strings = config_keys()
+    missing = sorted(key for _scope, key in strings if f"{key} = " not in PADDED)
+    assert missing == []

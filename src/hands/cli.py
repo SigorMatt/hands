@@ -485,9 +485,12 @@ def _pipeline_block(result: dict[str, Any]) -> str:
     rule = result.get("last_rule")
     if rule:
         fired = f" -> job {rule['fired_job']}" if rule.get("fired_job") else ""
+        # §21: the rule numbers are the fired file's, and that is not the file
+        # loaded now — the human is reading a record, not the current playbook.
+        stale = "  (stale: another playbook is loaded)" if rule.get("stale") else ""
         lines.append(
             f"  last     rule {rule.get('rule')} on {rule.get('on')}: "
-            f"{rule.get('then')}{fired}  [{rule.get('fired_at')}]"
+            f"{rule.get('then')}{fired}  [{rule.get('fired_at')}]{stale}"
         )
     else:
         lines.append("  last     no rule has fired")

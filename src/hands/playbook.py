@@ -945,13 +945,16 @@ class PlaybookEngine:
         A stop over a pipeline that is *already* stopped takes nothing: the first
         reason is the one that explains the pipeline and it is kept, with its
         timestamp. The stop that did not take is "recorded in the inbox only" —
-        one `stop.suppressed` event carrying the reason it would have set and the
-        reason that was kept — and notifies nobody, because the human was already
+        one `pipeline.stop_suppressed` event carrying the reason it would have set
+        and the reason that was kept — and notifies nobody, because the human was already
         told. So: one `stop` event and one notification per stop that takes.
+
+        The kind is in the `pipeline` namespace (H-011, §21) so that the driver
+        kit's `hands wait --for stop,held` is not woken by it.
         """
         if self.state.paused:
             self.spool.append_event(
-                "stop.suppressed",
+                "pipeline.stop_suppressed",
                 {**(payload or {}), "reason": reason, "kept": self.state.stop_reason},
             )
             log.info("playbook: stop suppressed (%s); kept: %s", reason, self.state.stop_reason)
@@ -985,7 +988,7 @@ class PlaybookEngine:
 
         §10 (v3.3) makes that one case of a general rule, so this pause goes
         through `stop()` like every other: over an existing stop it files the
-        `stop.suppressed` record and changes nothing else.
+        `pipeline.stop_suppressed` record and changes nothing else.
         """
         already = self.state.paused
         await self.stop(PAUSE_REASON, {"by": "hands pause"})
@@ -1059,8 +1062,24 @@ class PlaybookEngine:
                 },
                 "max_resumes": self.max_resumes,
             },
-            "last_rule": self.state.last_rule,
+            "last_rule": self._shown_last_rule(book),
         }
+
+    def _shown_last_rule(self, book: Playbook | None) -> dict[str, Any] | None:
+        """`last_rule`, marked `stale: true` when it is not the loaded file's (§21).
+
+        `_load` *clears* the record when a playbook with another sha loads (§10),
+        and that load happens when a job starts. `hands pipeline` is read-only on
+        a daemon that may not have started one yet: its own lazy load reads the
+        new file, so without this the command prints the old file's rule numbers
+        next to the new file's sha (review 4 should-fix 7). Marking is what a
+        display may do; clearing stays with the load. When no playbook could be
+        read there is no sha to compare against, so the record is shown as it is.
+        """
+        rule = self.state.last_rule
+        if rule is None or book is None or book.sha256 == self.state.last_rule_sha256:
+            return rule
+        return {**rule, "stale": True}
 
     # ------------------------------------------------------------- plumbing
 
