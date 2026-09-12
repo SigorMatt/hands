@@ -1,18 +1,18 @@
 # CHECKPOINT
 
-Mission: 5 (meta/BUILDER-5-PROMPT.md) — IN PROGRESS
-Unit in progress: U7 (no background tasks in role sessions)
-Intent: add `.claude/settings.json` with a `PreToolUse` hook on `Bash`
-running `.claude/hooks/no_background.py`, which reads the hook JSON and
-exits 2 (reason on stderr) when `tool_input.run_in_background` is true or
-the command daemonizes by hand (`nohup`, `setsid`, `disown`, a trailing `&`
-outside quotes, `&` before `)`), telling the agent to run the command in the
-foreground with a timeout; a `--selftest` and `tests/test_no_background.py`
-that runs it; one line in CLAUDE.md; `docs/INTEGRATION.md` says every
-project hands drives installs the same two files.
-Done means: tests; `./scripts/check` itself still runs (it is foreground);
-green three consecutive runs; one commit, pushed.
-Tip: 53bb986 (U6), green 3/3 — 818 passed, `check: green`.
+Mission: 5 (meta/BUILDER-5-PROMPT.md) — FINISHED 2026-09-12
+Unit in progress: none
+Intent: -
+Done means: -
+Tip: all of U0..U8 committed and pushed on `main`. `./scripts/check` green
+three consecutive runs at ffa4c65 (ruff + 929 tests + cli smoke);
+`bash_guard.py --selftest` 77/77 and `no_background.py --selftest` 50/50.
+meta/FINAL-REPORT-5.md holds the account. No order deviation, no unit
+yielded, no unit blocked, one commit per unit. Review 4's two blockers are
+closed by 068a091+50c466c and ce92ed6; should-fix 1, 2, 3, 4, 5, 7 and 8 are
+closed; should-fix 6 is a note on method, answered by U3's independent
+table and recorded as not applicable. REVIEW-3's should-fix 3, 6 and 7 stay
+deferred.
 Findings: H-001 open (needs a capture from a dotted cwd). H-009 open
 (design-side; no builder unit can close it). H-011 decided by U0 (068a091):
 the kind becomes `pipeline.stop_suppressed`, outside `stop`'s wake namespace;
@@ -23,8 +23,7 @@ a §7 paging contract — design-side, open. H-012 filed by U4 (6d9664d):
 §4's "cap plus one quarter" does not cover JSON escaping, so U4 measures the
 cap on the wire — design-side, open.
 H-002..H-008 and H-010 closed in missions 2, 3 and 4.
-Not proven, carried into this mission (see meta/FINAL-REPORT-4.md §3 and
-REVIEW-4):
+Not proven, carried out of this mission (see meta/FINAL-REPORT-5.md §3):
   1. Missions 3, 4 and 5's code have never run outside the test suite — the
      installed build is mission 2's. `uv tool install --force ~/git/hands`
      is what would put this mission's code under a real run.

@@ -12,26 +12,26 @@ Every unit closes a named item of `meta/reviews/REVIEW-4.md`
 (`VERDICT: review mission 4 blockers=2 should-fix=8`), except U6 and U7,
 which are DESIGN §21 items the review did not raise.
 
-- [ ] U0 Plan and corrections — this file, meta/CHECKPOINT.md, the dated
+- [x] U0 Plan and corrections — this file, meta/CHECKPOINT.md, the dated
       correction of `meta/FINAL-REPORT-4.md` §3 item 15 (blocker 1), the
       H-011 decision line (`pipeline.stop_suppressed`)
-- [ ] U1 Blocker 1 — git option policy in the guard, `find -fprint*`/`-fls`,
+- [x] U1 Blocker 1 — git option policy in the guard, `find -fprint*`/`-fls`,
       the reviewer's exact probes in the adversarial table (§12, §21)
-- [ ] U2 Blocker 2 — `ops.monitor_cmd` shape refused at load (§21)
-- [ ] U3 Determinism as a property — one path-stripping helper in
+- [x] U2 Blocker 2 — `ops.monitor_cmd` shape refused at load (§21)
+- [x] U3 Determinism as a property — one path-stripping helper in
       `tests/conftest.py` used by every negative assertion; 5 runs of
       `./scripts/check` under 5 crafted `--basetemp` values (should-fix 1, 2)
-- [ ] U4 Prompt delivery — `ensure_ascii=False`, line room, `--stdin`
+- [x] U4 Prompt delivery — `ensure_ascii=False`, line room, `--stdin`
       symmetry, `S_ISREG`, the exit-2 sentence in the docs (should-fix 3, 4,
       5; §4)
-- [ ] U5 Pipeline and config edges — `last_rule` `stale: true`, the
+- [x] U5 Pipeline and config edges — `last_rule` `stale: true`, the
       `pipeline.stop_suppressed` rename, the two config edges (should-fix 7,
       8; H-011)
-- [ ] U6 Daemon memory — stream-json streamed to the job log, bounded
+- [x] U6 Daemon memory — stream-json streamed to the job log, bounded
       retention (§21)
-- [ ] U7 No background tasks in role sessions — `.claude/settings.json` +
+- [x] U7 No background tasks in role sessions — `.claude/settings.json` +
       `.claude/hooks/no_background.py` in this repository (§2, §21)
-- [ ] U8 Final report — meta/FINAL-REPORT-5.md, then the verdict line
+- [x] U8 Final report — meta/FINAL-REPORT-5.md, then the verdict line
 
 No order deviation is planned: the base is green, so every unit is gated
 normally and runs in the order above. U1 and U2 are independent; U3 runs
