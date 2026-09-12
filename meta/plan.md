@@ -26,7 +26,7 @@ the prose.
       `failure_reason`, `CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS=0` unless the
       new `[roles.<r>] env` sets it, doctor reports it; `builder.failed →
       resume` end to end (§2, §6, §13, H-014)
-- [ ] U2 The hook covers background sub-agents (§2, §23)
+- [x] U2 The hook covers background sub-agents (§2, §23)
 - [ ] U3 Doc-truth as a property — the sweep reads every tracked text file;
       the README and test_playbook wordings join the phrase list; the U6
       tests become non-circular (blocker 1, should-fix 1, 2)
