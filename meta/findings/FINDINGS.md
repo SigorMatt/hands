@@ -550,6 +550,22 @@ on both prompt routes and rewrites the two sentences (`docs/INTEGRATION.md`,
 
 Status: decided (DESIGN v3.5 §4); closed on disk by mission 6 U1
 
+Status: closed on disk, 2026-09-12 (mission 6 U1). `hands.cli._wire_size`
+counts the exact JSON line `call` writes — the shape serialized with every
+string emptied, plus `_wire_bytes` per string — and `_checked_request` refuses
+inside `call`, before the socket is opened, when that line is over
+`runner.LINE_LIMIT` (the constant moved there from `daemon.py`, so the daemon's
+reader and the client's measurement are one number). The message is one line
+naming the total, the limit and the largest part. Tests (tests/test_daemon.py):
+the count is byte-exact against `json.dumps(..., ensure_ascii=False)` over four
+requests carrying quotes, backslashes, NULs, CJK and a `--file` list; the
+reviewer's reproduction (at-cap prompt plus twelve `--file` values of
+backslashes) exits 2 on all three prompt routes with one message, opens no
+socket, and against a real daemon leaves the daemon's log empty and creates no
+job; a request whose line is exactly `LINE_LIMIT` runs and writes its file,
+and the same request one byte fatter is refused. The two false sentences are
+rewritten and `tests/test_docs.py` fails if either comes back.
+
 ---
 
 ## H-013 — `hands log <job>` still answers a whole transcript in one message

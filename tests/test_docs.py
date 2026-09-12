@@ -192,6 +192,39 @@ def test_the_docs_say_what_exit_2_means() -> None:
     assert not stale, "a document still says exit 2 is one thing:\n" + "\n".join(stale)
 
 
+def test_no_shipped_sentence_says_the_prompt_cap_covers_the_whole_request() -> None:
+    """Review 5 blocker 1 / H-012: two shipped sentences said the prompt-sized
+    cap made the envelope safe — `docs/INTEGRATION.md` ("so anything the client
+    accepts fits") and `src/hands/daemon.py` ("more than a command line can
+    hold"). Twelve `--file` values of backslashes are both, so both are gone,
+    and the doc says what is measured instead (§4's `send` row).
+    """
+    integration = (ROOT / "docs" / "INTEGRATION.md").read_text(encoding="utf-8")
+    daemon_src = (ROOT / "src" / "hands" / "daemon.py").read_text(encoding="utf-8")
+    # Both sentences are wrapped across lines (one of them behind `# ` comment
+    # markers), so the claim is looked for in the prose, not in the layout.
+    flat = {
+        "docs/INTEGRATION.md": " ".join(integration.split()),
+        "src/hands/daemon.py": " ".join(daemon_src.replace("#", " ").split()),
+    }
+    stale = [
+        f"{where}: {claim!r}"
+        for where, text in flat.items()
+        for claim in (
+            "so anything the client accepts fits",
+            "more than a command line can hold",
+        )
+        if claim in text
+    ]
+    assert not stale, "a shipped sentence still says the envelope cannot overflow:\n" + "\n".join(
+        stale
+    )
+    for said in ("whole request", "--file", "before connecting"):
+        assert said in flat["docs/INTEGRATION.md"], (
+            f"docs/INTEGRATION.md never says {said!r} (§4, H-012)"
+        )
+
+
 def test_the_driver_kit_never_claims_a_command_line_cannot_hold_punctuation() -> None:
     """The driver cannot write files (settings.json denies every writing tool),
     so a rule forbidding punctuation on a command line leaves it with no way to

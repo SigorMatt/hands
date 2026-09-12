@@ -10,11 +10,13 @@ from __future__ import annotations
 import asyncio
 import io
 import json
+import logging
 import os
 import shutil
 import socket
 import threading
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -24,7 +26,7 @@ from hands import daemon as daemon_mod
 from hands.cli import EXIT_REFUSED, EXIT_TIMEOUT, main
 from hands.config import load_config
 from hands.daemon import Daemon
-from hands.runner import MAX_PROMPT_BYTES
+from hands.runner import LINE_LIMIT, MAX_PROMPT_BYTES
 from hands.spool import Spool
 from harness import (
     BLOCK,
@@ -491,8 +493,11 @@ def refuse_the_daemon(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_the_daemon_line_room_is_the_cap_plus_a_quarter() -> None:
     """§4: "the daemon's line room (cap plus one quarter)". The prompt is capped
-    at the cap *as it appears on the wire*, so the quarter is the envelope's."""
-    assert daemon_mod._LINE_LIMIT == MAX_PROMPT_BYTES + MAX_PROMPT_BYTES // 4
+    at the cap *as it appears on the wire*, and the quarter is the envelope's
+    room — not a proof that an envelope fits it (H-012), which is why the client
+    measures the whole request against this same number before it connects."""
+    assert LINE_LIMIT == MAX_PROMPT_BYTES + MAX_PROMPT_BYTES // 4
+    assert daemon_mod.LINE_LIMIT is LINE_LIMIT and cli_mod.LINE_LIMIT is LINE_LIMIT
 
 
 def test_the_wire_size_of_a_prompt_is_the_json_it_becomes() -> None:
@@ -686,6 +691,208 @@ def test_jobs_lists_recent_jobs_newest_first(project: str) -> None:
         only_aux = await ok("jobs", "--role", "aux")
         assert [job["id"] for job in only_aux["jobs"]] == [second["id"]]
         assert (await ok("show", first["id"]))["prompt"] == "FAKE:result one"
+
+    drive(body)
+
+
+# ----------------------- U1: the whole request on the wire (§4, H-012)
+# §4's `send` row: "the client then measures the **whole request** as it will go
+# on the wire (prompt, `--file` payloads, gate, envelope) and refuses before
+# connecting if it exceeds the daemon's line room, so a request never fails
+# inside the socket (H-012)". Review 5 blocker 1 is the request the prompt-sized
+# check of U4 let through: an at-cap prompt beside twelve `--file` values of
+# backslashes, which died at `[Errno 32] Broken pipe` with nothing in the
+# daemon log — the fault class review 4 should-fix 3 named, one field over.
+
+#: The reviewer's reproduction, to the byte: twelve `--file` values of 131 000
+#: backslashes each (a backslash costs 2 bytes as JSON) beside a prompt at the
+#: cap. 13 630 051 bytes against a 13 107 200 byte line room.
+REPRO_FILES = 12
+REPRO_BACKSLASHES = 131_000
+
+
+def repro_files(tmp_path: Path) -> list[str]:
+    """The twelve `--file path=content` values of the reviewer's reproduction."""
+    content = "\\" * REPRO_BACKSLASHES  # not inside the f-string: 3.11 forbids it
+    return [f"{tmp_path / f'payload-{index}.txt'}={content}" for index in range(REPRO_FILES)]
+
+
+def repro_argv(tmp_path: Path, prompt_path: Path) -> list[str]:
+    """`hands send` as the reviewer ran it: an at-cap prompt file and the twelve."""
+    prompt_path.write_bytes(b"x" * MAX_PROMPT_BYTES)
+    argv = ["--role", "aux", "--context", "clear"]
+    for spec in repro_files(tmp_path):
+        argv += ["--file", spec]
+    return [*argv, "--prompt-file", str(prompt_path)]
+
+
+def refuse_the_socket(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Make opening a socket an error: this refusal happens *before* connecting.
+
+    `refuse_the_daemon` cannot say it any more — the measurement lives inside
+    `call`, so patching `call` out would patch the thing under test out with it.
+    """
+
+    def never(*args: object, **kwargs: object) -> object:
+        raise AssertionError("the CLI opened a socket for a request it must refuse")
+
+    monkeypatch.setattr(cli_mod.socket, "socket", never)
+
+
+def test_the_wire_size_of_a_request_is_the_line_the_client_writes() -> None:
+    """The client measures the request without building it, so the count and
+    `json.dumps(..., ensure_ascii=False)` must agree byte for byte — over what a
+    request actually carries: quotes, backslashes, NULs, CJK, and `--file`
+    payloads in a list beside non-strings (`true`, `null`, a number)."""
+    awkward = 'quote " backslash \\ nul \x00 tab \t cjk 字 emoji \U0001f642'
+    requests: list[dict[str, Any]] = [
+        {"jsonrpc": "2.0", "id": 1, "method": "status", "params": {}},
+        {
+            "jsonrpc": "2.0", "id": 1, "method": "send",
+            "params": {
+                "role": "aux", "context": "clear", "prompt": awkward,
+                "file": [f"/tmp/{awkward}=value {awkward}", "/tmp/b=plain"],
+                "gate": awkward,
+            },
+        },
+        {
+            "jsonrpc": "2.0", "id": 1, "method": "jobs",
+            "params": {"role": None, "n": 20, "ack": True, "grep": awkward},
+        },
+        {"jsonrpc": "2.0", "id": 1, "method": "send", "params": {"prompt": "\\" * 4096}},
+    ]
+    for request in requests:
+        built = json.dumps(request, ensure_ascii=False).encode("utf-8")
+        assert cli_mod._wire_size(request) == len(built), request["method"]
+
+
+def test_send_refuses_a_request_whose_files_overflow_the_line_room(
+    project: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Review 5 blocker 1: each half fits, the request does not. One line, exit
+    2, before any socket is opened — and it names the total, the limit and the
+    part to move (`hands put`), because "too big" without a size is not actionable.
+    """
+    refuse_the_socket(monkeypatch)
+    code, out, err = send_cli(*repro_argv(tmp_path, tmp_path / "at-the-cap.txt"))
+    assert code == EXIT_REFUSED, f"exit {code}: {err!r}"
+    assert out == "", "a refusal prints no job record"
+    assert len(err.splitlines()) == 1, f"a refusal is one line: {err!r}"
+    said = strip_paths(err)
+    assert str(LINE_LIMIT) in said, f"the refusal never names the limit: {said!r}"
+    assert "the prompt" in strip_paths(err), said
+    assert str(MAX_PROMPT_BYTES) in said, said
+    # The prompt and the twelve payloads, to the byte; the rest of the line is
+    # the envelope (the method, the keys, the role, the twelve paths).
+    carried = MAX_PROMPT_BYTES + sum(
+        len(spec.encode("utf-8")) + REPRO_BACKSLASHES for spec in repro_files(tmp_path)
+    )
+    assert carried > LINE_LIMIT, "the reproduction no longer overflows the line room"
+    for size in range(carried, carried + 256):  # the envelope is the only unknown
+        if str(size) in err:
+            break
+    else:
+        raise AssertionError(f"the refusal never names the request's size: {said!r}")
+
+
+def test_the_largest_part_of_an_over_long_request_is_the_one_named(
+    project: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The message points at the part worth moving. With a small prompt and one
+    fat `--file`, that is the file — named by its path, not by "a file"."""
+    refuse_the_socket(monkeypatch)
+    fat = tmp_path / "fat.txt"
+    spec = f"{fat}={'x' * (LINE_LIMIT + 1)}"
+    code, _, err = send_cli("--role", "aux", "--context", "clear", "--file", spec, "go")
+    assert code == EXIT_REFUSED
+    assert f"--file {fat}" in err, f"the refusal must name the fattest part: {err!r}"
+    # The size named is that value's own: `path=content`, nothing escaped in it.
+    assert f"at {len(spec.encode('utf-8'))} bytes" in err, err
+
+
+def test_every_prompt_route_refuses_the_same_over_long_request(
+    project: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """§4's three routes carry the same bytes to the same daemon, so the same
+    request gets the same refusal on `--prompt-file`, `--stdin` and a positional
+    prompt: one message, one exit code, no socket (review 4 should-fix 3)."""
+    refuse_the_socket(monkeypatch)
+    prompt = "y" * MAX_PROMPT_BYTES
+    path = tmp_path / "prompt.txt"
+    path.write_text(prompt, encoding="utf-8")
+    files: list[str] = []
+    for spec in repro_files(tmp_path):
+        files += ["--file", spec]
+    common = ["--role", "aux", "--context", "clear", *files]
+    answers = [
+        send_cli(*common, "--prompt-file", str(path)),
+        send_cli(*common, "--stdin", stdin=prompt),
+        send_cli(*common, prompt),
+    ]
+    for code, out, err in answers:
+        assert code == EXIT_REFUSED and out == "", f"{code}: {err!r}"
+    messages = {strip_paths(err) for _, _, err in answers}
+    assert len(messages) == 1, f"one request, three answers: {messages}"
+
+
+def test_the_reviewers_reproduction_never_reaches_the_daemon(
+    project: str, tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The gate of this unit, against a real daemon on a real socket: the
+    reproduction is refused by the client, the daemon logs nothing about it, and
+    no job is created. It used to arrive as a broken pipe and exit 1."""
+    caplog.set_level(logging.DEBUG, logger="hands")
+    argv = repro_argv(tmp_path, tmp_path / "at-the-cap.txt")
+
+    async def body(daemon: Daemon) -> None:
+        assert any(record.name == "hands.daemon" for record in caplog.records), (
+            "nothing of the daemon's log is captured here, so an empty log proves nothing"
+        )
+        before = len(caplog.records)
+        code, out, err = await cli("send", *argv, "--json")
+        after = caplog.records[before:]
+        assert code == EXIT_REFUSED, f"exit {code}: {err!r}"
+        assert out == "" and len(err.splitlines()) == 1, f"{out!r} {err!r}"
+        assert "Broken pipe" not in strip_paths(err), err
+        assert after == [], f"the daemon logged a request it must never have read: {after}"
+        assert (await ok("jobs"))["jobs"] == [], "a refused request creates no job"
+
+    drive(body)
+
+
+def test_a_request_at_the_line_room_is_sent_and_one_byte_more_is_refused(
+    project: str, workdir: Path, tmp_path: Path
+) -> None:
+    """The limit is a maximum, not a margin, and the client's count is the
+    daemon's: a request whose line is exactly `LINE_LIMIT` bytes is read, run and
+    its file written, and the same request one byte fatter is refused here."""
+    target = workdir / "payload.txt"
+    prompt = "FAKE:result at the limit"
+
+    def request_of(content: str) -> dict[str, Any]:
+        params = {
+            "role": "aux", "context": "clear", "prompt": prompt,
+            "file": [f"{target}={content}"],
+        }
+        return {"jsonrpc": "2.0", "id": 1, "method": "send", "params": params}
+
+    room = LINE_LIMIT - cli_mod._wire_size(request_of(""))
+    assert room > 0, "the envelope alone is over the line room"
+    content = "x" * room  # one byte of wire per byte of content
+    assert cli_mod._wire_size(request_of(content)) == LINE_LIMIT
+
+    async def body(daemon: Daemon) -> None:
+        sent = await ok(
+            "send", "--role", "aux", "--context", "clear",
+            "--file", f"{target}={content}", prompt,
+        )
+        done = await ok("wait", sent["id"])
+        assert done["state"] == "done", done
+        assert target.read_text(encoding="utf-8") == content
+        code, out, err = await cli("send", "--role", "aux", "--context", "clear",
+            "--file", f"{target}={content}x", prompt, "--json")
+        assert code == EXIT_REFUSED, f"exit {code}: {err!r}"
+        assert out == "" and str(LINE_LIMIT + 1) in err, err
 
     drive(body)
 

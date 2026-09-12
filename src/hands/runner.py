@@ -36,6 +36,7 @@ from hands.limits import is_limit_notice, parse_reset_at, to_iso
 from hands.spool import TERMINAL_STATES, Job, Spool, SpoolError
 
 __all__ = [
+    "LINE_LIMIT",
     "MAX_PROMPT_BYTES",
     "KeepRefused",
     "Runner",
@@ -67,6 +68,13 @@ class KeepRefused(RunnerError):
 # §2: "The prompt arrives on stdin (10 MB cap; long content is written as a file
 # first and named in the prompt)." Writing the file is `send --file`, not here.
 MAX_PROMPT_BYTES = 10 * 1024 * 1024
+
+# §4's "the daemon's line room": the daemon reads one JSON-RPC request per line
+# and gives that reader the cap plus a quarter (`daemon.py`). The number lives
+# here, beside the cap it is derived from, because both ends need it — the
+# daemon to size its reader, and the client to measure the whole request it is
+# about to write before it connects (§4's `send` row, H-012).
+LINE_LIMIT = MAX_PROMPT_BYTES + MAX_PROMPT_BYTES // 4
 
 # One stream-json line can be large (a whole result). asyncio's default 64 KiB
 # reader limit would raise on it, so the reader is given room for the cap.

@@ -17,7 +17,7 @@ import socket
 import stat
 import sys
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, TextIO
@@ -26,7 +26,7 @@ from hands import __version__, doctor
 from hands import notify as notify_mod
 from hands.api import TIMEOUT as TIMEOUT_CODE
 from hands.config import Config, ConfigError, config_path, load_config, resolve_project
-from hands.runner import MAX_PROMPT_BYTES
+from hands.runner import LINE_LIMIT, MAX_PROMPT_BYTES
 from hands.spool import ORIGINS
 
 __all__ = [
@@ -89,6 +89,10 @@ def call(
 ) -> Any:
     """One newline-delimited JSON-RPC 2.0 request, one response (§3)."""
     request = {"jsonrpc": "2.0", "id": 1, "method": method, "params": params}
+    # §4: the whole request is measured here, before anything is connected, so a
+    # request that will not fit the daemon's line room is refused at the command
+    # the human typed instead of dying inside the socket (H-012).
+    _checked_request(request)
     sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     try:
         try:
@@ -804,12 +808,12 @@ _FILE_KINDS = (
     (stat.S_ISBLK, "a block device"),
 )
 
-#: §4: "the wire carries UTF-8 unescaped so the daemon's line room (cap plus
-#: one quarter) fits any accepted prompt". `json.dumps` leaves non-ASCII alone
-#: with `ensure_ascii=False` but still escapes `"`, `\` and the control bytes,
-#: so the cap is measured on the wire: an accepted prompt is at most the cap of
-#: that line, and the quarter left over is the envelope's — the method, the
-#: role, the `--file` writes and the gate.
+#: §4: the prompt is capped as it appears on the wire. `json.dumps` leaves
+#: non-ASCII alone with `ensure_ascii=False` but still escapes `"`, `\` and the
+#: control bytes, so a file at §2's cap by size can be twice or six times that
+#: on the wire; measuring it there is what keeps an accepted prompt inside the
+#: daemon's line room. The rest of the line — the method, the role, the `--file`
+#: writes, the gate — is measured too, but by `_checked_request` (H-012).
 #: A control byte costs 6 bytes as `\u00XX`, except these five, which json
 #: gives a two-character escape (`\b`, `\t`, `\n`, `\f`, `\r`).
 _SHORT_ESCAPES = (0x08, 0x09, 0x0A, 0x0C, 0x0D)
@@ -830,6 +834,103 @@ def _wire_bytes(text: str) -> int:
     for byte in range(0x20):
         extra += raw.count(bytes([byte])) * (1 if byte in _SHORT_ESCAPES else 5)
     return len(raw) + extra
+
+
+#: §4 (H-012, review 5 blocker 1): the prompt is not the whole request. `--file
+#: path=content` is argv, and JSON doubles a backslash, so twelve `--file` values
+#: of backslashes fill the quarter of the line room that is not the prompt's —
+#: an at-cap prompt beside them is 13 630 051 bytes against a 13 107 200 byte
+#: room. That request used to be written into the socket and die there: a broken
+#: pipe, exit 1, nothing in the daemon log. So the client measures the line it is
+#: about to write, whole, before it connects.
+#: The name each part is refused under, so the message says which one to move.
+_PART_LABELS = {"prompt": "the prompt", "gate": "--gate", "content": "--content"}
+
+
+def _hollow(value: Any) -> Any:
+    """`value` with every string emptied: its shape, without its content.
+
+    The shape is a few hundred bytes whatever the request carries, so `json`
+    can serialize it for real; what the strings cost is `_wire_bytes`. Together
+    they give the exact size of a 12 MB line without ever building one.
+    """
+    if isinstance(value, str):
+        return ""
+    if isinstance(value, dict):
+        return {key: _hollow(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_hollow(item) for item in value]
+    return value
+
+
+def _strings(value: Any) -> Iterator[str]:
+    """Every string *value* in `value`, at any depth.
+
+    Keys are not here on purpose: `_hollow` keeps them, so `json.dumps` counts
+    them — and their escaping — for real.
+    """
+    if isinstance(value, str):
+        yield value
+    elif isinstance(value, dict):
+        for item in value.values():
+            yield from _strings(item)
+    elif isinstance(value, list):
+        for item in value:
+            yield from _strings(item)
+
+
+def _wire_size(request: Mapping[str, Any]) -> int:
+    """The exact length in bytes of the JSON line `call` writes for `request`.
+
+    Without the `\n` terminator: the daemon's reader measures a line's content
+    against its limit, and the separator is not part of that content. The same
+    `json.dumps(..., ensure_ascii=False)` that `call` uses, so this is the size
+    of the bytes that actually go on the wire, not an estimate of them.
+    """
+    shape = json.dumps(_hollow(request), ensure_ascii=False).encode("utf-8")
+    return len(shape) + sum(_wire_bytes(text) for text in _strings(request))
+
+
+def _wire_parts(params: Mapping[str, Any]) -> list[tuple[str, int]]:
+    """What each string a request carries costs on the wire, under the name the
+    human typed it as. Only ever used to say which part of an over-long request
+    is the largest, so they know which one to move out of the command line."""
+    parts: list[tuple[str, int]] = []
+    for key, value in params.items():
+        for item in value if isinstance(value, list) else [value]:
+            if not isinstance(item, str):
+                continue
+            label = _PART_LABELS.get(key, f"--{key}")
+            if key == "file":  # `--file path=content`: the path is the name of it
+                label = f"--file {item.split('=', 1)[0]}"
+            parts.append((label, _wire_bytes(item)))
+    return parts
+
+
+def _checked_request(request: Mapping[str, Any]) -> None:
+    """§4: refuse a request too big for the daemon's line room, before connecting.
+
+    The refusal names the total, the limit and the largest part, because "too
+    big" without a size says nothing about what to drop. The envelope is what
+    the total is not: the method, the id, the keys, the role, the context — so a
+    request that is over the limit on those alone still names something.
+    """
+    total = _wire_size(request)
+    if total <= LINE_LIMIT:
+        return
+    params = request.get("params")
+    parts = _wire_parts(params) if isinstance(params, Mapping) else []
+    parts.append(("the envelope", total - sum(size for _, size in parts)))
+    label, size = max(parts, key=lambda part: part[1])
+    advice = (
+        "; send the content with `hands put` and name it in the prompt"
+        if request.get("method") == "send"
+        else ""
+    )
+    raise PromptError(
+        f"the request is {total} bytes on the wire, over the daemon's {LINE_LIMIT} byte "
+        f"line room; the largest part is {label} at {size} bytes" + advice
+    )
 
 
 def _checked_prompt(text: str, where: str) -> str:

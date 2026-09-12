@@ -235,9 +235,17 @@ The cap is counted as the prompt appears **on the wire**: the request is JSON,
 and JSON spends two bytes on a `"` or a `\` and six on a control byte, so a
 file at the cap made of quotes is refused here — with its two sizes in the
 message — instead of dying at a broken pipe against the daemon's line limit.
-Non-ASCII text is not escaped (a 9 MB file of CJK is 9 MB on the wire), and
-the daemon's line room is the cap plus a quarter, so anything the client
-accepts fits.
+Non-ASCII text is not escaped (a 9 MB file of CJK is 9 MB on the wire).
+
+The prompt is not the whole request, so the client then measures the whole
+request — the prompt, every `--file` payload, `--gate`, and the JSON-RPC
+envelope around them — as the line it is about to write, and refuses **before
+connecting** when that line is over the daemon's line room (the cap plus a
+quarter, 13 107 200 bytes). The message names the total, the limit and the
+largest part, so you know which one to move to `hands put`. A prompt at the cap
+beside twelve `--file` values of backslashes is such a request — each half is
+accepted alone — and it used to be written into the socket and die there:
+`hands: [Errno 32] Broken pipe`, exit 1, nothing in the daemon log.
 
 That read is **not** confined to `files.allowed_roots`, and that is deliberate,
 not an oversight: the roots confine what the *daemon* writes and reads on a

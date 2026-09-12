@@ -44,7 +44,7 @@ from hands.limits import LimitManager
 from hands.monitor import MonitorSupervisor
 from hands.notify import Notifier
 from hands.playbook import PlaybookEngine
-from hands.runner import MAX_PROMPT_BYTES, Runner, RunnerError, reconcile_orphans
+from hands.runner import LINE_LIMIT, Runner, RunnerError, reconcile_orphans
 from hands.spool import TERMINAL_STATES, Event, Job, Spool, now_iso
 
 __all__ = ["Daemon", "DaemonError", "main"]
@@ -59,12 +59,15 @@ INVALID_PARAMS = -32602
 INTERNAL_ERROR = -32603
 
 # One request may carry a 10 MB prompt (§2), well over asyncio's 64 KiB default
-# line limit. §4: "the daemon's line room (cap plus one quarter)". The client
-# sends UTF-8 unescaped and caps the prompt at `MAX_PROMPT_BYTES` *as it appears
-# on the wire*, so an accepted prompt is at most the cap of this line and the
-# quarter left over is the envelope's — method, id, role, `--file` writes, gate.
-# A quarter of the cap is 2.5 MiB, more than a command line can hold.
-_LINE_LIMIT = MAX_PROMPT_BYTES + MAX_PROMPT_BYTES // 4
+# line limit, so the reader is given §4's line room: the cap plus one quarter,
+# `runner.LINE_LIMIT`. The client sends UTF-8 unescaped, caps the prompt at
+# §2's 10 MB *as it appears on the wire*, and then measures the whole
+# request — prompt, `--file` payloads, gate, envelope — against this same number
+# before it connects (§4's `send` row, H-012). The quarter is not a proof that
+# the envelope fits: twelve `--file` values of backslashes are over it, and that
+# request used to die here as a broken pipe (review 5 blocker 1). It is the
+# client's measurement that keeps a `hands` request out of that; a longer line
+# from any writer is still refused below, at `readline`, with `bad request`.
 
 _SHUTDOWN_GRACE_S = 30.0  # ceiling on waiting for cancelled jobs to write their record
 
@@ -166,7 +169,7 @@ class Daemon:
 
         self._bind_guard()
         self._server = await asyncio.start_unix_server(
-            self._handle_conn, path=str(self.socket_path), limit=_LINE_LIMIT
+            self._handle_conn, path=str(self.socket_path), limit=LINE_LIMIT
         )
         # The socket lets its caller run `claude -p` as this user (§9, blast
         # radius): it is nobody else's business.
