@@ -21,7 +21,7 @@ the DESIGN v3.5 wait retirement (§11, §12 rule 8) the review did not raise.
       connecting, both prompt routes; the two sentences rewritten (§4, H-012)
 - [x] U2 Blocker 2 — `tail -n` requires n ≥ 1, `truncated: true` when the
       cap or the window cut the answer, `log` pages (§4, §7, H-013)
-- [ ] U3 Should-fix 1 — the guard's git policy becomes a per-subcommand
+- [x] U3 Should-fix 1 — the guard's git policy becomes a per-subcommand
       option allowlist (§12)
 - [ ] U4 Should-fix 2 — the three hook bypasses: closed with a test, or
       documented under "what the hook cannot see"
