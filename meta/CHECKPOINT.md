@@ -7,19 +7,15 @@ H-014's recorded shape is now `done`); U2 68e1048 (1300 passed; notice is
 `system` task_updated status killed / task_notification status stopped,
 command line from the matching Bash tool_use; root PLAYBOOK.toml left to U7);
 U3 4782a4a (1323 passed; process-group mode tested, scope mode via a stub
-systemd-run; conftest forces process-group mode; doctor `isolation` row).
-Unit in progress: U4 The phone channel (§8, §11, §24; backlog 5; H-015).
-Intent: `[notify]` keys per §24; `handsd` long-polls `cmd_topic`
-(`/json?since=…`), reconnecting on error; `approve <job> <secret|nonce>`,
-`deny <job> [reason] <secret|nonce>`, `pause <secret>`, `resume <secret>`,
-`status <secret>`; per-held-job 32-byte single-use nonce dying with the job
-on Approve/Deny action buttons; the long-term secret never in a
-notification; decisions `decided_by: phone`; bad secret/nonce logged and
-ignored, never answered; doctor reports channel on/off and refuses
-`cmd_topic` without `cmd_secret`; docs/INTEGRATION.md setup.
-Done means: one unit commit, pushed; mocked-ntfy tests for every command,
-the nonce lifecycle, secret-never-in-notification, and the `decided_by:
-phone` record; ./scripts/check green three consecutive runs.
+systemd-run; conftest forces process-group mode; doctor `isolation` row);
+U4 7183478 (1367 passed; src/hands/phone.py; cmd_topic without cmd_secret
+refused at config load; `decided_by: phone` read back three ways; doctor
+notifications/who rows left to U7).
+Unit in progress: U5 REVIEW-3 deferrals (backlog 3).
+Intent: meta/reviews/REVIEW-3.md should-fix 3 (doctor's hardcoded flags),
+6 (`accepted()` type), 7 (`Api.notify` failure shape).
+Done means: one unit commit, pushed; one test each; ./scripts/check green
+three consecutive runs.
 Base: da8df27, green (1235 passed).
 Standing constraints: one foreground sub-agent per unit, commit and push
 every unit, ./scripts/check green three consecutive runs before each commit,
