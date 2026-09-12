@@ -50,3 +50,10 @@ One line per unit, appended by the builder: date, unit, sha, verdict.
 2026-09-12  m5 U5 Pipeline and config edges  06de18c  green 3/3 (812 tests); should-fix 7 and 8 closed; H-011 closed: pipeline.stop_suppressed; last_rule stale: true
 2026-09-12  m5 U6 Daemon memory  53bb986  green 3/3 (818 tests); DESIGN 21; the runner writes the stream to the job log, retains 0 events; tail reads a window; H-013 filed
 2026-09-12  m5 U7 No background tasks  ffa4c65  green 3/3 (929 tests); DESIGN 21; PreToolUse hook refuses run_in_background and hand-rolled daemonization
+2026-09-12  m6 U0 Plan and corrections  bb9d8fb  meta only (929 tests green 3/3); FINAL-REPORT-5 §3 carries blocker 1, blocker 2 and should-fix 2 corrections; H-012 decided: the client measures the whole request
+2026-09-12  m6 U1 The whole request on the wire  81e4cd2  green 3/3 (936 tests); blocker 1 closed; the client measures gate, --file payloads and envelope and refuses with exit 2 before connecting; H-012 closed
+2026-09-12  m6 U2 tail semantics, log paging  0042433  green 3/3 (942 tests); blocker 2 closed; -n >= 1, truncated: true when cap or window cut it, log delivered in pages; H-013 closed
+2026-09-12  m6 U3 Guard git option allowlist  5ffbe33  green 3/3 (1047 tests); should-fix 1 closed; per-subcommand allowlist, selftest 100/100, ADVERSARIAL gains --upload-pack=/--exec=/--edit-description/-C --exec-path=
+2026-09-12  m6 U4 Hook bypasses  fba759b  green 3/3 (1095 tests); should-fix 2 closed; selftest 65/65; comment-suffix & and path-qualified nohup blocked, unreadable tool_input exits 2; the inner-shell class documented
+2026-09-12  m6 U5 Five REVIEW-5 edges  44e42ba  green 3/3 (1109 tests); should-fix 3, 4, 5, 6, 7 closed; last_argv bounded, ops containment resolves, the section scan binds, audits exempt by type, both prompt routes refuse non-UTF-8
+2026-09-12  m6 U5 follow-up  3809fcf  green 3/3 (1109 tests); U5's own NOT PROVEN closed: a prompt argument and every string in params refuse non-UTF-8 under the name it was typed as

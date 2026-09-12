@@ -25,7 +25,7 @@ the DESIGN v3.5 wait retirement (§11, §12 rule 8) the review did not raise.
       option allowlist (§12)
 - [x] U4 Should-fix 2 — the three hook bypasses: closed with a test, or
       documented under "what the hook cannot see"
-- [ ] U5 Should-fix 3–7 — `retained()` counts `last_argv`; U2-of-mission-5's
+- [x] U5 Should-fix 3–7 — `retained()` counts `last_argv`; U2-of-mission-5's
       containment test becomes a real path-resolution test; the config
       helper scan binds every section; the audits exempt by type; both
       prompt routes refuse invalid UTF-8 at the same place
