@@ -209,6 +209,23 @@ def test_the_driver_kit_never_claims_a_command_line_cannot_hold_punctuation() ->
     assert not offenders, "driver/ still claims a metacharacter rule:\n" + "\n".join(offenders)
 
 
+def test_the_integration_doc_installs_the_no_background_hook_in_every_driven_repo() -> None:
+    """§21: the hook that refuses background tasks is not the driver's alone.
+
+    The harness reaps a role session's background job, so every repository
+    hands drives gets the same two files — the hook and the settings that run
+    it — and the doc that sets a project up is where a human finds that out.
+    """
+    text = (ROOT / "docs" / "INTEGRATION.md").read_text(encoding="utf-8")
+    for name in (".claude/settings.json", ".claude/hooks/no_background.py"):
+        assert name in text, f"docs/INTEGRATION.md never tells the human to install {name} (§21)"
+    for word in ("run_in_background", "foreground", "--selftest"):
+        assert word in text, f"docs/INTEGRATION.md does not say {word!r} (§21)"
+    # The two files it names are the two files this repository ships.
+    for name in (".claude/settings.json", ".claude/hooks/no_background.py"):
+        assert (ROOT / name).is_file(), f"{name} is missing from this repository"
+
+
 def test_the_driver_bash_guard_selftest_passes() -> None:
     spec = importlib.util.spec_from_file_location(
         "bash_guard", ROOT / "driver" / "hooks" / "bash_guard.py"

@@ -252,6 +252,34 @@ it refused the prompt as above, or a `hands wait --timeout` expired — and in
 both cases nothing was dispatched and nothing changed. Every other failure is
 `1`. `hands --help` says the same three lines.
 
+### No background tasks in a role session (§21)
+
+Every repository a role works in — every `roles.*.cwd` — installs the same two
+files as this repository has, so that a builder or aux session cannot start a
+background job:
+
+    cd <the role's cwd>
+    mkdir -p .claude/hooks
+    cp ~/git/hands/.claude/settings.json .claude/settings.json
+    cp ~/git/hands/.claude/hooks/no_background.py .claude/hooks/
+    python3 .claude/hooks/no_background.py --selftest
+
+The settings run the hook before every Bash tool call. It exits 2 — which
+blocks the call and hands the reason back to the agent — when the call sets
+`run_in_background`, or when the command daemonizes by hand: `nohup`,
+`setsid`, `disown`, a trailing `&` outside quotes, or an `&` before `)`.
+Booleans and redirections are not backgrounding, so `&&`, `2>&1`, `&>` and an
+`&` inside quotes or in a URL all still run, and so does the project's own
+gate. The reason is that the harness reaps background tasks: a long background
+job started by a role session can die silently mid-mission and nothing says
+so. The way to run something long is the foreground with a timeout.
+
+A repository that already has a `.claude/settings.json` gets the `PreToolUse`
+entry added to it rather than the file overwritten. Copy the CLAUDE.md line
+too, so the session knows the rule before the hook has to say no. Hooks run
+even under `--dangerously-skip-permissions`, which is what §13's
+`permission_flags` gives both roles.
+
 ---
 
 ## First run, end to end

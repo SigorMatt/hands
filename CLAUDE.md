@@ -15,6 +15,10 @@ Conventions:
   the DESIGN.md sections it implements. Push immediately.
 - Tests live in tests/; tests/fake_claude.py stands in for the claude CLI.
 - Never require a real claude binary in tests.
+- Never run a background task (`run_in_background`, `nohup`, `setsid`,
+  `disown`, a trailing `&`): the harness reaps them, so run it in the
+  foreground with a timeout — `.claude/hooks/no_background.py` refuses the
+  rest.
 - meta/ is the builder's state (checkpoint, plan, journal, findings,
   reports). Sub-agents do not edit meta/plan.md or meta/CHECKPOINT.md.
 - DESIGN.md is not edited by builders; file a finding.

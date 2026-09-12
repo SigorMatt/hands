@@ -25,9 +25,12 @@ from conftest import strip_paths
 TESTS = Path(__file__).parent
 
 # Files whose assertions read artifacts checked into the repository — the
-# driver kit, the systemd unit, the docs, the guard's own case table. No path
-# a run creates can reach that text, so there is nothing to strip.
-READS_THE_REPO = frozenset({"test_docs.py", "test_bash_guard.py"})
+# driver kit, the systemd unit, the docs, the guard's own case table, the §21
+# hook and its settings. No path a run creates can reach that text, so there is
+# nothing to strip: `test_no_background.py`'s subprocess output is the hook's
+# refusal of a command the test itself spelled, not of anything an environment
+# chose.
+READS_THE_REPO = frozenset({"test_docs.py", "test_bash_guard.py", "test_no_background.py"})
 
 # This file's own subject is the helper, so its assertions read text that has
 # already been through it.
