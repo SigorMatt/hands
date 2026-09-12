@@ -68,3 +68,4 @@ One line per unit, appended by the builder: date, unit, sha, verdict.
 2026-09-12  m7a U4 Client seams  b29b1c7  green 3/3 (1233 tests); one walk (_carried) feeds size and UTF-8, dict keys and any depth; positionals refused as "a job/path/prompt argument", flags keep their option string
 2026-09-12  m7a U5 Review base  f96938e  green 3/3 (1235 tests); docs/PLAYBOOK.md says a review reads every commit after the last review: commit and when {job.head_at_start} is wrong; root PLAYBOOK.toml loads; REVIEW-PROTOCOL is the kit copy
 2026-09-12  m7a U6 Final report  (this commit)  green 3/3 (1235 tests; 66.91s 65.63s 65.19s); mission 7 finished
+2026-09-13  m8 U0 Plan and corrections  9ae7975  green 3/3 (1238 tests); show failure line pinned on harness_terminated, nonzero_exit and done (red by mutation); H-015 filed; prototype in place from da8df27

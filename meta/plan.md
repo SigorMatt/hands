@@ -8,7 +8,7 @@ Base of the mission: da8df27 (`plan: mission 8 kit (DESIGN v3.7, claudewho
 prototype)`) — green: ruff clean, 1235 passed, cli smoke, `check: green`. The
 kit already placed `meta/prototypes/claudewho.py` (ruff excludes it).
 
-- [ ] U0 Plan and corrections (`plan:`) — this file, meta/CHECKPOINT.md;
+- [x] U0 Plan and corrections (`plan:`) 9ae7975 — this file, meta/CHECKPOINT.md;
       the prototype verified in place; H-015 (phone channel decision, §24);
       `hands show`'s `failure` line pinned on a failed and a done job
       (review 7 blocker 1)
