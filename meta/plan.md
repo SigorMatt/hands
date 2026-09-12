@@ -19,7 +19,7 @@ kit already placed `meta/prototypes/claudewho.py` (ruff excludes it).
 - [x] U2 `monitor.task_killed` (§5, §24; backlog 1) 68e1048
 - [x] U3 Per-job scope and orphan accounting (§5, §24; backlog 2) 4782a4a
 - [x] U4 The phone channel (§8, §11, §24; backlog 5; H-015) 7183478
-- [ ] U5 REVIEW-3 deferrals: should-fix 3, 6, 7 (backlog 3)
+- [x] U5 REVIEW-3 deferrals: should-fix 3, 6, 7 (backlog 3) 6fcd7d7
 - [ ] U6 `hands who` and `handswho` (§4, §11, §24; backlog 6); prototype
       deleted
 - [ ] U7 Playbook and docs (backlog 4)

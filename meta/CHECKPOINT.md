@@ -10,12 +10,20 @@ U3 4782a4a (1323 passed; process-group mode tested, scope mode via a stub
 systemd-run; conftest forces process-group mode; doctor `isolation` row);
 U4 7183478 (1367 passed; src/hands/phone.py; cmd_topic without cmd_secret
 refused at config load; `decided_by: phone` read back three ways; doctor
-notifications/who rows left to U7).
-Unit in progress: U5 REVIEW-3 deferrals (backlog 3).
-Intent: meta/reviews/REVIEW-3.md should-fix 3 (doctor's hardcoded flags),
-6 (`accepted()` type), 7 (`Api.notify` failure shape).
-Done means: one unit commit, pushed; one test each; ./scripts/check green
-three consecutive runs.
+notifications/who rows left to U7); U5 6fcd7d7 (1380 passed; all three
+REVIEW-3 defects present at base and fixed; monitor.ops_argv shared with
+doctor; accepted() integer 2xx only; notify socket route renders + exit 1).
+Unit in progress: U6 `hands who` and `handswho` (§4, §11, §24; backlog 6).
+Intent: port meta/prototypes/claudewho.py into src/hands/who.py — this
+daemon's jobs, held gates, pipeline and inbox from the daemon's own state
+over the socket; other `claude` processes from /proc; interactive sessions'
+state from transcripts; §24 hierarchy, labels, debounce, fingerprint rules;
+`hands who` prints once; `handswho` console script pushes on change and on
+`status`/`who`/`check`/`?` from `who_cmd_topic`; optional
+systemd/handswho.service; the prototype deleted in the unit commit.
+Done means: one unit commit, pushed; the prototype's self-test cases ported;
+a rendering test with a fixed process table and fixed daemon state;
+./scripts/check green three consecutive runs.
 Base: da8df27, green (1235 passed).
 Standing constraints: one foreground sub-agent per unit, commit and push
 every unit, ./scripts/check green three consecutive runs before each commit,
