@@ -71,12 +71,13 @@ def test_the_table_covers_the_prompt_file_route() -> None:
 # (review 3 should-fix 1). Blocks come from §20's rule that the git subcommand
 # allowlist applies to every `git` token anywhere in a command and that `find`
 # with `-exec`/`-execdir`/`-ok`/`-okdir`/`-delete`/`-fprint*`/`-fls` is
-# forbidden, and from §21's git option policy: only `-C <path>` and
-# `--no-pager` before the subcommand, and no `--output`/`--ext-diff`/
-# `--textconv`/`-O`/`--open-files-in-pager`/`--config-env` after it. The allowed
-# cases are just as load-bearing: the driver's whole job is read-only git and
-# reads of the human's `~/git` workspace, and a guard that refuses those is
-# useless in a real session.
+# forbidden, and from §12's git option policy (DESIGN v3.5 §22): only
+# `-C <path>` and `--no-pager` before the subcommand, the `-C` value a single
+# path that does not begin with `-`, and after the subcommand only the options
+# §12 lists for that subcommand — every other token beginning with `-` is
+# refused because it is not listed. The allowed cases are just as load-bearing:
+# the driver's whole job is read-only git and reads of the human's `~/git`
+# workspace, and a guard that refuses those is useless in a real session.
 ADVERSARIAL: list[tuple[str, bool]] = [
     # --- git write behind a `find` wrapper: the argument position ---------
     (r"find . -exec git remote add origin https://x/y.git \;", False),
@@ -143,7 +144,7 @@ ADVERSARIAL: list[tuple[str, bool]] = [
     ("find ~/git -maxdepth 1 -type d", True),
     # ordinary read-only driver traffic
     ("git fetch origin", True),
-    ("git status --porcelain", True),
+    ("git status", True),
     ("git diff HEAD~1", True),
     ("git ls-remote origin", True),
     ("hands inbox", True),
@@ -198,13 +199,83 @@ ADVERSARIAL: list[tuple[str, bool]] = [
     ('git -C ./repo grep -n "git diff" origin/main -- docs', True),
     ("git --no-pager log --oneline -5", True),
     ("git --no-pager -C ./repo diff HEAD~1", True),
-    # the refusals are by exact option, not by prefix: these read
-    ("git -C ./repo diff --no-ext-diff HEAD", True),
-    ("git -C ./repo diff --output-indicator-new=X HEAD", True),
-    ("git -C ./repo log --no-textconv -1", True),
+    # an allowlist refuses by absence: these read, and are refused anyway,
+    # because §12 does not list them for `diff` or for `log`
+    ("git -C ./repo diff --no-ext-diff HEAD", False),
+    ("git -C ./repo diff --output-indicator-new=X HEAD", False),
+    ("git -C ./repo log --no-textconv -1", False),
     # a `find` printing to stdout is still a read
     ("find . -name '*.md' -print", True),
     ("find ~/git/hands -type f -printf %p", True),
+    # --- §12: the wrappers an allowlist refuses by absence ----------------
+    # `--upload-pack=`/`--exec=` name the program git runs on the other end
+    # of a fetch or an ls-remote; review 5 should-fix 1 executed the first two
+    # against the tip and both created their file. No denylist entry blocks
+    # them here: they are refused because `ls-remote` carries only `--heads`
+    # and `--tags`, and `fetch` only `-q`.
+    ("git ls-remote --upload-pack='touch /tmp/x/PWNED1' /tmp/x/src", False),
+    ("git -C ./src fetch --upload-pack='touch /tmp/x/PWNED2' /tmp/x/src", False),
+    ("git fetch --exec='touch /tmp/x/PWNED3' origin", False),
+    ("git ls-remote --exec='touch /tmp/x/PWNED3' origin", False),
+    ("git fetch --upload-pack=touch origin", False),
+    ("git branch --edit-description", False),
+    # the `-C` value is a path, so it may not begin with `-`: the guard used
+    # to step over the word after `-C` unjudged (review 5 should-fix 1).
+    ("git -C ./repo -C --exec-path=/tmp/evil log", False),
+    ("git -C --exec-path=/tmp/evil log", False),
+    ("git -C", False),
+    # --- §12: options that are not listed for their subcommand ------------
+    # None of these runs a program; each is refused for the same reason, that
+    # §12 does not list it. That is the point of an allowlist.
+    ("git fetch --force origin main:main", False),
+    ("git fetch --all", False),
+    ("git branch -a", False),
+    ("git branch --contains HEAD", False),
+    ("git remote --verbose", False),
+    ("git log -p -1", False),
+    ("git log --follow DESIGN.md", False),
+    ("git show -s --format=%H HEAD", False),
+    ("git diff --cached", False),
+    ("git grep -A2 pattern", False),
+    ("git cat-file --batch", False),
+    ("git ls-files -z", False),
+    ("git ls-tree -r HEAD", False),
+    ("git rev-parse --git-dir", False),
+    ("git status --porcelain", False),
+    ("git ls-remote --upload-pack=x", False),
+    # --- §12: the options each subcommand does carry: ALLOWED -------------
+    ("git -C ./repo log --oneline -n 5", True),
+    ("git -C ./repo log --format=%H -n 5", True),
+    ("git -C ./repo log --stat -1", True),
+    ("git -C ./repo log --name-status HEAD -- docs", True),
+    ("git -C ./repo show --stat HEAD", True),
+    ("git -C ./repo show --name-status HEAD", True),
+    ("git -C ./repo fetch -q", True),
+    ("git ls-remote --heads origin", True),
+    ("git ls-remote --tags origin", True),
+    ("git -C ./repo rev-parse --verify HEAD", True),
+    ("git -C ./repo rev-parse --short HEAD", True),
+    ("git -C ./repo diff --stat HEAD~1", True),
+    ("git -C ./repo diff --name-status HEAD~1", True),
+    ("git -C ./repo diff --name-only HEAD~1", True),
+    ("git -C ./repo grep -c pattern", True),
+    ("git -C ./repo grep -l pattern", True),
+    ("git -C ./repo grep -i -n pattern", True),
+    ("git -C ./repo grep -e pattern origin/main -- docs", True),
+    ("git -C ./repo cat-file -t HEAD", True),
+    ("git -C ./repo cat-file -p HEAD:DESIGN.md", True),
+    ("git -C ./repo cat-file -e HEAD^{commit}", True),
+    ("git -C ./repo ls-files", True),
+    ("git -C ./repo ls-tree HEAD", True),
+    ("git -C ./repo branch --list", True),
+    ("git -C ./repo remote -v", True),
+    ("git -C ./repo status", True),
+    # --- the git the driver kit's own docs tell the driver to run ---------
+    # driver/CLAUDE.md rule 2 and its "Starting a mission" section; a line the
+    # guard refuses here is a line the driver cannot run at all.
+    ("git -C ./repo fetch", True),
+    ("git -C ./repo fetch && git -C ./repo log --oneline origin/main -10", True),
+    ("git -C ./repo log --oneline origin/main -10", True),
 ]
 
 
@@ -220,6 +291,71 @@ def test_adversarial_case(cmd: str, allowed: bool) -> None:
         assert reason is None, f"the guard blocked a read-only command: {cmd} -> {reason}"
     else:
         assert reason is not None, f"the guard allowed a writing command: {cmd}"
+
+
+# The option table DESIGN §12's guard bullet enumerates, transcribed here from
+# the design text. It is the whole allowed surface: every other token beginning
+# with `-` is refused for that subcommand.
+DESIGN_12_OPTIONS: dict[str, set[str]] = {
+    "log": {"--oneline", "-n", "--grep", "--format", "--stat", "--name-status"},
+    "show": {"--stat", "--name-status"},
+    "fetch": {"-q"},
+    "ls-remote": {"--heads", "--tags"},
+    "rev-parse": {"--verify", "--short"},
+    "diff": {"--stat", "--name-status", "--name-only"},
+    "grep": {"-n", "-c", "-l", "-i", "-e"},
+    "cat-file": {"-t", "-p", "-e"},
+    "ls-files": set(),
+    "ls-tree": set(),
+    "branch": {"--list"},
+    "remote": {"-v"},
+    "status": set(),
+}
+
+# Options whose value names a program to run or a file to write. §12: these are
+# never listed — the guard refuses them by absence, not by name, because three
+# rounds of denylists each missed one (review 5 should-fix 1 missed
+# `--upload-pack`).
+NAMES_A_PROGRAM_OR_A_FILE = {
+    "--upload-pack", "--exec", "--receive-pack", "--upload-archive", "--output",
+    "--ext-diff", "--textconv", "--config-env", "--edit-description",
+    "-O", "--open-files-in-pager", "--exec-path", "--git-dir", "--work-tree",
+}
+# git's global `-c <name>=<value>` is not in the set above because `grep -c`
+# is a different option with the same spelling (count, not config). The global
+# one is refused by the rule before the subcommand, which is its own case.
+
+
+def test_the_guard_carries_the_option_table_design_12_enumerates() -> None:
+    """§12: a table from allowed subcommand to allowed options, and that table
+    is the remaining surface — so the test names every row of it."""
+    table = {sub: set(opts) for sub, opts in guard.GIT_SUBCOMMAND_OPTIONS.items()}
+    assert table == DESIGN_12_OPTIONS
+
+
+def test_no_listed_option_names_a_program_or_a_file() -> None:
+    """§12: option values that name programs or files are never listed."""
+    for sub, opts in guard.GIT_SUBCOMMAND_OPTIONS.items():
+        overlap = set(opts) & NAMES_A_PROGRAM_OR_A_FILE
+        assert not overlap, f"{sub} lists {sorted(overlap)}"
+
+
+@pytest.mark.parametrize("sub", sorted(DESIGN_12_OPTIONS))
+def test_the_global_config_option_is_refused_before_every_subcommand(sub: str) -> None:
+    """`grep -c` is a count, but git's global `-c` sets a config key whose
+    value git can execute — it is refused before the subcommand, everywhere."""
+    assert guard.check(f"git -c core.pager=touch {sub}") is not None
+
+
+@pytest.mark.parametrize("sub", sorted(DESIGN_12_OPTIONS))
+def test_an_unlisted_option_is_refused_for_every_allowed_subcommand(sub: str) -> None:
+    """The allowlist is the policy: an option no row lists is refused wherever
+    it is spelled, whether or not anyone thought of it."""
+    for option in ("--upload-pack=touch", "--exec=touch", "--output=/tmp/x",
+                   "--ext-diff", "--config-env=core.pager=EVIL",
+                   "--never-heard-of-this-option"):
+        cmd = f"git {sub} {option}"
+        assert guard.check(cmd) is not None, f"the guard allowed {cmd}"
 
 
 def test_the_adversarial_table_is_independent_of_the_guard() -> None:

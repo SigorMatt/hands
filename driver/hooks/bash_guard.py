@@ -11,16 +11,19 @@ Quoted text is stripped before inspection: prose inside quotes is text, but
 $(...) and backticks inside double quotes are still executed and still checked.
 Every `git` token is checked against the read-only subcommand allowlist,
 wherever it sits: a wrapper puts the real command in argument position, so
-`find . -exec git remote add ... \\;` is a `git remote add`. Before the
-subcommand only `-C <path>` and `--no-pager` are accepted and every other
-option is refused (DESIGN §21): `git -c diff.external=<cmd> diff --ext-diff`
-and `git -c core.pager=<cmd> log` execute `<cmd>` behind an allowlisted
-subcommand. The subcommand is still read as a word, so `rev-parse
-<sha>^{commit}` and `log --grep=push` still read. After the subcommand
-`--output`, `--ext-diff`, `--textconv`, `-O`, `--open-files-in-pager` and
-`--config-env` are refused in any spelling: they write a file at any path or
-run a configured command. A path token is not an invocation — the human's
-workspace is `~/git`, and `ls ~/git` is a read.
+`find . -exec git remote add ... \\;` is a `git remote add`. Git is an
+allowlist of options per subcommand (DESIGN §12): each allowed subcommand
+carries the exact options the driver needs, and any token beginning with `-`
+that its row does not list is refused. That is the whole policy — a wrapper
+option (`--upload-pack=`, `--exec=`, `--output`, `--ext-diff`, `--textconv`,
+`--config-env`, `--edit-description`) is refused because it is not listed,
+not because someone remembered to name it; denylists of git options lost
+three rounds. No option whose value names a program or a file is listed.
+Before the subcommand only `-C <path>` and `--no-pager` are accepted, and the
+`-C` value is a single path that may not begin with `-`. Revisions, `rev:path`
+and paths carry no leading dash, so `rev-parse <sha>^{commit}`,
+`show origin/main:x` and `grep -e x -- docs` still read. A path token is not
+an invocation — the human's workspace is `~/git`, and `ls ~/git` is a read.
 `find` with `-exec`, `-execdir`, `-ok`, `-okdir` or `-delete` is forbidden
 outright: those run commands (or delete) whatever the payload looks like, and
 `-fprint`, `-fprint0`, `-fprintf` and `-fls` write a file at any path.
@@ -38,31 +41,49 @@ ALLOWED_FIRST_WORDS = {
     "stat", "find", "diff", "sort", "uniq", "cut", "tr", "printf", "basename",
     "dirname", "realpath", "tty", "id", "whoami", "uptime",
 }
-ALLOWED_GIT_SUBCOMMANDS = {
-    "fetch", "log", "show", "diff", "status", "ls-remote", "rev-parse",
-    "cat-file", "ls-files", "ls-tree", "branch", "remote", "describe",
-    "shortlog", "blame", "grep", "name-rev",
+# DESIGN §12: the table from allowed subcommand to allowed options. A
+# subcommand that is not a key is refused; for one that is, every token
+# beginning with `-` that the row does not list is refused. The rows carry the
+# exact options the driver needs and nothing else — in particular no option
+# whose value names a program to run (`--upload-pack`, `--exec`, `--ext-diff`,
+# `--textconv`, `--config-env`, `--edit-description`) or a file to write
+# (`--output`, `-O`, `--open-files-in-pager`). The remaining surface is these
+# options themselves.
+GIT_SUBCOMMAND_OPTIONS = {
+    "log": frozenset({"--oneline", "-n", "--grep", "--format", "--stat",
+                      "--name-status"}),
+    "show": frozenset({"--stat", "--name-status"}),
+    "fetch": frozenset({"-q"}),
+    "ls-remote": frozenset({"--heads", "--tags"}),
+    "rev-parse": frozenset({"--verify", "--short"}),
+    "diff": frozenset({"--stat", "--name-status", "--name-only"}),
+    "grep": frozenset({"-n", "-c", "-l", "-i", "-e"}),
+    "cat-file": frozenset({"-t", "-p", "-e"}),
+    "ls-files": frozenset(),
+    "ls-tree": frozenset(),
+    "branch": frozenset({"--list"}),
+    "remote": frozenset({"-v"}),
+    "status": frozenset(),
 }
-FORBIDDEN_GIT_FLAGS = {"--prune", "--delete", "-d", "-D", "-m", "-M",
-                       "add", "set-url", "remove", "rename", "--set-upstream"}
+# Not options, so the option allowlist cannot see them: the second word of an
+# allowed subcommand can still be a mutating verb (`git remote add`,
+# `git remote set-url`). Those stay refused by name.
+MUTATING_GIT_ARGS = {"add", "set-url", "remove", "rename"}
 # `find` runs a command per match (`-exec`, `-execdir`, `-ok`, `-okdir`),
 # deletes (`-delete`) or writes its listing to a named file (`-fprint`,
 # `-fprint0`, `-fprintf`, `-fls`). The payload is irrelevant: the flag is the
 # write. `-print`/`-printf`/`-ls` write to stdout and are reads.
 FIND_ACTION_FLAGS = {"-exec", "-execdir", "-ok", "-okdir", "-delete",
                      "-fprint", "-fprint0", "-fprintf", "-fls"}
-# DESIGN §21: before the subcommand only `-C <path>` and `--no-pager` are
+# DESIGN §12/§21: before the subcommand only `-C <path>` and `--no-pager` are
 # accepted; every other leading option is refused. `-c`, `--config-env`,
 # `--exec-path`, `--git-dir` and friends each turn an allowlisted subcommand
-# into something else — `git -c core.pager=touch log` runs `touch`.
-GIT_PRE_FLAG_WITH_PATH = "-C"  # the next word is a path, not an option
+# into something else — `git -c core.pager=touch log` runs `touch`. `-C`'s
+# value is a single path: git itself takes it as the next word (`-C./x` and
+# `-C=./x` are both "unknown option" to git 2.43), and it may not begin with
+# `-`, or `git -C --exec-path=/tmp/evil log` would ride through unjudged.
+GIT_PRE_FLAG_WITH_PATH = "-C"
 GIT_ALLOWED_PRE_FLAGS = {"--no-pager"}
-# DESIGN §21: options after the subcommand that write a file at any path
-# (`--output`) or run a configured command (`--ext-diff`, `--textconv`, the
-# pager ones). Matched exactly or with `=`, so `--no-ext-diff` and
-# `--output-indicator-new=X` stay reads.
-FORBIDDEN_GIT_OPTIONS = {"--output", "--ext-diff", "--textconv", "-O",
-                         "--open-files-in-pager", "--config-env"}
 # `hands open <job>` execs `claude --resume <id>` in the role's directory
 # (DESIGN §7): an interactive session inside the driver's Bash call, and a way
 # past the `claude` block. The driver reads jobs with show/log/tail instead.
@@ -173,41 +194,57 @@ def first_word(segment: str):
 def git_subcommand(words, start: int):
     """Read the option area of the `git` at words[start - 1].
 
-    Returns `(subcommand, index, refused)`: the subcommand word and its index,
-    or `refused` set to the first option that the policy does not accept.
-    Only `-C <path>` (and the `-C=<path>` spelling) and `--no-pager` may
-    precede the subcommand — DESIGN §21. `-C`'s value is a path, not an
-    option, so it is stepped over without being judged.
+    Returns `(subcommand, index, refusal)`: the subcommand word and its index,
+    or `refusal` set to the reason the option area is not acceptable. Only
+    `-C <path>` and `--no-pager` may precede the subcommand (DESIGN §12/§21),
+    and `-C`'s value must be a single path that does not begin with `-`: the
+    word after `-C` used to be stepped over unjudged, which carried
+    `git -C --exec-path=/tmp/evil log` through.
     """
     i = start
     while i < len(words):
         w = words[i].strip("()")
         if w == GIT_PRE_FLAG_WITH_PATH:
+            if i + 1 >= len(words):
+                return None, i, "`-C` with no path after it"
+            value = words[i + 1].strip("()")
+            if value.startswith("-"):
+                return None, i, (f"the `-C` value must be a single path that does "
+                                 f"not begin with `-`, not {value!r}")
             i += 2
             continue
-        if w.startswith(GIT_PRE_FLAG_WITH_PATH + "=") or w in GIT_ALLOWED_PRE_FLAGS:
+        if w in GIT_ALLOWED_PRE_FLAGS:
             i += 1
             continue
         if w.startswith("-"):
-            return None, i, w
+            return None, i, (f"git option before the subcommand not allowed: {w!r} "
+                             f"(only `-C <path>` and `--no-pager` may come before a "
+                             f"git subcommand; `-c`, `--config-env` and the rest can "
+                             f"make a read-only subcommand run a command)")
         return w, i, None
     return None, len(words), None
 
 
-def forbidden_git_option(word: str):
-    """The refused post-subcommand option this word spells, or None.
+def unlisted_git_option(sub: str, word: str):
+    """The post-subcommand token this subcommand's row does not list, or None.
 
-    Both spellings count (`--output=/tmp/x` and `--output /tmp/x`), and `-O`
-    also counts with its value attached. Matching is on the whole option, so
-    `--no-ext-diff` and `--output-indicator-new=X` are reads and stay allowed.
+    Only a token beginning with `-` is judged: a revision, a `rev:path` and a
+    path carry no leading dash, and `--` separates paths from revisions. An
+    option is allowed only if `GIT_SUBCOMMAND_OPTIONS[sub]` lists it, with
+    `--grep=push` counting as `--grep`; for `log` alone, `-10` and `-n10` are
+    the `-n` shorthand, which is what `driver/CLAUDE.md` itself tells the
+    driver to run (`log --oneline origin/BRANCH -10`). Everything else is
+    refused because it is not listed — including every option that names a
+    program to run or a file to write.
     """
     w = word.strip("()")
-    for opt in FORBIDDEN_GIT_OPTIONS:
-        if w == opt or w.startswith(opt + "="):
-            return opt
-    if w.startswith("-O") and len(w) > 2:
-        return "-O"
-    return None
+    if not w.startswith("-") or w == "--":
+        return None
+    if w.split("=", 1)[0] in GIT_SUBCOMMAND_OPTIONS[sub]:
+        return None
+    if sub == "log" and re.fullmatch(r"-n?\d+", w):
+        return None
+    return w
 
 
 def invocations(words, name):
@@ -238,23 +275,23 @@ def git_violation(words, cmd):
     (`log --grep=push`) is still a word, not a verb.
     """
     for i in invocations(words, "git"):
-        sub, at, refused = git_subcommand(words, i + 1)
-        if refused is not None:
-            return (f"git option before the subcommand not allowed: {refused!r} in "
-                    f"{cmd!r} (policy: only `-C <path>` and `--no-pager` may come "
-                    f"before a git subcommand; `-c`, `--config-env` and the rest "
-                    f"can make a read-only subcommand run a command)")
-        if sub not in ALLOWED_GIT_SUBCOMMANDS:
+        sub, at, refusal = git_subcommand(words, i + 1)
+        if refusal is not None:
+            return f"{refusal} in {cmd!r}"
+        if sub not in GIT_SUBCOMMAND_OPTIONS:
             return f"git subcommand not allowed: {sub!r} in {cmd!r}"
-        if any(f in words for f in FORBIDDEN_GIT_FLAGS):
-            return f"git flag not allowed in {cmd!r}"
+        listed = sorted(GIT_SUBCOMMAND_OPTIONS[sub])
         for w in words[at + 1:]:
-            opt = forbidden_git_option(w)
+            bare = w.strip("()")
+            if bare in MUTATING_GIT_ARGS:
+                return f"git {sub} {bare} writes: {cmd!r}"
+            opt = unlisted_git_option(sub, w)
             if opt is not None:
-                return (f"git option not allowed: {opt!r} in {cmd!r} (policy: "
-                        f"`--output`, `--ext-diff`, `--textconv`, `-O`, "
-                        f"`--open-files-in-pager` and `--config-env` write a file "
-                        f"or run a command)")
+                return (f"git option not allowed for {sub!r}: {opt!r} in {cmd!r} "
+                        f"(policy: DESIGN §12 lists the options each subcommand may "
+                        f"carry — `{sub}` takes "
+                        f"{', '.join(listed) if listed else 'no options'} — and every "
+                        f"other option is refused because it is not listed)")
     return None
 
 
@@ -372,8 +409,38 @@ SELFTEST = [
     ("find . -fls /tmp/listing", False),
     ("git --no-pager log --oneline -3", True),
     ("git --no-pager -C ./repo show HEAD --stat", True),
-    ("git -C ./repo diff --no-ext-diff HEAD~1", True),
     ("find . -name '*.md' -printf %p", True),
+    # ... and under the per-subcommand allowlist (§12) an option is refused
+    # simply because its subcommand's row does not list it. These read, and
+    # are refused anyway; the wrappers below are refused the same way, which
+    # is the point — nobody has to have remembered them.
+    ("git -C ./repo diff --no-ext-diff HEAD~1", False),
+    ("git log --no-textconv -1", False),
+    ("git status --porcelain", False),
+    ("git branch -a", False),
+    ("git ls-remote --upload-pack='touch /tmp/x/PWNED1' /tmp/x/src", False),
+    ("git -C ./src fetch --upload-pack='touch /tmp/x/PWNED2' /tmp/x/src", False),
+    ("git fetch --exec='touch /tmp/x/PWNED3' origin", False),
+    ("git ls-remote --exec='touch /tmp/x/PWNED3' origin", False),
+    ("git branch --edit-description", False),
+    ("git fetch --force origin main:main", False),
+    # the `-C` value is a single path and may not begin with `-`
+    ("git -C ./repo -C --exec-path=/tmp/evil log", False),
+    ("git -C --exec-path=/tmp/evil log", False),
+    # the options each subcommand does carry, including the lines
+    # driver/CLAUDE.md itself tells the driver to run
+    ("git -C ./repo fetch && git -C ./repo log --oneline origin/main -10", True),
+    ("git -C ./repo log --format=%H --name-status -n 5", True),
+    ("git -C ./repo show --name-status HEAD", True),
+    ("git ls-remote --heads origin", True),
+    ("git -C ./repo rev-parse --short HEAD", True),
+    ("git -C ./repo diff --stat --name-only HEAD~1", True),
+    ("git -C ./repo grep -n -i -e pattern origin/main -- docs", True),
+    ("git -C ./repo cat-file -p HEAD:DESIGN.md", True),
+    ("git -C ./repo ls-files", True),
+    ("git -C ./repo ls-tree HEAD", True),
+    ("git -C ./repo branch --list", True),
+    ("git -C ./repo remote -v", True),
     # prose inside quotes is text, not shell
     ("hands send --role builder --context clear --gate \"apply kit\" \"Apply ~/Downloads/k.zip (it replaces DESIGN.md), then commit 'plan: kit (v3.1)' and push. Reply: VERDICT: kit applied <sha>.\"", True),
     ("hands send --role aux --context clear 'Review commits since abc123; report blockers=0 or blockers>0 (count them)'", True),
