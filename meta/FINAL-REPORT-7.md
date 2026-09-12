@@ -240,7 +240,7 @@ rule shape keep their existing test.
 | Blocker 2 — FINAL-REPORT-6 §1 U5 item 7's totality claim; `notify --test` | closed for the report | `b77bc4d` (dated correction); the code path is unchanged — §3 item 6 |
 | Should-fix 1 — the sweep missed `tests/test_playbook.py:689` | closed | `da1ffb3` (wording fixed; the file is now read) |
 | Should-fix 2 — circular U6 tests; the vacuous `check` half | closed | `da1ffb3` (rendered doctor output, rule 8 text; the half removed) |
-| Should-fix 3 — a unit commit carried the report draft via `git add -A` | closed | `b77bc4d` (`.gitignore` `meta/drafts/`); this mission's commits stage explicit paths and list every file (§5) |
+| Should-fix 3 — a unit commit carried the report draft via `git add -A` | closed | `b77bc4d` (`.gitignore` `meta/drafts/`); this mission's commits stage explicit paths and list every file (§4) |
 | Should-fix 4 — the UTF-8 check and the size measurement walk different trees | closed | `b29b1c7` |
 | Should-fix 5 — positionals refused under invented flag names | closed | `b29b1c7` (label "a job/path/prompt argument"; §3 item 9) |
 | Should-fix 6 — DESIGN §11's self-contradiction not in FINDINGS.md | closed by the design | DESIGN v3.6 §11 rewritten by the architect (§23 bullet 1); no builder change, and no H-number is needed for a contradiction that no longer exists |
