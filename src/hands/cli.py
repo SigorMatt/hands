@@ -25,6 +25,7 @@ from typing import Any, TextIO
 
 from hands import __version__, doctor
 from hands import notify as notify_mod
+from hands import who as who_mod
 from hands.api import MAX_TAIL_ENTRIES, TAIL_WINDOW_BYTES
 from hands.api import TIMEOUT as TIMEOUT_CODE
 from hands.config import Config, ConfigError, config_path, load_config, resolve_project
@@ -322,6 +323,17 @@ def build_parser() -> argparse.ArgumentParser:
         help="publish this message (or a default line) to ntfy_topic now and "
         "print the HTTP status — the proof that delivery works",
     )
+    who = command(
+        "who",
+        "the one-screen picture: this daemon's jobs and pipeline, every other claude "
+        "process, and interactive sessions' waiting/working state (§4, §24)",
+    )
+    who.add_argument(
+        "--daemon",
+        action="store_true",
+        help="keep running: push the picture to [notify] who_topic when it changes and "
+        "on status/who/check/? from who_cmd_topic (the handswho entry point)",
+    )
     check = command("doctor", "check the install end to end (§4, §14)")
     check.add_argument(
         "--live",
@@ -373,6 +385,7 @@ _PARAMS: dict[str, Any] = {
     "resume": lambda a: {},
     "status": lambda a: {},
     "notify": lambda a: {"test": a.test},
+    "who": lambda a: {},  # answered by the client; it asks the daemon's `who` itself
     "doctor": lambda a: {"live": a.live},
 }
 
@@ -686,6 +699,12 @@ def main(
         # and it has to work at an install, before (or without) a running daemon.
         if command == "notify":
             return _notify(config, args.test, out=out, as_json=as_json)
+        # §24: `hands who` joins the daemon's answer with /proc and transcripts,
+        # which only the client can read, so it is the client's command too.
+        if command == "who":
+            if args.daemon:
+                return who_mod.watch(config, socket_path)
+            return who_mod.print_once(config, socket_path, out=out, as_json=as_json)
         # §7: `hands log -f <role>` is a follow, and a follow is many requests.
         if command == "log" and args.role:
             if args.job:

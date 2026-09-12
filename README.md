@@ -39,7 +39,7 @@ your home directory.
 Needs Python ≥ 3.11 and [uv](https://docs.astral.sh/uv/). The only runtime
 dependency is `httpx`.
 
-    uv tool install ~/git/hands      # installs 2 executables: hands, handsd
+    uv tool install ~/git/hands      # installs 3 executables: hands, handsd, handswho
 
 Run the daemon under systemd (user unit; the project name comes from an
 environment file):
@@ -83,7 +83,7 @@ phone.
 
 `send`, `wait`, `result`, `jobs`, `show`, `open`, `log`, `cancel`, `put`,
 `get`, `ls`, `tail`, `inbox`, `pipeline`, `approve`, `deny`, `pause`,
-`resume`, `status`, `notify`, `doctor`. Every one takes `--json` (that is what the driver
+`resume`, `status`, `notify`, `who`, `doctor`. Every one takes `--json` (that is what the driver
 reads) and `--project`. `hands --help` is the reference; `handsd --help` is the
 daemon's.
 

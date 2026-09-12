@@ -107,8 +107,8 @@ class NotifyConfig:
     The command channel is on when `cmd_topic` is set; `cmd_secret` is then
     required (§24), which the loader enforces. The secret is kept out of `repr`,
     so a config that reaches a log line or a traceback does not carry it.
-    `who_topic` and `who_cmd_topic` are parsed and not yet used (§24's `hands
-    who`, a later unit).
+    `who_topic` and `who_cmd_topic` are read by `handswho` (`hands.who`, §24),
+    not by handsd.
     """
 
     ntfy_url: str = DEFAULT_NTFY_URL

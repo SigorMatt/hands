@@ -140,6 +140,22 @@ def test_the_systemd_unit_is_a_user_unit_with_the_project_in_an_environment_file
     assert "sh -c" not in exec_start[0]
 
 
+def test_the_handswho_unit_mirrors_handsd_and_is_off_unless_enabled() -> None:
+    """§24: `handswho` ships as an optional user unit, off unless enabled."""
+    unit = (ROOT / "systemd" / "handswho.service").read_text(encoding="utf-8")
+    assert "EnvironmentFile=%h/.config/hands.env" in unit
+    assert "--project ${HANDS_PROJECT}" in unit
+    assert "Restart=on-failure" in unit
+    assert "WantedBy=default.target" in unit
+    assert "User=" not in unit and "Group=" not in unit
+    exec_start = [line for line in unit.splitlines() if line.startswith("ExecStart=")]
+    assert exec_start == ["ExecStart=%h/.local/bin/handswho --project ${HANDS_PROJECT}"]
+    # Optional: the install recipe enables it only as a step the human takes.
+    assert "systemctl --user enable --now handswho" in unit
+    scripts = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    assert scripts["project"]["scripts"]["handswho"] == "hands.who:main"
+
+
 # ---------------------------------------------------------- driver kit (§12)
 
 

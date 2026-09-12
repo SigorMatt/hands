@@ -16,8 +16,8 @@
 # each `~/.hands/<project>.toml` must differ.
 #
 # ExecStart is an absolute path because a systemd unit has no login shell and so
-# no `~/.local/bin` on PATH. `uv tool install ~/git/hands` installs both
-# executables ("Installed 2 executables: hands, handsd") into uv's tool bin
+# no `~/.local/bin` on PATH. `uv tool install ~/git/hands` installs all
+# executables ("Installed 3 executables: hands, handsd, handswho") into uv's tool bin
 # directory, `~/.local/bin` by default; if you installed into a venv instead,
 # point ExecStart at `<venv>/bin/handsd`. `%h` is your home directory.
 

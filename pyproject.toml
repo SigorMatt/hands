@@ -9,6 +9,7 @@ dependencies = ["httpx>=0.27"]
 [project.scripts]
 hands = "hands.cli:main"
 handsd = "hands.daemon:main"
+handswho = "hands.who:main"
 
 [project.optional-dependencies]
 dev = ["pytest>=8", "ruff>=0.6"]
@@ -27,8 +28,6 @@ addopts = "-q"
 [tool.ruff]
 line-length = 100
 src = ["src", "tests"]
-# meta/prototypes/ holds read-only reference copies, not code hands ships.
-extend-exclude = ["meta/prototypes"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]

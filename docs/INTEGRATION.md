@@ -12,7 +12,7 @@ are the whole of its state.
 
 ## 1. Install (once per machine)
 
-    uv tool install ~/git/hands        # -> "Installed 2 executables: hands, handsd"
+    uv tool install ~/git/hands        # -> "Installed 3 executables: hands, handsd, handswho"
 
 `~/.local/bin` must be on your PATH (`uv tool update-shell` adds it). Check:
 
@@ -246,6 +246,36 @@ Publish a command to `cmd_topic` from the ntfy app. The last word is the token:
   read your secret. Anyone who can read `ntfy_topic` sees a held job's buttons,
   and they can use them while that job is held. Keep both names random and to
   yourself.
+
+### Optional: the who view (DESIGN §24)
+
+    hands who                             # the picture, printed once
+
+One screen: this daemon's roles, jobs, held gates, pipeline and unread inbox
+(asked of handsd over its socket), every other `claude` process on the machine
+(from /proc, with the commands running under it), and whether each interactive
+session is waiting for you or working (from its transcript under
+`~/.claude/projects/`). Your own session in a role directory is labelled
+`(your session)`; a session under `~/hands-driver/<project>/` is
+`driver:<project>`. With handsd down it still prints the rest, says the daemon
+is not answering, and exits 0.
+
+To have it pushed to your phone, add two more random topics:
+
+    [notify]
+    who_topic = "hands-who-<something-random>"
+    who_cmd_topic = "hands-who-cmd-<something-random>"   # optional
+
+and run `handswho --project <project>` (the same as `hands who --daemon`), or
+install `systemd/handswho.service` the way its header says; it is off unless you
+enable it. It pushes the picture to `who_topic` when what is running, held or
+waiting changes (a session's state must hold for two scans first; your own
+sessions never trigger a push), and whenever `status`, `who`, `check` or `?` is
+published to `who_cmd_topic`. Those words take no secret, because they execute
+nothing: the only answer is the same picture. The picture does carry the first
+line of each running job's prompt and of the commands under each session, so
+keep `who_topic` as private as `ntfy_topic`. Without `who_topic`, `handswho`
+exits 1 and names the key.
 
 ## 5. The driver session (§14 step 2)
 

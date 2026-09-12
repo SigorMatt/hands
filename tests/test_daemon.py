@@ -1271,7 +1271,7 @@ def test_every_param_of_every_command_is_named_as_its_parser_names_it() -> None:
 SECTION_4 = [
     "send", "wait", "result", "jobs", "show", "open", "log", "cancel",
     "put", "get", "ls", "tail", "inbox", "pipeline", "approve", "deny",
-    "pause", "resume", "status", "notify", "doctor",
+    "pause", "resume", "status", "notify", "who", "doctor",
 ]
 
 

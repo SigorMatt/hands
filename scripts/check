@@ -17,5 +17,6 @@ uv run pytest
 echo "== cli smoke =="
 uv run hands --help >/dev/null
 uv run handsd --help >/dev/null
+uv run handswho --help >/dev/null
 
 echo "check: green"

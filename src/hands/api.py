@@ -111,7 +111,7 @@ class Api:
     COMMANDS: tuple[str, ...] = (
         "send", "wait", "result", "jobs", "show", "open", "log", "cancel",
         "put", "get", "ls", "tail", "inbox", "pipeline", "approve", "deny",
-        "pause", "resume", "status", "notify", "doctor",
+        "pause", "resume", "status", "notify", "who", "doctor",
     )  # fmt: skip
 
     def __init__(self, daemon: Daemon) -> None:
@@ -735,6 +735,36 @@ class Api:
             return await send_test(self.config, test, post=self.daemon.notifier.post)
         except NotifyError as exc:
             raise ApiError(str(exc)) from exc
+
+    # ------------------------------------------------------------- who (§4)
+
+    async def who(self) -> dict[str, Any]:
+        """This daemon's part of the `hands who` picture (§4, §24). Read-only.
+
+        One call so the client does not stitch four: each role's running job and
+        queue, the running, queued and held jobs (a held job with its gate
+        reason), the pipeline, and the unread inbox as ids and kinds only. The
+        /proc and transcript parts are the client's (`hands.who`).
+        """
+        status = self.daemon.status()
+        jobs: list[dict[str, Any]] = []
+        for record in self.spool.list_jobs():
+            if record.state not in ("running", "queued", "held"):
+                continue
+            row = job_summary(record)
+            if record.state == "held":
+                row["gate_reason"] = (record.gate or {}).get("reason")
+            jobs.append(row)
+        return {
+            "project": self.config.project,
+            "roles": {
+                role: {"cwd": info["cwd"], "running": info["running"], "queued": info["queued"]}
+                for role, info in status["roles"].items()
+            },
+            "jobs": jobs,
+            "pipeline": self.daemon.playbook.pipeline(),
+            "inbox": [{"id": event.id, "kind": event.kind} for event in self.spool.unacked()],
+        }
 
     # ---------------------------------------------------------- doctor (§4)
 
