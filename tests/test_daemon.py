@@ -38,6 +38,7 @@ from harness import (
     drive,
     fails,
     ok,
+    poll,
     running_job,
     write_project,
 )
@@ -311,6 +312,81 @@ def test_send_reads_the_prompt_from_a_file_byte_for_byte(project: str, tmp_path:
         job = await ok("send", "--role", "aux", "--context", "clear", "--prompt-file", str(path))
         assert job["prompt"] == VERBATIM
         assert (await ok("show", job["id"]))["prompt"] == VERBATIM
+
+    drive(body)
+
+
+# ------------------------------------------ `hands show`'s failure line (§6)
+
+#: The harness's own termination line, as job 0mtygi953-ym63 carried it (H-014).
+TERMINATING = (
+    "Background tasks still running after 600s; terminating. "
+    "Set CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS=0 to wait indefinitely."
+)
+
+
+async def _ended(job_id: str) -> Any:
+    """The job record once it has left `queued`/`running`."""
+
+    async def check() -> Any:
+        record = await ok("show", job_id)
+        return record if record["state"] not in {"queued", "running"} else None
+
+    return await poll(check, f"job {job_id} to end")
+
+
+@pytest.mark.parametrize(
+    ("prompt", "reason"),
+    [
+        (f"FAKE:stderr {TERMINATING}\nFAKE:result a progress note\nFAKE:turns 59\nFAKE:exit 0",
+         "harness_terminated"),
+        ("FAKE:result partial\nFAKE:exit 3", "nonzero_exit"),
+    ],
+    ids=["harness_terminated", "nonzero_exit"],
+)
+def test_show_prints_the_failure_line_of_a_failed_job(
+    project: str, prompt: str, reason: str
+) -> None:
+    """Review 7 blocker 1: `hands show` is how a human reads *why* a job failed.
+    The readable block carries `failure <failure_reason>`, once."""
+
+    async def body(daemon: Daemon) -> None:
+        job = await ok("send", "--role", "aux", "--context", "clear", prompt)
+        record = await _ended(job["id"])
+        assert record["state"] == "failed"
+        assert record["failure_reason"] == reason
+
+        code, out, err = await cli("show", job["id"])
+        assert code == 0, err
+        lines = strip_paths(out).splitlines()
+        assert [line for line in lines if line.startswith("  state")] == [
+            "  state    failed"
+        ], out
+        assert [line for line in lines if line.startswith("  failure")] == [
+            f"  failure  {reason}"
+        ], out
+
+    drive(body)
+
+
+def test_show_prints_no_failure_line_for_a_done_job(project: str) -> None:
+    """§6: `failure_reason` is null unless the job failed, and `show` prints no
+    line for a null field — so a done job has no `failure` line at all."""
+
+    async def body(daemon: Daemon) -> None:
+        job = await ok("send", "--role", "aux", "--context", "clear", "FAKE:result fin")
+        record = await _ended(job["id"])
+        assert record["state"] == "done"
+        assert record["failure_reason"] is None
+
+        code, out, err = await cli("show", job["id"])
+        assert code == 0, err
+        lines = strip_paths(out).splitlines()
+        assert [line for line in lines if line.startswith("  state")] == [
+            "  state    done"
+        ], out
+        assert not [line for line in lines if line.lstrip().startswith("failure")], out
+        assert "failure" not in strip_paths(out), out
 
     drive(body)
 

@@ -743,3 +743,52 @@ refused, and is recorded in the hook's docstring and in docs/INTEGRATION.md's
 the hook against a real `Agent` or `Task` call, so that the harness delivers
 those payloads to it, and blocks on exit 2, is read from the binary, not
 observed.
+
+## H-015 — a held job can be decided from the phone only by a declaration
+
+Severity: medium · Component: DESIGN §8 (human gates), §11 (notifications),
+§13 (`[notify]`) against `src/hands/daemon.py`, `src/hands/notify.py` and
+`hands doctor`
+Filed by: mission 8, U0, from `meta/BACKLOG.md` (Mission 8 item 5 and
+"Unscheduled: Authenticated approvals") and DESIGN v3.7 §24.
+
+Symptom. The only phone path that releases a `held` job is a driver running
+`hands approve <job> --human-confirmed`, recorded as `decided_by: driver`
+with the quoted instruction. §8 says that record "is a declaration, not
+authentication: the daemon cannot tell a driver quoting the human from a
+driver inventing a quote", and that "Authenticated approval belongs to the
+remote face (§9), if it is built". The backlog carried the same limit as
+"Unscheduled: Authenticated approvals" (`decided_by: driver` is a
+declaration; authentication belongs to the remote face if built), and
+scheduled "ntfy command channel with authenticated approvals" as Mission 8
+item 5: a second random topic, commands carrying a shared secret, recorded
+as `decided_by: phone`, Approve/Deny action buttons on held-job
+notifications, and "Nothing but commands and status lines ever travels
+either topic."
+
+Direction. Decided by the architect in DESIGN v3.7 §24 ("Mission 8, the
+phone channel") and `meta/BUILDER-8-PROMPT.md` U4; recorded here as the
+decision.
+
+**Decision, 2026-09-13 (DESIGN v3.7 §8, §11, §24; recorded by mission 8 U0).**
+A `[notify]` config section carries `ntfy_url`, `ntfy_topic` (events, as
+today), `cmd_topic` (commands, optional), `cmd_secret` (required when
+`cmd_topic` is set), `who_topic` and `who_cmd_topic` (optional); all topics
+are random. `handsd` subscribes to `cmd_topic` by an outbound long-poll — no
+ingress — and accepts `approve <job>`, `deny <job> [reason]`, `pause`,
+`resume` and `status`, the last answered by publishing a status summary to
+`ntfy_topic`. A typed command carries `cmd_secret` as its last word. A
+held-job notification carries Approve/Deny action buttons that publish
+`approve <job> <nonce>` / `deny <job> <nonce>`, where the nonce is 32 random
+bytes minted per held job, single-use, and dying with the job; the long-term
+secret is never placed in a notification. A decision taken this way is
+`decided_by: phone`, the first authenticated approval path; §8's declaration
+limitation applies to the driver only. Nothing but commands and status lines
+ever travels either topic.
+
+Operational additions from the mission brief (`meta/BUILDER-8-PROMPT.md`
+U4): the long-poll reconnects on error; a bad secret or nonce is logged and
+ignored, never answered; `hands doctor` reports the channel on/off and
+refuses a `cmd_topic` without a `cmd_secret`.
+
+Status: decided (DESIGN v3.7 §24); fixing (mission 8 U4)
