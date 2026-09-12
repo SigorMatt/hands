@@ -1054,8 +1054,9 @@ class Posts:
     def __init__(self) -> None:
         self.sent: list[str] = []
 
-    async def __call__(self, url: str, *, title: str, message: str) -> None:
+    async def __call__(self, url: str, *, title: str, message: str) -> int:
         self.sent.append(title)
+        return 200  # ntfy's answer: a double speaks the transport's `-> int` too
 
 
 def drive_notified(

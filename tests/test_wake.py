@@ -19,8 +19,9 @@ from typing import Any
 import httpx
 import pytest
 
+import hands.cli
 from conftest import strip_paths
-from hands.cli import main
+from hands.cli import _render, call, main
 from hands.config import Config, load_config, parse_config
 from hands.daemon import Daemon
 from hands.limits import LimitManager, to_iso
@@ -28,6 +29,7 @@ from hands.notify import (
     DEFAULT_TEST_MESSAGE,
     TEST_TITLE,
     Notifier,
+    accepted,
     http_post,
     parse_quiet_hours,
     send_test,
@@ -250,10 +252,11 @@ class Posts:
         self.sent: list[dict[str, Any]] = []
         self.fail = fail
 
-    async def __call__(self, url: str, *, title: str, message: str) -> None:
+    async def __call__(self, url: str, *, title: str, message: str) -> int:
         if self.fail:
             raise OSError("ntfy.sh is unreachable")
         self.sent.append({"url": url, "title": title, "message": message})
+        return 200  # ntfy's answer: a double speaks the transport's `-> int` too
 
 
 class Clock:
@@ -890,3 +893,77 @@ def test_the_daemon_has_the_same_notify_method(tmp_home: Path, workdir: Path) ->
         assert [item["message"] for item in posts.sent] == ["from the daemon"]
 
     drive(body)
+
+
+class SilentPosts:
+    """A transport that returns without a status: the shape review 3 should-fix 6 names."""
+
+    def __init__(self) -> None:
+        self.sent: list[str] = []
+
+    async def __call__(self, url: str, *, title: str, message: str) -> None:
+        self.sent.append(title)
+
+
+@pytest.mark.parametrize(
+    ("status", "delivered"),
+    [(200, True), (202, True), (299, True), (199, False), (300, False), (403, False),
+     (None, False), (True, False), ("200", False), (200.0, False)],
+)
+def test_only_an_integer_2xx_is_accepted(status: Any, delivered: bool) -> None:
+    """Review 3 should-fix 6: a status that is not an int is not a delivery."""
+    assert accepted(status) is delivered
+
+
+def test_a_publish_that_answers_no_status_is_a_failed_delivery(
+    tmp_home: Path, tmp_path: Path, workdir: Path
+) -> None:
+    """Review 3 should-fix 6: a transport regression that returns None is not
+    counted as delivered — on the §11 path (inboxed) or on `--test` (refused)."""
+    note, posts, _, spool = notifier(tmp_home, tmp_path, posts=SilentPosts())  # type: ignore[arg-type]
+
+    async def body() -> None:
+        note.notify("hands: the pipeline stopped", {"reason": "blockers"})
+        await note.drain()
+
+    asyncio.run(body())
+    assert posts.sent == ["hands: the pipeline stopped"]
+    events = spool.events()
+    assert [event.kind for event in events] == ["notify"]
+    assert events[0].payload["delivered"] is False
+
+    config = load_config(notify_project(tmp_home, workdir))
+    result = asyncio.run(send_test(config, "hello", post=SilentPosts()))
+    assert result["delivered"] is False
+
+
+def test_notify_over_the_socket_answers_a_refusal_as_the_cli_does(
+    tmp_home: Path, workdir: Path
+) -> None:
+    """Review 3 should-fix 7: `Api.notify` at a 403, through a socket client.
+
+    The answer is a result, not an error (`delivered: false`, the code), and the
+    CLI's socket route renders it and fails it exactly as `hands notify --test`
+    does — `ntfy 403 <url>` and exit 1 (§4, §9, §19).
+    """
+    notify_project(tmp_home, workdir)
+    answers: list[dict[str, Any]] = []
+
+    async def body(daemon: Daemon) -> None:
+        daemon.notifier.post = StatusPosts(status=403)
+        answer = await asyncio.to_thread(
+            call, daemon.socket_path, "notify", {"test": "hi"}, project=PROJECT
+        )
+        answers.append(answer)
+
+    drive(body)
+    [result] = answers
+    assert result["status"] == 403
+    assert result["delivered"] is False
+    assert result["url"] == "https://ntfy.example/hands-abc123"
+    text = _render("notify", result)
+    assert strip_paths(text).startswith("ntfy 403  https://ntfy.example/hands-abc123"), text
+    assert "ntfy did not accept it" in strip_paths(text)
+    assert hands.cli.exit_code("notify", result) == 1
+    assert hands.cli.exit_code("notify", {**result, "status": 200, "delivered": True}) == 0
+    assert hands.cli.exit_code("status", {}) == 0

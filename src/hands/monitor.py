@@ -40,7 +40,7 @@ import re
 import signal
 import time
 from collections import OrderedDict
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -52,6 +52,7 @@ __all__ = [
     "DEFAULT_POLL_S",
     "MAX_CMDLINE",
     "OPS_FLAGS",
+    "ops_argv",
     "TASK_MEMORY",
     "WATCHED_ROLES",
     "BlockBuffer",
@@ -78,6 +79,20 @@ WATCHED_ROLES = frozenset({"builder"})
 #: `hands status` names these when the ops script is the monitor that decides, so
 #: the list lives where the invocation is built and is never spelled out again.
 OPS_FLAGS = ("--pids", "--transcript", "--base")
+
+
+def ops_argv(path: Path, values: Sequence[str]) -> list[str]:
+    """The ops script's command line: `path`, then each of `OPS_FLAGS` with its value.
+
+    The one place that argv is built. The monitor fills `values` from the job
+    record (§5); `hands doctor` fills them with a dead pid and calls the same
+    function, so what doctor probes is what the monitor sends (review 3
+    should-fix 3). `OPS_FLAGS` is read at call time, not bound here.
+    """
+    argv = [str(path)]
+    for flag, value in zip(OPS_FLAGS, values, strict=True):
+        argv += [flag, value]
+    return argv
 
 DEFAULT_POLL_S = 5.0  # how often the built-in monitor samples; a test shortens it
 MIN_POLL_S = 0.01
@@ -698,9 +713,7 @@ class MonitorSupervisor:
             job.transcript_path or "",
             job.head_at_start or "",
         )
-        argv = [str(path)]
-        for flag, value in zip(OPS_FLAGS, values, strict=True):
-            argv += [flag, value]
+        argv = ops_argv(path, values)
         try:
             proc = await asyncio.create_subprocess_exec(
                 *argv,

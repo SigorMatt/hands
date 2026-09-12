@@ -185,16 +185,16 @@ async def http_stream(url: str, *, transport: Any = None) -> AsyncIterator[str]:
                 yield line
 
 
-def accepted(status: Any) -> bool:
-    """Did ntfy take the message? A 2xx is a yes; any other number is a no.
+def accepted(status: object) -> bool:
+    """Did ntfy take the message? Only an integer 2xx is a yes.
 
-    A transport that answered with no status at all — an injected publisher, a
-    recorder in a test — has said nothing about the response, and there "it did
-    not raise" stays the whole answer, which is the rule §11 has always had.
+    `http_post` answers with an `int`, and a publisher injected in its place must
+    too. Anything else — `None`, a bool, a string — says nothing about a
+    response, so it is not a delivery: a transport regression that stops returning
+    the code fails loudly (§11 inboxes it, `--test` exits 1) instead of passing
+    as sent (review 3 should-fix 6).
     """
-    if isinstance(status, bool) or not isinstance(status, int):
-        return True
-    return 200 <= status < 300
+    return isinstance(status, int) and not isinstance(status, bool) and 200 <= status < 300
 
 
 class NotifyError(Exception):
@@ -207,7 +207,7 @@ class NotifyError(Exception):
 
 
 async def send_test(
-    config: Config, message: str, *, post: Callable[..., Awaitable[Any]] | None = None
+    config: Config, message: str, *, post: Callable[..., Awaitable[int]] | None = None
 ) -> dict[str, Any]:
     """One message to the configured topic, now, and the status it got back (§4).
 
@@ -276,7 +276,7 @@ class Notifier:
         config: Config,
         spool: Spool,
         *,
-        post: Callable[..., Awaitable[Any]] | None = None,
+        post: Callable[..., Awaitable[int]] | None = None,
         clock: Callable[[], datetime] | None = None,
         sleep: Callable[[float], Awaitable[None]] | None = None,
         quiet_hours: Callable[[], str | None] | None = None,

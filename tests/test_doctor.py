@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import io
 import json
+import os
 import re
 import shutil
 from pathlib import Path
@@ -710,3 +711,32 @@ def test_a_cmd_topic_without_a_cmd_secret_fails_doctor(
     assert code == 1
     assert found["config"]["status"] == FAIL
     assert "cmd_secret" in strip_paths(found["config"]["detail"])
+
+
+def test_the_probe_sends_whatever_flags_the_monitor_sends(
+    tmp_home: Path, tmp_path: Path, fake_mode: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Review 3 should-fix 3: the probe argv is built from `OPS_FLAGS`, not spelled.
+
+    The flags are renamed under doctor's feet. A probe that spells `--pids`,
+    `--transcript` and `--base` itself still sends the old three, and the
+    recorded argv shows it; a probe built from the monitor's list sends the new.
+    """
+    write_config(tmp_home, tmp_path)
+    record = tmp_path / "argv.txt"
+    ops_script(
+        tmp_path,
+        'if [ "$1" = "--help" ]; then echo "usage: watch_monitor.sh"; exit 1; fi\n'
+        f'printf "%s\\n" "$@" > "{record}"\nexit 0\n',
+    )
+    renamed = ("--pid-set", "--transcript-path", "--base-sha")
+    monkeypatch.setattr("hands.monitor.OPS_FLAGS", renamed)
+
+    code, found = checks()
+
+    argv = record.read_text().splitlines()
+    assert argv[0::2] == list(renamed), argv
+    assert argv[3:] == [os.devnull, "--base-sha", "HEAD"]
+    assert code == 0, found
+    detail = found["ops script"]["detail"]
+    assert all(flag in strip_paths(detail) for flag in renamed), detail

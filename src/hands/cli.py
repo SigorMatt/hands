@@ -617,6 +617,9 @@ def _render(command: str, result: Any) -> str:
                 "of the transcript, and there is more of it than that)"
             )
         return "\n".join(lines)
+    if command == "notify" and isinstance(result, dict) and "status" in result:
+        # §9: a socket caller gets the answer `hands notify --test` prints.
+        return _notify_block(result, sender="handsd")
     if command == "inbox" and isinstance(result, dict):
         events = result.get("events", [])
         if not events:
@@ -728,6 +731,18 @@ def main(
         print(f"hands: {exc}", file=err)
         return 1
     print(json.dumps(result, sort_keys=True) if as_json else _render(command, result), file=out)
+    return exit_code(command, result)
+
+
+def exit_code(command: str, result: Any) -> int:
+    """The exit status for an answer that came back (§4, §19).
+
+    Every answer is 0 except a notify ntfy did not accept, which is 1 on either
+    route — the client's own `hands notify --test` and a result from the daemon's
+    `notify` method (§9; review 3 should-fix 7).
+    """
+    if command == "notify" and isinstance(result, dict):
+        return 0 if result.get("delivered") else 1
     return 0
 
 
@@ -800,13 +815,13 @@ def _notify(config: Config, message: str | None, *, out: TextIO, as_json: bool) 
     # §19: the status is printed whatever it was, and a non-2xx still fails. A
     # refusal is a fact about the topic (wrong token, wrong URL), not a crash, so
     # it is reported in the same shape as a success — with a code and an exit 1.
-    return 0 if result["delivered"] else 1
+    return exit_code("notify", result)
 
 
-def _notify_block(result: dict[str, Any]) -> str:
+def _notify_block(result: dict[str, Any], *, sender: str = "the CLI itself, not handsd") -> str:
     """What ntfy answered, and who sent it — the daemon's notifications are its own."""
     last = (
-        "  sent by the CLI itself, not handsd, and not delayed by quiet hours (§11)"
+        f"  sent by {sender}, and not delayed by quiet hours (§11)"
         if result["delivered"]
         else "  ntfy did not accept it: nothing was delivered to the topic"
     )

@@ -45,9 +45,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+import hands.monitor
 import hands.runner
 from hands.config import BG_WAIT_CEILING_ENV, Config, RoleConfig
-from hands.monitor import OPS_FLAGS
 from hands.playbook import PlaybookError, load_playbook, playbook_path
 from hands.runner import build_argv
 
@@ -81,9 +81,6 @@ LIVE_PROMPT = "Reply with exactly this line and nothing else:\nVERDICT: doctor o
 #: reasons" (no git repo at the probe's `--base`, for one).
 _REFUSALS = ("unrecognized", "unrecognised", "unknown option", "invalid option", "illegal option")
 
-#: The flags §5 gives the ops script, from the module that actually passes them:
-#: doctor proves what the monitor will send, so there is one list, not two.
-MONITOR_FLAGS = OPS_FLAGS
 
 
 @dataclass(frozen=True)
@@ -277,31 +274,25 @@ def _ops_check(config: Config) -> Check:
             "no [ops] repo + monitor_cmd in the config: hands watches builder jobs with "
             "its built-in stall detector instead (§5)",
         )
-    step4 = (
-        "DESIGN §14 step 4: the ops repo's monitor script must exist and accept "
-        f"{', '.join(MONITOR_FLAGS)}"
-    )
+    # §5's flags, read from the module that sends them and at call time, and the
+    # probe argv built by the same `ops_argv` the monitor uses: doctor proves what
+    # the monitor will send, so there is one list and one argv (review 3 should-fix 3).
+    flags = hands.monitor.OPS_FLAGS
+    named = ", ".join(flags)
+    step4 = f"DESIGN §14 step 4: the ops repo's monitor script must exist and accept {named}"
     if not path.exists():
         return Check("ops script", FAIL, f"{path} does not exist.\n{step4}")
     if not os.access(path, os.X_OK):
         return Check("ops script", FAIL, f"{path} is not executable (chmod +x).\n{step4}")
 
     helped = _run_probe([str(path), "--help"], cwd=config.ops.repo)
-    if helped is not None and all(flag in helped.text for flag in MONITOR_FLAGS):
+    if helped is not None and all(flag in helped.text for flag in flags):
         return Check(
-            "ops script", OK, f"{path} accepts {', '.join(MONITOR_FLAGS)} (from `--help`)"
+            "ops script", OK, f"{path} accepts {named} (from `--help`)"
         )
 
     probe = _run_probe(
-        [
-            str(path),
-            "--pids",
-            str(_impossible_pid()),
-            "--transcript",
-            os.devnull,
-            "--base",
-            "HEAD",
-        ],
+        hands.monitor.ops_argv(path, (str(_impossible_pid()), os.devnull, "HEAD")),
         cwd=config.ops.repo,
     )
     if probe is None:
@@ -310,7 +301,7 @@ def _ops_check(config: Config) -> Check:
         return Check(
             "ops script",
             OK,
-            f"{path} took {', '.join(MONITOR_FLAGS)} and started watching; the probe "
+            f"{path} took {named} and started watching; the probe "
             f"stopped it after {PROBE_S:.0f}s (a dead pid, so no job was touched)",
         )
     lowered = probe.text.lower()
@@ -322,10 +313,10 @@ def _ops_check(config: Config) -> Check:
         return Check(
             "ops script",
             WARN,
-            f"{path} accepted {', '.join(MONITOR_FLAGS)} but exited {probe.code} on a "
+            f"{path} accepted {named} but exited {probe.code} on a "
             f"dead pid; that may be its way of saying the job is gone: {_tail(probe.text)}",
         )
-    return Check("ops script", OK, f"{path} ran with {', '.join(MONITOR_FLAGS)} and exited 0")
+    return Check("ops script", OK, f"{path} ran with {named} and exited 0")
 
 
 def _isolation_check(config: Config) -> Check:
