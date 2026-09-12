@@ -1,7 +1,7 @@
 """`hands doctor` — the install check (DESIGN §4, §11, §14).
 
 §4 gives doctor five jobs: the claude binary, the ops script's flags, the
-allowed roots, a one-turn `claude -p` per role, and the background-wake check of
+allowed roots, a one-turn `claude -p` per role, and the notification check of
 §11. Three properties shape the code below.
 
 **Doctor runs without a daemon.** §14 step 1 is "write the config; `hands
@@ -17,10 +17,11 @@ check is free and always runs. No test may run the live turn against a real
 binary, and `tests/test_doctor.py` proves the skip by pointing `runner.claude`
 at a script that leaves a file behind if it is ever spawned.
 
-**The wake check of §11 is not runnable by hands.** It needs an *idle
-interactive* Claude Code session, which a CLI process cannot be. Doctor
-therefore prints the procedure with the exact commands, for the human to run
-from the driver session, plus §11's fallback.
+**The notification check of §11 is not runnable by hands.** §11 retired the
+driver's background wait — "ntfy is the human's doorbell; the human's `check`
+is the driver's" — so what is left to check is the doorbell, and that ends on a phone
+this process cannot see. Doctor therefore prints the procedure with the exact
+commands and the clear-up step, for the human to run once at the laptop.
 
 **A config that will not load is a check result, not a crash** (§20, review 3
 should-fix 8). Doctor is the one command whose job is explaining a broken
@@ -394,58 +395,65 @@ def _live_check(config: Config, role: RoleConfig, *, live: bool) -> Check:
     )
 
 
-# ------------------------------------------------------- the wake check (§11)
+# ----------------------------------------------- the notification check (§11)
 
 
 def wake_procedure(project: str) -> list[str]:
-    """§11's background-wake check, for the human to run from the driver session.
+    """§11's notification check, for the human to run once at the laptop.
 
-    hands cannot run this itself: it needs an idle *interactive* Claude Code
-    session, and the question it answers (§16) is whether a background task
-    finishing wakes one. Two events will do it (H-007): `hands pause`, which
-    files a `stop` (`paused by human`) and is cleared by `hands resume` — one
-    command, no job, no turn — or a **held job**, gated by `--gate` so it never
-    runs, cleared with `hands deny`. The second is the only one that witnesses a
-    real `job.held`, which is the other kind the driver waits for.
+    §11 answered the wake-path question by retiring the driver's background
+    wait: ntfy is the human's doorbell, and the human's `check` is the driver's.
+    So the thing hands still cannot check for itself is delivery — the event has
+    to arrive on a phone this process cannot see. Two events will file one
+    without spending a turn (H-007): `hands pause`, which files a `stop`
+    (`paused by human`) and is cleared by `hands resume` — one command, no job —
+    or a **held job**, gated by `--gate` so it never runs, cleared with `hands
+    deny`. The second is the only one that witnesses a real `job.held`.
     """
     return [
-        "Background-wake check (§11) — hands cannot run this one: it needs an idle",
-        "interactive Claude Code session. Run it once, by hand, on a new install.",
+        "Notification check (§11) — hands cannot run this one: it ends on your phone.",
+        "Run it once, by hand, on a new install.",
         "",
-        "  1. In the driver session (remote control on), ask it to run this as a",
-        "     Claude Code *background* Bash task, and then go idle:",
+        "  The driver arms no wait and does not poll (§11): ntfy is your doorbell —",
+        "  `stop`, `job.held`, an exhausted `max_resumes`, daemon start/crash — and",
+        "  your message `check` is the driver's. So what is worth proving here is",
+        "  that an event you did not ask for reaches you.",
         "",
-        "         hands wait --for stop,held --timeout 3600",
+        "  1. Subscribe your phone to the `server.ntfy_topic` of your config — the",
+        "     ntfy app, or the topic's page in a browser — and allow its",
+        "     notifications. Then put the phone down.",
         "",
-        "  2. At the laptop, file an event the check can see. The simplest is a",
-        "     pause: it files a `stop` event (reason `paused by human`, §11), needs",
-        "     no job and no playbook, and costs nothing:",
+        "  2. At the laptop, file an event. The simplest is a pause: it files a",
+        "     `stop` event (reason `paused by human`, §11), needs no job and no",
+        "     playbook, and costs nothing:",
         "",
         f"         hands --project {project} pause",
         "",
-        "     Or, to witness a real `job.held` instead, a gated send — held for a",
+        "     Or, to file a real `job.held` instead, a gated send — held for a",
         "     human (§8), so it never starts a turn and costs nothing either:",
         "",
         f"         hands --project {project} send --role aux --context clear \\",
-        '             --gate "doctor wake check" "doctor wake check — do not run"',
+        '             --gate "doctor notification check" "doctor notification check — do not run"',
         "",
-        "  3. Watch the driver session without typing in it. Within seconds it should",
-        "     report that the background task returned with that event and should",
-        "     then read the inbox on its own (driver/CLAUDE.md rule 2 and 8).",
+        "  3. The phone should show it within seconds. `hands inbox` at the laptop",
+        "     shows the same event either way — what is being checked is the",
+        "     delivery, not the event. Quiet hours delay notifications and never",
+        "     actions (§11), so run this outside them.",
         "",
         "  4. Clear it, whatever the answer:",
         "",
         f"         hands --project {project} resume            # after the pause",
-        f"         hands --project {project} deny <job> --reason \"doctor wake check\"",
+        f"         hands --project {project} deny <job> --reason \"doctor notification check\"",
         f"         hands --project {project} resume            # after the gated send",
         "",
         "     (after a gated send, `resume` matters only if a playbook was loaded:",
         "     an unplanned job.held also stops the pipeline, §10.)",
         "",
-        "  If the session did not wake, §11's fallback: the driver re-issues",
-        "  `hands wait --for stop,held --timeout 3600` in a loop (exit code 2 is a",
-        "  timeout, not an event), and you open the Code tab after the ntfy",
-        "  notification instead. Record the answer — DESIGN §16 asks it.",
+        "  If nothing arrived: `hands notify --test` sends one message over the same",
+        "  transport and prints the HTTP status ntfy answered with, and with no",
+        "  `server.ntfy_topic` set there is nowhere for any of it to go. Until it",
+        "  works you learn you are needed by opening the Code tab and sending",
+        "  `check` yourself.",
     ]
 
 

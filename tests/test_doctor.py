@@ -367,42 +367,57 @@ def test_a_daemon_that_is_not_running_is_a_warning(
     assert "handsd" in strip_paths(found["daemon"]["detail"])
 
 
-# ------------------------------------------------- the background-wake check
+# ------------------------------------------------ the notification check (§11)
+
+#: The retired v3.4 procedure: doctor used to tell the human to have the driver
+#: arm `hands wait --for stop,held` as a background Bash task and watch it wake.
+#: §11's decision paragraph and §22's first bullet retire it — "the driver arms
+#: no background wait at all" — so its marks must not come back into the output
+#: doctor prints. Both spellings of the word: it led a line of the old text.
+RETIRED = ("hands wait --for stop,held", "background", "Background")
 
 
-def test_doctor_prints_the_background_wake_procedure(
+def test_the_wake_check_is_a_notification_test_not_an_armed_wait(
     tmp_home: Path, tmp_path: Path, fake_mode: None
 ) -> None:
-    """§11: hands cannot run this one; it hands the human the exact commands."""
+    """§11, §22: the driver arms no background wait, so what doctor prints is
+    the one check hands still cannot run itself — the event has to reach the
+    human's phone over ntfy. ntfy is the human's doorbell; the human's `check`
+    is the driver's."""
     write_config(tmp_home, tmp_path)
     _code, out, _err = run()
-    assert "hands wait --for stop,held" in strip_paths(out)
-    assert "--gate" in strip_paths(out)  # the free event that wakes the driver: a held job
-    assert "deny <job>" in strip_paths(out)  # and how to clear it without spending a turn
+    for retired in RETIRED:
+        assert retired not in strip_paths(out), f"doctor still prints {retired!r} (§22)"
+    assert "ntfy" in strip_paths(out)  # the doorbell it now checks
+    assert "`check`" in strip_paths(out)  # and what wakes the driver instead
     assert "§11" in strip_paths(out)
 
 
-def test_the_wake_procedure_offers_hands_pause(
+def test_the_notification_check_offers_a_pause_or_a_gated_send(
     tmp_home: Path, tmp_path: Path, fake_mode: None
 ) -> None:
     """H-007: the simplest event to fire is `hands pause` — one command, no job,
-    cleared by `hands resume`. The gated send stays: it is the only way to see a
-    real `job.held`."""
+    cleared by `hands resume`. The gated send stays: it is the only way to file a
+    real `job.held`, and `hands deny` clears it without spending a turn."""
     write_config(tmp_home, tmp_path)
     _code, out, _err = run()
-    assert "pause" in strip_paths(out) and "paused by human" in strip_paths(out)
+    assert "hands --project demo pause" in strip_paths(out)
+    assert "paused by human" in strip_paths(out)
     assert "hands --project demo resume" in strip_paths(out)  # how to clear it
-    # the job.held variant is kept
     assert "--gate" in strip_paths(out) and "deny <job>" in strip_paths(out)
 
 
-def test_the_wake_procedure_is_in_the_json_too(
+def test_the_notification_check_is_in_the_json_too(
     tmp_home: Path, tmp_path: Path, fake_mode: None
 ) -> None:
     write_config(tmp_home, tmp_path)
     _code, out, _err = run("--json")
     report = json.loads(out)
-    assert any("hands wait --for stop,held" in strip_paths(line) for line in report["wake_check"])
+    joined = "\n".join(report["wake_check"])
+    assert "ntfy" in strip_paths(joined)
+    assert "--gate" in strip_paths(joined)
+    for retired in RETIRED:
+        assert retired not in strip_paths(joined), retired
     assert report["green"] is True
 
 
@@ -456,7 +471,7 @@ def test_the_failed_config_check_has_the_same_shape_in_json(
     assert report["config"] == path
     assert found["config"]["status"] == "fail"
     assert "ntfy_topic" in strip_paths(found["config"]["detail"])
-    assert any("hands wait --for stop,held" in strip_paths(line) for line in report["wake_check"])
+    assert any("ntfy" in strip_paths(line) for line in report["wake_check"])
 
 
 def test_doctor_reports_a_missing_config_too(tmp_home: Path) -> None:
@@ -506,8 +521,6 @@ def test_the_daemon_answers_doctor_over_the_api(
         assert found["daemon"]["status"] == "ok"
         assert str(daemon.socket_path) in found["daemon"]["detail"]
         assert found["live builder"]["status"] == "skip"
-        assert any(
-            "hands wait --for stop,held" in strip_paths(line) for line in report["wake_check"]
-        )
+        assert any("ntfy" in strip_paths(line) for line in report["wake_check"])
 
     drive(body)

@@ -180,6 +180,87 @@ def test_driver_rule_6_is_the_design_section_12_rule_6() -> None:
     assert kit_rule(6) == design_rule(6)
 
 
+def test_driver_rule_8_is_the_design_section_12_rule_8() -> None:
+    """§22 (the v3.5 change): rule 8 became "never arm a background task; the
+    human's `check` is your wake", so the kit carries DESIGN §12's words for it
+    and not the v3.4 procedure. The exit-2 sentence the kit used to end this
+    rule with lives elsewhere in the document (see the test below)."""
+    assert design_rule(8), "DESIGN §12 has no rule 8 to pin the kit to"
+    assert kit_rule(8) == design_rule(8)
+
+
+#: Sentences that told a reader to arm a background wait, or that described the
+#: check built on one. §11's decision paragraph and §22's first bullet retire
+#: all of them: "the driver arms no background wait at all. ntfy is the human's
+#: doorbell; the human's `check` is the driver's". Each is matched against the
+#: flattened, lowercased document, so line wrapping cannot hide one.
+ARMED_WAIT = (
+    "arm the background wait",
+    "arm a background wait",
+    "arm the wake path",
+    "background-wake check",
+    "background-wake procedure",
+    "background wake check",
+    "background wake procedure",
+    "background* bash task",
+    "background bash task",
+)
+
+
+def test_no_shipped_document_tells_anyone_to_arm_a_background_wait() -> None:
+    """§11, §22: the driver arms no background wait, so the three documents a
+    driver or an installer reads may not describe one — not as a rule, not as a
+    first-run step, and not as the wake check doctor prints (§12 rule 8).
+
+    `docs/INTEGRATION.md`'s "No background tasks in a role session (§21)"
+    section and the `no_background.py` recipe are about the hook that *refuses*
+    background tasks; they are untouched by this, and the phrases below do not
+    appear in them.
+    """
+    offenders = [
+        f"{path.relative_to(ROOT).as_posix()}: {phrase!r}"
+        for path in (
+            ROOT / "driver" / "CLAUDE.md",
+            ROOT / "driver" / "README.md",
+            ROOT / "docs" / "INTEGRATION.md",
+        )
+        for flat in [flattened(path.read_text(encoding="utf-8")).lower()]
+        for phrase in ARMED_WAIT
+        if phrase in flat
+    ]
+    assert not offenders, "a document still arms the retired wait (§11, §22):\n" + "\n".join(
+        offenders
+    )
+    # The driver in particular waits for nothing it was not told to wait for:
+    # §12 rule 8 leaves it `hands wait <job>` in the foreground after an
+    # approval, and `--for stop,held` is the event wait it no longer arms. The
+    # command itself stays in §4 for a human at the laptop, so this is the
+    # kit's rule, not a repo-wide one.
+    kit = flattened((ROOT / "driver" / "CLAUDE.md").read_text(encoding="utf-8"))
+    assert "hands wait --for" not in kit, "the driver kit still offers the event wait (§12 rule 8)"
+    assert "hands wait <job>" in kit, "the kit must keep §12 rule 8's foreground wait"
+
+
+def test_the_docs_say_the_humans_check_is_the_drivers_wake() -> None:
+    """The other half of §11's decision: having removed the wait, the documents
+    have to say what replaced it — ntfy for the human, `check` for the driver."""
+    driver = (ROOT / "driver" / "CLAUDE.md").read_text(encoding="utf-8")
+    readme = (ROOT / "driver" / "README.md").read_text(encoding="utf-8")
+    integration = (ROOT / "docs" / "INTEGRATION.md").read_text(encoding="utf-8")
+    for where, text in (
+        ("driver/CLAUDE.md", driver),
+        ("driver/README.md", readme),
+        ("docs/INTEGRATION.md", integration),
+    ):
+        assert "check" in flattened(text).lower(), f"{where} never names the `check` wake (§11)"
+    assert "ntfy" in flattened(readme).lower(), "driver/README.md never names the doorbell (§11)"
+    # The kickoff walk-through is where the retired "arm the background wait"
+    # stood; it now sends the reader to rule 8.
+    kickoff = driver.split("## Starting a mission")[1]
+    assert "rule 8" in kickoff, "the kickoff walk-through does not cite rule 8"
+    assert "check" in kickoff, "the kickoff walk-through does not say what the wake is"
+
+
 def test_the_docs_say_what_exit_2_means() -> None:
     """§4/§21 (review 4 should-fix 5): exit 2 stopped being only a `wait`
     timeout when `send` began refusing prompts itself, so both documents that

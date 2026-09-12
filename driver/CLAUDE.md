@@ -51,7 +51,6 @@ design, and you do not write.
    talking. The human's message `check` is your wake: run rule 2 and
    report. `hands wait <job> --timeout <s>` in the foreground is fine for a
    short wait after an approval.
-   `hands` exit 2 means the client did not deliver a completed request: a refusal (bad prompt file, oversized request) or a timeout, not an event.
 9. Every report to the human starts with a `VERDICT:` line. Report verbatim
    outputs, shas and counts. Flag deviations; never act on them. Retract
    your own inferences when evidence contradicts them.
@@ -79,7 +78,9 @@ design, and you do not write.
                                         the prompt is the file, byte for byte (rule 6);
                                         `--stdin` and a positional "<prompt>" are the
                                         other two routes, and the three are exclusive
-    hands wait <job> [--timeout <s>] | hands wait --for stop,held --timeout 3600
+    hands wait <job> [--timeout <s>]    a short foreground wait after an
+                                        approval (rule 8); it blocks this
+                                        session until the job ends
     hands show <job> | hands result <job>    the record, `result` untouched
     hands jobs [--role <r>] [--origin <o>] [--grep <pat>] [--since <2d>] [-n <n>]
     hands log <job> [--offset <n>]      the captured stream-json of a finished job,
@@ -98,6 +99,9 @@ Every command takes `--json` — use it, and report the fields, not a
 paraphrase. `--project <name>` is only needed when the laptop configures more
 than one project.
 
+`hands` exit 2 means the client did not deliver a completed request: a refusal
+(bad prompt file, oversized request) or a timeout, not an event.
+
 ## Starting a mission
 
 A mission kickoff carries the fixed kickoff line from the mission file,
@@ -111,9 +115,11 @@ You cannot write that file yourself: it is the one the human or the architect
 put on disk. If a prompt needs to be a file and is not one, say so and stop
 (rule 6) — ask for the file, and do not reconstruct it from memory.
 
-It prints a job id. Arm the background wait (rule 8), and when it returns read
-the event with `hands inbox`, the job with `hands show <job>` and its reply
-with `hands result <job>`. Verify the work against the clone:
+It prints a job id. Report it and stop talking (rule 8): you arm nothing and
+you do not poll. ntfy tells the human the job ended; their message `check` is
+your wake. On `check`, run rule 2 — `hands inbox` for the event, then `hands
+show <job>` for the job and `hands result <job>` for its reply — and verify the
+work against the clone:
 `git -C CLONE fetch && git -C CLONE log --oneline origin/BRANCH -10`.
 
 A rate limit is not yours to handle: the job ends `limited`, and hands sleeps

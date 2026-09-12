@@ -155,9 +155,11 @@ to print and it says so on stderr and exits 1. Quiet hours do not delay it: §11
 delays notifications, never actions, and a message you asked for at a terminal
 is an action.
 
-Doctor also prints the **background-wake check** of §11 — the one check hands
-cannot run itself, because it needs an idle interactive session. Run it by
-hand after step 5; the procedure is in doctor's own output.
+Doctor also prints the **notification check** of §11 — the one check hands
+cannot run itself, because it ends on your phone. Run it by hand after step 5;
+the procedure is in doctor's own output. It is the check that matters now that
+the driver arms no wait of its own (§11, §22): ntfy is your doorbell, and your
+message `check` is the driver's.
 
 ## 5. The driver session (§14 step 2)
 
@@ -340,7 +342,9 @@ slips, and a session that works around it was never being stopped by a hook.
     hands jobs -n 5
     hands inbox --ack
 
-Then arm the wake path the way the driver does:
+At the laptop you can also block on the next pipeline event, in the foreground
+of this terminal. The driver does not: it arms nothing, and your message
+`check` is its wake (§11, driver/CLAUDE.md rule 8).
 
     hands wait --for stop,held --timeout 3600     # exits 2 on timeout, 0 on an event
 
@@ -352,11 +356,11 @@ Then arm the wake path the way the driver does:
 - The ops-script bridge has only ever been exercised against
   `tests/fake_monitor.py`; no real `watch_monitor.sh` with the three flags
   exists yet (§14 step 4 is the work that creates it).
-- Whether a finished background Bash task wakes an idle interactive Claude
-  Code session (§11, §16) is **open**. Run the procedure `hands doctor` prints
-  and record the answer; §11's fallback is a long-timeout `hands wait` re-armed
-  by the driver, plus the ntfy notification.
-- ntfy delivery has only been driven through a recording transport in the
-  tests (`tests/test_wake.py`); no request has ever left the machine. `hands
-  notify --test` is the command that proves it, and running it once at an
-  install is the first proof there has ever been.
+- **ntfy delivery has never been proven.** It has only been driven through a
+  recording transport in the tests (`tests/test_wake.py`); no request has ever
+  left the machine. It carries more than it used to: §11 answered the wake-path
+  question by retiring the driver's wait, so ntfy is the only thing that tells
+  the human an event happened when they are not looking. `hands notify --test`
+  is the command that proves the transport, and the notification check `hands
+  doctor` prints is the one that proves an event you did not ask for arrives.
+  Run them once at an install and record the answer.

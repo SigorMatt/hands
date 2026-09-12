@@ -44,4 +44,11 @@ Notes:
 - `hands` must be installed on the laptop first (`uv tool install
   ~/git/hands`, then `docs/INTEGRATION.md`). `hands doctor` at the laptop is
   the check that the driver has something to talk to; it also prints the §11
-  background-wake procedure, which is run from *this* session.
+  notification check, which is run once at the laptop and ends on your phone.
+- The driver waits for nothing and polls for nothing (CLAUDE.md rule 8). ntfy
+  is your doorbell: a `stop`, a `job.held`, an exhausted `max_resumes` or a
+  daemon crash arrives on the phone. Open this session's Code tab and send:
+
+      check
+
+  That is the driver's wake — it reads the inbox and reports (rule 2).
