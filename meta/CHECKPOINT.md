@@ -1,18 +1,16 @@
 # CHECKPOINT
 
 Mission: 5 (meta/BUILDER-5-PROMPT.md) — IN PROGRESS
-Unit in progress: U1 (blocker 1 — the guard's git option policy)
-Intent: in driver/hooks/bash_guard.py, accept only `-C <path>` and
-`--no-pager` before the subcommand and refuse every other leading `-` token
-naming the policy; refuse `--output`, `--output=…`, `--ext-diff`,
-`--textconv`, `-O`, `--open-files-in-pager`, `--config-env` after it, in any
-spelling; add `-fprint`, `-fprint0`, `-fprintf`, `-fls` to FIND_ACTION_FLAGS;
-put REVIEW-4 blocker 1's exact probes in the adversarial table as blocked and
-the four read-only commands the driver relies on as allowed.
-Done means: both guard tables green, `./scripts/check` green three
-consecutive runs, one commit whose body lists the probes blocked only after
-this change, pushed.
-Tip: 068a091 (U0), green — ruff clean, 726 passed, cli smoke, `check: green`.
+Unit in progress: U2 (blocker 2 — the shape of ops.monitor_cmd)
+Intent: `Config` refuses at load an `ops.monitor_cmd` that is absolute,
+contains `..`, or does not name an existing executable regular file under
+`ops.repo`; `monitor_path` returns only a validated path; the test that
+documents the unreachable state (tests/test_config.py:381-390) is rewritten
+to prove it.
+Done means: tests for `.`, `..`, absolute, a directory, a non-executable
+file, a missing file and a valid script; `./scripts/check` green three
+consecutive runs; one commit, pushed.
+Tip: 50c466c (U1), green 3/3 — 778 passed, `check: green`, selftest 77/77.
 Findings: H-001 open (needs a capture from a dotted cwd). H-009 open
 (design-side; no builder unit can close it). H-011 open until U0 appends the
 architect's decision — the kind becomes `pipeline.stop_suppressed`, outside
