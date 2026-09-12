@@ -1,16 +1,18 @@
 # CHECKPOINT
 
 Mission: 5 (meta/BUILDER-5-PROMPT.md) — IN PROGRESS
-Unit in progress: U3 (determinism as a property)
-Intent: one shared path-stripping helper in tests/conftest.py, used by every
-negative assertion in tests/ that compares against text which may embed a
-path (tmp_path, basetemp, the socket path, the ops repo path) — at
-test_daemon.py:509, test_playbook.py:345 and everywhere the audit finds.
-Then `./scripts/check` five times under five different `--basetemp` values,
-two of them containing `--pids` and `a send needs a prompt`.
-Done means: 5/5 green with the values listed in the commit body;
-`./scripts/check` green three consecutive runs; one commit, pushed.
-Tip: ce92ed6 (U2), green 3/3 — 789 passed, `check: green`.
+Unit in progress: U4 (prompt delivery)
+Intent: the client sends the request with `ensure_ascii=False`; the daemon's
+line room is the cap plus a quarter; the same size check applies to
+`--stdin`; a non-regular file (directory, FIFO, device, socket) is refused
+before opening, by `stat`; `docs/INTEGRATION.md` and `hands --help` say exit
+2 means the client did not deliver a completed request (refusal or timeout).
+Done means: tests with a 9 MiB CJK file, a 10 MiB file of quotes, an at-cap
+NUL file, a FIFO, and the same oversized prompt on both routes refusing at
+the same place; `./scripts/check` green three consecutive runs; one commit,
+pushed.
+Tip: e35a2e7 (U3), green 3/3 — 794 passed, `check: green`; 5/5 under five
+crafted `--basetemp` values, two re-run here.
 Findings: H-001 open (needs a capture from a dotted cwd). H-009 open
 (design-side; no builder unit can close it). H-011 open until U0 appends the
 architect's decision — the kind becomes `pipeline.stop_suppressed`, outside

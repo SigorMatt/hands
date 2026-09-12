@@ -45,3 +45,4 @@ One line per unit, appended by the builder: date, unit, sha, verdict.
 2026-09-12  m5 U0 Plan and corrections  068a091  meta only; FINAL-REPORT-4 item 15 corrected (blocker 1); H-011 decided: pipeline.stop_suppressed
 2026-09-12  m5 U1 Guard git option policy  50c466c  green 3/3 (778 tests); blocker 1 closed; ADVERSARIAL 102, SELFTEST 77; find -fprint*/-fls forbidden
 2026-09-12  m5 U2 ops.monitor_cmd shape  ce92ed6  green 3/3 (789 tests); blocker 2 closed; relative, no .., executable regular file under ops.repo
+2026-09-12  m5 U3 Determinism as a property  e35a2e7  green 3/3 + 5/5 crafted basetemps (794 tests); should-fix 1 and 2 closed; strip_paths + two AST audits
