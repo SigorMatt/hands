@@ -1,12 +1,12 @@
-# hands — DESIGN v3.3
+# hands — DESIGN v3.4
 
 Machinery that replaces the human relay between the planning brain and the two
 Claude Code roles (builder, aux) on the Ubuntu laptop, and that keeps a series
 moving without a human while everything goes by plan. Working name: `hands`.
 The method it serves is described in WORKING-MODEL.md (agile-skills) and
 OPERATING-MODEL.md (spanweave); hands changes the topology, not the method.
-v3.3 (2026-09-12) folds in the mission 3 review and the driver's pipeline
-observations; changes are in §20; earlier changes in §19, §18, §17.
+v3.4 (2026-09-12) folds in the mission 4 review; changes are in §21;
+earlier changes in §20, §19, §18, §17.
 
 Status: proposal, 2026-09-10. Items marked DECIDED were settled in discussion.
 
@@ -153,7 +153,7 @@ JSON with `--json` (the driver uses that) or a readable form for you.
 
 | Command | Args | Returns |
 |---|---|---|
-| `send` | `--role builder\|aux --context clear\|keep [--file path=content…] [--gate reason] [--prompt-file path\|--stdin\|prompt]` | job id, state. `--prompt-file` is the normal route for prose: the prompt never touches a command line; the client refuses a missing, unreadable, empty or over-10 MB file |
+| `send` | `--role builder\|aux --context clear\|keep [--file path=content…] [--gate reason] [--prompt-file path\|--stdin\|prompt]` | job id, state. `--prompt-file` is the normal route for prose: the prompt never touches a command line; the client refuses a missing, unreadable, non-regular, empty or over-10 MB file on either route (`--prompt-file` or `--stdin`), and the wire carries UTF-8 unescaped so the daemon's line room (cap plus one quarter) fits any accepted prompt; exit 2 means "the client did not deliver a completed request" (a refusal or a timeout) |
 | `wait` | `<job>\|--for event-kind [--timeout s]` | job record when terminal / the event; used by the driver in the background (§11) |
 | `result` | `<job>` | job record |
 | `jobs` | `[--role r] [--origin o] [--grep pat] [--since d] [-n]` | recent job summaries |
@@ -441,7 +441,8 @@ queued send changes nothing), and a stop is never cleared by a job the
 playbook or the limit manager started. Every stop, from any component, goes
 through one `stop()` that keeps the first reason and files one
 notification; a later stop over an existing one is recorded in the inbox
-only. `last_rule` is cleared when a different playbook file is loaded.
+only, as `pipeline.stop_suppressed` (outside the `stop` wake namespace;
+H-011). `last_rule` is cleared when a different playbook file is loaded.
 
 ---
 
@@ -463,6 +464,14 @@ driver and nothing needs to. `hands doctor` prints the procedure for this check 
 files a real `job.held` without spending a turn, or `hands pause`, which
 files a `stop` event with reason `paused by human`; H-007) and the driver
 session confirming it woke;
+
+Observed 2026-09-12 on Claude Code 2.1.268: the harness kills idle
+background tasks intermittently (a control `sleep 3600` died alongside the
+wait, with 70% of memory free; the "low memory" text it prints does not
+describe the machine). Each kill wakes the session for one recovery turn.
+So the wait is armed only while a job is running or queued; when the
+pipeline is idle or stopped, nothing is armed and the human's next message,
+prompted by the ntfy notification, is the wake.
 if background completion does not wake an idle session on your Claude Code
 version, the fallback is a `hands wait` with a long timeout re-issued by the
 driver, or you opening the Code tab after the ntfy notification.
@@ -732,3 +741,40 @@ one-time checks in step 4.
   not a stop.
 - Reports are snapshots; a report whose claim expires is corrected by an
   appended dated line, never rewritten. (Review 3 blocker 3.)
+
+---
+
+## 21. Changes from v3.3 (mission 4 review)
+
+- Guard git policy (§12): before the subcommand only `-C <path>` and
+  `--no-pager` are allowed; any other leading option (`-c`, `--config-env`,
+  `--exec-path`, `--git-dir`, …) is refused. After the subcommand,
+  `--output`, `--output=…`, `--ext-diff`, `--textconv`, `-O`,
+  `--open-files-in-pager` and `--config-env` are refused. `find` also
+  refuses `-fprint`, `-fprint0`, `-fprintf`, `-fls`. The NOT PROVEN section
+  of a report states the surface honestly; review 4 blocker 1.
+- `ops.monitor_cmd` must be a relative path without `..` naming an
+  executable regular file under `ops.repo` at load; review 4 blocker 2.
+- H-011: the suppressed-stop event is `pipeline.stop_suppressed`.
+- Prompt cap semantics and exit-code meaning made explicit (§4); the same
+  check on both routes; a non-regular file is refused before opening.
+- Negative assertions in tests compare against path-stripped text; the
+  gate's determinism is a property, not a sample (review 4 should-fix 1, 2).
+- `hands pipeline` marks `last_rule` `stale: true` when its playbook sha256
+  is not the loaded one (should-fix 7).
+- Daemon memory: stream-json events are written to the job's log file as
+  they arrive and never accumulated in memory; the daemon's resident size
+  must not grow with a job's transcript (peak 959 MB observed on a 60-turn
+  mission).
+- Operational: a mission's builder and sub-agents add several `claude`
+  processes; idle sessions from other projects should be closed while a
+  mission runs, or the driver's background wait gets killed and re-armed
+  on every memory dip, a turn each time (56 observed).
+- Wake path (§11): the driver arms its wait only while work is in flight;
+  idle sessions arm nothing. Grounded in the 2026-09-12 diagnostic.
+- Role sessions never use background tasks (§2, §21): the harness reaps
+  them, so a builder sub-agent's long background job could die silently
+  mid-mission. A `PreToolUse` hook in every driven repository refuses
+  `run_in_background` and hand-rolled daemonization; foreground Bash with a
+  timeout is the only way to run something long. Hooks run under
+  `--dangerously-skip-permissions`, so this holds for builder and aux.

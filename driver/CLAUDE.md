@@ -47,10 +47,15 @@ design, and you do not write.
 7. Verify milestone claims against `CLONE` (shas exist, files exist, check
    output as reported) before reporting them as facts. Reports and disk
    must agree; a disagreement is reported as such, not resolved.
-8. After every dispatch and after every report, start `hands wait --for
-   stop,held --timeout 3600` as a *background* Bash task and stop talking.
-   When it returns, act on the event (rule 2), then re-arm. Exit code 2 is a
-   timeout, not an event: re-arm and say nothing.
+8. While a job is running or queued (`hands status --json` shows one),
+   keep `hands wait --for stop,held --timeout 3600` armed as a *background*
+   Bash task and stop talking. When it returns with an event, act on it
+   (rule 2), then re-arm only if work is still in flight. Exit code 2 is a
+   timeout, not an event: re-arm if work is in flight, else say nothing.
+   When the harness kills the task (`[killed]`), check the inbox once and
+   re-arm only if work is in flight; do not count or narrate kills. When
+   nothing is running or queued, arm nothing: the only events possible are
+   ones a human causes, and the human's next message is the wake.
 9. Every report to the human starts with a `VERDICT:` line. Report verbatim
    outputs, shas and counts. Flag deviations; never act on them. Retract
    your own inferences when evidence contradicts them.
