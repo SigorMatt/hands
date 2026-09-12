@@ -16,7 +16,7 @@ kit already placed `meta/prototypes/claudewho.py` (ruff excludes it).
       never overrides success; the two over-match lines as negatives; the doc
       sweep reads every tracked non-binary file, `meta/` history excluded by
       path, live `meta/` instructions included (§6, §24)
-- [ ] U2 `monitor.task_killed` (§5, §24; backlog 1)
+- [x] U2 `monitor.task_killed` (§5, §24; backlog 1) 68e1048
 - [ ] U3 Per-job scope and orphan accounting (§5, §24; backlog 2)
 - [ ] U4 The phone channel (§8, §11, §24; backlog 5; H-015)
 - [ ] U5 REVIEW-3 deferrals: should-fix 3, 6, 7 (backlog 3)
