@@ -29,10 +29,10 @@ the DESIGN v3.5 wait retirement (§11, §12 rule 8) the review did not raise.
       containment test becomes a real path-resolution test; the config
       helper scan binds every section; the audits exempt by type; both
       prompt routes refuse invalid UTF-8 at the same place
-- [ ] U6 Driver kit and doctor text — rule 8 in `driver/CLAUDE.md`, the
+- [x] U6 Driver kit and doctor text — rule 8 in `driver/CLAUDE.md`, the
       doctor's wake-path text, `docs/INTEGRATION.md`, `driver/README.md`
       (§11, §12)
-- [ ] U7 Final report — meta/FINAL-REPORT-6.md, then the verdict line
+- [x] U7 Final report — meta/FINAL-REPORT-6.md, then the verdict line
 
 No order deviation is planned: the base is green, so every unit is gated
 normally and runs in the order above. U1 and U2 are independent of each

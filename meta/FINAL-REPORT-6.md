@@ -6,10 +6,14 @@ blockers=2 should-fix=7`.
 
 Base `b950956` (`plan: mission 6 kit (DESIGN v3.5)`) — green here before U0:
 ruff clean, **929 passed**, cli smoke, `check: green`.
-Tip `TIP_SHA` — ruff clean, **TIP_COUNT passed** (TIP_TIMES), cli smoke,
+Tip `3dd3403` — ruff clean, **1112 passed** (63.06s / 61.32s / 62.41s), cli smoke,
 `check: green`, three consecutive runs, verified by the builder at that sha.
-U7 adds this file and nothing else, so the commit carrying it changes no gate
-input.
+U7 changes this file and nothing else, so the commit carrying it changes no
+gate input. A draft of this file was untracked in the working tree when U6's
+second commit ran `git add -A`, so `3dd3403` carries it — placeholders and all
+— and that commit's own report line "No DESIGN.md, no meta/" is wrong about
+`meta/`. Nothing in `3dd3403`'s code or tests is affected; the history is
+pushed and is not rewritten (DESIGN §20), so this line is the correction.
 
 Eight units planned, eight landed. No unit yielded, none blocked, no order
 deviation. Two units took two commits each rather than one — U5 and U6 — and
@@ -155,7 +159,8 @@ commits' tests are red at their parents.
   characters…` with exit 1 — review 5 blocker 1's shape, one field over.
 
 **U6 — `56bef53` `docs: the driver arms no background wait; doctor checks the
-doorbell instead`, then `U6B_SHA` `U6B_SUBJECT`.** Not a REVIEW-5 item: the
+doorbell instead`, then `3dd3403` `docs: the sentences outside the grep that
+still said the driver waits`.** Not a REVIEW-5 item: the
 v3.5 design change (§22's first bullet, "Driver wait retired") the review did
 not raise. §11's decision paragraph is the spec — the driver arms no background
 wait at all; ntfy is the human's doorbell and the human's `check` is the
@@ -175,9 +180,24 @@ driver's.
   `docs/INTEGRATION.md`'s open question about whether a finished background
   Bash task wakes an idle session is replaced by the unknown that survives it,
   ntfy delivery.
-- U6B_BULLET
+- The second commit is the same retired claim in the files the unit's own
+  `grep -rn 'background'` gate could not reach, because they do not contain the
+  word: **19 sentences in 8 files** said the driver arms, blocks on, or is woken
+  by `hands wait --for stop,held`. `README.md`'s "three commands" comment now
+  labels `--for stop,held` a foreground wait at the laptop; `docs/PLAYBOOK.md`
+  keeps H-011's `pipeline`-vs-`stop` fact and drops the blocked driver; and the
+  reason given for `--for`, for exit 2, for the unacked match and for the
+  `pipeline` namespace in `api.py`, `cli.py`, `daemon.py`, `playbook.py` and
+  `spool.py` is now the caller that exists — a human at the laptop, or rule 8's
+  short foreground wait after an approval. Comments, docstrings and prose only:
+  no exit code, no `resolve_kinds` semantics, no playbook semantics, and no
+  assertion changed. One test function was renamed
+  (`test_the_driver_kit_spelling_resolves_to_real_event_kinds` →
+  `test_the_stop_held_spelling_resolves_to_real_event_kinds`), so earlier mission
+  reports citing the old name cite a name that is no longer on disk.
 
-**U7 — this file.** `meta/FINAL-REPORT-6.md` and nothing else.
+**U7 — this file**, plus `meta/plan.md`, `meta/CHECKPOINT.md` and
+`meta/journal.md`. No product code, no tests.
 
 ---
 
@@ -185,7 +205,7 @@ driver's.
 
 Test count at each unit's own commit, as its body states and the builder
 re-ran: base 929 → U1 936 → U2 942 → U3 1047 → U4 1095 → U5 1109 → U6
-TIP_COUNT. `driver/hooks/bash_guard.py --selftest` is **100/100**, up from 77;
+1112. `driver/hooks/bash_guard.py --selftest` is **100/100**, up from 77;
 `.claude/hooks/no_background.py --selftest` is **65/65**, up from 50.
 
 **U1.** `_wire_size` is byte-exact against `json.dumps(..., ensure_ascii=False)`
@@ -243,7 +263,12 @@ give one identical reason, and `--gate` given those bytes refuses as
 appending "Arm the background wait (rule 8)" to the kit. Doctor's output and
 its `wake_check` JSON must not contain `hands wait --for stop,held` or the word
 "background", and must carry ntfy, `check`, §11, the pause, `paused by human`,
-the gated send, `deny <job>` and `resume`. These prove what the documents say,
+the gated send, `deny <job>` and `resume`. The second commit's
+`test_nothing_shipped_says_the_driver_arms_or_blocks_on_a_wait` extends that
+phrase check with a second family ("the driver is the one waiting") and a file
+list covering `README.md`, `docs/PLAYBOOK.md`, the two driver-kit files,
+`docs/INTEGRATION.md`, four source modules and `tests/test_wake.py`; it was red
+first, on **19 offenders across 8 files**. These prove what the documents say,
 and nothing about what a driver session does with them.
 
 ---
@@ -305,7 +330,10 @@ and nothing about what a driver session does with them.
    session has run against the rewritten kit. The notification check
    `hands doctor` now prints has never been run, so **ntfy delivery is still
    unwitnessed**: no request has ever left this machine for a topic.
-   `hands notify --test` has still never been run against a live topic.
+   `hands notify --test` has still never been run against a live topic. Both of
+   U6's regression tests are **source-text assertions**: they pin that the
+   retired sentences do not come back, not that the sentences replacing them
+   are true, and a stale claim spelled a new way is not caught.
 10. **Nothing in this mission ran outside pytest.** The installed build is
     still mission 2's, so missions 3, 4, 5 and 6 are now four missions of code
     that have never run in a real session: no live daemon, no live driver, no
@@ -367,14 +395,14 @@ touched them:
 | REVIEW-3 7 — `Api.notify`'s failure shape has no client test | deferred, mission 7 (`meta/BACKLOG.md` item 3) |
 
 Not a review item, landed this mission: **U6**, DESIGN v3.5 §22's first bullet
-(driver wait retired), `56bef53` and `U6B_SHA`.
+(driver wait retired), `56bef53` and `3dd3403`.
 
 ---
 
 ## 5. Acceptance, checked
 
-- `./scripts/check` green on the pushed tip `TIP_SHA`, three consecutive runs:
-  ruff `All checks passed!`, `TIP_COUNT passed` (TIP_TIMES), cli smoke,
+- `./scripts/check` green on the pushed tip `3dd3403`, three consecutive runs:
+  ruff `All checks passed!`, `1112 passed` (63.06s / 61.32s / 62.41s), cli smoke,
   `check: green`, exit 0 each. Run by the builder, at the tip.
 - The reviewer's blocker-1 reproduction refuses on the client: an at-cap prompt
   plus twelve `--file` values of backslashes exits 2 before a socket is opened,

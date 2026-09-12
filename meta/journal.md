@@ -57,3 +57,6 @@ One line per unit, appended by the builder: date, unit, sha, verdict.
 2026-09-12  m6 U4 Hook bypasses  fba759b  green 3/3 (1095 tests); should-fix 2 closed; selftest 65/65; comment-suffix & and path-qualified nohup blocked, unreadable tool_input exits 2; the inner-shell class documented
 2026-09-12  m6 U5 Five REVIEW-5 edges  44e42ba  green 3/3 (1109 tests); should-fix 3, 4, 5, 6, 7 closed; last_argv bounded, ops containment resolves, the section scan binds, audits exempt by type, both prompt routes refuse non-UTF-8
 2026-09-12  m6 U5 follow-up  3809fcf  green 3/3 (1109 tests); U5's own NOT PROVEN closed: a prompt argument and every string in params refuse non-UTF-8 under the name it was typed as
+2026-09-12  m6 U6 Driver kit and doctor text  56bef53  green 3/3 (1112 tests); DESIGN v3.5 §11, §12 rule 8, §22; kit rule 8 == design rule 8, doctor prints a notification check, not a background wake
+2026-09-12  m6 U6 follow-up  3dd3403  green 3/3 (1112 tests); 19 sentences in 8 files that still said the driver arms or blocks on a wait; comments/docstrings/prose only, no behaviour
+2026-09-12  m6 U7 Final report  7abcb32  green 3/3 (1112 tests); mission 6 finished
