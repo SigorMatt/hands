@@ -1,16 +1,20 @@
 # CHECKPOINT
 
 Mission: 6 (meta/BUILDER-6-PROMPT.md) — IN PROGRESS
-Unit in progress: U1 (blocker 1 — the whole request on the wire)
-Intent: the client builds the request, measures its wire bytes, and refuses
-with exit 2 before connecting when the total exceeds the daemon's line room;
-both prompt routes; the two false sentences rewritten.
-Done means: the reviewer's reproduction (at-cap prompt plus twelve `--file`
-values of backslashes) refuses on the client with exit 2 and an untouched
-daemon log, a request just under the limit succeeds, `./scripts/check` green
-three consecutive runs, one commit pushed.
-Tip: bb9d8fb (`meta: mission 6 plan; review 5's three corrections and the
-H-012 decision`), U0 done; green three consecutive runs (929 passed).
+Unit in progress: U2 (blocker 2 — tail semantics and log paging)
+Intent: `hands tail -n` requires n >= 1 (0 and negatives refused with exit
+2); the answer carries `truncated: true` whenever the 1000-entry cap or the
+read window cut it, and the human output says so in one line; `hands log
+<job>` reads the log file in pages of bounded size and the client prints
+them in order.
+Done means: tests for `-n 0`, for a 2000-entry transcript (truncated), for a
+trailing entry wider than the window (truncated, not `[]`), and for `log`
+over a 64 MB file with bounded peak memory measured by `tracemalloc`;
+`./scripts/check` green three consecutive runs; one commit pushed.
+Tip: 81e4cd2 (`client: measure the whole request before connecting`), U1
+done — 936 passed; the reviewer's reproduction refuses with exit 2 before
+connecting (re-driven by the builder through the real CLI: "the request is
+13630014 bytes on the wire, over the daemon's 13107200 byte line room").
 Findings: H-001 open (needs a capture from a dotted cwd). H-009 open
 (design-side; no builder unit can close it). H-012 decided by DESIGN v3.5 §4
 and §22: the client measures the whole request on the wire before connecting;
