@@ -403,7 +403,11 @@ Not a review item, landed this mission: **U6**, DESIGN v3.5 §22's first bullet
 
 - `./scripts/check` green on the pushed tip `3dd3403`, three consecutive runs:
   ruff `All checks passed!`, `1112 passed` (63.06s / 61.32s / 62.41s), cli smoke,
-  `check: green`, exit 0 each. Run by the builder, at the tip.
+  `check: green`, exit 0 each. Run by the builder, at the tip. `3dd3403` is the
+  last commit of this mission that changes a gate input; every commit after it
+  is meta only (`0f046ea` this report, `c15e79c` a journal sha, and the one
+  carrying this line), and the gate was run three consecutive times, green at
+  1112, before each of them as well.
 - The reviewer's blocker-1 reproduction refuses on the client: an at-cap prompt
   plus twelve `--file` values of backslashes exits 2 before a socket is opened,
   on all three prompt routes, and leaves the daemon's log untouched — tested at
