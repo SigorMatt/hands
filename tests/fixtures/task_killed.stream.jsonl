@@ -1,0 +1,41 @@
+# The harness's task-killed notice, as `claude -p --output-format stream-json
+# --verbose` writes it (mission 8 U2, DESIGN §5, §24; backlog item 1).
+#
+# OBSERVED. Every non-comment line below is copied from a real hands stream log
+# (~/.hands/jobs/<job>.stream.jsonl, the runner's verbatim capture of stdout):
+#
+#   A. job 0mtygi953-ym63 (builder), claude 2.1.269 (its init event), lines
+#      1406, 1408, 1413, 1414: a Bash command (task bar46gi30) owned by a
+#      sub-agent, killed at the same millisecond as that sub-agent.
+#   B. job 0mtyvy78g-yq73 (builder), claude 2.1.270, lines 608, 609, 621, 635,
+#      636: a Bash command (task bs3zkkxlo) the harness moved to the background
+#      after the Bash tool's timeout, then stopped with the TaskStop tool.
+#
+# The `system` lines are byte for byte. The `assistant` lines are reduced: the
+# `tool_use` content item is the recorded one (re-serialised by json.dumps),
+# while the rest of the recorded message (model, usage, ids) is left out; the
+# runner reads nothing else from an assistant event.
+#
+# The notice is two events per killed task: `system`/`task_updated` whose
+# `patch.status` is "killed", then `system`/`task_notification` whose `status`
+# is "stopped". The binary (2.1.270, `strings`) maps one to the other when a
+# local shell task settles: `Hi(e,r==="killed"?"stopped":r,{toolUseId:m,...})`,
+# and the SDK schema for task_notification's status is
+# `V(["completed","failed","stopped"])` - there is no "killed" on that event.
+# The command line is in neither: it is the `input.command` of the `Bash`
+# tool_use whose id is the task's `tool_use_id` (on task_started and on
+# task_notification).
+#
+# NOT OBSERVED: a kill the harness makes on its own schedule with nothing else
+# involved. A and B were killed with a parent agent and by TaskStop; the stream
+# carries no field saying who killed a task, so the shape is the same for all
+# three and hands cannot tell them apart.
+{"type": "assistant", "message": {"role": "assistant", "content": [{"type": "tool_use", "id": "toolu_01GbuPKhvSEfHEhe9X6dRVde", "name": "Bash", "input": {"command": "for i in 1 2 3; do timeout 900 ./scripts/check > /tmp/g$i.log 2>&1; echo \"run $i exit=$?\"; grep -E 'passed|green|All checks' /tmp/g$i.log | tr '\\n' ' '; echo; done", "description": "Re-run the gate three times after the doc edit"}, "caller": {"type": "direct"}}]}, "parent_tool_use_id": "toolu_011TuqJbjcGyixueSo4PzJsU", "session_id": "2fb3baa0-80cf-44cf-8ca1-6f25d8f1c941"}
+{"type":"system","subtype":"task_started","task_id":"bar46gi30","owned_by_subagent":true,"tool_use_id":"toolu_01GbuPKhvSEfHEhe9X6dRVde","description":"Re-run the gate three times after the doc edit","is_backgrounded":false,"task_type":"local_bash","uuid":"799ec2ae-265d-4614-b430-d06ccf008dbe","session_id":"2fb3baa0-80cf-44cf-8ca1-6f25d8f1c941"}
+{"type":"system","subtype":"task_updated","task_id":"bar46gi30","patch":{"status":"killed","end_time":1789228081996},"uuid":"bfefee93-aed2-4218-a8e1-fefa57fd12f4","session_id":"2fb3baa0-80cf-44cf-8ca1-6f25d8f1c941"}
+{"type":"system","subtype":"task_notification","task_id":"bar46gi30","tool_use_id":"toolu_01GbuPKhvSEfHEhe9X6dRVde","status":"stopped","output_file":"/tmp/claude-1000/-home-msi-git-hands/2fb3baa0-80cf-44cf-8ca1-6f25d8f1c941/tasks/bar46gi30.output","summary":"Re-run the gate three times after the doc edit","uuid":"5deb079b-e0f9-4fba-bd31-f6a9784e619c","session_id":"2fb3baa0-80cf-44cf-8ca1-6f25d8f1c941"}
+{"type": "assistant", "message": {"role": "assistant", "content": [{"type": "tool_use", "id": "toolu_01RAktg8tXyvQM3hULZCE51f", "name": "Bash", "input": {"command": "sed -n 379590,379615p /tmp/claude-strings.txt | cut -c1-600; echo ----; /usr/bin/grep -n -o '.\\{0,300\\}was killed.\\{0,200\\}\\|.\\{0,200\\}killed\\\\\\?\".\\{0,10\\}' /tmp/claude-strings.txt | /usr/bin/grep -i 'task\\|shell\\|command' | head -15 | cut -c1-600", "description": "Read binary notification template and killed summaries"}, "caller": {"type": "direct"}}]}, "parent_tool_use_id": "toolu_012TKNbQ8gfrxyWTGLwSiXCj", "session_id": "52a69cde-1163-4530-886e-c1e8252d00a7"}
+{"type":"system","subtype":"task_started","task_id":"bs3zkkxlo","owned_by_subagent":true,"tool_use_id":"toolu_01RAktg8tXyvQM3hULZCE51f","description":"Read binary notification template and killed summaries","is_backgrounded":false,"task_type":"local_bash","uuid":"d0c8e97d-bbcb-43cd-a6dd-5e4685da1e4c","session_id":"52a69cde-1163-4530-886e-c1e8252d00a7"}
+{"type":"system","subtype":"task_updated","task_id":"bs3zkkxlo","patch":{"is_backgrounded":true},"uuid":"751775e7-f4bd-47cd-ab07-b71b62e8ee63","session_id":"52a69cde-1163-4530-886e-c1e8252d00a7"}
+{"type":"system","subtype":"task_updated","task_id":"bs3zkkxlo","patch":{"status":"killed","end_time":1789250168891},"uuid":"5b65a0f9-1f20-4b7f-8037-b65e7c3ece6f","session_id":"52a69cde-1163-4530-886e-c1e8252d00a7"}
+{"type":"system","subtype":"task_notification","task_id":"bs3zkkxlo","tool_use_id":"toolu_01RAktg8tXyvQM3hULZCE51f","status":"stopped","output_file":"/tmp/claude-1000/-home-msi-git-hands/52a69cde-1163-4530-886e-c1e8252d00a7/tasks/bs3zkkxlo.output","summary":"Read binary notification template and killed summaries","uuid":"5ad39add-1d59-4378-a9c8-cc512071da27","session_id":"52a69cde-1163-4530-886e-c1e8252d00a7"}

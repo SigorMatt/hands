@@ -44,11 +44,28 @@ Unknown keys are refused, at the top level, in `[limits]` and in a `[[rule]]`.
 ## Events (`on`)
 
 `builder.done`, `builder.failed`, `builder.limited`, `builder.orphaned`,
-`aux.done`, `aux.failed`, `monitor.stall`, `monitor.tripwire`, `job.held`,
-`job.denied`.
+`aux.done`, `aux.failed`, `monitor.stall`, `monitor.tripwire`,
+`monitor.task_killed`, `job.held`, `job.denied`.
 
 The list is closed: anything else is not a playbook event and fires nothing. A
 job you cancelled yourself (`killed`) is not an event — you already know.
+
+`monitor.task_killed` (DESIGN §24) means a task inside a running role job — a
+Bash command or a sub-agent — was killed before it finished. hands reads every
+role job's stream-json, builder and aux, for the notice claude writes when that
+happens and files one event per task, with its `task_id` and its command line
+(`command`, taken from the `Bash` call that started it; empty when that call is
+not in the stream). The stream does not say who killed the task: the harness
+reaping it, the `TaskStop` tool and a killed parent agent look the same. Work
+the job was waiting on did not finish, so the rule is `stop`:
+
+    [[rule]]
+    on = "monitor.task_killed"
+    then = "stop"
+
+An event with no matching rule stops anyway; the rule says it on purpose.
+DESIGN §24 puts it in the example playbook, but the copy of §10's example at
+the end of this page is §10's own text byte for byte, which does not carry it.
 
 ## Actions (`then`)
 

@@ -35,6 +35,7 @@ import logging
 import os
 import re
 import signal
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, TextIO
@@ -305,6 +306,10 @@ class Runner:
         #: The last `MAX_LAST_ARGV` of them: this is the one structure here that
         #: outlives its job, so it is the one that needs a cap (§21).
         self.last_argv: dict[str, list[str]] = {}
+        #: Handed every parsed stream-json event of every run, with its job, as it
+        #: is read. The daemon passes the monitor's `observe` (§5, §24: the
+        #: task-killed notice). A hook that raises is logged; the run goes on.
+        self.on_stream_event: Callable[[Job, dict[str, Any]], None] | None = None
 
     def _remember_argv(self, job_id: str, argv: list[str]) -> None:
         """Keep this argv and drop the oldest beyond `MAX_LAST_ARGV` (§21).
@@ -536,6 +541,16 @@ class Runner:
             if not isinstance(event, dict):
                 continue
             self._on_event(event, job, role, parsed)
+            self._observe(job, event)
+
+    def _observe(self, job: Job, event: dict[str, Any]) -> None:
+        hook = self.on_stream_event
+        if hook is None:
+            return
+        try:
+            hook(job, event)
+        except Exception:  # the observer only reports; it never breaks a run
+            log.exception("job %s: the stream observer failed", job.id)
 
     def _on_event(
         self, event: dict[str, Any], job: Job, role: RoleConfig, parsed: _Parsed

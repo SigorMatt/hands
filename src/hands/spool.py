@@ -106,6 +106,7 @@ EVENT_KINDS = frozenset(
         "gate.requested",  # a human decision is waiting on a cancel (§8)
         "monitor.stall",
         "monitor.tripwire",
+        "monitor.task_killed",  # a task inside a role job was killed (§5, §24)
         "monitor.event",
         "playbook.rule",
         "stop",

@@ -385,6 +385,7 @@ def test_events_since_filters_by_id(tmp_home: Path) -> None:
         "job.held",
         "monitor.stall",
         "monitor.tripwire",
+        "monitor.task_killed",
         "monitor.event",
         "playbook.rule",
         "stop",
@@ -397,6 +398,14 @@ def test_events_since_filters_by_id(tmp_home: Path) -> None:
 )
 def test_every_design_event_kind_is_accepted(tmp_home: Path, kind: str) -> None:
     assert Spool().append_event(kind, {}).kind == kind
+
+
+def test_wait_for_task_killed_resolves_to_the_monitor_kind() -> None:
+    """§24's `monitor.task_killed` is reachable by `hands wait --for` like its siblings."""
+    from hands.spool import resolve_kinds
+
+    assert resolve_kinds("task_killed") == frozenset({"monitor.task_killed"})
+    assert {"monitor.task_killed"} <= resolve_kinds("monitor")
 
 
 @pytest.mark.parametrize("kind", ["", "Job.Done", "weather.report", "job..done", "job done"])

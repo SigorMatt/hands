@@ -237,6 +237,7 @@ def test_the_events_and_actions_are_exactly_section_10s() -> None:
         "aux.failed",
         "monitor.stall",
         "monitor.tripwire",
+        "monitor.task_killed",  # §24: mission 8's detector, mapped to `stop`
         "job.held",
         "job.denied",
     )
@@ -579,6 +580,22 @@ def test_a_monitor_tripwire_stops_the_pipeline(tmp_home: Path, workdir: Path) ->
     run(engine.on_event("monitor.tripwire", payload={"job": job.id, "block": "TRIPWIRE main"}))
     assert engine.pipeline()["paused"] is True
     assert "monitor.tripwire" in strip_paths(engine.pipeline()["stop_reason"])
+
+
+def test_a_task_killed_rule_loads_and_stops_the_pipeline(tmp_home: Path, workdir: Path) -> None:
+    """§24: the example playbook maps `monitor.task_killed` to `stop`, so the
+    loader accepts the name and the event reaches the rule."""
+    body = EXAMPLE + '\n[[rule]]\non = "monitor.task_killed"\nthen = "stop"\n'
+    book = parse_playbook(body, path=workdir / "PLAYBOOK.toml")
+    assert (book.rules[-1].on, book.rules[-1].then) == ("monitor.task_killed", "stop")
+    engine, recorder = engine_for(tmp_home, workdir, body=body)
+    job = engine.spool.create_job(role="builder", context="clear", prompt="p", origin="cli")
+    run(engine.on_job_start(job))
+    payload = {"job": job.id, "task_id": "bg1", "command": "sleep 600", "block": "TASK_KILLED"}
+    run(engine.on_event("monitor.task_killed", payload=payload))
+    assert engine.pipeline()["paused"] is True
+    assert "monitor.task_killed" in strip_paths(engine.pipeline()["stop_reason"])
+    assert recorder.sent == []
 
 
 def test_a_held_job_stops_the_pipeline(tmp_home: Path, workdir: Path) -> None:

@@ -11,6 +11,11 @@
   no liveness for `monitor.stall_minutes` is one `monitor.stall` event, which
   re-fires only after another interval.
 
+Beside whichever of those decides, every role job's stream-json (builder and
+aux alike) is read for the harness's task-killed notice (§24): the runner hands
+each parsed event to `MonitorSupervisor.observe`, and a killed task is one
+`monitor.task_killed` event carrying the task's command line, once per task.
+
 Invariant 4 of §1 is the whole of this module's authority: **it reports, it
 never intervenes**. Nothing here signals the job, cancels it, or sends a
 prompt; a monitor that raises is logged and dropped, and the job runs on.
@@ -27,6 +32,7 @@ import os
 import re
 import signal
 import time
+from collections import OrderedDict
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -38,9 +44,12 @@ from hands.spool import Job, Spool
 __all__ = [
     "DEFAULT_POLL_S",
     "OPS_FLAGS",
+    "TASK_MEMORY",
     "WATCHED_ROLES",
     "BlockBuffer",
+    "KilledTask",
     "MonitorSupervisor",
+    "TaskKillWatch",
     "block_kind",
     "cpu_ticks",
     "descendants_of",
@@ -49,7 +58,8 @@ __all__ = [
 
 log = logging.getLogger("hands.monitor")
 
-#: §5 says "hands starts those with every builder job"; aux is not watched.
+#: §5 says "hands starts those with every builder job"; aux is not watched for
+#: stalls. The task-killed notice (§24) is read from every role's stream.
 WATCHED_ROLES = frozenset({"builder"})
 
 #: The whole of what §5 hands the ops script, in the order `_external` passes it.
@@ -106,6 +116,120 @@ class BlockBuffer:
         lines, self._lines = self._lines, []
         block = "\n".join(lines)
         return [block] if block.strip() else []
+
+
+# ------------------------------------------------- the task-killed notice
+
+
+#: How many Bash commands, started tasks and killed task ids one job's
+#: `TaskKillWatch` remembers. §21 forbids the daemon growing with a transcript,
+#: so past this the oldest entry is forgotten: a kill whose Bash call is that far
+#: back names no command, and a notice repeated after that many later kills
+#: would be filed again.
+TASK_MEMORY = 1024
+
+
+@dataclass(frozen=True)
+class KilledTask:
+    """One task the stream says was killed, with what is known about it."""
+
+    task_id: str
+    task_type: str | None  # `local_bash`, `local_agent`, … from `task_started`
+    tool_use_id: str | None
+    command: str | None  # the `Bash` tool_use's `input.command`, when it was seen
+    description: str | None  # `task_started`'s description, else the notice's summary
+
+
+def _text(value: Any) -> str | None:
+    return value if isinstance(value, str) and value else None
+
+
+def _remember(store: OrderedDict[str, Any], key: str, value: Any) -> None:
+    store[key] = value
+    store.move_to_end(key)
+    while len(store) > TASK_MEMORY:
+        store.popitem(last=False)
+
+
+class TaskKillWatch:
+    """The harness's task-killed notice in one job's stream-json (§5, §24).
+
+    The shape is the recorded one quoted in `tests/fixtures/task_killed.stream.jsonl`
+    (claude 2.1.269 and 2.1.270): a killed task is `system`/`task_updated` with
+    `patch.status == "killed"`, then `system`/`task_notification` with
+    `status == "stopped"` (the binary maps killed to stopped on that event).
+    Either one is the notice, and `feed` returns a `KilledTask` for the first of
+    them and None for everything else, so a task is reported once however often
+    the notice repeats. The command line is not in the notice: it is recovered
+    from the `Bash` tool_use whose id is the task's `tool_use_id`.
+    """
+
+    def __init__(self) -> None:
+        self._commands: OrderedDict[str, str] = OrderedDict()  # tool_use id → command
+        self._tasks: OrderedDict[str, dict[str, str | None]] = OrderedDict()
+        self._killed: OrderedDict[str, None] = OrderedDict()
+
+    def feed(self, event: dict[str, Any]) -> KilledTask | None:
+        kind = event.get("type")
+        if kind == "assistant":
+            self._note_commands(event)
+            return None
+        if kind != "system":
+            return None
+        task_id = _text(event.get("task_id"))
+        if task_id is None:
+            return None
+        subtype = event.get("subtype")
+        if subtype == "task_started":
+            _remember(
+                self._tasks,
+                task_id,
+                {
+                    "tool_use_id": _text(event.get("tool_use_id")),
+                    "task_type": _text(event.get("task_type")),
+                    "description": _text(event.get("description")),
+                },
+            )
+            return None
+        if subtype == "task_updated":
+            patch = event.get("patch")
+            if isinstance(patch, dict) and patch.get("status") == "killed":
+                return self._kill(task_id, None, None)
+            return None
+        if subtype == "task_notification" and event.get("status") == "stopped":
+            return self._kill(task_id, _text(event.get("tool_use_id")), _text(event.get("summary")))
+        return None
+
+    def _note_commands(self, event: dict[str, Any]) -> None:
+        message = event.get("message")
+        content = message.get("content") if isinstance(message, dict) else None
+        if not isinstance(content, list):
+            return
+        for item in content:
+            if not isinstance(item, dict) or item.get("type") != "tool_use":
+                continue
+            if item.get("name") != "Bash" or not isinstance(item.get("input"), dict):
+                continue
+            tool_use_id = _text(item.get("id"))
+            command = item["input"].get("command")
+            if tool_use_id is not None and isinstance(command, str):
+                _remember(self._commands, tool_use_id, command)
+
+    def _kill(
+        self, task_id: str, tool_use_id: str | None, summary: str | None
+    ) -> KilledTask | None:
+        if task_id in self._killed:
+            return None
+        _remember(self._killed, task_id, None)
+        started = self._tasks.get(task_id, {})
+        tool_use_id = started.get("tool_use_id") or tool_use_id
+        return KilledTask(
+            task_id=task_id,
+            task_type=started.get("task_type"),
+            tool_use_id=tool_use_id,
+            command=self._commands.get(tool_use_id) if tool_use_id else None,
+            description=started.get("description") or summary,
+        )
 
 
 # ----------------------------------------------------------- process facts
@@ -306,6 +430,9 @@ class MonitorSupervisor:
         self.clock = clock
         self.stop_grace_s = stop_grace_s
         self._watches: dict[str, _Watch] = {}
+        #: job id → the task-killed reader of its stream (§24), for every role.
+        #: Created by the first event `observe` sees and dropped by `stop`.
+        self._kill_watches: dict[str, TaskKillWatch] = {}
 
     @property
     def source(self) -> str:
@@ -342,6 +469,7 @@ class MonitorSupervisor:
 
     async def stop(self, job_id: str) -> None:
         """End the watch for a job and wait for it to have let go of its process."""
+        self._kill_watches.pop(job_id, None)
         watch = self._watches.pop(job_id, None)
         if watch is None:
             return
@@ -388,6 +516,45 @@ class MonitorSupervisor:
         with contextlib.suppress(TimeoutError, asyncio.CancelledError):
             await ready  # a job that never booted is simply not watched
         return not stop.is_set()
+
+    # ------------------------------------------------ the stream (§5, §24)
+
+    def observe(self, job: Job, event: dict[str, Any]) -> None:
+        """One parsed stream-json event of a running job, of any role (§24).
+
+        The runner calls this for every event as it reads it. A killed task is
+        filed as `monitor.task_killed`, once per task per job; nothing else is
+        done with the event, and a failure here is logged, never raised into the
+        run (§1 invariant 4).
+        """
+        try:
+            watch = self._kill_watches.get(job.id)
+            if watch is None:
+                watch = self._kill_watches[job.id] = TaskKillWatch()
+            kill = watch.feed(event)
+            if kill is not None:
+                self._task_killed(job, kill)
+        except Exception:
+            log.exception("job %s: the task-killed reader failed; the job is untouched", job.id)
+
+    def _task_killed(self, job: Job, kill: KilledTask) -> None:
+        block = (
+            f"TASK_KILLED {job.id} ({job.role}) task {kill.task_id} "
+            f"({kill.task_type or 'type unknown'}) was killed\n"
+            f"command: {kill.command if kill.command is not None else 'unknown'}\n"
+            f"description: {kill.description or 'none'}"
+        )
+        self._file(
+            job,
+            block,
+            source="stream",
+            kind="task_killed",
+            task_id=kill.task_id,
+            task_type=kill.task_type,
+            tool_use_id=kill.tool_use_id,
+            command=kill.command,
+            description=kill.description,
+        )
 
     # ----------------------------------------------------------- the inbox
 

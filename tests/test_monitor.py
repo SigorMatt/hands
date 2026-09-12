@@ -21,7 +21,14 @@ import pytest
 from conftest import strip_paths
 from fake_monitor import FAREWELL, FIRST, SECOND, THIRD
 from hands.config import Config, parse_config
-from hands.monitor import BlockBuffer, MonitorSupervisor, block_kind, descendants_of, pid_list
+from hands.monitor import (
+    BlockBuffer,
+    MonitorSupervisor,
+    TaskKillWatch,
+    block_kind,
+    descendants_of,
+    pid_list,
+)
 from hands.spool import Event, Job, Spool
 from harness import BLOCK, config_body, drive, ok, write_project
 
@@ -408,3 +415,142 @@ def _alive(pid: int) -> bool:
     except PermissionError:  # pragma: no cover - not ours, but it exists
         return True
     return True
+
+
+# ------------------------------------------- the task-killed notice (§5, §24)
+
+TASK_KILLED_FIXTURE = Path(__file__).parent / "fixtures" / "task_killed.stream.jsonl"
+
+
+def recorded_events() -> list[dict[str, Any]]:
+    """The fixture's events: its `#` header quotes where each line was recorded."""
+    text = TASK_KILLED_FIXTURE.read_text(encoding="utf-8")
+    return [json.loads(line) for line in text.splitlines() if line and not line.startswith("#")]
+
+
+def kills_of(events: list[dict[str, Any]]) -> list[Any]:
+    watch = TaskKillWatch()
+    return [kill for event in events for kill in [watch.feed(event)] if kill is not None]
+
+
+def test_the_recorded_notice_is_one_kill_per_task_with_its_command_line() -> None:
+    kills = kills_of(recorded_events())
+    assert [(kill.task_id, kill.task_type) for kill in kills] == [
+        ("bar46gi30", "local_bash"),
+        ("bs3zkkxlo", "local_bash"),
+    ]
+    assert kills[0].command.startswith("for i in 1 2 3; do timeout 900 ./scripts/check")
+    assert kills[1].command.startswith("sed -n 379590,379615p /tmp/claude-strings.txt")
+    assert kills[0].tool_use_id == "toolu_01GbuPKhvSEfHEhe9X6dRVde"
+    assert kills[0].description == "Re-run the gate three times after the doc edit"
+
+
+def test_either_half_of_the_notice_is_the_notice() -> None:
+    events = recorded_events()
+    without_update = [e for e in events if e.get("subtype") != "task_updated"]
+    without_notification = [e for e in events if e.get("subtype") != "task_notification"]
+    for stream in (without_update, without_notification):
+        kills = kills_of(stream)
+        assert [kill.task_id for kill in kills] == ["bar46gi30", "bs3zkkxlo"]
+        assert all(kill.command for kill in kills)
+
+
+def test_a_completed_or_backgrounded_task_is_not_a_kill() -> None:
+    completed = []
+    for event in recorded_events():
+        event = json.loads(json.dumps(event))
+        if event.get("subtype") == "task_updated" and "status" in event["patch"]:
+            event["patch"]["status"] = "completed"
+        if event.get("subtype") == "task_notification":
+            event["status"] = "completed"
+        completed.append(event)
+    assert kills_of(completed) == []
+
+
+def test_a_repeated_notice_is_one_kill_per_task() -> None:
+    assert [kill.task_id for kill in kills_of(recorded_events() * 2)] == ["bar46gi30", "bs3zkkxlo"]
+
+
+def test_a_kill_with_no_recorded_tool_use_names_no_command() -> None:
+    events = [e for e in recorded_events() if e.get("type") != "assistant"]
+    kills = kills_of(events)
+    assert [kill.command for kill in kills] == [None, None]
+    assert kills[0].description == "Re-run the gate three times after the doc edit"
+
+
+def test_the_supervisor_files_the_kill_and_hands_it_on(
+    tmp_home: Path, workdir: Path, spool: Spool
+) -> None:
+    seen: list[tuple[str, dict[str, Any]]] = []
+    monitors = MonitorSupervisor(
+        make_config(tmp_home, workdir), spool, on_event=lambda kind, p: seen.append((kind, p))
+    )
+    job = running(spool, role="aux")
+    for event in recorded_events() * 2:
+        monitors.observe(job, event)
+    events = monitor_events(spool)
+    assert [event.kind for event in events] == ["monitor.task_killed"] * 2
+    assert [kind for kind, _ in seen] == ["monitor.task_killed"] * 2
+    first = events[0].payload
+    assert first["job"] == job.id and first["role"] == "aux" and first["source"] == "stream"
+    assert first["task_id"] == "bar46gi30"
+    assert first["command"].startswith("for i in 1 2 3;")
+    assert first["command"] in first["block"]
+    run(lambda: monitors.stop(job.id))
+
+
+KILL_A = "FAKE:task-killed bg1 sleep 600"
+KILL_B = "FAKE:task-killed bg2 tail -f /tmp/app.log"
+
+
+@pytest.mark.parametrize(
+    ("role", "lines", "expected"),
+    [
+        ("builder", [], []),
+        ("builder", [KILL_A], [("bg1", "sleep 600")]),
+        ("builder", [KILL_A, KILL_A], [("bg1", "sleep 600")]),
+        ("builder", [KILL_A, KILL_B], [("bg1", "sleep 600"), ("bg2", "tail -f /tmp/app.log")]),
+        ("aux", [KILL_A], [("bg1", "sleep 600")]),
+    ],
+    ids=["normal-run", "one-kill", "repeated-notice", "two-tasks", "aux-job"],
+)
+def test_a_role_job_through_the_daemon_files_one_task_killed_per_task(
+    tmp_home: Path, tmp_path: Path, role: str, lines: list[str], expected: list[tuple[str, str]]
+) -> None:
+    workdir = tmp_path / "work"
+    workdir.mkdir()
+    write_project(tmp_home, config_body(tmp_home, workdir))
+
+    async def body(daemon: Any) -> None:
+        job = await ok("send", "--role", role, "--context", "clear", "\n".join(["go", *lines]))
+        assert (await ok("wait", job["id"]))["state"] == "done"
+        events = [e for e in daemon.spool.events() if e.kind.startswith("monitor.")]
+        assert [e.kind for e in events] == ["monitor.task_killed"] * len(expected)
+        assert [(e.payload["task_id"], e.payload["command"]) for e in events] == expected
+        for event in events:
+            assert event.payload["job"] == job["id"]
+            assert event.payload["role"] == role
+            assert event.payload["command"] in event.payload["block"]
+
+    drive(body)
+
+
+def test_a_queued_reply_can_carry_the_notice(
+    tmp_home: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    replies = tmp_path / "replies.json"
+    replies.write_text(json.dumps([{"result": "ok", "task_killed": [["bg9", "npm run dev"]]}]))
+    monkeypatch.setenv("HANDS_FAKE_CLAUDE_REPLIES", str(replies))
+    workdir = tmp_path / "work"
+    workdir.mkdir()
+    write_project(tmp_home, config_body(tmp_home, workdir))
+
+    async def body(daemon: Any) -> None:
+        job = await ok("send", "--role", "builder", "--context", "clear", "go")
+        assert (await ok("wait", job["id"]))["state"] == "done"
+        events = [e for e in daemon.spool.events() if e.kind == "monitor.task_killed"]
+        assert [(e.payload["task_id"], e.payload["command"]) for e in events] == [
+            ("bg9", "npm run dev")
+        ]
+
+    drive(body)

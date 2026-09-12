@@ -113,6 +113,9 @@ class Daemon:
         self.monitors = MonitorSupervisor(
             config, self.spool, ready=self.runner.wait_for_session, on_event=self._monitor_event
         )
+        #: §24: every role job's stream-json reaches the monitor as it is read, so a
+        #: task the harness killed is filed as `monitor.task_killed`.
+        self.runner.on_stream_event = self.monitors.observe
         #: §11's ntfy publisher. It is handed the playbook's `[limits] quiet_hours`
         #: as a callable, because the playbook is re-read while the daemon runs.
         self.notifier = Notifier(config, self.spool, quiet_hours=self._quiet_hours)
@@ -447,7 +450,8 @@ class Daemon:
         await self.playbook.stop(reason, payload)
 
     def _monitor_event(self, kind: str, payload: dict[str, Any]) -> None:
-        """§5's watch speaks to §10: `monitor.stall` and `monitor.tripwire` are events."""
+        """§5's watch speaks to §10: `monitor.stall`, `monitor.tripwire` and §24's
+        `monitor.task_killed` are events."""
         self.playbook.dispatch(kind, payload=payload)
 
     # ------------------------------------------------------------ job waiting

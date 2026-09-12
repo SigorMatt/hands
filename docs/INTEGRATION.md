@@ -223,6 +223,11 @@ If `[ops]` is left out, hands uses its own built-in stall detector instead
 (transcript mtime, subagent mtime, CPU ticks, commits, `.git/index` mtime,
 stash) — the tripwire rules of §5 are the ops script's, though.
 
+Whichever of the two decides, hands also reads every role job's stream-json
+(builder and aux) for claude's task-killed notice and files
+`monitor.task_killed` with the task's command line, once per task (§24). It
+needs no script and no flag.
+
 `hands status` names whichever monitor is deciding: with `[ops]` set it prints
 the script's path and the three flags hands fills for it; otherwise it prints
 the built-in rule (`stall = no progress and no liveness for <stall_minutes>m`),

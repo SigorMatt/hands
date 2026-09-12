@@ -16,6 +16,9 @@ backslash, so a multi-line result fits on one line of a test:
     FAKE:stderr <text>     write this to stderr before anything else
     FAKE:junk <text>       emit this as a raw, non-JSON stdout line
     FAKE:events <n>        emit n small `assistant` events after the init event
+    FAKE:task-killed <task-id> <command>
+                           emit a `Bash` tool_use of <command> and the harness's
+                           task-killed notice for it (repeatable; see below)
     FAKE:sleep <seconds>   sleep this long after the init event
     FAKE:block             block until SIGINT (exit 130) or SIGTERM (exit 143)
     FAKE:ignore-int        with FAKE:block, ignore SIGINT so only SIGTERM ends it
@@ -43,7 +46,9 @@ exhausted queue falls back to the default result. An entry may also be an object
 `{"result": <text>, "stderr": <text>}`: its `stderr` is written to stderr when the
 entry is taken, which is how a playbook-issued job ends the way the harness ends
 one it terminates (H-014); `"no_turns": true` in it leaves `num_turns` out of the
-result event, as `FAKE:no-turns` does. A reply is taken only on the path that emits a
+result event, as `FAKE:no-turns` does; `"task_killed": [[<task-id>, <command>], …]`
+in it emits the task-killed notice for each pair before the result, as
+`FAKE:task-killed` does. A reply is taken only on the path that emits a
 successful result, so a prompt with `FAKE:error`, `FAKE:no-result` or
 `FAKE:rate-limit` leaves the queue where it was.
 
@@ -53,6 +58,12 @@ init event is `{"type":"system","subtype":"init",…}`, the retry event is
 is an enum that includes `rate_limit`, and the result event is
 `{"type":"result","subtype":"success",…}` with `result`, `num_turns`,
 `duration_ms`, `total_cost_usd` and `permission_denials`.
+
+The task-killed notice is the sequence recorded in real stream logs and quoted
+in `tests/fixtures/task_killed.stream.jsonl` (claude 2.1.269 and 2.1.270): an
+`assistant` event carrying the `Bash` tool_use, `system`/`task_started`,
+`system`/`task_updated` with `patch.status` "killed", and
+`system`/`task_notification` with `status` "stopped".
 """
 
 from __future__ import annotations
@@ -121,6 +132,65 @@ def emit_many(count: int, session_id: str) -> None:
     for n in range(count):
         write(prefix + str(n) + "}\n")
     sys.stdout.flush()
+
+
+def emit_task_killed(session_id: str, task_id: str, command: str) -> None:
+    """The recorded shape of a Bash command's task being killed (see the fixture)."""
+    tool_use_id = f"toolu_fake_{task_id}"
+    emit(
+        {
+            "type": "assistant",
+            "message": {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "tool_use",
+                        "id": tool_use_id,
+                        "name": "Bash",
+                        "input": {"command": command, "run_in_background": True},
+                    }
+                ],
+            },
+            "parent_tool_use_id": None,
+            "session_id": session_id,
+        }
+    )
+    emit(
+        {
+            "type": "system",
+            "subtype": "task_started",
+            "task_id": task_id,
+            "tool_use_id": tool_use_id,
+            "description": command,
+            "is_backgrounded": True,
+            "task_type": "local_bash",
+            "uuid": str(uuid.uuid4()),
+            "session_id": session_id,
+        }
+    )
+    emit(
+        {
+            "type": "system",
+            "subtype": "task_updated",
+            "task_id": task_id,
+            "patch": {"status": "killed", "end_time": int(time.time() * 1000)},
+            "uuid": str(uuid.uuid4()),
+            "session_id": session_id,
+        }
+    )
+    emit(
+        {
+            "type": "system",
+            "subtype": "task_notification",
+            "task_id": task_id,
+            "tool_use_id": tool_use_id,
+            "status": "stopped",
+            "output_file": f"/tmp/fake-claude/tasks/{task_id}.output",
+            "summary": command,
+            "uuid": str(uuid.uuid4()),
+            "session_id": session_id,
+        }
+    )
 
 
 def parse_argv(argv: list[str]) -> argparse.Namespace:
@@ -274,6 +344,10 @@ def main(argv: list[str]) -> int:
 
     emit_many(int(one("events", "0") or 0), session_id)
 
+    for spec in directives.get("task-killed", []):
+        task_id, _, command = spec.partition(" ")
+        emit_task_killed(session_id, task_id, command)
+
     if "sleep" in directives:
         time.sleep(float(one("sleep", "0") or 0))
 
@@ -333,6 +407,9 @@ def main(argv: list[str]) -> int:
     text, entry = _result(one)
     if entry.get("no_turns") is True:
         common.pop("num_turns", None)
+    killed = entry.get("task_killed")
+    for pair in killed if isinstance(killed, list) else []:
+        emit_task_killed(session_id, str(pair[0]), str(pair[1]))
     emit(subtyped({**common, "is_error": False, "result": text}, "success"))
     return exit_code
 
