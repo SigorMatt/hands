@@ -86,10 +86,20 @@ def test_both_files_are_installed_in_this_repository_and_tracked() -> None:
     assert ".claude/settings.json" in names, "the settings must be committed"
 
 
+def matcher_names(matcher: object) -> set[str]:
+    """The tool names a PreToolUse matcher selects, read the way Claude Code
+    2.1.269 reads a plain one: a string of `[a-zA-Z0-9_|]` only is split on `|`
+    and each part compared as an exact tool name (anything else is a regex,
+    which this repository does not use, so it selects nothing here)."""
+    if not isinstance(matcher, str) or not re.fullmatch(r"[a-zA-Z0-9_|]+", matcher):
+        return set()
+    return {part.strip() for part in matcher.split("|") if part.strip()}
+
+
 def test_the_settings_run_the_hook_before_every_bash_call() -> None:
     settings = json.loads(SETTINGS.read_text(encoding="utf-8"))
     entries = settings["hooks"]["PreToolUse"]
-    matching = [e for e in entries if e.get("matcher") == "Bash"]
+    matching = [e for e in entries if "Bash" in matcher_names(e.get("matcher"))]
     assert matching, "settings.json has no PreToolUse hook matching Bash"
     commands = [h["command"] for e in matching for h in e["hooks"] if h["type"] == "command"]
     assert any("no_background.py" in c for c in commands), commands
@@ -449,3 +459,240 @@ def test_main_still_allows_the_shapes_that_carry_no_command() -> None:
     ):
         done = run_hook(payload)
         assert done.returncode == 0, (payload, done)
+
+
+# ------------------------------------- the sub-agent tool (mission 7a U2, H-014)
+#
+# DESIGN §23: "the hook covers background sub-agents". The facts these tests
+# take as given, read from Claude Code 2.1.269 (`claude --version`) and recorded
+# in the hook's docstring: the sub-agent tool is `Agent`, with `Task` as its
+# alias; a sub-agent runs in the background unless its input carries
+# `run_in_background: false` (the harness itself tests `run_in_background !==
+# false`); and a matcher of `[a-zA-Z0-9_|]` only is split on `|` into exact
+# tool names.
+
+SUBAGENT_TOOLS = ("Agent", "Task")
+
+
+def subagent_event(tool_name: str = "Agent", **tool_input: object) -> dict[str, object]:
+    return {
+        "session_id": "s1",
+        "hook_event_name": "PreToolUse",
+        "tool_name": tool_name,
+        "tool_input": {
+            "description": "run unit U2",
+            "prompt": "Implement the unit.",
+            "subagent_type": "general-purpose",
+            **tool_input,
+        },
+    }
+
+
+def one_line(stderr: str) -> bool:
+    return bool(stderr.strip()) and stderr.strip().count("\n") == 0
+
+
+def test_the_settings_run_the_hook_before_every_subagent_call() -> None:
+    settings = json.loads(SETTINGS.read_text(encoding="utf-8"))
+    for tool in SUBAGENT_TOOLS:
+        matching = [
+            e
+            for e in settings["hooks"]["PreToolUse"]
+            if tool in matcher_names(e.get("matcher"))
+        ]
+        assert matching, f"settings.json has no PreToolUse hook matching {tool}"
+        commands = [h["command"] for e in matching for h in e["hooks"] if h["type"] == "command"]
+        assert any(".claude/hooks/no_background.py" in c for c in commands), (tool, commands)
+
+
+def test_the_hook_and_the_settings_name_the_same_tools() -> None:
+    settings = json.loads(SETTINGS.read_text(encoding="utf-8"))
+    matched: set[str] = set()
+    for entry in settings["hooks"]["PreToolUse"]:
+        if any("no_background.py" in h.get("command", "") for h in entry["hooks"]):
+            matched |= matcher_names(entry.get("matcher"))
+    assert matched == {"Bash", *hook.SUBAGENT_TOOLS}, matched
+    assert set(hook.SUBAGENT_TOOLS) == set(SUBAGENT_TOOLS)
+
+
+def test_the_docstring_records_the_tool_name_and_where_it_stops() -> None:
+    doc = hook.__doc__ or ""
+    for word in ("Agent", "Task", "2.1.269", "run_in_background: false", "SendMessage"):
+        assert word in doc, f"the hook's docstring does not record {word!r}"
+
+
+@pytest.mark.parametrize("tool", SUBAGENT_TOOLS)
+def test_main_blocks_a_subagent_that_asks_for_the_background(tool: str) -> None:
+    done = run_hook(subagent_event(tool, run_in_background=True))
+    assert done.returncode == 2, done
+    assert one_line(done.stderr) and "Traceback" not in done.stderr, done.stderr
+    assert done.stderr.startswith(f"no_background blocked this {tool} call (run_in_background")
+    assert "foreground" in done.stderr and "run_in_background: false" in done.stderr
+
+
+@pytest.mark.parametrize("tool", SUBAGENT_TOOLS)
+def test_main_allows_a_subagent_that_runs_in_the_foreground(tool: str) -> None:
+    done = run_hook(subagent_event(tool, run_in_background=False))
+    assert done.returncode == 0, done
+    assert done.stderr == ""
+
+
+@pytest.mark.parametrize("tool", SUBAGENT_TOOLS)
+def test_an_omitted_flag_is_a_background_sub_agent_and_is_refused(tool: str) -> None:
+    """The decision: 2.1.269 runs a sub-agent in the background unless the
+    input says `run_in_background: false`, so an input that omits it asks for
+    the background (27 of 27 such calls in this project's transcripts came back
+    "Async agent launched")."""
+    done = run_hook(subagent_event(tool))
+    assert done.returncode == 2, done
+    assert one_line(done.stderr), done.stderr
+    assert "omitted" in done.stderr and "run_in_background: false" in done.stderr
+
+
+@pytest.mark.parametrize("value", [True, "true", 1, "false", "False", 0, "", "0", None, 0.0])
+def test_only_the_json_boolean_false_is_a_foreground_sub_agent(value: object) -> None:
+    """The harness compares `run_in_background !== false`: a string `"false"`
+    or a `0` is not false to it, so it is not foreground to the hook either."""
+    done = run_hook(subagent_event("Agent", run_in_background=value))
+    assert done.returncode == 2, (value, done)
+    assert one_line(done.stderr) and "Traceback" not in done.stderr, done.stderr
+
+
+def test_the_subagent_refusal_has_the_bash_refusals_shape() -> None:
+    bash = run_hook(bash_event("ls", run_in_background=True))
+    agent = run_hook(subagent_event("Agent", run_in_background=True))
+    assert bash.returncode == agent.returncode == 2
+    assert bash.stdout == agent.stdout == ""
+    for done in (bash, agent):
+        assert one_line(done.stderr)
+        assert re.match(
+            r"no_background blocked this \w+ call \(.+\)\. Role sessions never", done.stderr
+        )
+        assert "(DESIGN §21)" in done.stderr and "in the foreground instead" in done.stderr
+
+
+#: Sub-agent payloads with a `tool_input` the hook cannot read: the same
+#: fail-closed stance, and the same one line, as `UNREADABLE_INPUTS` for Bash.
+UNREADABLE_SUBAGENT_INPUTS: list[dict[str, object]] = [
+    {"tool_name": "Agent", "tool_input": ["prompt"]},
+    {"tool_name": "Agent", "tool_input": "prompt"},
+    {"tool_name": "Agent", "tool_input": 7},
+    {"tool_name": "Task", "tool_input": ["prompt"]},
+    {"tool_name": "Agent", "tool_input": {"prompt": "x", "run_in_background": ["false"]}},
+    {"tool_name": "Agent", "tool_input": {"prompt": "x", "run_in_background": {"v": False}}},
+    {"tool_name": "Task", "tool_input": {"prompt": "x", "run_in_background": [False]}},
+]
+
+
+@pytest.mark.parametrize("payload", UNREADABLE_SUBAGENT_INPUTS)
+def test_main_fails_closed_on_a_subagent_input_it_cannot_read(payload: dict[str, object]) -> None:
+    done = run_hook(payload)
+    assert done.returncode == 2, (payload, done)
+    assert "Traceback" not in done.stderr, done.stderr
+    assert one_line(done.stderr), done.stderr
+    assert done.stderr.startswith("no_background: "), done.stderr
+
+
+def test_a_subagent_input_that_carries_nothing_is_still_a_background_one() -> None:
+    """Where the sub-agent differs from Bash: an absent Bash command runs
+    nothing, but an absent `run_in_background` is the background default, so an
+    empty, null or missing `tool_input` is refused, not waved through."""
+    for payload in (
+        {"tool_name": "Agent", "tool_input": None},
+        {"tool_name": "Agent", "tool_input": {}},
+        {"tool_name": "Agent"},
+        {"tool_name": "Task", "tool_input": {}},
+    ):
+        done = run_hook(payload)
+        assert done.returncode == 2, (payload, done)
+        assert one_line(done.stderr) and "omitted" in done.stderr, done.stderr
+
+
+def test_send_message_is_not_refused() -> None:
+    """H-014's actual cause: `SendMessage` continuing a finished sub-agent runs
+    it in the background, but the call has no background input to refuse. The
+    hook does not block it; the docs say so."""
+    for payload in (
+        {"tool_name": "SendMessage", "tool_input": {"to": "a1", "message": "continue"}},
+        {"tool_name": "SendMessage", "tool_input": {"run_in_background": True}},
+        {"tool_name": "ListAgents", "tool_input": {}},
+        {"tool_name": "agent", "tool_input": {"run_in_background": True}},
+    ):
+        done = run_hook(payload)
+        assert done.returncode == 0, (payload, done)
+        assert done.stderr == ""
+
+
+@pytest.mark.parametrize("tool_input,allowed", hook.SUBAGENT_SELFTEST)
+def test_subagent_selftest_case(tool_input: dict[str, object], allowed: bool) -> None:
+    reason = hook.check_subagent(tool_input)
+    assert (reason is None) == allowed, (tool_input, reason)
+
+
+def test_the_subagent_selftest_table_covers_true_false_and_omitted() -> None:
+    cases = [(json.dumps(t, sort_keys=True), allowed) for t, allowed in hook.SUBAGENT_SELFTEST]
+    assert (json.dumps({"run_in_background": True}), False) in cases
+    assert (json.dumps({"run_in_background": False}), True) in cases
+    assert (json.dumps({}), False) in cases
+    assert all(
+        not allowed
+        for t, allowed in hook.SUBAGENT_SELFTEST
+        if t.get("run_in_background") is not False
+    )
+
+
+def test_the_selftest_subprocess_reports_the_subagent_table() -> None:
+    done = run_hook("", "--selftest")
+    assert done.returncode == 0, done.stdout + done.stderr
+    match = re.search(r"selftest \(Agent, Task\): (\d+)/(\d+) ok", done.stdout)
+    assert match, done.stdout
+    total = str(len(hook.SUBAGENT_SELFTEST))
+    assert match.group(1) == total and match.group(2) == total, done.stdout
+
+
+# ------------------------------------------- the Bash half, byte for byte (U2)
+
+#: The Bash refusals exactly as the hook printed them at 2955a20, before the
+#: sub-agent tool was added: U2 must leave every byte of them alone.
+BASH_ADVICE_AT_2955A20 = (
+    "Role sessions never run background tasks (DESIGN §21): the harness reaps them, so a "
+    "long background job can die silently mid-mission and nothing says so. Run it in the "
+    "foreground instead, with a timeout — the Bash tool's own `timeout` parameter "
+    "(milliseconds, up to 20 minutes), or `timeout <seconds> <command>` — and split work "
+    "that cannot fit into steps that each finish."
+)
+BASH_STDERR_AT_2955A20: list[tuple[object, str]] = [
+    (
+        bash_event("ls", run_in_background=True),
+        "no_background blocked this Bash call (run_in_background is true). "
+        + BASH_ADVICE_AT_2955A20
+        + "\n",
+    ),
+    (
+        bash_event("nohup ./scripts/check"),
+        "no_background blocked this Bash call (nohup: 'nohup ./scripts/check'). "
+        + BASH_ADVICE_AT_2955A20
+        + "\n",
+    ),
+    (
+        {"tool_name": "Bash", "tool_input": ["x"]},
+        "no_background: tool_input is list, not an object; blocking\n",
+    ),
+    (
+        {"tool_name": "Bash", "tool_input": {"command": 1}},
+        "no_background: command or run_in_background has the wrong type; blocking\n",
+    ),
+]
+
+
+@pytest.mark.parametrize("payload,stderr", BASH_STDERR_AT_2955A20)
+def test_the_bash_refusals_are_byte_identical_to_before(payload: object, stderr: str) -> None:
+    done = run_hook(payload)
+    assert done.returncode == 2, done
+    assert done.stdout == ""
+    assert done.stderr == stderr
+
+
+def test_the_bash_selftest_line_is_unchanged() -> None:
+    done = run_hook("", "--selftest")
+    assert "selftest: 65/65 ok" in done.stdout.splitlines(), done.stdout

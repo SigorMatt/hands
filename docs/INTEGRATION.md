@@ -314,6 +314,13 @@ gate. The reason is that the harness reaps background tasks: a long background
 job started by a role session can die silently mid-mission and nothing says
 so. The way to run something long is the foreground with a timeout.
 
+The settings also run the hook before every sub-agent call — the `Agent` tool,
+and `Task`, its alias (matcher `Bash|Agent|Task`; §23, H-014). In Claude Code
+2.1.x a sub-agent runs in the background unless its input says
+`run_in_background: false`, so the hook exits 2 on every sub-agent call that
+does not carry that boolean: `true`, an omitted flag, or any other value. A
+role session runs its sub-agents in the foreground.
+
 A repository that already has a `.claude/settings.json` gets the `PreToolUse`
 entry added to it rather than the file overwritten. Copy the CLAUDE.md line
 too, so the session knows the rule before the hook has to say no. Hooks run
@@ -346,6 +353,18 @@ commands the gate itself is made of. Everything here is **allowed** today:
     python3 -c 'import os; os.fork()'
     D=nohup; $D ./long.sh       # the daemonizer arrives through a variable
     \nohup ./long.sh            # ...or through a quoting spelling of the word
+
+A sub-agent can also end up in the background with no call the hook can
+refuse. `SendMessage` continuing a finished sub-agent runs that sub-agent in the
+background: that is what happened in H-014, where every `Agent` call had said
+`run_in_background: false`. The call names an agent and a message, not a mode,
+so there is nothing background-shaped in it to refuse, and refusing
+`SendMessage` itself would stop a role from ever continuing a sub-agent. The
+hook does not match it. The hook is not what answers that case. hands sets
+`CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS=0` in the role environment (§2, §23) so
+that `claude -p` waits rather than terminating, and records a harness
+termination as `failed`. That a real claude binary waits with the ceiling at
+0 has not been observed.
 
 So the hook is a guardrail against the spellings a role session actually
 writes, not a sandbox. The rule it enforces is in CLAUDE.md as prose for the

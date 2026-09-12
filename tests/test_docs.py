@@ -401,6 +401,9 @@ BLIND_SPOTS = [
     "systemd-run",
     "fork",
     "variable",
+    # H-014: continuing a finished sub-agent runs it in the background, and the
+    # call carries no background input for the hook to refuse (mission 7a U2).
+    "SendMessage",
 ]
 
 

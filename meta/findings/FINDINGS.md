@@ -718,3 +718,28 @@ terminating line) and `builder.failed → resume` over the §10 example in a rea
 daemon. They do not prove that a real claude binary run with the ceiling at 0
 waits instead of terminating, or what the turn does when the sub-agent reports
 back; neither was observed. The hook half stays open for U2.
+
+**Status: closed on disk (U2 half) (mission 7a U2, the commit that carries
+this paragraph).** `.claude/settings.json` now matches `Bash|Agent|Task`, and
+`.claude/hooks/no_background.py` also refuses a sub-agent call (exit 2, one
+line on stderr, the Bash refusal's shape) unless its input carries the JSON
+boolean `run_in_background: false`. Read from Claude Code 2.1.269 and recorded
+in the hook's docstring:
+- the tool is `Agent`, with `Task` as its alias;
+- the harness counts a sub-agent as background when `run_in_background !==
+  false`, so an omitted flag is refused;
+- the transcripts have 85 `Agent` blocks and 0 `Task` blocks, and all 27
+  `Agent` calls under 2.1.269 that omit the flag came back "Async agent
+  launched";
+- a matcher of `[a-zA-Z0-9_|]` only is split on `|` into exact names.
+
+Tests prove the hook's exit code and stderr for `Agent` and `Task` with the
+flag true, false, omitted, null, non-boolean and unreadable. They also prove
+that the Bash refusals are byte-identical to 2955a20's, that `SendMessage` is
+not refused, and that the settings matcher names the hook's tools. `SendMessage`
+continuing a finished sub-agent (this finding's actual cause) is still not
+refused, and is recorded in the hook's docstring and in docs/INTEGRATION.md's
+"What the hook cannot see". Not proven: no live Claude Code session has run
+the hook against a real `Agent` or `Task` call, so that the harness delivers
+those payloads to it, and blocks on exit 2, is read from the binary, not
+observed.

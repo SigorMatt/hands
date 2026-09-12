@@ -10,12 +10,27 @@ hook before every Bash tool call: it reads the hook JSON on stdin and exits 2
 `setsid`, `disown`, a trailing `&` outside quotes, or an `&` before `)`.
 Foreground Bash with a timeout is the only way to run something long.
 
-What is not daemonization, and must keep working, or the role cannot run its
-own gate: `&&`, `2>&1`, `1>&2`, `&>`, `|&`, an `&` inside single or double
-quotes, and a literal `&` in an unquoted URL (`?a=1&b=2` — the `&` there is
-followed by more of the argument, not by the end of a command). Quoted text is
-text, heredoc bodies are text, and a `#` comment is text; `$(...)` and backticks
-are still commands and are still read, inside double quotes as well as outside.
+The sub-agent tool too (DESIGN §23, finding H-014): Claude Code runs this hook
+before every sub-agent call and exits 2, with the same message shape, unless
+the call's input carries `run_in_background: false` — the JSON boolean.
+What the tool is called, read from Claude Code 2.1.269 (`claude --version`;
+the installed binary's own source, 2026-09-12):
+- The tool is `Agent`, with `Task` as its alias (`name:"Agent"`,
+  `aliases:["Task"]`, and a legacy-name table `{Task:"Agent"}`). The harness's
+  own background check tests `name === "Agent" || name === "Task"`, so a
+  `tool_use` named `Task` can still arrive; both are covered. In this
+  project's transcripts (~/.claude/projects/-home-msi-git-hands/*.jsonl) every
+  sub-agent call is named `Agent`: 85 of them, and none named `Task`.
+- A sub-agent runs in the background unless the input says otherwise: the
+  harness counts a call as background when `run_in_background !== false`, and
+  the tool's description says "Subagents run in the background by default".
+  The transcripts agree: 27 `Agent` calls under 2.1.269 omit the flag, and
+  all 27 came back "Async agent launched". So an omitted flag, a null, and any
+  value that is not the boolean `false` (`"false"`, `0`) ask for the
+  background and are refused. An absent or empty `tool_input` is refused on
+  the same reading, where an absent Bash command runs nothing and passes.
+- A matcher made only of `[a-zA-Z0-9_|]` is split on `|` into exact tool
+  names, so `.claude/settings.json` matches `Bash|Agent|Task`.
 
 Where it stops (docs/INTEGRATION.md, "What the hook cannot see"): the hook reads
 one command line as shell text. It never runs it, never resolves a variable, and
@@ -24,6 +39,19 @@ takes quoted text as text — so `bash -c 'sleep 30 &'`, `eval`, `screen -dmS`,
 arrives through a variable all pass. That is the model's boundary, not a bug to
 patch here: reading quoted text as shell would block `git commit -m '… & …'` and
 `grep -rn "nohup" src`, which a role session needs.
+`SendMessage` also passes. Continuing a finished sub-agent with it runs that
+sub-agent in the background (H-014's actual cause, job `0mtygi953-ym63`), but
+the call has no background input to refuse: it names an agent and a message,
+not a mode. Refusing it would stop a role from ever continuing a sub-agent, so
+the hook does not match it. A role session can therefore still leave a
+background sub-agent running with a foreground-only hook installed.
+
+What is not daemonization, and must keep working, or the role cannot run its
+own gate: `&&`, `2>&1`, `1>&2`, `&>`, `|&`, an `&` inside single or double
+quotes, and a literal `&` in an unquoted URL (`?a=1&b=2` — the `&` there is
+followed by more of the argument, not by the end of a command). Quoted text is
+text, heredoc bodies are text, and a `#` comment is text; `$(...)` and backticks
+are still commands and are still read, inside double quotes as well as outside.
 
 Install this file and the `.claude/settings.json` beside it in every repository
 hands drives (docs/INTEGRATION.md). Hooks run under
@@ -72,6 +100,21 @@ ADVICE = (
     "tool's own `timeout` parameter (milliseconds, up to 20 minutes), or "
     "`timeout <seconds> <command>` — and split work that cannot fit into "
     "steps that each finish."
+)
+
+#: The sub-agent tool's names in Claude Code 2.1.x: `Agent`, and `Task`, its
+#: alias (module docstring). `.claude/settings.json` matches the same names.
+SUBAGENT_TOOLS = ("Agent", "Task")
+
+#: What the agent is told when a sub-agent call asks for the background: the
+#: same shape as `ADVICE`, with the sub-agent's own way to stay in the foreground.
+SUBAGENT_ADVICE = (
+    "Role sessions never run background tasks (DESIGN §21): the harness reaps "
+    "them, so a background sub-agent can die silently mid-mission and nothing "
+    "says so. Run the sub-agent in the foreground instead — pass "
+    "`run_in_background: false`, since a sub-agent runs in the background when "
+    "the flag is omitted — and split work that cannot fit into steps that each "
+    "finish."
 )
 
 
@@ -246,6 +289,48 @@ def check(cmd: str, run_in_background: object = False) -> str | None:
     return None
 
 
+def check_subagent(tool_input: dict) -> str | None:
+    """Return None if the sub-agent call runs in the foreground, else why not.
+
+    Only the JSON boolean `false` is foreground: Claude Code counts a sub-agent
+    as background when `run_in_background !== false` (module docstring), so an
+    omitted flag is the background default, and `"false"` or `0` are not false.
+    """
+    if "run_in_background" not in tool_input or tool_input["run_in_background"] is None:
+        return (
+            "run_in_background is omitted, and a sub-agent runs in the background "
+            "unless it says false"
+        )
+    value = tool_input["run_in_background"]
+    if value is False:
+        return None
+    if value is True:
+        return "run_in_background is true"
+    return f"run_in_background is {value!r}, not the boolean false"
+
+
+SUBAGENT_SELFTEST = [
+    # (sub-agent tool_input, allowed?)
+    ({"run_in_background": False}, True),
+    (
+        {"prompt": "Implement U2.", "subagent_type": "general-purpose", "run_in_background": False},
+        True,
+    ),
+    ({"run_in_background": True}, False),
+    ({"prompt": "Implement U2.", "run_in_background": True}, False),
+    # --- omitted is the background default ---------------------------------
+    ({}, False),
+    ({"prompt": "Implement U2.", "subagent_type": "general-purpose"}, False),
+    ({"run_in_background": None}, False),
+    # --- only the boolean false is false -----------------------------------
+    ({"run_in_background": "false"}, False),
+    ({"run_in_background": "true"}, False),
+    ({"run_in_background": 0}, False),
+    ({"run_in_background": 1}, False),
+    ({"run_in_background": ""}, False),
+]
+
+
 SELFTEST = [
     # (command, allowed?)
     # --- the ordinary foreground work of a role session -------------------
@@ -336,7 +421,43 @@ def selftest() -> int:
         bad += 1
         print("FAIL expected block: run_in_background=true")
     print(f"selftest: {len(SELFTEST) + 1 - bad}/{len(SELFTEST) + 1} ok")
-    return 1 if bad else 0
+    bad_subagent = 0
+    for tool_input, expected in SUBAGENT_SELFTEST:
+        reason = check_subagent(tool_input)
+        if (reason is None) != expected:
+            bad_subagent += 1
+            print(f"FAIL expected {'allow' if expected else 'block'}: {tool_input!r} -> {reason}")
+    total = len(SUBAGENT_SELFTEST)
+    print(f"selftest ({', '.join(SUBAGENT_TOOLS)}): {total - bad_subagent}/{total} ok")
+    return 1 if bad or bad_subagent else 0
+
+
+def main_subagent(tool_name: str, tool_input: object) -> int:
+    """The sub-agent half of `main`: exit 2 unless the call stays in the foreground.
+
+    A `tool_input` that is not an object, or a flag of a type JSON booleans are
+    never read from, fails closed in one line, as it does for Bash. An absent or
+    null `tool_input` is an omitted flag — the background default — and is
+    refused with the advice, not waved through as an absent Bash command is.
+    """
+    if tool_input is None:
+        tool_input = {}
+    if not isinstance(tool_input, dict):
+        kind = type(tool_input).__name__
+        print(f"no_background: tool_input is {kind}, not an object; blocking", file=sys.stderr)
+        return 2
+    background = tool_input.get("run_in_background")
+    if background is not None and not isinstance(background, (bool, str, int, float)):
+        print("no_background: run_in_background has the wrong type; blocking", file=sys.stderr)
+        return 2
+    reason = check_subagent(tool_input)
+    if reason is None:
+        return 0
+    print(
+        f"no_background blocked this {tool_name} call ({reason}). {SUBAGENT_ADVICE}",
+        file=sys.stderr,
+    )
+    return 2
 
 
 def main() -> int:
@@ -347,6 +468,8 @@ def main() -> int:
     except Exception as e:  # malformed input: fail closed
         print(f"no_background: cannot parse hook input ({e}); blocking", file=sys.stderr)
         return 2
+    if isinstance(data, dict) and data.get("tool_name") in SUBAGENT_TOOLS:
+        return main_subagent(data["tool_name"], data.get("tool_input"))
     if not isinstance(data, dict) or data.get("tool_name") != "Bash":
         return 0
     # A Bash call whose `tool_input` or `command` is not the shape the tool
