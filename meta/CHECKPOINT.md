@@ -5,18 +5,21 @@ Done: U0 9ae7975 (1238 passed); U1 df8c1fd (1285 passed; per DESIGN §6
 a success result + turns + exit 0 is `done` whatever stderr says, so
 H-014's recorded shape is now `done`); U2 68e1048 (1300 passed; notice is
 `system` task_updated status killed / task_notification status stopped,
-command line from the matching Bash tool_use; root PLAYBOOK.toml left to U7).
-Unit in progress: U3 Per-job scope and orphan accounting (§5, §24; backlog 2).
-Intent: the runner starts each `claude -p` inside `systemd-run --user
---scope --quiet --unit hands-<project>-<job>` when available and the user
-manager answers, else `start_new_session`; `hands doctor` says which is in
-force; the monitor reads the scope's `cgroup.procs` (or the process group)
-for the live pid set and passes it as `--pids`; at job end anything still
-alive is filed `monitor.orphan_processes` with command lines, then the scope
-is stopped or the group killed.
-Done means: one unit commit, pushed; process-group path tested; a
-double-forking `fake_claude` proves the orphan is found and killed;
-./scripts/check green three consecutive runs.
+command line from the matching Bash tool_use; root PLAYBOOK.toml left to U7);
+U3 4782a4a (1323 passed; process-group mode tested, scope mode via a stub
+systemd-run; conftest forces process-group mode; doctor `isolation` row).
+Unit in progress: U4 The phone channel (§8, §11, §24; backlog 5; H-015).
+Intent: `[notify]` keys per §24; `handsd` long-polls `cmd_topic`
+(`/json?since=…`), reconnecting on error; `approve <job> <secret|nonce>`,
+`deny <job> [reason] <secret|nonce>`, `pause <secret>`, `resume <secret>`,
+`status <secret>`; per-held-job 32-byte single-use nonce dying with the job
+on Approve/Deny action buttons; the long-term secret never in a
+notification; decisions `decided_by: phone`; bad secret/nonce logged and
+ignored, never answered; doctor reports channel on/off and refuses
+`cmd_topic` without `cmd_secret`; docs/INTEGRATION.md setup.
+Done means: one unit commit, pushed; mocked-ntfy tests for every command,
+the nonce lifecycle, secret-never-in-notification, and the `decided_by:
+phone` record; ./scripts/check green three consecutive runs.
 Base: da8df27, green (1235 passed).
 Standing constraints: one foreground sub-agent per unit, commit and push
 every unit, ./scripts/check green three consecutive runs before each commit,
