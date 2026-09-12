@@ -1,9 +1,9 @@
 # CHECKPOINT
 
 Mission: 7a (meta/BUILDER-7-PROMPT.md) — IN PROGRESS
-Unit in progress: U4 (client seams).
+Unit in progress: U5 (review base).
 Done: U0 b77bc4d; U1 c00f0c0 (1156 passed); U2 09eed7c (1204 passed);
-U3 da1ffb3 (1205 passed).
+U3 da1ffb3 (1205 passed); U4 b29b1c7 (1233 passed).
 Base: db0bd2c, red (2 failed, 1110 passed): the kit changed rule 8 and §10's
 example. 169ce88 brought the disk to the kit before U0; green three runs,
 1112 passed (65.04s / 62.45s / 59.88s). meta/plan.md records the deviation.

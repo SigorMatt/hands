@@ -30,7 +30,7 @@ the prose.
 - [x] U3 Doc-truth as a property — the sweep reads every tracked text file;
       the README and test_playbook wordings join the phrase list; the U6
       tests become non-circular (blocker 1, should-fix 1, 2)
-- [ ] U4 Client seams — one tree walk for UTF-8 and size; positionals
+- [x] U4 Client seams — one tree walk for UTF-8 and size; positionals
       refused under `job`/`path`/`prompt` (should-fix 4, 5)
 - [ ] U5 Review base — docs/PLAYBOOK.md and the example describe "every
       commit after the last `review:` commit"; the kit's REVIEW-PROTOCOL
