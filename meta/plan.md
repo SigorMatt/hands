@@ -23,7 +23,7 @@ the DESIGN v3.5 wait retirement (§11, §12 rule 8) the review did not raise.
       cap or the window cut the answer, `log` pages (§4, §7, H-013)
 - [x] U3 Should-fix 1 — the guard's git policy becomes a per-subcommand
       option allowlist (§12)
-- [ ] U4 Should-fix 2 — the three hook bypasses: closed with a test, or
+- [x] U4 Should-fix 2 — the three hook bypasses: closed with a test, or
       documented under "what the hook cannot see"
 - [ ] U5 Should-fix 3–7 — `retained()` counts `last_argv`; U2-of-mission-5's
       containment test becomes a real path-resolution test; the config
