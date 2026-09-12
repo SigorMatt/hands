@@ -1,12 +1,12 @@
-# hands — DESIGN v3.5
+# hands — DESIGN v3.6
 
 Machinery that replaces the human relay between the planning brain and the two
 Claude Code roles (builder, aux) on the Ubuntu laptop, and that keeps a series
 moving without a human while everything goes by plan. Working name: `hands`.
 The method it serves is described in WORKING-MODEL.md (agile-skills) and
 OPERATING-MODEL.md (spanweave); hands changes the topology, not the method.
-v3.5 (2026-09-12) folds in the mission 5 review and retires the driver's
-background wait; changes are in §22; earlier changes in §21–§17.
+v3.6 (2026-09-12) folds in the mission 6 review and the first harness
+termination of a role job; changes are in §23; earlier changes in §22–§17.
 
 Status: proposal, 2026-09-10. Items marked DECIDED were settled in discussion.
 
@@ -372,7 +372,7 @@ allowed: `{n+1}`), and job fields: `{job.id}`, `{job.head_at_start}`,
     then = "send"
     role = "aux"
     context = "clear"
-    prompt = "Review WORKPLAN.md commits since {job.head_at_start}"
+    prompt = "Review WORKPLAN.md commits since the last review: commit on the branch"
 
     [[rule]]                  # review clean and next run pre-planned → go
     on = "aux.done"
@@ -454,31 +454,23 @@ monitor event (verbatim block), playbook rule fired, stop (reason), gate
 decided, limit/resume, heartbeat (hourly while any job runs, so silence is
 distinguishable from death).
 
-**Wake-up — the driver is not a poller.** After dispatching or after
-reporting to you, the driver runs `hands wait --for stop,held` as a Claude
-Code *background* Bash task and goes idle. When hands emits such an event,
-the command returns, Claude Code delivers the background result to the
-driver session, and the driver acts: reads the inbox, verifies, reports,
-re-arms the wait. While the playbook is chaining runs, nothing wakes the
-driver and nothing needs to. `hands doctor` prints the procedure for this check (a gated send, which
-files a real `job.held` without spending a turn, or `hands pause`, which
-files a `stop` event with reason `paused by human`; H-007) and the driver
-session confirming it woke;
+**Wake-up — there is none, by decision.** The driver arms no background
+task. ntfy is the human's doorbell (every `stop` and every `held` job
+reaches the phone); the human's `check` in the Code tab is the driver's;
+`hands wait <job> --timeout <s>` remains a foreground tool for short waits
+after an approval. `hands doctor` prints a one-time *notification* check (a
+gated send, which files a real `job.held` without spending a turn, or
+`hands pause`, which files a `stop`), not a wake procedure.
 
-Observed 2026-09-12 on Claude Code 2.1.268: the harness kills idle
-background tasks intermittently (a control `sleep 3600` died alongside the
-wait, with 70% of memory free; the "low memory" text it prints does not
-describe the machine). Each kill wakes the session for one recovery turn.
-Narrowing the wait to in-flight work still cost a driver turn every few
-minutes during a mission (the reaper fires regardless), and a turn is the
-only thing in hands that costs tokens. So the driver arms no background
-wait at all. ntfy is the human's doorbell; the human's `check` is the
-driver's; `hands wait <job>` remains a foreground tool for short waits
-(after an approval). The wake-path question is answered: it works, and it
-is not worth its price on Claude Code 2.1.x.
-if background completion does not wake an idle session on your Claude Code
-version, the fallback is a `hands wait` with a long timeout re-issued by the
-driver, or you opening the Code tab after the ntfy notification.
+History, kept so the decision is not relitigated: a background `hands wait
+--for stop,held` did wake an idle driver session on Claude Code 2.1.268
+(observed 2026-09-11), but the harness kills idle background tasks
+intermittently (a control `sleep 3600` died alongside the wait with 70% of
+memory free; the "low memory" text it prints does not describe the
+machine), and each kill costs a driver turn, the only thing in hands that
+costs tokens. Narrowing the wait to in-flight work still cost a turn every
+few minutes during a mission. The wake-path question is answered: it works
+and it is not worth its price on Claude Code 2.1.x.
 
 **Notifications** (ntfy, in scope — it is how you learn you are needed):
 `stop`, `job.held`, `max_resumes` exhausted, daemon start/crash. Not for
@@ -517,7 +509,8 @@ playbook path):
   8. Never arm a background task. After a dispatch or a report, stop
      talking. The human's message `check` is your wake: run rule 2 and
      report. `hands wait <job> --timeout <s>` in the foreground is fine for
-     a short wait after an approval.
+     a short wait after an approval. `hands` exit 2 means the client did not
+     deliver a completed request: a refusal or a timeout, not an event.
   9. Reports to the human start with a `VERDICT:` line; deviations are
      flagged, not acted on; retract on contradicting evidence.
   10. Design changes, new batches, playbook edits and decisions files are not
@@ -814,3 +807,23 @@ one-time checks in step 4.
 - Backlog items 1–4 (harness-kill detection, per-job scope and orphan
   accounting, REVIEW-3 deferrals, playbook rules) move to mission 7 so
   mission 6 stays a review-closing mission.
+
+---
+
+## 23. Changes from v3.5 (mission 6 review, harness termination)
+
+- §11 rewritten without its self-contradiction: no wake, by decision; the
+  history kept in one paragraph (review 6 should-fix 6).
+- Harness termination of a role job is `failed`, not `done` (§2, §6); the
+  bg-wait ceiling is disabled for role jobs; the hook covers background
+  sub-agents; root `CLAUDE.md` says sub-agents run in the foreground.
+- Review base: the cold review reads the commits since the last `review:`
+  commit on the branch, computed by the reviewer, not `{job.head_at_start}`
+  of the job that finished — a resumed mission's last job starts mid-mission
+  (review 6 scope note). The protocol and the playbook example say so.
+- Reports are drafted outside the tree or excluded from `git add`; a unit
+  commit never carries another unit's draft (review 6 should-fix 3).
+- Doc-truth sweeps compare every tracked text file, not a list (review 6
+  blocker 1, should-fix 1); positionals are refused under the name the
+  human typed (should-fix 5); the UTF-8 check walks the same tree the size
+  measurement walks (should-fix 4).

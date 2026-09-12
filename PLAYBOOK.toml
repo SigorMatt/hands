@@ -12,7 +12,7 @@ verdict = '^VERDICT: mission (?P<n>\d+) finished'
 then = "send"
 role = "aux"
 context = "clear"
-prompt = "Read meta/REVIEW-PROTOCOL.md and review mission {n} of this repository: the commits from {job.head_at_start} to origin/main. Follow the protocol exactly, commit only meta/reviews/REVIEW-{n}.md, and begin your reply with the VERDICT line it specifies."
+prompt = "Read meta/REVIEW-PROTOCOL.md and review mission {n} of this repository: every commit after the last review: commit on origin/main (the protocol says how to find the base). Follow the protocol exactly, commit only meta/reviews/REVIEW-{n}.md, and begin your reply with the VERDICT line it specifies."
 
 # A kit was applied: worth a note, not a stop.
 [[rule]]

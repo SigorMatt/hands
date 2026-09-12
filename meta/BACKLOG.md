@@ -3,7 +3,7 @@
 Maintained by the architect; the builder does not act on this file. Each
 item names the mission it is scheduled for; unscheduled items say so.
 
-## Mission 7 (moved from 6 on 2026-09-12: mission 6 is review-closing only)
+## Mission 7b (7a, 2026-09-12, closes review 6 and the harness termination)
 
 1. **Harness-killed background tasks are detected.** The monitor watches
    each role job's stream-json for the harness's task-killed notice and
@@ -23,7 +23,31 @@ item names the mission it is scheduled for; unscheduled items say so.
 4. Playbook example gains `monitor.task_killed` and
    `monitor.orphan_processes` rules; `docs/PLAYBOOK.md` updated.
 
+5. **ntfy command channel with authenticated approvals.** `handsd`
+   subscribes to a second random topic; accepts `approve <job>`, `deny
+   <job>`, `resume`, `pause`, `check` (answered by publishing a status
+   summary); commands carry a shared secret (HMAC or passphrase from the
+   config) and are recorded as `decided_by: phone`; held-job notifications
+   carry Approve/Deny action buttons that publish those commands. Nothing
+   but commands and status lines ever travels either topic.
+6. **`hands who` and the `handswho` daemon.** The claudewho prototype
+   (2026-09-12) folded into hands: `hands who` prints the one-screen
+   picture (hands jobs and pipeline from the daemon's own state, every
+   other `claude` process from /proc, interactive sessions' waiting/working
+   state from their transcripts); `handswho` pushes it on change and on a
+   `status` command, sharing the ntfy client and a `[notify]` config section
+   (`ntfy_topic`, `who_topic`, `who_cmd_topic`, all optional). Ships as an
+   optional user unit, off unless enabled; `hands doctor` reports
+   notifications and who as on/off, never as errors; `docs/INTEGRATION.md`
+   gains an "optional: notifications and the who view" section. ntfy itself
+   is never shipped, only spoken to.
+
 ## Unscheduled
+
+- **PR reviewer as a second verdict source.** A hosted PR review (bot or
+  action) is one more cold reviewer whose verdict the playbook reads via
+  `gh pr view`/checks; hands' own review could post as a PR review. A
+  playbook rule and one tool, after M5's first auto-merge works.
 
 - **tmux wake channel.** `handsd` (or a small watcher) sends a fixed
   `check` + Enter into the driver's tmux pane on `stop`/`held`, removing

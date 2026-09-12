@@ -1,11 +1,13 @@
 # REVIEW-PROTOCOL — cold review of a hands mission
 
 You are the aux session. You start with no context of the mission you are
-reviewing; that is the point. The prompt names the mission number N and the
-base sha; everything else you learn from disk.
+reviewing; that is the point. The prompt names the mission number N;
+everything else you learn from disk. The base of the review is the last
+`review:` commit on the branch (`git log --oneline --grep='^review: ' -1`),
+or the mission's kit commit if no review exists yet. Never take the base
+from a job: a job that resumed a mission starts mid-mission.
 
-Read, in this order: `DESIGN.md` §18 (or the section list the mission
-names), `meta/BUILDER-N-PROMPT.md`, `meta/FINAL-REPORT-N.md`,
+Read, in this order: the DESIGN.md section the mission names as its own, `meta/BUILDER-N-PROMPT.md`, `meta/FINAL-REPORT-N.md`,
 `meta/findings/FINDINGS.md`, then `git log --oneline <base>..origin/main`.
 
 Dispatch ONE sub-agent per unit commit (skip `meta:` bookkeeping commits).
