@@ -22,7 +22,7 @@ the prose.
       (blocker 1); dated correction to FINAL-REPORT-6 §1 U5 item 7 naming
       `notify --test` (blocker 2); root CLAUDE.md's foreground sub-agent
       line; H-014 filed with the decision
-- [ ] U1 Harness termination is `failed` — three failure signals,
+- [x] U1 Harness termination is `failed` — three failure signals,
       `failure_reason`, `CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS=0` unless the
       new `[roles.<r>] env` sets it, doctor reports it; `builder.failed →
       resume` end to end (§2, §6, §13, H-014)

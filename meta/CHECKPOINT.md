@@ -1,8 +1,8 @@
 # CHECKPOINT
 
 Mission: 7a (meta/BUILDER-7-PROMPT.md) — IN PROGRESS
-Unit in progress: U1 (harness termination is `failed`). U0 done in the
-commit that carries this line.
+Unit in progress: U2 (the hook covers background sub-agents).
+Done: U0 b77bc4d; U1 c00f0c0 (1156 passed, green 3/3 by its sub-agent).
 Base: db0bd2c, red (2 failed, 1110 passed): the kit changed rule 8 and §10's
 example. 169ce88 brought the disk to the kit before U0; green three runs,
 1112 passed (65.04s / 62.45s / 59.88s). meta/plan.md records the deviation.

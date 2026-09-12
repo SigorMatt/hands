@@ -61,3 +61,5 @@ One line per unit, appended by the builder: date, unit, sha, verdict.
 2026-09-12  m6 U6 follow-up  3dd3403  green 3/3 (1112 tests); 19 sentences in 8 files that still said the driver arms or blocks on a wait; comments/docstrings/prose only, no behaviour
 2026-09-12  m6 U7 Final report  0f046ea  green 3/3 (1112 tests); mission 6 finished (entry amended: it was written with 7abcb32, the pre-amend commit, which is unreachable from main — the same defect REVIEW-3 should-fix 6 named)
 2026-09-12  m7a pre-U0 kit drift  169ce88  green 3/3 (1112 tests); base db0bd2c red 2/1112: rule 8 and the §10 example follow DESIGN v3.6
+2026-09-12  m7a U0 Plan and corrections  b77bc4d  green 3/3 (1112 tests); README open question gone (blocker 1); FINAL-REPORT-6 §1 U5 item 7 corrected (blocker 2); H-014 filed and decided
+2026-09-12  m7a U1 Harness termination is failed  c00f0c0  green 3/3 (1156 tests); terminating line / no final result / no num_turns → failed with failure_reason; BG_WAIT_CEILING=0 unless [roles.<r>] env sets it; doctor shows it; builder.failed → resume end to end
