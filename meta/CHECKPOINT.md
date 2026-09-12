@@ -1,16 +1,16 @@
 # CHECKPOINT
 
 Mission: 5 (meta/BUILDER-5-PROMPT.md) — IN PROGRESS
-Unit in progress: U2 (blocker 2 — the shape of ops.monitor_cmd)
-Intent: `Config` refuses at load an `ops.monitor_cmd` that is absolute,
-contains `..`, or does not name an existing executable regular file under
-`ops.repo`; `monitor_path` returns only a validated path; the test that
-documents the unreachable state (tests/test_config.py:381-390) is rewritten
-to prove it.
-Done means: tests for `.`, `..`, absolute, a directory, a non-executable
-file, a missing file and a valid script; `./scripts/check` green three
-consecutive runs; one commit, pushed.
-Tip: 50c466c (U1), green 3/3 — 778 passed, `check: green`, selftest 77/77.
+Unit in progress: U3 (determinism as a property)
+Intent: one shared path-stripping helper in tests/conftest.py, used by every
+negative assertion in tests/ that compares against text which may embed a
+path (tmp_path, basetemp, the socket path, the ops repo path) — at
+test_daemon.py:509, test_playbook.py:345 and everywhere the audit finds.
+Then `./scripts/check` five times under five different `--basetemp` values,
+two of them containing `--pids` and `a send needs a prompt`.
+Done means: 5/5 green with the values listed in the commit body;
+`./scripts/check` green three consecutive runs; one commit, pushed.
+Tip: ce92ed6 (U2), green 3/3 — 789 passed, `check: green`.
 Findings: H-001 open (needs a capture from a dotted cwd). H-009 open
 (design-side; no builder unit can close it). H-011 open until U0 appends the
 architect's decision — the kind becomes `pipeline.stop_suppressed`, outside
