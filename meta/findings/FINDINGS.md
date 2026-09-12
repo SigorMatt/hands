@@ -477,3 +477,50 @@ makes the rename in code, tests and docs; the acceptance is that
 `grep -rn 'stop\.suppressed' src tests docs driver` returns nothing.
 
 Status: closed by mission 5 U5 (the decision above; see meta/FINAL-REPORT-5.md)
+
+---
+
+## H-012 — "cap plus one quarter" does not cover JSON escaping; the cap is measured on the wire
+
+Severity: low · Component: DESIGN §4 (`send` row) against `src/hands/cli.py`
+(`_wire_bytes`, `_checked_prompt`) and `src/hands/daemon.py:63` (`_LINE_LIMIT`)
+Filed by: mission 5, U4 (prompt delivery), while implementing §4's revised
+`send` row.
+
+Symptom. §4 now says the client refuses "a missing, unreadable, non-regular,
+empty or over-10 MB file on either route ... and the wire carries UTF-8
+unescaped so the daemon's line room (cap plus one quarter) fits any accepted
+prompt". `ensure_ascii=False` fixes the transcoding half — 9 MiB of CJK is
+9 MiB on the wire instead of 18 — but JSON still escapes three things, and one
+of them is not a rounding error:
+
+    a quote     -> 2 bytes per byte     10 MiB of quotes -> 20 MiB
+    a backslash -> 2 bytes per byte
+    a NUL       -> 6 bytes per byte     10 MiB of NULs   -> 60 MiB
+
+So a file *at* the cap by size can be 2x or 6x the cap on the wire, and a line
+room of cap + cap/4 (12.5 MiB) does not hold it. Taken as bytes-of-file, §4's
+enumeration would accept those two files and they would die exactly where
+review 4 should-fix 3 says they must not: a broken pipe, with nothing in the
+daemon log.
+
+What U4 did. Read §4's "fits any accepted prompt" as the binding half: the cap
+is measured on the prompt **as it appears on the wire**, so a prompt that
+escapes past `MAX_PROMPT_BYTES` is refused client-side, with one line naming
+the path and both sizes ("is 10485760 bytes, 20971520 once escaped for the
+wire, over the 10485760 byte cap of §2"). Under that reading every accepted
+prompt is at most the cap on the wire and the remaining quarter — 2.5 MiB — is
+the envelope's, which no `--file`-bearing command line can exceed. The claim in
+§4 becomes true rather than approximately true.
+
+What the architect may want to say. Two things are the architect's, not a
+builder's: (1) §4's list of refusals does not name this one, and a reader of
+§4 alone would expect a 10 MiB file of quotes to be sent; (2) the cap is
+therefore stricter than `Runner.run`'s (`runner.py:283`, raw UTF-8 bytes), so
+the client refuses prompts the runner would have accepted — deliberate here,
+because the daemon could never have received them, but it is a second meaning
+for "10 MB" alongside the 10 MB / 10 MiB question already recorded. Either
+spell the wire measurement into §4, or raise the line room to six times the
+cap and let the daemon refuse the escaped monsters itself.
+
+Status: open (design wording; the behaviour is implemented and tested at U4)

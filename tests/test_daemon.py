@@ -12,18 +12,32 @@ import io
 import json
 import os
 import shutil
+import socket
+import threading
 from pathlib import Path
 
 import pytest
 
 from conftest import strip_paths
 from hands import cli as cli_mod
+from hands import daemon as daemon_mod
 from hands.cli import EXIT_REFUSED, EXIT_TIMEOUT, main
 from hands.config import load_config
 from hands.daemon import Daemon
 from hands.runner import MAX_PROMPT_BYTES
 from hands.spool import Spool
-from harness import BLOCK, PROJECT, cli, config_body, drive, fails, ok, running_job, write_project
+from harness import (
+    BLOCK,
+    PROJECT,
+    TIMEOUT,
+    cli,
+    config_body,
+    drive,
+    fails,
+    ok,
+    running_job,
+    write_project,
+)
 
 # ------------------------------------------------------------------ fixtures
 
@@ -457,6 +471,188 @@ def test_no_bad_prompt_file_ever_reaches_the_daemon(
         assert out == "", f"{path.name}: a refusal prints no job record"
         assert str(path) in err, f"{path.name}: the refusal must name the path: {err!r}"
         assert len(err.splitlines()) == 1, f"{path.name}: a refusal is one line: {err!r}"
+
+
+# ------------------------- U4: the wire, the cap on it, and non-regular files
+# §4 (and review 4 should-fix 3, 4): the client refuses a missing, unreadable,
+# non-regular, empty or over-cap prompt "on either route", and the wire carries
+# UTF-8 unescaped so the daemon's line room (the cap plus a quarter) fits any
+# prompt the client accepted.
+
+
+def refuse_the_daemon(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Make any daemon contact an error: these refusals are the client's own."""
+
+    def never(*args: object, **kwargs: object) -> dict[str, object]:
+        raise AssertionError("the CLI contacted the daemon about a refused prompt")
+
+    monkeypatch.setattr(cli_mod, "call", never)
+
+
+def test_the_daemon_line_room_is_the_cap_plus_a_quarter() -> None:
+    """§4: "the daemon's line room (cap plus one quarter)". The prompt is capped
+    at the cap *as it appears on the wire*, so the quarter is the envelope's."""
+    assert daemon_mod._LINE_LIMIT == MAX_PROMPT_BYTES + MAX_PROMPT_BYTES // 4
+
+
+def test_the_wire_size_of_a_prompt_is_the_json_it_becomes() -> None:
+    """The client measures what `json.dumps(..., ensure_ascii=False)` will spend
+    on the prompt without building it; the two must agree byte for byte."""
+    sample = 'quote " backslash \\ nul \x00 bell \x07 tab \t line \n cjk 字 emoji \U0001f642'
+    escaped = json.dumps(sample, ensure_ascii=False).encode("utf-8")
+    assert cli_mod._wire_bytes(sample) == len(escaped) - 2  # minus the two quotes
+
+
+def capture_one_request(where: Path, *argv: str) -> tuple[bytes, tuple[int, str, str]]:
+    """Run `hands send` against a socket that records the request line verbatim."""
+    server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    server.bind(str(where))
+    server.listen(1)
+    seen: list[bytes] = []
+
+    def serve() -> None:
+        conn, _ = server.accept()
+        with conn, conn.makefile("rwb") as stream:
+            seen.append(stream.readline())
+            stream.write(b'{"jsonrpc": "2.0", "id": 1, "result": {}}\n')
+            stream.flush()
+
+    thread = threading.Thread(target=serve)
+    thread.start()
+    try:
+        result = send_cli(*argv, "--socket", str(where))
+    finally:
+        thread.join(TIMEOUT)
+        server.close()
+    assert seen, "the client never sent a request"
+    return seen[0], result
+
+
+def test_the_request_carries_utf8_unescaped(project: str, tmp_path: Path) -> None:
+    """§4: "the wire carries UTF-8 unescaped". `ensure_ascii` at its default
+    turned every 3-byte CJK character into 6 bytes of `\\uXXXX` (should-fix 3)."""
+    line, (code, _, err) = capture_one_request(
+        tmp_path / "capture.sock", "--role", "aux", "--context", "clear", "字 prompt"
+    )
+    assert code == 0, err
+    wire = line.decode("utf-8")  # the whole request, as the daemon's reader sees it
+    assert "字".encode() in line, "the prompt is not on the wire as UTF-8"
+    assert "\\u" not in strip_paths(wire), f"the client escaped what it need not: {wire[:200]!r}"
+
+
+def test_a_cjk_prompt_file_under_the_cap_reaches_the_daemon(project: str, tmp_path: Path) -> None:
+    """9 MiB of CJK is under the cap, 9 MiB on the wire, and fits the daemon's
+    line room. It used to die at `[Errno 32] Broken pipe` (should-fix 3)."""
+    text = "字" * (3 * 1024 * 1024)  # 3 bytes each: 9 MiB of UTF-8
+    path = tmp_path / "cjk.txt"
+    path.write_text(text, encoding="utf-8")
+    assert path.stat().st_size == 9 * 1024 * 1024 < MAX_PROMPT_BYTES
+
+    async def body(daemon: Daemon) -> None:
+        job = await ok("send", "--role", "aux", "--context", "clear", "--prompt-file", str(path))
+        assert job["prompt"] == text
+
+    drive(body)
+
+
+def test_send_refuses_a_prompt_file_that_only_fits_before_escaping(
+    project: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A file at the cap whose bytes inflate as JSON is refused here, naming the
+    path — not at a broken pipe with nothing in the daemon log (should-fix 3).
+    A quote costs 2 bytes on the wire and a NUL costs 6."""
+    refuse_the_daemon(monkeypatch)
+    for name, byte in (("quotes.txt", b'"'), ("nul.txt", b"\x00")):
+        path = tmp_path / name
+        path.write_bytes(byte * MAX_PROMPT_BYTES)  # at the cap, not over it
+        code, out, err = send_cli("--role", "aux", "--context", "clear", "--prompt-file", str(path))
+        assert code == EXIT_REFUSED, f"{name}: exit {code}"
+        assert str(path) in err and str(MAX_PROMPT_BYTES) in err, f"{name}: {err!r}"
+        assert out == "", f"{name}: a refusal prints no job record"
+        assert len(err.splitlines()) == 1, f"{name}: a refusal is one line: {err!r}"
+
+
+def test_send_refuses_a_prompt_file_that_is_not_a_regular_file(
+    project: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """review 4 should-fix 4: a FIFO reports 0 bytes to `stat`, passes every
+    other refusal, and then blocks forever with no writer. `stat` answers "not a
+    regular file" too, so none of these is ever opened."""
+    fifo = tmp_path / "fifo"
+    os.mkfifo(fifo)
+    directory = tmp_path / "dir"
+    directory.mkdir()
+    endpoint = tmp_path / "endpoint.sock"
+    server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    server.bind(str(endpoint))
+    cases = [fifo, directory, endpoint]
+    if Path("/dev/zero").exists():  # a character device: an endless read
+        cases.append(Path("/dev/zero"))
+
+    def never_read(self: Path) -> bytes:
+        raise AssertionError(f"the CLI opened {self} instead of refusing it")
+
+    monkeypatch.setattr(Path, "read_bytes", never_read)
+    refuse_the_daemon(monkeypatch)
+    try:
+        for path in cases:
+            code, out, err = send_cli(
+                "--role", "aux", "--context", "clear", "--prompt-file", str(path)
+            )
+            assert code == EXIT_REFUSED, f"{path}: exit {code}"
+            assert str(path) in err, f"{path}: the refusal must name the path: {err!r}"
+            assert "regular file" in strip_paths(err), f"{path}: {err!r}"
+            assert out == "" and len(err.splitlines()) == 1, f"{path}: {err!r}"
+    finally:
+        server.close()
+
+
+def test_the_same_oversized_prompt_refuses_the_same_way_on_both_routes(
+    project: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """§4: the refusals are the client's "on either route" — the same bytes get
+    the same message and the same exit code from `--prompt-file` and `--stdin`,
+    and neither reaches the daemon (should-fix 3)."""
+    over = "x" * (MAX_PROMPT_BYTES + 1)
+    path = tmp_path / "huge.txt"
+    path.write_text(over, encoding="utf-8")
+    refuse_the_daemon(monkeypatch)
+    code_file, out_file, err_file = send_cli(
+        "--role", "aux", "--context", "clear", "--prompt-file", str(path)
+    )
+    code_stdin, out_stdin, err_stdin = send_cli(
+        "--role", "aux", "--context", "clear", "--stdin", stdin=over
+    )
+    assert code_file == EXIT_REFUSED and code_stdin == EXIT_REFUSED
+    assert out_file == "" and out_stdin == ""
+    said = f"is {MAX_PROMPT_BYTES + 1} bytes, over the {MAX_PROMPT_BYTES} byte cap of §2"
+    assert err_file == f"hands: --prompt-file {path} {said}" + err_file.split(said)[1]
+    assert err_stdin == f"hands: --stdin {said}" + err_stdin.split(said)[1]
+    assert err_file.split(said)[1] == err_stdin.split(said)[1], "one message, one advice"
+
+
+def test_send_refuses_an_empty_stdin_prompt(
+    project: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """§4 refuses an empty prompt "on either route": `--stdin` had no check at
+    all, so the same mistake came back from the daemon as exit 1."""
+    refuse_the_daemon(monkeypatch)
+    for text in ("", "\n   \n"):
+        code, out, err = send_cli("--role", "aux", "--context", "clear", "--stdin", stdin=text)
+        assert code == EXIT_REFUSED, f"{text!r}: exit {code}"
+        assert "--stdin is empty" in strip_paths(err), f"{text!r}: {err!r}"
+        assert out == ""
+
+
+def test_hands_help_says_what_exit_2_means(capsys: pytest.CaptureFixture[str]) -> None:
+    """review 4 should-fix 5: exit 2 is a refusal *or* a timeout, and the one
+    reader of it that is not a machine reads `--help` and the docs."""
+    with pytest.raises(SystemExit) as exc:
+        main(["--help"])
+    assert exc.value.code == 0
+    # One line or three is argparse's business, not the product's claim.
+    said = " ".join(capsys.readouterr().out.split())
+    assert "2 when the client did not deliver a completed request" in strip_paths(said)
 
 
 def test_send_help_lists_the_prompt_file_route(capsys: pytest.CaptureFixture[str]) -> None:

@@ -170,6 +170,28 @@ def test_driver_rule_6_is_the_design_section_12_rule_6() -> None:
     assert kit_rule(6) == design_rule(6)
 
 
+def test_the_docs_say_what_exit_2_means() -> None:
+    """§4/§21 (review 4 should-fix 5): exit 2 stopped being only a `wait`
+    timeout when `send` began refusing prompts itself, so both documents that
+    tell a reader what an exit code means have to say the whole of it — the
+    driver's rule 8 in particular, because rule 6 is where it meets the other 2.
+    """
+    integration = (ROOT / "docs" / "INTEGRATION.md").read_text(encoding="utf-8")
+    driver = (ROOT / "driver" / "CLAUDE.md").read_text(encoding="utf-8")
+    said = "did not deliver a completed request"
+    assert said in integration, "docs/INTEGRATION.md never says what exit 2 means"
+    assert said in driver, "driver/CLAUDE.md never says what exit 2 means"
+    stale = [
+        f"{where}: {line}"
+        for where, text in (("docs/INTEGRATION.md", integration), ("driver/CLAUDE.md", driver))
+        for line in text.splitlines()
+        if "every other command exits 1 with the message alone" in line
+        or "Exit code 2 is a timeout, not an event" in line
+        or ("--prompt-file" in line and "non-zero" in line)
+    ]
+    assert not stale, "a document still says exit 2 is one thing:\n" + "\n".join(stale)
+
+
 def test_the_driver_kit_never_claims_a_command_line_cannot_hold_punctuation() -> None:
     """The driver cannot write files (settings.json denies every writing tool),
     so a rule forbidding punctuation on a command line leaves it with no way to

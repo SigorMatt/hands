@@ -14,6 +14,7 @@ import asyncio
 import json
 import os
 import socket
+import stat
 import sys
 import time
 from collections.abc import Callable, Sequence
@@ -33,19 +34,20 @@ __all__ = [
     "EXIT_TIMEOUT",
     "FOLLOW_INTERVAL_S",
     "ClientError",
-    "PromptFileError",
+    "PromptError",
     "build_parser",
     "call",
     "exec_session",
     "main",
 ]
 
-#: Exit 2: the command refused before it did anything, and nothing changed —
-#: a `hands wait` that gave up waiting, and a `hands send` that refused its
-#: `--prompt-file` before the daemon was contacted (§4). Every other failure
-#: is 1. The driver runs `hands wait --for stop,held` in the background (§11)
-#: and has to know whether it was woken or simply gave up waiting (rule 8);
-#: a refused send is the same answer at the other end — no job was dispatched.
+#: Exit 2: §4's "the client did not deliver a completed request" — a `hands
+#: wait` that gave up waiting, and a `hands send` that refused its prompt
+#: (`--prompt-file` or `--stdin`) before the daemon was contacted. Nothing
+#: changed either way. Every other failure is 1. The driver runs `hands wait
+#: --for stop,held` in the background (§11) and has to know whether it was
+#: woken or simply gave up waiting (rule 8); a refused send is the same answer
+#: at the other end — no job was dispatched.
 EXIT_REFUSED = 2
 
 #: `hands wait`'s timeout under the name its readers know it by. One value,
@@ -59,13 +61,14 @@ EXIT_TIMEOUT = EXIT_REFUSED
 FOLLOW_INTERVAL_S = 0.2
 
 
-class PromptFileError(ValueError):
-    """§4: `--prompt-file` named a file the client itself refuses.
+class PromptError(ValueError):
+    """§4: the prompt itself is one the client refuses, on either route.
 
     A `ValueError` like every other bad command line, and told apart from them
     only by its exit code: `EXIT_REFUSED`, because the refusal is complete
-    before the daemon is contacted — the four refusals of §4's `send` row
-    (missing, unreadable, empty, over the cap) all arrive here.
+    before the daemon is contacted — §4's refusals for `send` (missing,
+    unreadable, non-regular, empty, over the cap, on `--prompt-file` or
+    `--stdin`) all arrive here.
     """
 
 
@@ -96,7 +99,12 @@ def call(
                 f"no daemon on {socket_path}: {exc}; is handsd running?{hint}"
             ) from exc
         with sock.makefile("rw", encoding="utf-8", newline="\n") as stream:
-            stream.write(json.dumps(request) + "\n")
+            # §4: "the wire carries UTF-8 unescaped". `ensure_ascii` at its
+            # default spends 6 ASCII bytes on every 3-byte CJK character, so a
+            # prompt well under the cap could outgrow the daemon's line room
+            # and die at a broken pipe (review 4 should-fix 3). The socket is
+            # UTF-8 at both ends; there is nothing to transliterate for.
+            stream.write(json.dumps(request, ensure_ascii=False) + "\n")
             stream.flush()
             line = stream.readline()
     finally:
@@ -149,6 +157,13 @@ def build_parser() -> argparse.ArgumentParser:
             "hands — dispatch prompts to headless Claude Code roles, monitor them, "
             "and chain pre-planned steps by a playbook."
         ),
+        # §4: the exit codes, said once where every command's reader can find
+        # them. 2 is the one that carries information a driver acts on.
+        epilog=(
+            f"exit codes: 0 on success; {EXIT_REFUSED} when the client did not deliver a "
+            "completed request (it refused the prompt, or `wait --timeout` expired), "
+            "and nothing was dispatched; 1 for every other failure."
+        ),
     )
     parser.add_argument("--version", action="version", version=f"hands {__version__}")
     sub = parser.add_subparsers(dest="command", metavar="command")
@@ -173,10 +188,16 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="PATH",
         help="read the prompt from this file (UTF-8), sent byte for byte; §4's "
         "normal route for prose, since the prompt never touches a command line. "
-        f"A missing, unreadable, empty or over-{MAX_PROMPT_BYTES}-byte file is "
-        f"refused here, before the daemon is contacted, and exits {EXIT_REFUSED}",
+        f"A missing, unreadable, non-regular, empty or over-{MAX_PROMPT_BYTES}-byte "
+        "file (counted as the JSON it becomes on the wire) is refused here, before "
+        f"the daemon is contacted, and exits {EXIT_REFUSED}",
     )
-    send.add_argument("--stdin", action="store_true", help="read the prompt from stdin")
+    send.add_argument(
+        "--stdin",
+        action="store_true",
+        help="read the prompt from stdin; the same size and emptiness refusals as "
+        "--prompt-file, at the same place",
+    )
     send.add_argument("prompt", nargs="?", help="the prompt; or --prompt-file/--stdin")
 
     wait = command("wait", "block until a job is terminal, or an event arrives")
@@ -632,8 +653,8 @@ def main(
         if command == "open" and not as_json:
             (exec_fn or exec_session)(result["argv"], result["cwd"])
             return 0
-    except PromptFileError as exc:
-        # §4: the client refused the file itself. Nothing was sent, so this is
+    except PromptError as exc:
+        # §4: the client refused the prompt itself. Nothing was sent, so this is
         # not a failure of the run — it is the same "nothing happened" that a
         # timed-out `wait` reports, and it carries the same code.
         print(f"hands: {exc}", file=err)
@@ -768,16 +789,85 @@ def _follow(socket_path: Path, role: str, *, project: str, out: TextIO) -> int:
 _PROMPT_ROUTES = "--prompt-file PATH, --stdin, or a prompt argument"
 
 
+#: The kinds of file a prompt cannot come from, in the order `stat` answers
+#: them. Reading any of these can fail to end — a FIFO with no writer blocks
+#: forever, `/dev/zero` never stops giving — so they are refused before they
+#: are opened, not after (§4, review 4 should-fix 4).
+_FILE_KINDS = (
+    (stat.S_ISDIR, "a directory"),
+    (stat.S_ISFIFO, "a named pipe (FIFO)"),
+    (stat.S_ISSOCK, "a socket"),
+    (stat.S_ISCHR, "a character device"),
+    (stat.S_ISBLK, "a block device"),
+)
+
+#: §4: "the wire carries UTF-8 unescaped so the daemon's line room (cap plus
+#: one quarter) fits any accepted prompt". `json.dumps` leaves non-ASCII alone
+#: with `ensure_ascii=False` but still escapes `"`, `\` and the control bytes,
+#: so the cap is measured on the wire: an accepted prompt is at most the cap of
+#: that line, and the quarter left over is the envelope's — the method, the
+#: role, the `--file` writes and the gate.
+#: A control byte costs 6 bytes as `\u00XX`, except these five, which json
+#: gives a two-character escape (`\b`, `\t`, `\n`, `\f`, `\r`).
+_SHORT_ESCAPES = (0x08, 0x09, 0x0A, 0x0C, 0x0D)
+
+
+def _wire_bytes(text: str) -> int:
+    r"""The bytes `json.dumps(text, ensure_ascii=False)` will spend on `text`.
+
+    Counted rather than built: the answer is needed for a prompt that may be
+    10 MB, and escaping one to find out how big it is would cost six times that
+    in memory for the one input that makes it matter. Counting bytes is exact
+    because none of the bytes that need escaping — `"`, `\` and the C0 controls
+    — can occur inside a multi-byte UTF-8 sequence, whose bytes are all >= 0x80.
+    The enclosing quotes are not counted: this is the size of the content.
+    """
+    raw = text.encode("utf-8")
+    extra = raw.count(b'"') + raw.count(b"\\")
+    for byte in range(0x20):
+        extra += raw.count(bytes([byte])) * (1 if byte in _SHORT_ESCAPES else 5)
+    return len(raw) + extra
+
+
+def _checked_prompt(text: str, where: str) -> str:
+    """§4's prompt refusals that are the same on `--prompt-file` and `--stdin`.
+
+    Both routes carry the same bytes to the same daemon, so the same prompt is
+    refused the same way, with the same message and the same exit code, on
+    either of them (review 4 should-fix 3): the route names itself and the rest
+    of the sentence is one sentence, spelled once.
+    """
+    if not text.strip():
+        raise PromptError(f"{where} is empty; refusing to send an empty prompt")
+    size = len(text.encode("utf-8"))
+    advice = "; send the content with `hands put` and name it in the prompt"
+    if size > MAX_PROMPT_BYTES:
+        raise PromptError(
+            f"{where} is {size} bytes, over the {MAX_PROMPT_BYTES} byte cap of §2" + advice
+        )
+    wire = _wire_bytes(text)
+    if wire > MAX_PROMPT_BYTES:
+        # Under the cap as bytes, over it as JSON. The daemon would refuse to
+        # read a line this long and close the connection, and the human would
+        # see a broken pipe instead of the file they named (should-fix 3).
+        raise PromptError(
+            f"{where} is {size} bytes, {wire} once escaped for the wire, over the "
+            f"{MAX_PROMPT_BYTES} byte cap of §2" + advice
+        )
+    return text
+
+
 def _read_prompt_file(where: str) -> str:
     """§4/§12: the prompt travels as a file, so no shell ever parses it.
 
     The bytes are sent exactly as they are — a trailing newline included, the
-    way `--stdin` sends what it was piped. §4 makes all four refusals the
-    client's own — "the client refuses a missing, unreadable, empty or over-10
-    MB file" — so each one names the path the human typed, and none of them
-    costs a round trip. An empty file and an oversized one would both be
-    refused later anyway (`Api.send` at §6, `Runner.run` at §2); refusing them
-    here is what turns "the daemon said no" into "that file is empty".
+    way `--stdin` sends what it was piped. §4 makes the refusals the client's
+    own — "the client refuses a missing, unreadable, non-regular, empty or
+    over-10 MB file on either route" — so each one names the path the human
+    typed, and none of them costs a round trip. An empty file and an oversized
+    one would both be refused later anyway (`Api.send` at §6, `Runner.run` at
+    §2); refusing them here is what turns "the daemon said no" into "that file
+    is empty".
 
     This is the one path where hands reads a file without `files.py`'s
     allowed-roots check, and that is deliberate, not an oversight: those roots
@@ -786,32 +876,37 @@ def _read_prompt_file(where: str) -> str:
     is not confined to their own roles' roots.
     """
     path = Path(where).expanduser()
-    # The size comes from the directory entry, so a 10 MB mistake is refused
-    # without ever being read into memory. `stat` also answers "missing" and
-    # "no permission" — the first two refusals — before anything is opened.
+    named = f"--prompt-file {path}"
+    # One `stat` answers three of the refusals before anything is opened:
+    # "missing", "no permission", and "not a regular file". The size comes from
+    # the directory entry too, so a 10 MB mistake never enters memory.
     try:
-        size = path.stat().st_size
+        info = path.stat()
     except OSError as exc:
-        raise PromptFileError(f"--prompt-file {path}: {exc.strerror or exc}") from exc
-    # §2's cap, spelled once: the client refuses exactly what the runner would.
-    if size > MAX_PROMPT_BYTES:
-        raise PromptFileError(
-            f"--prompt-file {path} is {size} bytes, over the {MAX_PROMPT_BYTES} byte "
-            "cap of §2; send the content with `hands put` and name it in the prompt"
+        raise PromptError(f"{named}: {exc.strerror or exc}") from exc
+    # review 4 should-fix 4: a FIFO reports 0 bytes, passes every size check,
+    # and then blocks forever with no writer; a device never ends. Only a
+    # regular file has an end, so only a regular file is a prompt.
+    for is_kind, kind in _FILE_KINDS:
+        if is_kind(info.st_mode):
+            raise PromptError(f"{named} is {kind}, not a regular file; a prompt is read to its end")
+    if not stat.S_ISREG(info.st_mode):  # pragma: no cover - no other kind exists on Linux
+        raise PromptError(f"{named} is not a regular file; a prompt is read to its end")
+    # §2's cap, before the read: the same sentence `_checked_prompt` would give.
+    if info.st_size > MAX_PROMPT_BYTES:
+        raise PromptError(
+            f"{named} is {info.st_size} bytes, over the {MAX_PROMPT_BYTES} byte cap of §2"
+            "; send the content with `hands put` and name it in the prompt"
         )
     try:
         raw = path.read_bytes()
     except OSError as exc:
-        raise PromptFileError(f"--prompt-file {path}: {exc.strerror or exc}") from exc
+        raise PromptError(f"{named}: {exc.strerror or exc}") from exc
     try:
         text = raw.decode("utf-8")
     except UnicodeDecodeError as exc:
-        raise PromptFileError(f"--prompt-file {path}: not UTF-8 text ({exc})") from exc
-    if not text.strip():
-        raise PromptFileError(
-            f"--prompt-file {path} is empty; refusing to send an empty prompt"
-        )
-    return text
+        raise PromptError(f"{named}: not UTF-8 text ({exc})") from exc
+    return _checked_prompt(text, named)
 
 
 def _prompt_of(args: argparse.Namespace, stdin: TextIO) -> str:
@@ -830,7 +925,11 @@ def _prompt_of(args: argparse.Namespace, stdin: TextIO) -> str:
     if args.prompt_file is not None:
         return _read_prompt_file(args.prompt_file)
     if args.stdin:
-        return stdin.read()
+        # §4: the same refusals as `--prompt-file`, minus the ones about a file
+        # (a stream is never missing, unreadable or a FIFO by the time it is
+        # read). Refusing here is what keeps one prompt from getting two
+        # answers depending on the route it took (review 4 should-fix 3).
+        return _checked_prompt(stdin.read(), "--stdin")
     if args.prompt is None:
         raise ValueError(f"send needs a prompt: {_PROMPT_ROUTES}")
     return args.prompt

@@ -123,7 +123,8 @@ you have to have started one. Exit code 1 means a check failed.
 A config that will not load at all is reported the same way, not as a crash:
 doctor prints its usual report with a failed `config` row carrying the error
 (`--json` included) and exits 1. It is the one command that does this — every
-other command exits 1 with the message alone.
+other command prints the message alone and exits 1, or 2 when the client
+refused before it delivered the request (see "Exit codes" below).
 
     hands doctor --live       # also runs ONE real `claude -p` turn per role
 
@@ -222,15 +223,34 @@ ops script.
 trailing newline included — so a prompt with a `>`, a parenthesis or a quote in
 it never reaches a command line and never has to survive a shell or the
 driver's Bash guard. It is one of three exclusive routes: `--prompt-file PATH`,
-`--stdin`, or the prompt as an argument. A missing file, a directory, bytes
-that are not UTF-8, and an empty (or all-whitespace) file are each refused with
-a message naming the file, and hands exits non-zero.
+`--stdin`, or the prompt as an argument. A missing file, an unreadable one, a
+directory or any other non-regular file (a FIFO, a socket, a device — reading
+one can never end), bytes that are not UTF-8, an empty (or all-whitespace)
+file, and one over the 10 MB cap are each refused by the client, before the
+daemon is contacted, with one line naming the file. `--stdin` gets the same
+size and emptiness refusals, in the same place, with the same message and the
+same exit code: one prompt cannot get two answers by changing route.
+
+The cap is counted as the prompt appears **on the wire**: the request is JSON,
+and JSON spends two bytes on a `"` or a `\` and six on a control byte, so a
+file at the cap made of quotes is refused here — with its two sizes in the
+message — instead of dying at a broken pipe against the daemon's line limit.
+Non-ASCII text is not escaped (a 9 MB file of CJK is 9 MB on the wire), and
+the daemon's line room is the cap plus a quarter, so anything the client
+accepts fits.
 
 That read is **not** confined to `files.allowed_roots`, and that is deliberate,
 not an oversight: the roots confine what the *daemon* writes and reads on a
 role's behalf (`hands put`/`get`/`ls`, `send --file`), while `--prompt-file` is
 read by the CLI, in your terminal, as you. Any file you can read is a prompt
 you can send.
+
+### Exit codes
+
+`0` is success. **`2` means the client did not deliver a completed request** —
+it refused the prompt as above, or a `hands wait --timeout` expired — and in
+both cases nothing was dispatched and nothing changed. Every other failure is
+`1`. `hands --help` says the same three lines.
 
 ---
 

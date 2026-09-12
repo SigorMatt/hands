@@ -59,8 +59,12 @@ INVALID_PARAMS = -32602
 INTERNAL_ERROR = -32603
 
 # One request may carry a 10 MB prompt (§2), well over asyncio's 64 KiB default
-# line limit; the reader is given the same room the runner gives the stream.
-_LINE_LIMIT = MAX_PROMPT_BYTES + 1024 * 1024
+# line limit. §4: "the daemon's line room (cap plus one quarter)". The client
+# sends UTF-8 unescaped and caps the prompt at `MAX_PROMPT_BYTES` *as it appears
+# on the wire*, so an accepted prompt is at most the cap of this line and the
+# quarter left over is the envelope's — method, id, role, `--file` writes, gate.
+# A quarter of the cap is 2.5 MiB, more than a command line can hold.
+_LINE_LIMIT = MAX_PROMPT_BYTES + MAX_PROMPT_BYTES // 4
 
 _SHUTDOWN_GRACE_S = 30.0  # ceiling on waiting for cancelled jobs to write their record
 
