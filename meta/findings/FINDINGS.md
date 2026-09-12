@@ -468,5 +468,12 @@ namespace, and keep `--for stop` meaning exactly one kind; (3) make the
 namespace rule opt-in (`--for 'stop.*'`). Builders do not edit `DESIGN.md`, so
 no mission unit can close this; U3 implemented the name the brief gave it.
 
-Status: open
+Decision, 2026-09-12 (architect, DESIGN v3.4 §21; recorded by mission 5 U0).
+Way (2): the kind is renamed **`pipeline.stop_suppressed`**. It sits in the
+`pipeline` namespace beside `pipeline.resumed`, so `--for stop` resolves to
+`{stop}` again and the driver is not woken by a stop that was deliberately not
+notified; a session that does want them arms `--for pipeline`. Mission 5 U5
+makes the rename in code, tests and docs; the acceptance is that
+`grep -rn 'stop\.suppressed' src tests docs driver` returns nothing.
 
+Status: closed by mission 5 U5 (the decision above; see meta/FINAL-REPORT-5.md)

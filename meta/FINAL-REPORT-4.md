@@ -281,6 +281,29 @@ command line cannot hold punctuation.
     vector left inside the allow list. Whether the allow list should contain
     `find` at all is the architect's question, not this mission's.
 
+**Correction, 2026-09-12 (mission 5 U0; REVIEW-4 blocker 1).** Item 15's middle
+clause is false. `find -exec` was closed at `935a275`, but the arbitrary-exec
+surface inside the allow list was **not** empty there and is not empty at
+`edf0bc2`. Re-run today against both (`check()` returning `None` = allowed):
+
+    git -c diff.external='touch /tmp/gprobe-pwned' diff --ext-diff  -> None
+    git -c core.pager=touch log                                     -> None
+    git diff --output=/tmp/x                                        -> None
+    git show HEAD --output=/tmp/x                                   -> None
+    find . -fprint /tmp/out  (also -fprint0, -fprintf, -fls)        -> None
+
+`git -c <key>=<cmd>` sets a config key for one invocation and `diff.external` /
+`core.pager` are keys whose values git executes, so an allowed first-level
+subcommand runs an arbitrary command; the reviewer confirmed the first live
+(`/tmp/gprobe-pwned` created). `--output=` and `find -fprint*` are the write
+half, against DESIGN §12's "never writes". None of these are regressions — the
+pre-`935a275` guard allowed them too — so what item 15 got wrong is the
+sentence, not the unit: it told the architect the surface was empty in the one
+section whose job is to say what is not. The report is a snapshot and is not
+rewritten (DESIGN §20); this line is the correction. Mission 5 U1 closes these
+vectors in the guard and pins the reviewer's exact probes in the adversarial
+table; what remains open after it is stated in `meta/FINAL-REPORT-5.md` §3.
+
 ---
 
 ## 4. Review items
