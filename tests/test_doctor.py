@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import io
 import json
+import shutil
 from pathlib import Path
 from typing import Any
 
@@ -20,7 +21,9 @@ import pytest
 
 from conftest import strip_paths
 from hands.cli import call, main
+from hands.config import load_config
 from hands.daemon import Daemon
+from hands.doctor import FAIL, Check, run_checks
 from harness import PROJECT, config_body, drive, write_project
 
 FAKE_CLAUDE = Path(__file__).with_name("fake_claude.py")
@@ -50,7 +53,11 @@ def write_config(
     if monitor_cmd == FAKE_MONITOR.name:
         target = ops / monitor_cmd
         if not target.exists():
-            target.symlink_to(FAKE_MONITOR)
+            # Copied, not linked: §21 makes `ops.monitor_cmd` name a script the
+            # ops repo really holds, and a symlink to this repo's stand-in
+            # resolves outside it (review 5 should-fix 4).
+            shutil.copy(FAKE_MONITOR, target)
+            target.chmod(0o755)
     allowed = roots if roots is not None else [str(work)]
     ops_block = f'monitor_cmd = "{monitor_cmd}"' if monitor_cmd else ""
     resume_block = f'resume_line = "{resume_line}"' if resume_line else ""
@@ -225,6 +232,13 @@ def test_the_ops_script_is_probed_for_the_three_flags(
         assert flag in strip_paths(detail)
 
 
+def ops_row(found: list[Check]) -> Check:
+    """The `ops script` row of a `run_checks` result (§4's doctor row order)."""
+    rows = [check for check in found if check.name == "ops script"]
+    assert len(rows) == 1, f"expected one ops script row, got {len(rows)}"
+    return rows[0]
+
+
 def ops_script(tmp_path: Path, body: str) -> None:
     """Replace the ops script with one that behaves as `body` says."""
     script = tmp_path / "ops" / FAKE_MONITOR.name
@@ -264,15 +278,46 @@ def test_a_missing_ops_script_is_refused_before_doctor_can_report_on_it(
     tmp_home: Path, tmp_path: Path, fake_mode: None
 ) -> None:
     """§21 (review 4 blocker 2): a `monitor_cmd` with no script behind it does
-    not load at all, so doctor's own missing-script row (§14 step 4, still the
-    answer for a script deleted after the config was read) is not what the human
-    meets — the `config` row is, naming the key and the path it could not find."""
+    not load at all, so doctor's own missing-script row is not what the human
+    meets — the `config` row is, naming the key and the path it could not find.
+    That row is still the answer for a script deleted *after* the config was
+    read, which is what the test below this one drives."""
     write_config(tmp_home, tmp_path, monitor_cmd="watch_monitor.sh")
     code, found = checks()
     assert code == 1
     assert found["config"]["status"] == "fail"
     detail = found["config"]["detail"]
     assert "monitor_cmd" in strip_paths(detail) and "watch_monitor.sh" in strip_paths(detail)
+
+
+def test_an_ops_script_that_changes_after_the_config_was_read_is_doctors_own_row(
+    tmp_home: Path, tmp_path: Path, fake_mode: None
+) -> None:
+    """§14 step 4 (review 5 should-fix 4): the run-time rows, restored.
+
+    §21 refuses a `monitor_cmd` with no executable script behind it at *load*, so
+    the two rows above — "does not exist" and "is not executable" — are reachable
+    only by a config that loaded and a script that changed under it afterwards.
+    That is what they are for, and the commit that added the load refusal took
+    their only coverage away with it. Here the config is read first, exactly as
+    the daemon reads it once at startup, and the script is then taken away.
+    """
+    write_config(tmp_home, tmp_path)
+    config = load_config("demo")
+    script = tmp_path / "ops" / FAKE_MONITOR.name
+    assert config.ops.monitor_path == script
+
+    script.chmod(0o644)
+    row = ops_row(run_checks(config))
+    assert row.status == FAIL
+    assert "not executable" in strip_paths(row.detail)
+    assert "§14" in strip_paths(row.detail)
+
+    script.unlink()
+    row = ops_row(run_checks(config))
+    assert row.status == FAIL
+    assert "does not exist" in strip_paths(row.detail)
+    assert "§14" in strip_paths(row.detail)
 
 
 def test_no_ops_script_configured_is_a_skip_not_a_failure(

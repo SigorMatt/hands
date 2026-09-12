@@ -20,6 +20,7 @@ from conftest import strip_paths
 from hands.config import Config, parse_config
 from hands.limits import from_iso
 from hands.runner import (
+    MAX_LAST_ARGV,
     KeepRefused,
     Runner,
     RunnerError,
@@ -564,7 +565,7 @@ def test_a_huge_stream_is_never_retained_by_the_runner(runner: Runner, spool: Sp
     job = asyncio.run(scenario())
 
     assert job.state == "killed"
-    # Everything per-job is released with the job; `last_argv` is `hands status`'.
+    # Everything per-job is released with the job; `last_argv` keeps the last few.
     assert runner.retained() == {
         "cancelled": 0,
         "last_argv": 1,
@@ -574,6 +575,29 @@ def test_a_huge_stream_is_never_retained_by_the_runner(runner: Runner, spool: Sp
         "session_ready": 0,
     }
     assert spool.stream_path(job.id).read_bytes().count(b"\n") > HUGE
+
+
+def test_last_argv_is_bounded_and_retained_names_what_it_does_not_count(
+    runner: Runner, spool: Spool
+) -> None:
+    """§21 (review 5 should-fix 3): every count `retained()` reports is bounded.
+
+    `_procs`, `_running`, `_session_ready` and `_logs` are popped when a run
+    ends; `last_argv` never was, so the daemon held one argv list per job for
+    the rest of its life while the method's docstring said every count was
+    "bounded by the number of jobs in flight". The cap is what makes that
+    sentence true, and the docstring now also names the three things the method
+    does *not* count, so its number is not read as "everything the runner holds".
+    """
+    jobs = [send(runner, spool, "FAKE:result ok") for _ in range(MAX_LAST_ARGV + 3)]
+
+    assert runner.retained()["last_argv"] == MAX_LAST_ARGV
+    # Which ones: the newest `MAX_LAST_ARGV`, the three oldest dropped.
+    assert sorted(runner.last_argv) == sorted(job.id for job in jobs[3:])
+
+    doc = Runner.retained.__doc__ or ""
+    for unreported in ("_Parsed.result", "stderr", "reader"):
+        assert unreported in strip_paths(doc), f"the docstring calls {unreported!r} counted"
 
 
 def test_the_final_result_is_the_only_event_kept_after_a_huge_run(

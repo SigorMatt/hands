@@ -393,6 +393,36 @@ def test_send_refuses_a_prompt_file_that_is_not_utf8(project: str, tmp_path: Pat
     assert str(path) in err and "UTF-8" in strip_paths(err)
 
 
+@pytest.mark.parametrize("route", ["--prompt-file", "--stdin"])
+def test_every_prompt_route_refuses_bytes_that_are_not_utf8_the_same_way(
+    project: str, tmp_path: Path, route: str
+) -> None:
+    """§4 (review 5 should-fix 7): one prompt, one refusal, on either route.
+
+    `--prompt-file` read bytes and refused them itself. `--stdin` never saw
+    bytes: under `PYTHONUTF8=1` the interpreter reads stdin with
+    `errors="surrogateescape"`, so the same file piped in arrives as lone
+    surrogates, and nothing looked at them until the request was measured for
+    the wire — where the encode raised, the human got `hands: 'utf-8' codec
+    can't encode characters…` and the exit code was 1, not 2. That is "fails
+    somewhere other than at the place the human named", one route over. Both
+    routes now carry their text into the same check and get the same sentence.
+    """
+    raw = b"a prompt\xff\xfe and then some"
+    argv = ["--role", "aux", "--context", "clear"]
+    if route == "--prompt-file":
+        path = tmp_path / "prompt.bin"
+        path.write_bytes(raw)
+        code, _, err = send_cli(*argv, "--prompt-file", str(path))
+    else:
+        # What PYTHONUTF8=1 hands the client for those bytes, spelled out.
+        code, _, err = send_cli(*argv, "--stdin", stdin=raw.decode("utf-8", "surrogateescape"))
+    assert code == EXIT_REFUSED, err
+    assert "not UTF-8 text" in strip_paths(err)
+    # The route it refused is the first thing the sentence says, on both of them.
+    assert err.startswith(f"hands: {route}"), err
+
+
 def test_send_refuses_an_empty_prompt_file(project: str, tmp_path: Path) -> None:
     """An empty prompt is a mistake, not an instruction — and the daemon refuses
     one anyway (§6); catching it here names the file that was empty."""

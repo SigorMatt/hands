@@ -3,7 +3,7 @@
 import ast
 import dataclasses
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 import pytest
 
@@ -404,13 +404,25 @@ def test_an_empty_monitor_cmd_cannot_make_the_ops_repo_the_monitor(write_config)
 
 @pytest.fixture
 def ops_repo(tmp_home: Path) -> Path:
-    """An ops repo (§13 `[ops] repo`) holding one of each thing a name can hit."""
+    """An ops repo (§13 `[ops] repo`) holding one of each thing a name can hit.
+
+    Including the two that are inside it only by spelling: `link.sh` is a
+    symlink to a script the ops repo does not hold, and `linkdir` is a symlink
+    to the directory that holds it (review 5 should-fix 4).
+    """
     repo = tmp_home / "ops"
     (repo / "sub").mkdir(parents=True)
     for name in ("watch_monitor.sh", "sub/nested.sh", "plain.sh"):
         script = repo / name
         script.write_text("#!/bin/sh\nexit 0\n")
         script.chmod(0o644 if name == "plain.sh" else 0o755)
+    outside = tmp_home / "outside"
+    outside.mkdir()
+    evil = outside / "evil.sh"
+    evil.write_text("#!/bin/sh\nexit 0\n")
+    evil.chmod(0o755)
+    (repo / "link.sh").symlink_to(evil)
+    (repo / "linkdir").symlink_to(outside)
     return repo
 
 
@@ -471,6 +483,46 @@ def test_a_monitor_cmd_naming_an_executable_script_under_the_ops_repo_loads(
     cfg = load_config("demo")
     assert cfg.ops.monitor_cmd == monitor_cmd
     assert cfg.ops.monitor_path == ops_repo / monitor_cmd
+
+
+@pytest.mark.parametrize(
+    "monitor_cmd",
+    ["link.sh", "linkdir/evil.sh"],
+    ids=["a_symlink_out_of_the_repo", "a_traversal_through_a_symlinked_directory"],
+)
+def test_a_monitor_cmd_that_resolves_outside_the_ops_repo_is_refused_at_load(
+    write_config, ops_repo: Path, monitor_cmd: str
+) -> None:
+    """§21 (review 5 should-fix 4): "under ops.repo" is a fact about the path
+    the kernel reaches, not about the way it is spelled.
+
+    The `..`-and-absolute check is lexical, so a symlink inside `ops.repo` that
+    points out of it, and a traversal through a symlinked directory, both loaded
+    clean and left `monitor_path` naming a script the ops repo does not hold —
+    the thing review 4 blocker 2 refused, spelled differently. Containment is
+    checked after resolution now, and the refusal names both the name and where
+    it lands.
+    """
+    write_config(ops_config(monitor_cmd))
+    with pytest.raises(ConfigError) as exc:
+        load_config("demo")
+    message = str(exc.value)
+    assert "demo.toml" in strip_paths(message)  # the `path` context every error carries
+    assert "[ops]" in strip_paths(message) and "monitor_cmd" in strip_paths(message)
+    assert "outside ops.repo" in strip_paths(message)  # what is wrong with the value
+    assert "evil.sh" in strip_paths(message)  # where it lands, which the name does not say
+    assert "inside ops.repo" in strip_paths(message)  # what to do about it
+
+
+def test_a_monitor_cmd_inside_the_ops_repo_may_still_be_a_symlink(
+    write_config, ops_repo: Path
+) -> None:
+    """The refusal is about where the script *is*, not about symlinks: one that
+    resolves back inside `ops.repo` is the repo's own script under another
+    name, and stays legal."""
+    (ops_repo / "alias.sh").symlink_to(ops_repo / "watch_monitor.sh")
+    write_config(ops_config("alias.sh"))
+    assert load_config("demo").ops.monitor_path == ops_repo / "alias.sh"
 
 
 def test_the_ops_repo_directory_can_never_be_the_monitor_script() -> None:
@@ -709,12 +761,44 @@ STRING_HELPERS = ("_str", "_opt_str", "_path", "_str_list")
 ROLE_SCOPE = "[roles.<name>]"
 
 
-def config_keys() -> tuple[set[tuple[str, str]], set[tuple[str, str]], set[tuple[str, str]]]:
-    """Read `config.py`: the keys it admits, the keys it reads, and the string ones."""
-    tree = ast.parse(Path(hands.config.__file__).read_text())
+#: `config.py` as text, so a test can scan a *mutated* copy of it and show what
+#: the scan below would say about a loader that does not exist yet.
+SOURCE = Path(hands.config.__file__).read_text()
+
+
+def section_scope(section: str) -> str:
+    """The `where` a section's own `_check_keys` call passes (§13's headings)."""
+    return ROLE_SCOPE if section == "roles" else f"[{section}]"
+
+
+class Scan(NamedTuple):
+    """What `config.py` says about itself: sections, keys, and how they are read."""
+
+    admitted: set[tuple[str, str]]
+    read: set[tuple[str, str]]
+    strings: set[tuple[str, str]]
+    sections: set[str]
+    checked: set[str]
+
+    @property
+    def unchecked_sections(self) -> set[str]:
+        """Sections the config admits whose own keys nothing checks (§21).
+
+        A section that never calls `_check_keys` admits every key anyone writes
+        under it, and none of its keys reach `admitted`, so the "read through a
+        helper" walk has nothing to say about them either.
+        """
+        return {name for name in self.sections if section_scope(name) not in self.checked}
+
+
+def config_keys(source: str | None = None) -> Scan:
+    """Read `config.py`: the sections and keys it admits, and how it reads them."""
+    tree = ast.parse(SOURCE if source is None else source)
     admitted: set[tuple[str, str]] = set()
     read: set[tuple[str, str]] = set()
     strings: set[tuple[str, str]] = set()
+    sections: set[str] = set()
+    checked: set[str] = set()
     for func in [n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)]:
         for node in ast.walk(func):
             if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Name):
@@ -724,7 +808,11 @@ def config_keys() -> tuple[set[tuple[str, str]], set[tuple[str, str]], set[tuple
                 where = node.args[2]
                 scope = where.value if isinstance(where, ast.Constant) else ROLE_SCOPE
                 if scope == "config":
-                    continue  # the section names, not keys
+                    # The section names, not keys — and the list of sections the
+                    # rest of this scan has to account for (review 5 should-fix 5).
+                    sections |= {item.value for item in node.args[1].elts}
+                    continue
+                checked.add(scope)
                 admitted |= {(scope, item.value) for item in node.args[1].elts}
             elif name in HELPER_WHERE:
                 key = node.args[1]
@@ -735,7 +823,7 @@ def config_keys() -> tuple[set[tuple[str, str]], set[tuple[str, str]], set[tuple
                 read.add((scope, key.value))
                 if name in STRING_HELPERS:
                     strings.add((scope, key.value))
-    return admitted, read, strings
+    return Scan(admitted, read, strings, sections, checked)
 
 
 def test_every_key_the_config_admits_is_read_through_a_loader_helper() -> None:
@@ -748,14 +836,18 @@ def test_every_key_the_config_admits_is_read_through_a_loader_helper() -> None:
     config admits at all; every one of them must be read by a helper, and nothing
     else may be read, so the two lists cannot drift apart unnoticed.
     """
-    admitted, read, strings = config_keys()
-    assert admitted, "the parse found no keys at all — the scan is broken, not the loader"
-    assert read - admitted == set(), "a key is read that no section admits"
-    assert admitted - read == set(), "a key is admitted that no helper reads"
+    scan = config_keys()
+    assert scan.admitted, "the parse found no keys at all — the scan is broken, not the loader"
+    assert scan.read - scan.admitted == set(), "a key is read that no section admits"
+    assert scan.admitted - scan.read == set(), "a key is admitted that no helper reads"
+    # …and every section the config admits checks its own keys, so the two lists
+    # above cover the whole of §13 rather than the part of it that opted in.
+    assert scan.sections, "the parse found no sections — the scan is broken, not the loader"
+    assert scan.unchecked_sections == set(), "a section is admitted whose keys nothing checks"
     # …and the scan tells the string keys from the rest, which is what the two
     # tests around this one lean on.
-    assert ("[ops]", "monitor_cmd") in strings
-    assert (ROLE_SCOPE, "queue_depth") in read.difference(strings)
+    assert ("[ops]", "monitor_cmd") in scan.strings
+    assert (ROLE_SCOPE, "queue_depth") in scan.read.difference(scan.strings)
 
 
 def test_the_padded_config_names_every_string_key_the_loader_reads() -> None:
@@ -764,6 +856,26 @@ def test_the_padded_config_names_every_string_key_the_loader_reads() -> None:
     So the string keys are read out of `config.py` itself: a new one that this
     file does not exercise fails here rather than passing silently.
     """
-    _admitted, _read, strings = config_keys()
+    strings = config_keys().strings
     missing = sorted(key for _scope, key in strings if f"{key} = " not in PADDED)
     assert missing == []
+
+
+def test_a_new_section_that_checks_no_keys_is_caught_by_the_scan() -> None:
+    """§21 (review 5 should-fix 5): the scan binds every section, not only the
+    sections that already call `_check_keys`.
+
+    The reviewer added a whole `[extra]` section to the top-level list and read
+    it with a raw `extra_t.get(...)`: this file stayed green, because the scan
+    skipped the one call that says which sections exist, so `[extra]` admitted
+    every key anyone wrote under it and its raw read was invisible to the walk
+    above. The demonstration is a mutated copy of `config.py` — the real one is
+    what the test above asserts on."""
+    mutated = SOURCE.replace('"gates", "runner"),', '"gates", "runner", "extra"),', 1)
+    assert mutated != SOURCE, "config.py no longer spells its section list as the scan expects"
+
+    scan = config_keys(mutated)
+    assert "extra" in scan.sections, "the scan did not see the new section at all"
+    assert scan.unchecked_sections == {"extra"}
+    # …and the section list the loader really has is fully accounted for.
+    assert config_keys(SOURCE).unchecked_sections == set()

@@ -70,10 +70,10 @@ def strip_paths(text: str, *extra: str | Path) -> str:
     repo, a config file), the per-test `tmp_path` and pytest's `--basetemp`,
     `$HOME` with `~/.hands` and the daemon socket `~/.hands/handsd.sock` under
     it, and the current working directory — plus the resolved form of each. A
-    directory with fewer than two components (`/`, `/home`) is never stripped:
-    that would delete the text rather than the path. Only prefixes go, so what
-    the product printed *after* a path (`watch_monitor.sh`, `demo.toml`) is
-    still there to assert on.
+    directory of fewer than three components (`/`, `/home`, `/tmp`) is never
+    stripped: that would delete the text rather than the path. Only prefixes
+    go, so what the product printed *after* a path (`watch_monitor.sh`,
+    `demo.toml`) is still there to assert on.
 
     Why (DESIGN §21, review 4 should-fix 1 and 2): none of these paths are the
     product's choice. `assert "--pids" not in out` went red under

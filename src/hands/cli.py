@@ -1017,10 +1017,22 @@ def _checked_prompt(text: str, where: str) -> str:
     refused the same way, with the same message and the same exit code, on
     either of them (review 4 should-fix 3): the route names itself and the rest
     of the sentence is one sentence, spelled once.
+
+    Including "these are not UTF-8 bytes" (review 5 should-fix 7). `--stdin`
+    never sees bytes: under `PYTHONUTF8=1` the interpreter reads stdin with
+    `errors="surrogateescape"`, so a file that `--prompt-file` refuses arrives
+    here as lone surrogates instead — and every later step assumes text that can
+    be encoded. Unrefused, the `UnicodeEncodeError` surfaced as a bare `hands:
+    'utf-8' codec can't encode characters…` with exit 1, from inside the wire
+    measurement, for a prompt the human named at the command line.
     """
+    try:
+        raw = text.encode("utf-8")
+    except UnicodeEncodeError as exc:
+        raise PromptError(f"{where}: not UTF-8 text ({exc})") from exc
     if not text.strip():
         raise PromptError(f"{where} is empty; refusing to send an empty prompt")
-    size = len(text.encode("utf-8"))
+    size = len(raw)
     advice = "; send the content with `hands put` and name it in the prompt"
     if size > MAX_PROMPT_BYTES:
         raise PromptError(
@@ -1083,11 +1095,11 @@ def _read_prompt_file(where: str) -> str:
         raw = path.read_bytes()
     except OSError as exc:
         raise PromptError(f"{named}: {exc.strerror or exc}") from exc
-    try:
-        text = raw.decode("utf-8")
-    except UnicodeDecodeError as exc:
-        raise PromptError(f"{named}: not UTF-8 text ({exc})") from exc
-    return _checked_prompt(text, named)
+    # Decoded with `surrogateescape` rather than refused here: that is exactly
+    # what `--stdin` hands the client for the same bytes under `PYTHONUTF8=1`,
+    # so both routes carry the same string into `_checked_prompt` and are
+    # refused by it, in one place, with one sentence (review 5 should-fix 7).
+    return _checked_prompt(raw.decode("utf-8", "surrogateescape"), named)
 
 
 def _prompt_of(args: argparse.Namespace, stdin: TextIO) -> str:

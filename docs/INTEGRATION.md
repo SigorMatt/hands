@@ -106,9 +106,11 @@ Notes that are easy to get wrong:
   flags".
 - **`ops.monitor_cmd` names a script inside `ops.repo`** (§21): a relative path
   with no `..`, and the file it names has to be an executable regular file that
-  exists when the config loads. `"."` used to load and make the ops *directory*
-  the monitor script, which then failed silently and left builder jobs
-  unwatched; it is a load error now, naming the path it looked for.
+  exists when the config loads *and resolves inside the repo* — a symlink out of
+  it, or a traversal through a symlinked directory, is refused by where it lands
+  rather than accepted by how it is spelled. `"."` used to load and make the ops
+  *directory* the monitor script, which then failed silently and left builder
+  jobs unwatched; it is a load error now, naming the path it looked for.
 
 ## 4. `hands doctor` (§14 step 1)
 
@@ -228,8 +230,11 @@ directory or any other non-regular file (a FIFO, a socket, a device — reading
 one can never end), bytes that are not UTF-8, an empty (or all-whitespace)
 file, and one over the 10 MB cap are each refused by the client, before the
 daemon is contacted, with one line naming the file. `--stdin` gets the same
-size and emptiness refusals, in the same place, with the same message and the
-same exit code: one prompt cannot get two answers by changing route.
+size, emptiness and encoding refusals, in the same place, with the same message
+and the same exit code: one prompt cannot get two answers by changing route.
+(Under `PYTHONUTF8=1` stdin decodes bad bytes to lone surrogates rather than
+failing, so the client checks the text it was handed, not the route it came
+by.)
 
 The cap is counted as the prompt appears **on the wire**: the request is JSON,
 and JSON spends two bytes on a `"` or a `\` and six on a control byte, so a

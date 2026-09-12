@@ -82,6 +82,12 @@ _STREAM_LIMIT = MAX_PROMPT_BYTES + 1024 * 1024
 
 _STDERR_TAIL_LINES = 50  # §6: "stderr_tail  # last 50 lines"
 
+# How many spawned command lines `last_argv` keeps (§21, review 5 should-fix 3).
+# It is a debugging aid — nothing in hands reads it back — so it is the one
+# structure here that is not emptied when a run ends; a cap is what keeps it
+# from growing with the number of jobs the daemon has ever run.
+MAX_LAST_ARGV = 8
+
 _VERDICT_RE = re.compile(r"^VERDICT:")  # §6: "the first line of result matching ^VERDICT:"
 
 # §6 detects a limit from "the `api_retry` error category `rate_limit` or the
@@ -236,8 +242,22 @@ class Runner:
         #: same resident bytes as a one-turn one. `retained()` states that as a
         #: number a test can assert on.
         self._logs: dict[str, TextIO] = {}
-        #: job id → the argv it was spawned with, for `hands status`/tests.
+        #: job id → the argv it was spawned with, for a human reading a spawn.
+        #: The last `MAX_LAST_ARGV` of them: this is the one structure here that
+        #: outlives its job, so it is the one that needs a cap (§21).
         self.last_argv: dict[str, list[str]] = {}
+
+    def _remember_argv(self, job_id: str, argv: list[str]) -> None:
+        """Keep this argv and drop the oldest beyond `MAX_LAST_ARGV` (§21).
+
+        Review 5 should-fix 3: every other structure on this object is popped
+        when the run ends, so it is bounded by the jobs in flight. This one is
+        not, and without the cap the daemon held one argv list per job it had
+        ever run.
+        """
+        self.last_argv[job_id] = argv
+        while len(self.last_argv) > MAX_LAST_ARGV:
+            self.last_argv.pop(next(iter(self.last_argv)))
 
     def retained(self) -> dict[str, int]:
         """How many items this runner is still holding, by structure (§21).
@@ -245,7 +265,15 @@ class Runner:
         §21 forbids the daemon's resident size growing with a job's transcript.
         RSS is a property of the machine and cannot be asserted; the length of
         what is held is a property of the code and can be. Nothing counted here
-        is per-event, so every count is bounded by the number of jobs in flight.
+        is per-event: five of the six counts are emptied when a run ends and so
+        are bounded by the jobs in flight, and `last_argv`, which is not emptied,
+        is bounded by `MAX_LAST_ARGV` instead.
+
+        What it does not count, so the number is not read as everything the
+        runner holds: the in-flight `_Parsed.result` (one job's final result),
+        the stderr tail `run()` keeps as a local (`_STDERR_TAIL_LINES` lines),
+        and asyncio's own reader buffer (`_STREAM_LIMIT`). Each is bounded, none
+        is per-event, and none of them is on this object to be counted.
         """
         return {
             "cancelled": len(self._cancelled),
@@ -316,7 +344,7 @@ class Runner:
 
         resume = self.resolve_resume_session(job.role) if job.context == "keep" else None
         argv = build_argv(self.config, role, resume=resume)
-        self.last_argv[job.id] = argv
+        self._remember_argv(job.id, argv)
 
         head_at_start = await _git_head(role.cwd)
         job = self.spool.transition(job, "running", head_at_start=head_at_start)

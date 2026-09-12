@@ -149,6 +149,11 @@ def _monitor_cmd_problem(repo: Path | None, cmd: str) -> str | None:
     what it has to be. monitor.py and doctor.py still say what they find at run
     time — a script can be deleted after the config loads — but that is no
     longer the first place a human hears about a name that never named a script.
+
+    Containment is checked here rather than in `_monitor_cmd_shape` because it
+    is a fact about the filesystem, not about the spelling: review 5 should-fix
+    4 walked out of the ops repo through a symlink, with no `..` and no absolute
+    path in the value, so the answer is where the name *resolves*.
     """
     shape = _monitor_cmd_shape(cmd)
     if shape is not None or repo is None:
@@ -156,6 +161,12 @@ def _monitor_cmd_problem(repo: Path | None, cmd: str) -> str | None:
     target = repo / cmd
     if not target.exists():
         return f"names a script that does not exist, got {cmd!r} ({target}); {_MONITOR_CMD_FIX}"
+    landing = target.resolve()
+    if not landing.is_relative_to(repo.resolve()):
+        return (
+            f"names a script outside ops.repo, got {cmd!r} ({target} resolves to "
+            f"{landing}); {_MONITOR_CMD_FIX}"
+        )
     if not target.is_file():
         return f"must name a regular file, got {cmd!r} ({target}); {_MONITOR_CMD_FIX}"
     if not os.access(target, os.X_OK):
@@ -190,10 +201,12 @@ class OpsConfig:
         """`<ops.repo>/<monitor_cmd>` when both are set (§5).
 
         The value is validated before it can be stored (§21): the path this
-        builds is under `ops.repo` and is never the repo directory itself, and
-        at load time it named an executable regular file. What is on disk can
-        still change afterwards, which is what monitor.py's `_script_problem`
-        and doctor's ops-script check are for.
+        builds is under `ops.repo` — after resolution, not only by spelling —
+        and is never the repo directory itself, and at load time it named an
+        executable regular file. What is on disk can still change afterwards,
+        which is what monitor.py's `_script_problem` and doctor's ops-script
+        check are for: `OpsConfig` is built once, and a symlink can be
+        repointed, a script deleted or its exec bit dropped at any time after.
         """
         if self.repo is None or self.monitor_cmd is None:
             return None
