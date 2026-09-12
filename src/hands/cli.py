@@ -11,13 +11,14 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import functools
 import json
 import os
 import socket
 import stat
 import sys
 import time
-from collections.abc import Callable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence, Sized
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, TextIO
@@ -752,7 +753,7 @@ def _doctor_unloadable(
     The same report, with the error as the `config` row a `--json` caller already
     reads. No other check can run: they all need the config. `project` is None
     only when the project itself could not be resolved — there is then no path to
-    name either, and the wake procedure prints a placeholder rather than a guess.
+    name either, and the notification check prints a placeholder rather than a guess.
     """
     named = project or "<project>"
     path = config_path(project) if project else None
@@ -922,7 +923,12 @@ def _wire_bytes(text: str) -> int:
 #: pipe, exit 1, nothing in the daemon log. So the client measures the line it is
 #: about to write, whole, before it connects.
 #: The name each part is refused under, so the message says which one to move.
-_PART_LABELS = {"prompt": "the prompt", "gate": "--gate", "content": "--content"}
+#: Every other part is named as its parser names it (`_typed_names`); the prompt
+#: is not, because three routes fill it and only one of them is the positional.
+_PART_LABELS = {"prompt": "the prompt"}
+
+#: What the client itself puts on the line: the method, the id, the keys.
+_ENVELOPE = "the envelope"
 
 
 def _utf8_bytes(text: str, where: str) -> bytes:
@@ -949,67 +955,134 @@ def _utf8_bytes(text: str, where: str) -> bytes:
         raise PromptError(f"{named}: not UTF-8 text ({exc})") from exc
 
 
-def _hollow(value: Any) -> Any:
-    """`value` with every string emptied: its shape, without its content.
+@functools.cache
+def _typed_names() -> dict[str, dict[str, str]]:
+    """command -> wire key -> the name the human typed that value under (§4).
 
-    The shape is a few hundred bytes whatever the request carries, so `json`
-    can serialize it for real; what the strings cost is `_wire_bytes`. Together
-    they give the exact size of a 12 MB line without ever building one.
+    Read off the parser, so it cannot drift from it (review 6 should-fix 5): a
+    positional is `a <dest> argument` — `hands result $'job-\\xff'` used to answer
+    `--job`, a flag that does not exist — and a flag is its own option string,
+    the long one where it has one (`--for`, `-f`). A wire key is its argument's
+    dest, or the dest without the `_` that keeps it off a keyword (`for_`).
     """
+    names: dict[str, dict[str, str]] = {}
+    for action in build_parser()._actions:
+        if not isinstance(action, argparse._SubParsersAction):
+            continue
+        for command, parser in action.choices.items():
+            typed = names.setdefault(command, {})
+            for argument in parser._actions:
+                flags = argument.option_strings
+                if flags:
+                    long = [flag for flag in flags if flag.startswith("--")]
+                    typed[argument.dest.removesuffix("_")] = (long or flags)[0]
+                else:
+                    typed[argument.dest] = f"a {argument.dest} argument"
+    return names
+
+
+def _named(method: Any, key: Any, item: Any) -> str:
+    """The name one top-level part of a request's params is refused under."""
+    if key in _PART_LABELS:
+        return _PART_LABELS[key]
+    name = _typed_names().get(method, {}).get(key, str(key))
+    if key == "file" and isinstance(item, str):  # `--file path=content`: the path names it
+        return f"{name} {item.split('=', 1)[0]}"
+    return name
+
+
+#: One step of the walk: (the name it is refused under, the string or None, the
+#: bytes of JSON syntax around it — quotes, `": "`, brackets, `", "`, a scalar).
+_Piece = tuple[str, str | None, int]
+
+
+def _frame(container: Sized, label: str) -> Iterator[_Piece]:
+    """The brackets of a dict or list and the `", "` between its items."""
+    yield label, None, 2 + 2 * max(len(container) - 1, 0)
+
+
+def _key(key: Any, label: str) -> Iterator[_Piece]:
+    """A dict key as `json.dumps` writes it: quoted, then `": "`. A key that is
+    not a string is written as the JSON of it, quoted."""
+    if isinstance(key, str):
+        yield label, key, 4
+    else:
+        yield label, None, 4 + len(json.dumps(key))
+
+
+def _walk(value: Any, label: str) -> Iterator[_Piece]:
+    """Every string in `value` — dict keys too — at any depth, under `label`."""
     if isinstance(value, str):
-        return ""
-    if isinstance(value, dict):
-        return {key: _hollow(item) for key, item in value.items()}
-    if isinstance(value, list):
-        return [_hollow(item) for item in value]
-    return value
-
-
-def _strings(value: Any) -> Iterator[str]:
-    """Every string *value* in `value`, at any depth.
-
-    Keys are not here on purpose: `_hollow` keeps them, so `json.dumps` counts
-    them — and their escaping — for real.
-    """
-    if isinstance(value, str):
-        yield value
+        yield label, value, 2
     elif isinstance(value, dict):
-        for item in value.values():
-            yield from _strings(item)
-    elif isinstance(value, list):
+        yield from _frame(value, label)
+        for key, item in value.items():
+            yield from _key(key, label)
+            yield from _walk(item, label)
+    elif isinstance(value, list | tuple):
+        yield from _frame(value, label)
         for item in value:
-            yield from _strings(item)
+            yield from _walk(item, label)
+    else:
+        yield label, None, len(json.dumps(value).encode("utf-8"))
+
+
+def _carried(request: Mapping[str, Any]) -> Iterator[_Piece]:
+    """The one walk of a request: every string it carries, with its name.
+
+    Review 6 should-fix 4: the UTF-8 check used to walk top-level strings and
+    lists of strings while the measurement recursed and `json.dumps` encoded the
+    keys too, so a string one level down died inside the measurement as a bare
+    `UnicodeEncodeError`. Both read this now — `_checked_request` checks every
+    string it yields, `_wire_size` counts every string and every byte of syntax
+    it yields — so there is no string one of them sees and the other does not.
+
+    Each top-level part of `params` is named by `_named`; a list there (the
+    repeatable `--file`) names each item on its own; anything nested inside a
+    part carries that part's name. The rest is the envelope.
+    """
+    method = request.get("method")
+    yield from _frame(request, _ENVELOPE)
+    for key, value in request.items():
+        yield from _key(key, _ENVELOPE)
+        if key != "params" or not isinstance(value, dict):
+            yield from _walk(value, _ENVELOPE)
+            continue
+        yield from _frame(value, _ENVELOPE)
+        for name, part in value.items():
+            yield from _key(name, _ENVELOPE)
+            if isinstance(part, list | tuple):
+                yield from _frame(part, _ENVELOPE)
+                for item in part:
+                    yield from _walk(item, _named(method, name, item))
+            else:
+                yield from _walk(part, _named(method, name, part))
 
 
 def _wire_size(request: Mapping[str, Any]) -> int:
     """The exact length in bytes of the JSON line `call` writes for `request`.
 
     Without the `\n` terminator: the daemon's reader measures a line's content
-    against its limit, and the separator is not part of that content. The same
-    `json.dumps(..., ensure_ascii=False)` that `call` uses, so this is the size
-    of the bytes that actually go on the wire, not an estimate of them.
+    against its limit, and the separator is not part of that content. Counted
+    over `_carried` as `json.dumps(..., ensure_ascii=False)` would write it —
+    its separators, its escapes — so this is the size of the bytes that actually
+    go on the wire, without building a 12 MB line to find out.
     """
-    shape = json.dumps(_hollow(request), ensure_ascii=False).encode("utf-8")
-    return len(shape) + sum(_wire_bytes(text) for text in _strings(request))
+    return sum(
+        syntax + (0 if text is None else _wire_bytes(text))
+        for _label, text, syntax in _carried(request)
+    )
 
 
-def _labelled_strings(params: Mapping[str, Any]) -> Iterator[tuple[str, str]]:
-    """Every string a request carries, under the name the human typed it as."""
-    for key, value in params.items():
-        for item in value if isinstance(value, list) else [value]:
-            if not isinstance(item, str):
-                continue
-            label = _PART_LABELS.get(key, f"--{key}")
-            if key == "file":  # `--file path=content`: the path is the name of it
-                label = f"--file {item.split('=', 1)[0]}"
-            yield label, item
-
-
-def _wire_parts(params: Mapping[str, Any]) -> list[tuple[str, int]]:
-    """What each string a request carries costs on the wire. Only ever used to
-    say which part of an over-long request is the largest, so the human knows
-    which one to move out of the command line."""
-    return [(label, _wire_bytes(text)) for label, text in _labelled_strings(params)]
+def _wire_parts(request: Mapping[str, Any]) -> list[tuple[str, int]]:
+    """What each string a request's params carry costs on the wire. Only ever
+    used to say which part of an over-long request is the largest, so the human
+    knows which one to move out of the command line."""
+    return [
+        (label, _wire_bytes(text))
+        for label, text, _syntax in _carried(request)
+        if text is not None and label != _ENVELOPE
+    ]
 
 
 def _checked_request(request: Mapping[str, Any]) -> None:
@@ -1025,15 +1098,14 @@ def _checked_request(request: Mapping[str, Any]) -> None:
     `--gate`, `--file` and `--content` used to die inside the measurement with a
     codec message and exit 1 (review 5 should-fix 7).
     """
-    params = request.get("params")
-    if isinstance(params, Mapping):
-        for label, text in _labelled_strings(params):
+    for label, text, _syntax in _carried(request):
+        if text is not None:
             _utf8_bytes(text, label)
     total = _wire_size(request)
     if total <= LINE_LIMIT:
         return
-    parts = _wire_parts(params) if isinstance(params, Mapping) else []
-    parts.append(("the envelope", total - sum(size for _, size in parts)))
+    parts = _wire_parts(request)
+    parts.append((_ENVELOPE, total - sum(size for _, size in parts)))
     label, size = max(parts, key=lambda part: part[1])
     advice = (
         "; send the content with `hands put` and name it in the prompt"

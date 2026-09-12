@@ -7,6 +7,7 @@ terminal. Nothing is mocked but the `claude` binary (`tests/fake_claude.py`).
 
 from __future__ import annotations
 
+import argparse
 import asyncio
 import io
 import json
@@ -949,6 +950,241 @@ def test_a_request_at_the_line_room_is_sent_and_one_byte_more_is_refused(
         assert out == "" and str(LINE_LIMIT + 1) in err, err
 
     drive(body)
+
+
+# ------------------- U4: one tree walk; positionals keep their names (§4, §23)
+# Review 6 should-fix 4: the UTF-8 check walked top-level strings and lists of
+# strings while the size measurement recursed and `json.dumps` encoded dict keys
+# too, so a string one level down died inside the measurement as a bare
+# `UnicodeEncodeError`. Should-fix 5: a positional was refused under a flag the
+# human never typed (`--job`, `--path`).
+
+#: What `PYTHONUTF8=1` hands the client for `\xff` in argv: a lone surrogate.
+BAD = b"bad-\xff".decode("utf-8", "surrogateescape")
+
+
+def _request(params: dict[Any, Any], method: str = "send") -> dict[str, Any]:
+    return {"jsonrpc": "2.0", "id": 1, "method": method, "params": params}
+
+
+def _string_slots(value: Any, path: tuple[Any, ...] = ()) -> list[tuple[tuple[Any, ...], str]]:
+    """Every place a string sits in `value` — values and dict keys, any depth —
+    as a path; ("key", k) marks the key itself rather than what it holds."""
+    slots: list[tuple[tuple[Any, ...], str]] = []
+    if isinstance(value, str):
+        slots.append((path, "value"))
+    elif isinstance(value, dict):
+        for key, item in value.items():
+            if isinstance(key, str):
+                slots.append(((*path, key), "key"))
+            slots += _string_slots(item, (*path, key))
+    elif isinstance(value, list):
+        for index, item in enumerate(value):
+            slots += _string_slots(item, (*path, index))
+    return slots
+
+
+def _spoiled(value: Any, path: tuple[Any, ...], kind: str) -> Any:
+    """`value` with the string at `path` (or the key at it) made un-encodable."""
+    if not path:
+        return value + BAD if kind == "value" else value
+    head, rest = path[0], path[1:]
+    if isinstance(value, list):
+        return [_spoiled(item, rest, kind) if index == head else item
+                for index, item in enumerate(value)]
+    out: dict[Any, Any] = {}
+    for key, item in value.items():
+        if key != head:
+            out[key] = item
+        elif kind == "key" and not rest:
+            out[key + BAD] = item
+        else:
+            out[key] = _spoiled(item, rest, kind)
+    return out
+
+
+#: Nested params no command builds today, and one that it does.
+NESTED_PARAMS: list[dict[Any, Any]] = [
+    {"files": {"a": "v"}},
+    {"file": [["x"]]},
+    {"gate": [{"k": "v"}, "plain"]},
+    {"gate": {"a": [{"b": [[{"c": 'quote " cjk 字'}]]}]}, "n": 3, "ack": True},
+    {"role": "aux", "context": "clear", "prompt": "go", "file": ["/tmp/a=1", "/tmp/b=2"]},
+]
+
+
+def test_a_string_at_any_depth_of_a_request_is_refused_as_not_utf8() -> None:
+    """The review's three shapes, then every string slot — value or key — of
+    every nested request above: each is §4's refusal, never a codec error."""
+    reviewed = [
+        ({"files": {"a": BAD}}, "files"),
+        ({"files": {BAD: "v"}}, "files"),
+        ({"file": [[BAD]]}, "--file"),
+        ({"gate": [{"k": [{"deep": {"deeper": [BAD]}}]}]}, "--gate"),
+    ]
+    for params, label in reviewed:
+        with pytest.raises(cli_mod.PromptError) as caught:
+            cli_mod._checked_request(_request(params))
+        said = str(caught.value)
+        assert said.startswith(f"{label}"), said
+        assert ": not UTF-8 text (" in strip_paths(said), said
+    tried = 0
+    for params in NESTED_PARAMS:
+        cli_mod._checked_request(_request(params))  # clean, it passes
+        for path, kind in _string_slots(params):
+            spoiled = _spoiled(params, path, kind)
+            with pytest.raises(cli_mod.PromptError, match="not UTF-8 text"):
+                cli_mod._checked_request(_request(spoiled))
+            tried += 1
+    assert tried >= 25, tried  # the slots were really enumerated
+
+
+def test_the_size_walk_measures_only_strings_the_utf8_walk_checks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """One tree: every string the measurement counts was checked first, every
+    string a request carries (keys included) is checked, and the count is still
+    `json.dumps(..., ensure_ascii=False)` to the byte (H-012)."""
+    measured: list[str] = []
+    checked: list[str] = []
+    wire_bytes, utf8_bytes = cli_mod._wire_bytes, cli_mod._utf8_bytes
+
+    def counting(text: str) -> int:
+        measured.append(text)
+        return wire_bytes(text)
+
+    def checking(text: str, where: str) -> bytes:
+        checked.append(text)
+        return utf8_bytes(text, where)
+
+    monkeypatch.setattr(cli_mod, "_wire_bytes", counting)
+    monkeypatch.setattr(cli_mod, "_utf8_bytes", checking)
+    shapes = [*NESTED_PARAMS, {"odd keys": {1: "one", None: "nil", 2.5: ["x", {}, []]}}]
+    for params in shapes:
+        request = _request(params)
+        measured.clear()
+        checked.clear()
+        cli_mod._checked_request(request)
+        carried = [text for path, kind in _string_slots(request) for text in [
+            (path[-1] if kind == "key" else _at(request, path))]]
+        assert measured, params
+        assert sorted(measured) == sorted(checked), params
+        assert sorted(carried) == sorted(checked), params
+        built = json.dumps(request, ensure_ascii=False).encode("utf-8")
+        assert cli_mod._wire_size(request) == len(built), params
+
+
+def _at(value: Any, path: tuple[Any, ...]) -> Any:
+    for step in path:
+        value = value[step]
+    return value
+
+
+def _cli(argv: list[str]) -> tuple[int, str, str]:
+    out, err = io.StringIO(), io.StringIO()
+    code = main(["--project", PROJECT, *argv], stdout=out, stderr=err, stdin=io.StringIO(""))
+    return code, out.getvalue(), err.getvalue()
+
+
+#: Every command of §4 that takes a positional, and the argv that puts BAD in it.
+POSITIONALS = [
+    ("job", ["result", BAD, "--json"]),
+    ("job", ["show", BAD, "--json"]),
+    ("job", ["open", BAD, "--json"]),
+    ("job", ["open", BAD]),
+    ("job", ["wait", BAD, "--json"]),
+    ("job", ["log", BAD, "--json"]),
+    ("job", ["log", BAD]),  # the page-walking route
+    ("job", ["cancel", BAD, "--json"]),
+    ("job", ["approve", BAD, "--json"]),
+    ("job", ["deny", BAD, "--json"]),
+    ("path", ["put", BAD, "--content", "x", "--json"]),
+    ("path", ["get", BAD, "--json"]),
+    ("path", ["ls", BAD, "--json"]),
+    ("prompt", ["send", "--role", "aux", "--context", "clear", BAD, "--json"]),
+]
+
+
+@pytest.mark.parametrize(("name", "argv"), POSITIONALS, ids=lambda v: str(v))
+def test_a_positional_is_refused_under_the_name_the_human_typed(
+    project: str, monkeypatch: pytest.MonkeyPatch, name: str, argv: list[str]
+) -> None:
+    """Review 6 should-fix 5: `hands result $'job-\\xff'` said `--job`, a flag
+    that does not exist. A positional is named as `hands --help` names it."""
+    refuse_the_socket(monkeypatch)
+    code, out, err = _cli(argv)
+    assert code == EXIT_REFUSED, f"exit {code}: {err!r}"
+    assert out == "" and len(err.splitlines()) == 1, (out, err)
+    assert err.startswith(f"hands: a {name} argument: not UTF-8 text ("), err
+    assert f"--{name}" not in strip_paths(err), err
+
+
+#: A real flag keeps its flag name.
+FLAGS = [
+    ("--reason", ["cancel", "j1", "--reason", BAD, "--json"]),
+    ("--reason", ["approve", "j1", "--reason", BAD, "--json"]),
+    ("--quote", ["deny", "j1", "--human-confirmed", "--quote", BAD, "--json"]),
+    ("--content", ["put", "/tmp/x", "--content", BAD, "--json"]),
+    ("--from", ["put", "/tmp/x", "--from", BAD, "--json"]),
+    ("--for", ["wait", "--for", BAD, "--json"]),
+    ("--grep", ["jobs", "--grep", BAD, "--json"]),
+    ("--role", ["tail", "--role", BAD, "--json"]),
+    ("-f", ["log", "-f", BAD]),
+    ("--gate", ["send", "--role", "aux", "--context", "clear", "--gate", BAD, "go", "--json"]),
+    ("--file /tmp/p", ["send", "--role", "aux", "--context", "clear",
+                       "--file", f"/tmp/p={BAD}", "go", "--json"]),
+]
+
+
+@pytest.mark.parametrize(("label", "argv"), FLAGS, ids=lambda v: str(v))
+def test_a_flag_is_refused_under_its_flag_name(
+    project: str, monkeypatch: pytest.MonkeyPatch, label: str, argv: list[str]
+) -> None:
+    refuse_the_socket(monkeypatch)
+    code, out, err = _cli(argv)
+    assert code == EXIT_REFUSED, f"exit {code}: {err!r}"
+    assert out == "", out
+    assert err.startswith(f"hands: {label}: not UTF-8 text ("), err
+
+
+def test_every_param_of_every_command_is_named_as_its_parser_names_it() -> None:
+    """The whole space: each key `_PARAMS` sends, for each of §4's commands, is
+    refused under the name argparse gives the argument it came from — `a <dest>
+    argument` for a positional, its option string for a flag. `send`'s prompt is
+    the one exception, and it is refused earlier under its route's name (above);
+    at the request it is "the prompt", because three routes fill it."""
+    from hands.cli import _PARAMS, build_parser
+
+    class Blank(argparse.Namespace):
+        def __getattr__(self, name: str) -> None:
+            return None
+
+    commands = next(
+        action for action in build_parser()._actions
+        if isinstance(action, argparse._SubParsersAction)
+    ).choices
+    named = 0
+    for command, params_of in _PARAMS.items():
+        for key in params_of(Blank()):
+            action = next(
+                action for action in commands[command]._actions
+                if action.dest in (key, f"{key}_")
+            )
+            if command == "send" and key == "prompt":
+                expected = "the prompt"
+            elif action.option_strings:
+                expected = next(
+                    (flag for flag in action.option_strings if flag.startswith("--")),
+                    action.option_strings[0],
+                )
+            else:
+                expected = f"a {action.dest} argument"
+            with pytest.raises(cli_mod.PromptError) as caught:
+                cli_mod._checked_request(_request({key: BAD}, command))
+            assert str(caught.value).startswith(f"{expected}"), (command, key, caught.value)
+            assert not str(caught.value).startswith(f"{expected}-"), (command, key)
+            named += 1
+    assert named >= 30, named
 
 
 # --------------------------------------------------- the surface of §4 (§9)
