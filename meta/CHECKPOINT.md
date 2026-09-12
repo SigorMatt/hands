@@ -1,24 +1,25 @@
 # CHECKPOINT
 
 Mission: 5 (meta/BUILDER-5-PROMPT.md) — IN PROGRESS
-Unit in progress: U6 (daemon memory)
-Intent: find where the runner or daemon accumulates a job's stream-json
-(lists of events, captured stdout, log buffers) and replace it with
-streaming writes to the job's log file under `~/.hands/`, keeping in memory
-only the last N events needed for `tail` and the final `result`;
-`hands log <job>` and `hands log -f` read the file.
-Done means: a test with `fake_claude` emitting 200 000 events asserting the
-runner's retained structures stay bounded (on the length of what is
-retained, not on RSS); the commit body reports the daemon's RSS before and
-after on a real run if one is available, else says NOT PROVEN;
-`./scripts/check` green three consecutive runs; one commit, pushed.
-Tip: 06de18c (U5), green 3/3 — 812 passed, `check: green`;
-`grep -rn 'stop\.suppressed' src tests docs driver` returns nothing.
+Unit in progress: U7 (no background tasks in role sessions)
+Intent: add `.claude/settings.json` with a `PreToolUse` hook on `Bash`
+running `.claude/hooks/no_background.py`, which reads the hook JSON and
+exits 2 (reason on stderr) when `tool_input.run_in_background` is true or
+the command daemonizes by hand (`nohup`, `setsid`, `disown`, a trailing `&`
+outside quotes, `&` before `)`), telling the agent to run the command in the
+foreground with a timeout; a `--selftest` and `tests/test_no_background.py`
+that runs it; one line in CLAUDE.md; `docs/INTEGRATION.md` says every
+project hands drives installs the same two files.
+Done means: tests; `./scripts/check` itself still runs (it is foreground);
+green three consecutive runs; one commit, pushed.
+Tip: 53bb986 (U6), green 3/3 — 818 passed, `check: green`.
 Findings: H-001 open (needs a capture from a dotted cwd). H-009 open
 (design-side; no builder unit can close it). H-011 decided by U0 (068a091):
 the kind becomes `pipeline.stop_suppressed`, outside `stop`'s wake namespace;
 U5 makes the rename in code, tests and docs. H-011 closed on disk by U5 (06de18c).
-H-012 filed by U4 (6d9664d):
+H-013 filed by U6 (53bb986):
+`hands log <job>` at offset 0 still materializes a whole transcript; it needs
+a §7 paging contract — design-side, open. H-012 filed by U4 (6d9664d):
 §4's "cap plus one quarter" does not cover JSON escaping, so U4 measures the
 cap on the wire — design-side, open.
 H-002..H-008 and H-010 closed in missions 2, 3 and 4.
