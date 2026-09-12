@@ -94,6 +94,27 @@ def test_the_playbook_doc_carries_the_section_10_example_verbatim() -> None:
         assert ("    " + line).rstrip() in doc, f"the §10 example line is missing: {line!r}"
 
 
+def test_the_playbook_doc_says_a_review_reads_from_the_last_review_commit() -> None:
+    """§23, review 6's scope note: the prose — not the verbatim example, which
+    carries §10's prompt already — states the review base the reviewer computes,
+    keeps `{job.head_at_start}` documented, and says when it is the wrong base
+    (a job that resumed a mission mid-way) and when it is the right one."""
+    doc = (ROOT / "docs" / "PLAYBOOK.md").read_text(encoding="utf-8")
+    prose = flattened(doc.split("## The example (DESIGN §10, verbatim)")[0])
+    for must in (
+        "every commit after the last `review:` commit",
+        "`git log --oneline --grep='^review: ' -1`",
+        "the mission's kit commit if no review exists yet",
+        "`{job.head_at_start}`, `{job.head_at_end}`",
+        "`{job.head_at_start}` is the wrong review base",
+        "a limit resume",
+        "`builder.failed` → `resume`",
+        "a human re-kick",
+        "exactly the job that finished",
+    ):
+        assert must in prose, f"docs/PLAYBOOK.md's prose does not say {must!r} (§23)"
+
+
 def test_the_playbook_doc_lists_every_event_and_action() -> None:
     doc = (ROOT / "docs" / "PLAYBOOK.md").read_text(encoding="utf-8")
     for name in EVENTS + ACTIONS:

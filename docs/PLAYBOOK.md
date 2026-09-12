@@ -110,6 +110,26 @@ A placeholder that names no group of the rule's own regex, and a `{job.…}`
 field outside that list of four, are refused when the file is parsed — never
 when the rule fires.
 
+### The review base (DESIGN §23)
+
+A cold review reads every commit after the last `review:` commit on the
+branch. The reviewer computes that base itself, from disk:
+`git log --oneline --grep='^review: ' -1`, or the mission's kit commit if no
+review exists yet. hands does not compute it, and the review prompt names no
+commit: §10's example says "commits since the last review: commit on the
+branch", and the protocol the prompt points at says how to find it.
+
+`{job.head_at_start}` is the wrong review base. It is where the job that
+finished started, and that job may have resumed a mission mid-way — a limit
+resume, a `builder.failed` → `resume`, a human re-kick — so it is the start of
+that last job, not of the mission. Review 6 is the real case: its prompt's base
+was itself a unit commit of the mission, and five of the mission's unit commits
+fell outside the range and went unreviewed per commit.
+
+`{job.head_at_start}` is right when you mean exactly the job that finished: a
+per-job diff (`{job.head_at_start}..{job.head_at_end}`), a note naming where
+that job began, a check of what that one job committed.
+
 ## `run = "<expr>"`
 
 On a `send` only. It names, explicitly, the run number that send would start,

@@ -207,6 +207,26 @@ def test_the_example_parses_into_the_rules_of_section_10(tmp_home: Path, workdir
     assert book.sha256 == hashlib.sha256(EXAMPLE.encode()).hexdigest()
 
 
+def test_the_repositorys_own_playbook_loads_and_its_review_reads_from_the_last_review() -> None:
+    """§23, review 6's scope note: the root `PLAYBOOK.toml` goes through the real
+    loader, and the rule that sends the cold review names its base as the last
+    `review:` commit, never `{job.head_at_start}` of the job that finished — a
+    resumed mission's last job starts mid-mission."""
+    path = Path(__file__).parents[1] / "PLAYBOOK.toml"
+    book = load_playbook(path)
+    assert book is not None, "the repository's PLAYBOOK.toml is missing"
+    assert book == parse_playbook(path.read_text(encoding="utf-8"), path=path)
+    reviews = [
+        rule for rule in book.rules if rule.then == "send" and rule.role == "aux"
+    ]
+    assert len(reviews) == 1, f"expected one review send, got {reviews}"
+    prompt = reviews[0].prompt
+    assert prompt is not None
+    assert "head_at_start" not in strip_paths(prompt)
+    assert "every commit after the last review: commit" in strip_paths(prompt)
+    assert "meta/REVIEW-PROTOCOL.md" in strip_paths(prompt)
+
+
 def test_the_events_and_actions_are_exactly_section_10s() -> None:
     assert EVENTS == (
         "builder.done",
