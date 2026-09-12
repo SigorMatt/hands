@@ -1,15 +1,16 @@
 # CHECKPOINT
 
 Mission: 6 (meta/BUILDER-6-PROMPT.md) — IN PROGRESS
-Unit in progress: U0 (plan and corrections)
-Intent: write meta/plan.md and this file for mission 6, append the three
-dated corrections review 5 asks for to meta/FINAL-REPORT-5.md §3 (blocker 1,
-blocker 2, should-fix 2), and append the H-012 decision (the client measures
-the whole request on the wire).
-Done means: the four files are on disk, `./scripts/check` green three
-consecutive runs, one `meta:` commit pushed, and the next unit named here.
-Tip: b950956 (`plan: mission 6 kit (DESIGN v3.5)`), base of the mission,
-green here before U0 — ruff clean, 929 passed in 39.78s, cli smoke.
+Unit in progress: U1 (blocker 1 — the whole request on the wire)
+Intent: the client builds the request, measures its wire bytes, and refuses
+with exit 2 before connecting when the total exceeds the daemon's line room;
+both prompt routes; the two false sentences rewritten.
+Done means: the reviewer's reproduction (at-cap prompt plus twelve `--file`
+values of backslashes) refuses on the client with exit 2 and an untouched
+daemon log, a request just under the limit succeeds, `./scripts/check` green
+three consecutive runs, one commit pushed.
+Tip: bb9d8fb (`meta: mission 6 plan; review 5's three corrections and the
+H-012 decision`), U0 done; green three consecutive runs (929 passed).
 Findings: H-001 open (needs a capture from a dotted cwd). H-009 open
 (design-side; no builder unit can close it). H-012 decided by DESIGN v3.5 §4
 and §22: the client measures the whole request on the wire before connecting;

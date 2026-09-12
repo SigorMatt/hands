@@ -11,7 +11,7 @@ Every unit closes a named item of `meta/reviews/REVIEW-5.md`
 (`VERDICT: review mission 5 blockers=2 should-fix=7`), except U6, which is
 the DESIGN v3.5 wait retirement (§11, §12 rule 8) the review did not raise.
 
-- [ ] U0 Plan and corrections — this file, meta/CHECKPOINT.md, three dated
+- [x] U0 Plan and corrections — this file, meta/CHECKPOINT.md, three dated
       corrections in `meta/FINAL-REPORT-5.md` §3 (blocker 1: should-fix 3 of
       review 4 was closed for the prompt, not the request; blocker 2:
       `tail -n 0` changed meaning and a wide trailing entry answers `[]`;
