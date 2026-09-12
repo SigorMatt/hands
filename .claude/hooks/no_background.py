@@ -14,8 +14,16 @@ What is not daemonization, and must keep working, or the role cannot run its
 own gate: `&&`, `2>&1`, `1>&2`, `&>`, `|&`, an `&` inside single or double
 quotes, and a literal `&` in an unquoted URL (`?a=1&b=2` — the `&` there is
 followed by more of the argument, not by the end of a command). Quoted text is
-text and heredoc bodies are text; `$(...)` and backticks are still commands and
-are still read, inside double quotes as well as outside.
+text, heredoc bodies are text, and a `#` comment is text; `$(...)` and backticks
+are still commands and are still read, inside double quotes as well as outside.
+
+Where it stops (docs/INTEGRATION.md, "What the hook cannot see"): the hook reads
+one command line as shell text. It never runs it, never resolves a variable, and
+takes quoted text as text — so `bash -c 'sleep 30 &'`, `eval`, `screen -dmS`,
+`tmux new -d`, `at`, `systemd-run`, a script that forks, and a daemonizer that
+arrives through a variable all pass. That is the model's boundary, not a bug to
+patch here: reading quoted text as shell would block `git commit -m '… & …'` and
+`grep -rn "nohup" src`, which a role session needs.
 
 Install this file and the `.claude/settings.json` beside it in every repository
 hands drives (docs/INTEGRATION.md). Hooks run under
@@ -33,6 +41,12 @@ import sys
 #: in one of them (`docs/nohup-notes.md`) is not this token, and quoted prose
 #: is dropped before the tokens are read, so `grep -rn "nohup" src` still runs.
 DAEMONIZERS = {"nohup", "setsid", "disown"}
+
+#: Where a word can begin, and so where an unquoted `#` opens a comment that
+#: runs to the end of the line. bash starts a word at the start of input, after
+#: whitespace, or after one of its metacharacters — `echo a"b"#c` is the single
+#: word `a#c`, and `${#x}` is a parameter expansion, so neither is a comment.
+WORD_BREAK = " \t\r\n;|&()<>"
 
 #: Shell punctuation that separates tokens without whitespace around it.
 PUNCTUATION_RE = re.compile(r"([;()|&{}])")
@@ -101,6 +115,9 @@ def strip_quoted(cmd: str) -> str:
 
     Characters inside quotes become spaces, so the shell's structure (`&`, `(`,
     `)`, `;`) survives while prose does not: `echo 'run it &'` keeps no `&`.
+    A `#` that starts a word outside quotes opens a comment, and the rest of its
+    line goes the same way — `ls # a & b` backgrounds nothing, and `sleep 30 &#
+    note` is left as the background job bash reads it to be.
     Inside double quotes `$(…)` and backticks are still executed, so their text
     is kept and read like any other command. Unbalanced quotes raise: the shell
     would wait for more input, and the hook fails closed.
@@ -133,6 +150,12 @@ def strip_quoted(cmd: str) -> str:
                 stack.append('"')
             out.append(" ")
             i += 1
+            continue
+        if c == "#" and not quoted and (i == 0 or cmd[i - 1] in WORD_BREAK):
+            end = cmd.find("\n", i)
+            end = n if end < 0 else end
+            out.append(" " * (end - i))
+            i = end
             continue
         if cmd.startswith("$(", i):
             stack.append("$(")
@@ -176,14 +199,17 @@ def background_operator(cmd: str) -> bool:
     """True if a bare `&` in this (already stripped) command backgrounds it.
 
     An `&` is the background operator when nothing of the same word follows it:
-    at the end, before whitespace, or before `)`, `;` or a newline. An `&` glued
+    at the end, before whitespace, or before `)`, `;`, `#` or a newline. (A `#`
+    there always opens a comment, since `&` ends the word: `sleep 30 &# note` is
+    a background job. Comments are blanked before this runs, so the `#` case
+    only remains inside a substitution.) An `&` glued
     between two argument characters is a literal — that is the unquoted URL
     (`?a=1&b=2`), which bash would background too but which the unit takes as
     text, and which no role session means as a daemon.
     """
     for match in re.finditer(r"&", cmd):
         after = cmd[match.end() : match.end() + 1]
-        if after == "" or after in ");\n" or after.isspace():
+        if after == "" or after in ");#\n" or after.isspace():
             return True
     return False
 
@@ -209,6 +235,11 @@ def check(cmd: str, run_in_background: object = False) -> str | None:
         return f"unbalanced quotes ({e}): {cmd!r}"
     for token in PUNCTUATION_RE.sub(r" \1 ", bare).split():
         if token in DAEMONIZERS:
+            return f"{token}: {cmd!r}"
+        # `/usr/bin/nohup ./x` is `nohup ./x`: the path is how it is spelled,
+        # not what it is. The cost is that reading the file by that exact name
+        # (`ls -l /usr/bin/nohup`) is refused too — the safe direction.
+        if "/" in token and token.rsplit("/", 1)[1] in DAEMONIZERS:
             return f"{token}: {cmd!r}"
     if background_operator(bare):
         return f"`&` backgrounds the command: {cmd!r}"
@@ -243,6 +274,15 @@ SELFTEST = [
     ("curl -s 'https://example.com/?a=1&b=2'", True),
     ("curl -s https://ntfy.sh/x?title=a&message=b", True),
     ("cat > /tmp/x <<'EOF'\nrun it with &\nnohup ./x\nEOF", True),
+    # --- a comment is text too ----------------------------------------------
+    ("ls # a & b", True),
+    ("uv run pytest -q  # then nohup ./x & disown", True),
+    ("# a note about & and setsid", True),
+    ("make -j2 # &", True),
+    ("ls # a note\nuv run pytest", True),
+    ("echo ${#PATH} && ls", True),
+    ("curl -s http://example.com/page#frag", True),
+    ("./scripts/disown-notes.sh", True),
     # --- a trailing `&` is a background job --------------------------------
     ("sleep 100 &", False),
     ("sleep 100&", False),
@@ -253,6 +293,11 @@ SELFTEST = [
     ("ls; ./scripts/check &", False),
     ("./scripts/check &\necho started", False),
     ("cat > /tmp/x <<'EOF' &\nbody\nEOF", False),
+    # --- ...and a comment hides no `&` --------------------------------------
+    ("sleep 30 &# note", False),
+    ("./scripts/check &# run it", False),
+    ("uv run pytest &  # start the gate", False),
+    ("ls # a note\nuv run pytest &", False),
     # --- `&` before `)`: a backgrounded subshell ---------------------------
     ("( sleep 300 & )", False),
     ("(./scripts/check &)", False),
@@ -266,6 +311,10 @@ SELFTEST = [
     ("./run.sh & disown", False),
     ("disown -a", False),
     ("env X=1 nohup ./run.sh", False),
+    # --- a daemonizer spelled as a path is the same daemonizer --------------
+    ("/usr/bin/nohup ./long.sh", False),
+    ("/usr/bin/setsid --fork uv run handsd", False),
+    ("env X=1 /bin/nohup ./run.sh", False),
     # --- a substitution is still a command ---------------------------------
     ('echo "$(sleep 100 &)"', False),
     ("echo `sleep 100 &`", False),
@@ -300,11 +349,29 @@ def main() -> int:
         return 2
     if not isinstance(data, dict) or data.get("tool_name") != "Bash":
         return 0
-    tool_input = data.get("tool_input") or {}
-    reason = check(
-        tool_input.get("command") or "",
-        run_in_background=tool_input.get("run_in_background", False),
-    )
+    # A Bash call whose `tool_input` or `command` is not the shape the tool
+    # documents is input this hook cannot parse, so it fails closed like any
+    # other: exit 2, one line, no traceback. Claude Code reads exit 1 as
+    # non-blocking, so raising here would let the call through. No real Bash
+    # tool call produces these shapes.
+    tool_input = data.get("tool_input")
+    if tool_input is None:
+        tool_input = {}
+    if not isinstance(tool_input, dict):
+        kind = type(tool_input).__name__
+        print(f"no_background: tool_input is {kind}, not an object; blocking", file=sys.stderr)
+        return 2
+    command = tool_input.get("command")
+    if command is None:
+        command = ""
+    background = tool_input.get("run_in_background", False)
+    if not isinstance(command, str) or not isinstance(background, (bool, str, int, float)):
+        print(
+            "no_background: command or run_in_background has the wrong type; blocking",
+            file=sys.stderr,
+        )
+        return 2
+    reason = check(command, run_in_background=background)
     if reason is None:
         return 0
     print(f"no_background blocked this Bash call ({reason}). {ADVICE}", file=sys.stderr)

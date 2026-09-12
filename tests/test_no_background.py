@@ -183,6 +183,24 @@ ADVERSARIAL: list[tuple[str, bool]] = [
     ("python3 .claude/hooks/no_background.py --selftest", True),
     ("wait", True),
     ("jobs", True),
+    # --- a comment hides nothing (review 5 should-fix 2) -------------------
+    ("sleep 30 &# note", False),
+    ("uv run pytest &  # start the gate", False),
+    ("./scripts/check &# run it", False),
+    # --- a daemonizer keeps its meaning when it is spelled as a path -------
+    ("/usr/bin/nohup ./long.sh", False),
+    ("/usr/bin/setsid --fork uv run handsd", False),
+    ("env X=1 /bin/nohup ./run.sh", False),
+    # --- FALSE POSITIVES: comment text is text, and so is a path that only
+    #     ends in one of the words -----------------------------------------
+    ("ls # a & b", True),
+    ("uv run pytest -q  # then nohup ./x & disown", True),
+    ("# a note about & and setsid", True),
+    ("make -j2 # &", True),
+    ("echo ${#PATH} && ls", True),
+    ("curl -s http://example.com/page#frag", True),
+    ("cat docs/nohup-notes.md", True),
+    ("./scripts/disown-notes.sh", True),
 ]
 
 
@@ -297,3 +315,137 @@ def test_claude_md_states_the_rule() -> None:
     rule = re.sub(r"\s+", " ", bullets[0])
     for word in ("run_in_background", "nohup", "foreground", "timeout"):
         assert word in rule, f"the CLAUDE.md rule does not name {word!r}: {rule}"
+
+
+# ------------------------------- the three bypasses of review 5 should-fix 2
+
+
+def test_a_comment_does_not_hide_a_trailing_ampersand() -> None:
+    """`sleep 30 &# note` is a background job: `&` ends the command and `#`,
+    starting a word, opens a comment. It was allowed (review 5 should-fix 2)."""
+    for cmd in ("sleep 30 &# note", "sleep 30 & # note", "./scripts/check &# run it"):
+        assert hook.check(cmd) is not None, f"the hook allowed a background command: {cmd!r}"
+
+
+def test_a_comment_is_text_and_is_not_read_as_shell() -> None:
+    """The other half of the same fix: nothing after an opening `#` runs, so a
+    comment that talks about `&`, `nohup` or `setsid` must not block the call."""
+    for cmd in (
+        "ls # a & b",
+        "uv run pytest # then nohup ./x & disown",
+        "echo hi; # setsid & disown",
+        "make -j2 # &",
+        "# a whole line of note about & and nohup",
+        "uv run pytest\nls # a & b",
+    ):
+        assert hook.check(cmd) is None, f"the hook blocked a foreground command: {cmd!r}"
+
+
+def test_a_comment_ends_at_its_own_line() -> None:
+    """A comment reaches the end of its line and no further: the next line of a
+    multi-line command is still shell."""
+    assert hook.check("ls # a note\nuv run pytest") is None
+    assert hook.check("ls # a note\nuv run pytest &") is not None
+
+
+def test_a_hash_that_does_not_start_a_word_is_not_a_comment() -> None:
+    """bash opens a comment only at the start of a word, so `${#x}`, a URL
+    fragment and `\"a\"#b` are not comments — and an `&` after them still bites."""
+    assert hook.check("echo ${#PATH} && ls") is None
+    assert hook.check("curl -s http://example.com/page#frag") is None
+    assert hook.check('echo "a"#b &') is not None
+    assert hook.check("echo a\\#b &") is not None
+
+
+def test_a_path_qualified_daemonizer_is_the_same_daemonizer() -> None:
+    """`/usr/bin/nohup ./long.sh` was allowed because the token match was the
+    bare word only (review 5 should-fix 2): the basename carries the meaning."""
+    for cmd in (
+        "/usr/bin/nohup ./long.sh",
+        "/usr/bin/setsid --fork uv run handsd",
+        "env X=1 /bin/nohup ./run.sh",
+        "../bin/nohup ./run.sh",
+        'echo "$(/usr/bin/nohup ./run.sh)"',
+    ):
+        assert hook.check(cmd) is not None, f"the hook allowed a daemonizer: {cmd!r}"
+
+
+def test_a_path_that_merely_ends_in_the_word_is_not_the_word() -> None:
+    for cmd in (
+        "cat docs/nohup-notes.md",
+        "ls tools/setsid.md",
+        "./scripts/disown-notes.sh",
+        "cat /etc/nohup.conf.d/x",
+    ):
+        assert hook.check(cmd) is None, f"the hook blocked a foreground command: {cmd!r}"
+
+
+def test_the_basename_rule_costs_a_file_named_exactly_after_a_daemonizer() -> None:
+    """Deliberate, and the price of the fix above: the hook cannot tell the
+    program from the same path in argument position, so reading the file blocks
+    too. The refusal is the safe direction and is stated in the hook."""
+    assert hook.check("ls -l /usr/bin/nohup") is not None
+
+
+def test_the_hooks_own_table_pins_the_two_closed_bypasses() -> None:
+    cases = dict(hook.SELFTEST)
+    assert cases.get("sleep 30 &# note") is False
+    assert cases.get("/usr/bin/nohup ./long.sh") is False
+    assert cases.get("ls # a & b") is True
+    assert len(hook.SELFTEST) >= 58, "the selftest table did not grow with the fix"
+
+
+def test_the_selftest_subprocess_reports_every_case_of_the_grown_table() -> None:
+    done = run_hook("", "--selftest")
+    assert done.returncode == 0, done.stdout + done.stderr
+    match = re.search(r"selftest: (\d+)/(\d+) ok", done.stdout)
+    assert match, done.stdout
+    total = str(len(hook.SELFTEST) + 1)
+    assert match.group(1) == total and match.group(2) == total, done.stdout
+    assert int(total) >= 59
+
+
+# ----------------------------------------- the input shape that failed open
+
+
+#: Hook payloads that no real Bash tool call produces — `tool_input` is always
+#: an object and `command` a string — but which the hook used to read straight
+#: into an `AttributeError`/`TypeError`: a traceback on stderr and exit 1, which
+#: Claude Code treats as non-blocking. Review 5 should-fix 2: the one shape that
+#: failed open, against a hook whose stance is exit 2 on input it cannot parse.
+UNREADABLE_INPUTS: list[dict[str, object]] = [
+    {"tool_name": "Bash", "tool_input": ["uv run pytest &"]},
+    {"tool_name": "Bash", "tool_input": "uv run pytest &"},
+    {"tool_name": "Bash", "tool_input": 7},
+    {"tool_name": "Bash", "tool_input": {"command": 123}},
+    {"tool_name": "Bash", "tool_input": {"command": ["uv", "run", "pytest", "&"]}},
+    {"tool_name": "Bash", "tool_input": {"command": {"cmd": "nohup ./x"}}},
+    {"tool_name": "Bash", "tool_input": {"command": "ls", "run_in_background": ["true"]}},
+    {"tool_name": "Bash", "tool_input": {"command": "ls", "run_in_background": {"y": 1}}},
+]
+
+
+@pytest.mark.parametrize("payload", UNREADABLE_INPUTS)
+def test_main_fails_closed_on_a_tool_input_it_cannot_read(payload: dict[str, object]) -> None:
+    done = run_hook(payload)
+    assert done.returncode == 2, (payload, done)
+    assert "Traceback" not in done.stderr, done.stderr
+    assert done.stderr.strip() and done.stderr.strip().count("\n") == 0, done.stderr
+
+
+def test_main_still_allows_the_shapes_that_carry_no_command() -> None:
+    """The fix must not turn "nothing to block" into a block: an absent or null
+    `tool_input` or `command`, and any tool that is not Bash, still exit 0."""
+    for payload in (
+        {"tool_name": "Bash", "tool_input": None},
+        {"tool_name": "Bash", "tool_input": {}},
+        {"tool_name": "Bash", "tool_input": {"command": None}},
+        {"tool_name": "Bash", "tool_input": {"command": ""}},
+        {"tool_name": "Bash"},
+        {"tool_name": "Read", "tool_input": {"command": 123}},
+        {"tool_name": "Read", "tool_input": ["x"]},
+        ["not", "a", "hook", "event"],
+        "null",
+    ):
+        done = run_hook(payload)
+        assert done.returncode == 0, (payload, done)

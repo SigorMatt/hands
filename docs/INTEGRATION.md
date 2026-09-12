@@ -288,6 +288,38 @@ too, so the session knows the rule before the hook has to say no. Hooks run
 even under `--dangerously-skip-permissions`, which is what §13's
 `permission_flags` gives both roles.
 
+A `#` comment is text, and hides nothing: `ls # a & b` runs, while `sleep 30 &#
+note` is the background job bash reads it to be and is blocked. A daemonizer
+written as a path is the same daemonizer, so `/usr/bin/nohup ./long.sh` is
+blocked as `nohup ./long.sh` is — at the price of refusing `ls -l /usr/bin/nohup`
+too, which starts nothing.
+
+### What the hook cannot see
+
+The hook reads one command line as shell text. It never runs the line, never
+resolves a variable, and takes quoted text as text. That last one is a choice,
+not an oversight: reading quoted text as shell would block `git commit -m
+'runner: the log & the spool'` and `grep -rn "nohup" src`, which a role session
+needs, so the hook cannot close the first item below without breaking the
+commands the gate itself is made of. Everything here is **allowed** today:
+
+    bash -c 'sleep 30 &'        # an inner shell: the quoted text is an argument
+    sh -c "nohup ./long.sh"     # ...and so is this one
+    eval 'sleep 30 &'           # eval, the same way
+    screen -dmS job ./long.sh   # a terminal multiplexer detaches for you
+    tmux new -d ./long.sh
+    at now                      # a scheduler runs it later, out of this session
+    systemd-run --user ./long.sh
+    ./run.sh                    # a script that forks or daemonizes inside itself
+    python3 -c 'import os; os.fork()'
+    D=nohup; $D ./long.sh       # the daemonizer arrives through a variable
+    \nohup ./long.sh            # ...or through a quoting spelling of the word
+
+So the hook is a guardrail against the spellings a role session actually
+writes, not a sandbox. The rule it enforces is in CLAUDE.md as prose for the
+same reason: a session that means to obey it is stopped by the hook when it
+slips, and a session that works around it was never being stopped by a hook.
+
 ---
 
 ## First run, end to end

@@ -269,6 +269,35 @@ def test_the_integration_doc_installs_the_no_background_hook_in_every_driven_rep
         assert (ROOT / name).is_file(), f"{name} is missing from this repository"
 
 
+#: What `.claude/hooks/no_background.py` does not and cannot catch. The hook
+#: reads one command line as shell text: it never runs it, never resolves a
+#: variable, and treats quoted text as text — so a session that spells its
+#: background job in any of these ways is refused by nothing. Review 5
+#: should-fix 2 asked for one list rather than two partial ones, so the doc
+#: that installs the hook is where it lives, and this pins it.
+BLIND_SPOTS = [
+    "bash -c",
+    "eval",
+    "screen -dmS",
+    "tmux new -d",
+    "at ",
+    "systemd-run",
+    "fork",
+    "variable",
+]
+
+
+def test_the_integration_doc_lists_what_the_no_background_hook_cannot_see() -> None:
+    """§21: the hook is a guardrail against the spellings a role session writes,
+    not a sandbox, and the human installing it is told where it stops."""
+    text = (ROOT / "docs" / "INTEGRATION.md").read_text(encoding="utf-8")
+    heading = "### What the hook cannot see"
+    assert heading in text, f"docs/INTEGRATION.md has no {heading!r} section (§21)"
+    section = text.split(heading, 1)[1].split("\n## ", 1)[0]
+    for named in BLIND_SPOTS:
+        assert named in section, f"the blind-spot list does not name {named!r} (§21)"
+
+
 def test_the_driver_bash_guard_selftest_passes() -> None:
     spec = importlib.util.spec_from_file_location(
         "bash_guard", ROOT / "driver" / "hooks" / "bash_guard.py"
