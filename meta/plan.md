@@ -19,7 +19,7 @@ the DESIGN v3.5 wait retirement (§11, §12 rule 8) the review did not raise.
       the H-012 decision line (the client measures the whole request)
 - [x] U1 Blocker 1 — the whole request measured on the wire before
       connecting, both prompt routes; the two sentences rewritten (§4, H-012)
-- [ ] U2 Blocker 2 — `tail -n` requires n ≥ 1, `truncated: true` when the
+- [x] U2 Blocker 2 — `tail -n` requires n ≥ 1, `truncated: true` when the
       cap or the window cut the answer, `log` pages (§4, §7, H-013)
 - [ ] U3 Should-fix 1 — the guard's git policy becomes a per-subcommand
       option allowlist (§12)
