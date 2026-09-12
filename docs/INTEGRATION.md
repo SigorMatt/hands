@@ -228,6 +228,19 @@ Whichever of the two decides, hands also reads every role job's stream-json
 `monitor.task_killed` with the task's command line, once per task (§24). It
 needs no script and no flag.
 
+Each `claude -p` also runs isolated per job (§24). When `systemd-run --user
+--scope` can start a scope on this machine (systemd-run and systemctl on PATH,
+cgroup v2, a user manager that answers), the job runs inside a transient user
+scope named `hands-<project>-<job>`; otherwise it starts in a new process group.
+The job's live pid set, which is what `--pids` carries, is the scope's
+`cgroup.procs` or the group's members. When claude exits, anything still in
+that set is filed as one `monitor.orphan_processes` event with each process's
+command line, and then the scope is stopped (`systemctl --user stop`) or the
+group is sent SIGTERM and, two seconds later, SIGKILL. The process group is the
+weaker of the two: a process that calls `setsid` leaves it and is neither
+listed nor killed. `hands doctor` prints an `isolation` row saying which is in
+force; it is information, never a failure.
+
 `hands status` names whichever monitor is deciding: with `[ops]` set it prints
 the script's path and the three flags hands fills for it; otherwise it prints
 the built-in rule (`stall = no progress and no liveness for <stall_minutes>m`),

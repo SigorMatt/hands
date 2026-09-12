@@ -20,6 +20,17 @@ All six flags were checked against the installed binary (claude 2.1.268,
 The process runs in handsd's environment plus the role's `spawn_env` (§23):
 `CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS=0` unless `[roles.<r>] env` sets it.
 
+Each process is isolated per job (§24). When `systemd-run --user --scope` can
+start a scope here, the invocation runs inside a transient user scope named
+`hands-<project>-<job>`; otherwise it starts in a new process group
+(`start_new_session`). Which one is probed once per `Runner`, at its first job
+(`detect_isolation`). The job's live pid set is the scope's `cgroup.procs` or the
+group's members (`live_pids`, the monitor's `--pids`). Once claude has exited,
+whatever is still in that set is handed to `on_orphans` (the daemon files
+`monitor.orphan_processes`) and then killed: the scope is stopped, the group is
+sent SIGTERM and, after `ORPHAN_GRACE_S`, SIGKILL. The group is weaker: a process
+that calls setsid leaves it and is neither seen nor killed.
+
 A job is `done` only when the process ends cleanly with a final `result` event
 of subtype `success` (or the `error_*` family) that carries `num_turns`, and
 stderr never said the harness terminated it (§2, §6, §23; H-014). Anything else
@@ -34,7 +45,10 @@ import json
 import logging
 import os
 import re
+import shutil
 import signal
+import subprocess
+import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -42,21 +56,36 @@ from typing import Any, TextIO
 
 from hands.config import Config, RoleConfig
 from hands.limits import is_limit_notice, parse_reset_at, to_iso
+from hands.monitor import (
+    CGROUP_ROOT,
+    MAX_PIDS,
+    cgroup_path,
+    cgroup_pids,
+    cmdline,
+    descendants_of,
+    group_pids,
+)
 from hands.spool import TERMINAL_STATES, Job, Spool, SpoolError
 
 __all__ = [
     "FAILURE_REASONS",
+    "GROUP",
     "LINE_LIMIT",
     "MAX_PROMPT_BYTES",
+    "SCOPE",
     "KeepRefused",
     "Runner",
     "RunnerError",
     "build_argv",
+    "detect_isolation",
     "extract_verdict",
     "is_harness_termination",
+    "probe_isolation",
     "project_dir_name",
     "reconcile_orphans",
+    "spawn_argv",
     "transcript_path_for",
+    "unit_name",
 ]
 
 
@@ -130,6 +159,26 @@ _TERMINATING_RE = re.compile(
     r"Set CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS="
 )
 
+# §24's per-job isolation: a transient systemd user scope, or a process group.
+SCOPE = "scope"
+GROUP = "group"
+#: Seconds for `systemd-run`/`systemctl` to answer (the probe, a scope lookup).
+PROBE_S = 5.0
+#: A stuck `systemctl --user stop` is given this long; systemd finishes the stop
+#: on its own schedule (its TimeoutStopSec then SIGKILL) either way.
+SCOPE_STOP_S = 30.0
+#: SIGTERM → this long → SIGKILL, for what is left in a process group (§24).
+ORPHAN_GRACE_S = 2.0
+#: Once claude has exited, how long its pipes may stay open before the sweep runs
+#: anyway: an orphan that inherited stdout would otherwise hold the job open.
+DRAIN_S = 1.0
+_EXIT_POLL_S = 0.05
+# A systemd unit name may hold more than this, but these are all hands needs.
+_UNIT_UNSAFE_RE = re.compile(r"[^A-Za-z0-9_-]")
+#: The project part of a unit name is cut to this many characters, so a long
+#: project name cannot push the name past systemd's 255; the job id is kept whole.
+MAX_UNIT_PROJECT = 64
+
 #: Every `failure_reason` the runner writes, in the order it checks them (§23):
 #:   harness_terminated  stderr carried the harness's `terminating` line
 #:   no_final_result     no `result` event, or its subtype is not success/error_*
@@ -201,6 +250,59 @@ def build_argv(config: Config, role: RoleConfig, *, resume: str | None = None) -
     argv += list(role.permission_argv)
     argv += ["--permission-prompts", "none"]
     return argv
+
+
+def unit_name(project: str, job_id: str) -> str:
+    """`hands-<project>-<job>`, a valid systemd unit name (§24).
+
+    Every character outside `[A-Za-z0-9_-]` becomes `_` (so `.`, `/`, `@`, `:`,
+    spaces and non-ASCII are all replaced), and the project part is cut to
+    `MAX_UNIT_PROJECT` characters.
+    """
+    safe_project = _UNIT_UNSAFE_RE.sub("_", project)[:MAX_UNIT_PROJECT]
+    return f"hands-{safe_project}-{_UNIT_UNSAFE_RE.sub('_', job_id)}"
+
+
+def spawn_argv(argv: list[str], *, project: str, job_id: str, isolation: str) -> list[str]:
+    """What is actually executed: the §2 invocation, inside a scope when there is one."""
+    if isolation != SCOPE:
+        return list(argv)
+    unit = unit_name(project, job_id)
+    return ["systemd-run", "--user", "--scope", "--quiet", "--unit", unit, "--", *argv]
+
+
+def probe_isolation(
+    *,
+    which: Callable[[str], str | None] = shutil.which,
+    run: Callable[..., subprocess.CompletedProcess[Any]] = subprocess.run,
+    cgroup_root: Path = CGROUP_ROOT,
+) -> str:
+    """`SCOPE` when a transient user scope can be started here, else `GROUP` (§24).
+
+    A scope needs `systemd-run` and `systemctl` on PATH, the unified cgroup
+    hierarchy (to read `cgroup.procs`), and a user manager that really starts
+    one: `systemd-run --user --scope --quiet -- true` must exit 0 in `PROBE_S`.
+    """
+    if which("systemd-run") is None or which("systemctl") is None:
+        return GROUP
+    if not (cgroup_root / "cgroup.controllers").exists():
+        return GROUP
+    try:
+        proc = run(
+            ["systemd-run", "--user", "--scope", "--quiet", "--", "true"],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=PROBE_S,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return GROUP
+    return SCOPE if proc.returncode == 0 else GROUP
+
+
+def detect_isolation() -> str:
+    """The isolation this machine gives a job now. The test suite pins it to `GROUP`."""
+    return probe_isolation()
 
 
 # ------------------------------------------------------------ orphan sweep
@@ -310,6 +412,15 @@ class Runner:
         #: is read. The daemon passes the monitor's `observe` (§5, §24: the
         #: task-killed notice). A hook that raises is logged; the run goes on.
         self.on_stream_event: Callable[[Job, dict[str, Any]], None] | None = None
+        #: `SCOPE` or `GROUP` (§24). None until the first job probes it; a caller
+        #: (or a test) may set it first.
+        self.isolation: str | None = None
+        #: job id → the isolation its process was started under, for the run only.
+        self._isolated: dict[str, str] = {}
+        #: Handed (job, processes, isolation) once claude has exited, when anything
+        #: is still alive in its scope or group; each process is {pid, cmdline}. The
+        #: daemon passes the monitor's `orphan_processes` (§24). Killed afterwards.
+        self.on_orphans: Callable[[Job, list[dict[str, Any]], str], None] | None = None
 
     def _remember_argv(self, job_id: str, argv: list[str]) -> None:
         """Keep this argv and drop the oldest beyond `MAX_LAST_ARGV` (§21).
@@ -331,7 +442,7 @@ class Runner:
         what is held is a property of the code and can be. Nothing counted here
         is per-event: five of the six counts are emptied when a run ends and so
         are bounded by the jobs in flight, and `last_argv`, which is not emptied,
-        is bounded by `MAX_LAST_ARGV` instead.
+        is bounded by `MAX_LAST_ARGV` instead. (`isolated` is emptied too.)
 
         What it does not count, so the number is not read as everything the
         runner holds: the in-flight `_Parsed.result` (one job's final result),
@@ -341,6 +452,7 @@ class Runner:
         """
         return {
             "cancelled": len(self._cancelled),
+            "isolated": len(self._isolated),
             "last_argv": len(self.last_argv),
             "logs": len(self._logs),
             "procs": len(self._procs),
@@ -372,6 +484,29 @@ class Runner:
         return state.last_session_id
 
     # ----------------------------------------------------------- lifecycle
+
+    def live_pids(self, job: Job) -> list[int]:
+        """The job's live pid set, which the monitor passes as `--pids` (§5, §24).
+
+        Its scope's `cgroup.procs`, or every live member of its process group.
+        For a job this runner is not running, or a scope whose cgroup cannot be
+        read yet, it is the process and its descendants, as before §24.
+        """
+        if job.pid is None:
+            return []
+        isolation = self._isolated.get(job.id)
+        if isolation == GROUP:
+            return group_pids(job.pid)[:MAX_PIDS]
+        if isolation == SCOPE:
+            path = cgroup_path(_read_text(f"/proc/{job.pid}/cgroup"))
+            if path and path.endswith(f"/{unit_name(self.config.project, job.id)}.scope"):
+                return cgroup_pids(path)[:MAX_PIDS]
+        return descendants_of(job.pid)
+
+    async def _isolation(self) -> str:
+        if self.isolation is None:
+            self.isolation = await asyncio.to_thread(detect_isolation)
+        return self.isolation
 
     def is_running(self, job_id: str) -> bool:
         proc = self._procs.get(job_id)
@@ -408,30 +543,36 @@ class Runner:
 
         resume = self.resolve_resume_session(job.role) if job.context == "keep" else None
         argv = build_argv(self.config, role, resume=resume)
-        self._remember_argv(job.id, argv)
+        isolation = await self._isolation()
+        spawned = spawn_argv(
+            argv, project=self.config.project, job_id=job.id, isolation=isolation
+        )
+        self._remember_argv(job.id, spawned)
 
         head_at_start = await _git_head(role.cwd)
         job = self.spool.transition(job, "running", head_at_start=head_at_start)
 
         try:
             proc = await asyncio.create_subprocess_exec(
-                *argv,
+                *spawned,
                 cwd=str(role.cwd),
                 stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 limit=_STREAM_LIMIT,
                 env={**os.environ, **role.spawn_env},  # §23
+                start_new_session=isolation == GROUP,  # §24: its own process group
             )
         except OSError as exc:
             # The one dispatch failure that never produces a process. `failed` is
             # the only terminal state §6 offers for it.
-            reason = f"cannot spawn {argv[0]}: {exc}"
+            reason = f"cannot spawn {spawned[0]}: {exc}"
             return await self._finish(
                 job, role, "failed", _Parsed(), None, reason, failure_reason="spawn_error"
             )
 
         self._procs[job.id] = proc
+        self._isolated[job.id] = isolation
         job.pid = proc.pid
         self.spool.save_job(job)
         self._running.setdefault(job.id, asyncio.Event()).set()
@@ -439,14 +580,34 @@ class Runner:
         parsed = _Parsed()
         stderr_lines: list[str] = []
         self._open_log(job.id)
+        swept = False
         try:
-            await asyncio.gather(
+            io = asyncio.gather(
                 self._write_prompt(proc, job.prompt),
                 self._read_stdout(proc, job, role, parsed),
                 self._read_stderr(proc, stderr_lines, parsed),
             )
-            exit_code = await proc.wait()
+            try:
+                await _until_exit(proc, io)
+                if io.done():
+                    await io
+                    exit_code = await proc.wait()
+                    await self._sweep(job, isolation)
+                    swept = True
+                else:
+                    # claude has exited and something still holds its pipes: an
+                    # orphan that inherited them. Sweep first, so they close.
+                    await self._sweep(job, isolation)
+                    swept = True
+                    await io
+                    exit_code = await proc.wait()
+            except BaseException:
+                io.cancel()
+                raise
         finally:
+            if not swept:
+                self._last_resort(job, isolation)
+            self._isolated.pop(job.id, None)
             self._close_log(job.id)
             self._procs.pop(job.id, None)
             self._running.pop(job.id, None)
@@ -473,6 +634,65 @@ class Runner:
         except TimeoutError:
             _signal(proc, signal.SIGTERM)
         return True
+
+    # ------------------------------------------------------- job end (§24)
+
+    async def _sweep(self, job: Job, isolation: str) -> list[dict[str, Any]]:
+        """Report and kill what is still in the job's scope or group (§24).
+
+        Called once claude has exited. Nothing found, nothing reported and
+        nothing signalled. Otherwise `on_orphans` is handed every process with
+        its command line, and then the scope is stopped or the group killed.
+        """
+        if job.pid is None:  # pragma: no cover - a spawned job always has one
+            return []
+        unit = unit_name(self.config.project, job.id)
+        if isolation == SCOPE:
+            path = await _systemctl(
+                "show", "--property", "ControlGroup", "--value", f"{unit}.scope"
+            )
+            pids = cgroup_pids(path) if path else []
+        else:
+            pids = group_pids(job.pid)
+        processes = [{"pid": pid, "cmdline": cmdline(pid)} for pid in pids[:MAX_PIDS]]
+        if not processes:
+            return []
+        log.warning(
+            "job %s: %d process(es) outlived claude in its %s: %s",
+            job.id,
+            len(processes),
+            isolation,
+            ", ".join(str(proc["pid"]) for proc in processes),
+        )
+        hook = self.on_orphans
+        if hook is not None:
+            try:
+                hook(job, processes, isolation)
+            except Exception:  # reporting must never keep the orphans alive
+                log.exception("job %s: the orphan reporter failed", job.id)
+        if isolation == SCOPE:
+            await _systemctl("stop", f"{unit}.scope", timeout=SCOPE_STOP_S)
+        else:
+            await _kill_group(job.pid)
+        return processes
+
+    def _last_resort(self, job: Job, isolation: str) -> None:
+        """The run ended by an exception before its sweep: kill, report nothing."""
+        if job.pid is None:
+            return
+        if isolation == SCOPE:
+            unit = unit_name(self.config.project, job.id)
+            with contextlib.suppress(OSError, subprocess.SubprocessError):
+                subprocess.run(
+                    ["systemctl", "--user", "stop", "--no-block", f"{unit}.scope"],
+                    stdin=subprocess.DEVNULL,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    timeout=PROBE_S,
+                )
+        else:
+            with contextlib.suppress(OSError):
+                os.killpg(job.pid, signal.SIGKILL)
 
     # -------------------------------------------------------------- internals
 
@@ -696,6 +916,65 @@ def _signal(proc: asyncio.subprocess.Process, signum: int) -> None:
 
 async def _wait(proc: asyncio.subprocess.Process) -> int:
     return await proc.wait()
+
+
+async def _until_exit(proc: asyncio.subprocess.Process, io: asyncio.Future[Any]) -> None:
+    """Until the pipes are drained, or claude has exited and `DRAIN_S` has passed.
+
+    asyncio's `wait()` also waits for the pipes to close, and an orphan that
+    inherited them keeps them open; the exit status itself arrives without them.
+    """
+    while not io.done() and proc.returncode is None:
+        await asyncio.wait({io}, timeout=_EXIT_POLL_S)
+    if not io.done():
+        await asyncio.wait({io}, timeout=DRAIN_S)
+
+
+def _read_text(path: str) -> str:
+    try:
+        return Path(path).read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return ""
+
+
+async def _kill_group(pgid: int, grace: float = ORPHAN_GRACE_S) -> None:
+    """SIGTERM the group, wait `grace`, SIGKILL what is left, wait again (§24)."""
+    for signum in (signal.SIGTERM, signal.SIGKILL):
+        with contextlib.suppress(ProcessLookupError, PermissionError):
+            os.killpg(pgid, signum)
+        deadline = time.monotonic() + grace
+        while group_pids(pgid):
+            if time.monotonic() >= deadline:
+                break
+            await asyncio.sleep(0.02)
+        else:
+            return
+    log.warning("process group %d still has members after SIGKILL: %s", pgid, group_pids(pgid))
+
+
+async def _systemctl(*args: str, timeout: float = PROBE_S) -> str | None:
+    """`systemctl --user <args>`'s stdout, stripped, or None. Never raises."""
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "systemctl",
+            "--user",
+            *args,
+            stdin=asyncio.subprocess.DEVNULL,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+    except OSError:
+        return None
+    try:
+        out, _ = await asyncio.wait_for(proc.communicate(), timeout)
+    except TimeoutError:
+        with contextlib.suppress(ProcessLookupError):
+            proc.kill()
+        await proc.wait()
+        return None
+    if proc.returncode != 0:
+        return None
+    return out.decode("utf-8", errors="replace").strip()
 
 
 async def _git_head(cwd: Path) -> str | None:

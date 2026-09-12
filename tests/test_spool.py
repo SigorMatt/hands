@@ -386,6 +386,7 @@ def test_events_since_filters_by_id(tmp_home: Path) -> None:
         "monitor.stall",
         "monitor.tripwire",
         "monitor.task_killed",
+        "monitor.orphan_processes",
         "monitor.event",
         "playbook.rule",
         "stop",
@@ -406,6 +407,14 @@ def test_wait_for_task_killed_resolves_to_the_monitor_kind() -> None:
 
     assert resolve_kinds("task_killed") == frozenset({"monitor.task_killed"})
     assert {"monitor.task_killed"} <= resolve_kinds("monitor")
+
+
+def test_wait_for_orphan_processes_resolves_to_the_monitor_kind() -> None:
+    """§24's `monitor.orphan_processes` is reachable by `hands wait --for` too."""
+    from hands.spool import resolve_kinds
+
+    assert resolve_kinds("orphan_processes") == frozenset({"monitor.orphan_processes"})
+    assert {"monitor.orphan_processes"} <= resolve_kinds("monitor")
 
 
 @pytest.mark.parametrize("kind", ["", "Job.Done", "weather.report", "job..done", "job done"])

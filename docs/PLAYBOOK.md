@@ -45,7 +45,7 @@ Unknown keys are refused, at the top level, in `[limits]` and in a `[[rule]]`.
 
 `builder.done`, `builder.failed`, `builder.limited`, `builder.orphaned`,
 `aux.done`, `aux.failed`, `monitor.stall`, `monitor.tripwire`,
-`monitor.task_killed`, `job.held`, `job.denied`.
+`monitor.task_killed`, `monitor.orphan_processes`, `job.held`, `job.denied`.
 
 The list is closed: anything else is not a playbook event and fires nothing. A
 job you cancelled yourself (`killed`) is not an event — you already know.
@@ -63,9 +63,24 @@ the job was waiting on did not finish, so the rule is `stop`:
     on = "monitor.task_killed"
     then = "stop"
 
-An event with no matching rule stops anyway; the rule says it on purpose.
-DESIGN §24 puts it in the example playbook, but the copy of §10's example at
-the end of this page is §10's own text byte for byte, which does not carry it.
+`monitor.orphan_processes` (DESIGN §24) means processes a role job started were
+still alive after its `claude -p` exited. hands files one event per job, only
+when there were any, listing each process's `pid` and command line
+(`processes`, each line cut to 1024 characters), and then kills them. Where
+`systemd-run --user --scope` works, each job runs in its own transient scope and
+the list is everything left in it, double forks included. Elsewhere each job
+runs in its own process group, which is weaker: a process that called `setsid`
+has left the group and is not listed or killed. `hands doctor` says which one
+is in force. Work the job left running did not finish with it, so the rule is
+`stop` too:
+
+    [[rule]]
+    on = "monitor.orphan_processes"
+    then = "stop"
+
+An event with no matching rule stops anyway; each rule says it on purpose.
+DESIGN §24 puts both in the example playbook, but the copy of §10's example at
+the end of this page is §10's own text byte for byte, which carries neither.
 
 ## Actions (`then`)
 

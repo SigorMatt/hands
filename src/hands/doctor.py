@@ -45,6 +45,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+import hands.runner
 from hands.config import BG_WAIT_CEILING_ENV, Config, RoleConfig
 from hands.monitor import OPS_FLAGS
 from hands.playbook import PlaybookError, load_playbook, playbook_path
@@ -120,7 +121,8 @@ def run_checks(
     found = [_config_check(config)]
     found += [_claude_check(config)]
     found += [_role_check(role) for role in config.roles.values()]
-    found += [_roots_check(config), _ops_check(config), _playbook_check(config)]
+    found += [_roots_check(config), _ops_check(config), _isolation_check(config)]
+    found += [_playbook_check(config)]
     found += [_daemon_check(config, socket_path, daemon)]
     found += [_live_check(config, role, live=live) for role in config.roles.values()]
     return found
@@ -294,6 +296,33 @@ def _ops_check(config: Config) -> Check:
             f"dead pid; that may be its way of saying the job is gone: {_tail(probe.text)}",
         )
     return Check("ops script", OK, f"{path} ran with {', '.join(MONITOR_FLAGS)} and exited 0")
+
+
+def _isolation_check(config: Config) -> Check:
+    """§24: which per-job isolation the runner would use here. Informational only.
+
+    Probed now, the way the runner probes it when it starts its first job. Both
+    answers are `ok`: the process group is weaker, not broken.
+    """
+    if hands.runner.detect_isolation() == hands.runner.SCOPE:
+        return Check(
+            "isolation",
+            OK,
+            "scope: each `claude -p` runs under `systemd-run --user --scope --unit "
+            f"hands-{config.project}-<job>`\nthe monitor's --pids is the scope's "
+            "cgroup.procs; a process that double-forks or calls setsid is still in it, "
+            "so at job end it is filed as monitor.orphan_processes and the scope is "
+            "stopped (§24)",
+        )
+    return Check(
+        "isolation",
+        OK,
+        "process group: `systemd-run --user --scope` could not start a scope here (no "
+        "systemd-run, no cgroup v2, or no user manager answering)\neach `claude -p` "
+        "starts in a new process group; this is weaker: a process that calls setsid "
+        "leaves the group, so it is not in --pids, not filed as "
+        "monitor.orphan_processes and not killed at job end (§24)",
+    )
 
 
 def _playbook_check(config: Config) -> Check:

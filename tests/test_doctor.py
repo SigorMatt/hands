@@ -20,6 +20,7 @@ from typing import Any
 
 import pytest
 
+import hands.runner
 from conftest import strip_paths
 from hands.cli import call, main
 from hands.config import load_config
@@ -630,3 +631,31 @@ def test_the_daemon_answers_doctor_over_the_api(
         assert any("ntfy" in strip_paths(line) for line in report["wake_check"])
 
     drive(body)
+
+
+@pytest.mark.parametrize(
+    ("isolation", "words"),
+    [
+        ("scope", "systemd-run --user --scope"),
+        ("group", "process group"),
+    ],
+)
+def test_doctor_says_which_isolation_is_in_force_and_never_fails_on_it(
+    tmp_home: Path,
+    tmp_path: Path,
+    fake_mode: None,
+    monkeypatch: pytest.MonkeyPatch,
+    isolation: str,
+    words: str,
+) -> None:
+    """§24: `hands doctor` says whether jobs get a scope or the weaker process group."""
+    monkeypatch.setattr(hands.runner, "detect_isolation", lambda: isolation)
+    write_config(tmp_home, tmp_path)
+    code, out, err = run()
+    assert code == 0, f"{out}\n{err}"
+    assert words in strip_paths(text_row(out, "isolation"))
+    assert ("weaker" in strip_paths(text_row(out, "isolation"))) is (isolation == "group")
+    code, found = checks()
+    assert code == 0
+    assert found["isolation"]["status"] == "ok"
+    assert words in strip_paths(found["isolation"]["detail"])

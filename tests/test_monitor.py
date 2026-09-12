@@ -12,21 +12,27 @@ import asyncio
 import json
 import os
 import shutil
+import subprocess
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
 
 import pytest
 
-from conftest import strip_paths
+from conftest import kill_quietly, process_live, strip_paths
 from fake_monitor import FAREWELL, FIRST, SECOND, THIRD
 from hands.config import Config, parse_config
 from hands.monitor import (
+    MAX_CMDLINE,
     BlockBuffer,
     MonitorSupervisor,
     TaskKillWatch,
     block_kind,
+    cgroup_path,
+    cgroup_pids,
+    cmdline,
     descendants_of,
+    group_pids,
     pid_list,
 )
 from hands.spool import Event, Job, Spool
@@ -552,5 +558,145 @@ def test_a_queued_reply_can_carry_the_notice(
         assert [(e.payload["task_id"], e.payload["command"]) for e in events] == [
             ("bg9", "npm run dev")
         ]
+
+    drive(body)
+
+
+# ------------------------------------- the live pid set and orphans (§5, §24)
+
+
+SCOPE_PATH = (
+    "/user.slice/user-1000.slice/user@1000.service/app.slice/hands-demo-0mtygi953-ym63.scope"
+)
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        (f"0::{SCOPE_PATH}\n", SCOPE_PATH),
+        (f"12:pids:/user.slice/user-1000.slice\n1:name=systemd:/user.slice\n0::{SCOPE_PATH}\n",
+         SCOPE_PATH),
+        ("12:pids:/user.slice\n1:name=systemd:/user.slice\n", None),
+        ("", None),
+    ],
+    ids=["unified", "hybrid", "v1-only", "empty"],
+)
+def test_the_unified_cgroup_line_names_the_scope(text: str, expected: str | None) -> None:
+    assert cgroup_path(text) == expected
+
+
+def test_a_scopes_pid_set_is_its_cgroup_procs(tmp_path: Path) -> None:
+    scope = tmp_path / SCOPE_PATH.lstrip("/")
+    scope.mkdir(parents=True)
+    (scope / "cgroup.procs").write_text("101\n202\n\n")
+    assert cgroup_pids(SCOPE_PATH, root=tmp_path) == [101, 202]
+    assert cgroup_pids("/user.slice/gone.scope", root=tmp_path) == []
+
+
+def test_a_groups_pid_set_is_its_live_members() -> None:
+    child = subprocess.Popen(["sleep", "30"], start_new_session=True)
+    try:
+        assert group_pids(child.pid) == [child.pid]  # this process is not in it
+    finally:
+        child.kill()
+        child.wait()
+    assert group_pids(child.pid) == []
+
+
+def fake_proc(root: Path, pid: int, state: str, pgrp: int, argv: bytes = b"") -> None:
+    d = root / str(pid)
+    d.mkdir(parents=True)
+    # The comm field is parenthesised and may hold spaces and parentheses.
+    (d / "stat").write_text(f"{pid} (a (b) c) {state} 1 {pgrp} {pgrp} 0 -1 4194304 0 0\n")
+    (d / "cmdline").write_bytes(argv)
+
+
+def test_a_zombie_is_not_live_and_a_command_line_is_capped(tmp_path: Path) -> None:
+    fake_proc(tmp_path, 10, "S", 10, b"sleep\x00300\x00")
+    fake_proc(tmp_path, 11, "Z", 10)
+    fake_proc(tmp_path, 12, "R", 99, b"x\x00" + b"a" * (MAX_CMDLINE * 3) + b"\x00")
+    (tmp_path / "self").mkdir()
+    assert group_pids(10, proc_root=tmp_path) == [10]
+    assert cmdline(10, proc_root=tmp_path) == "sleep 300"
+    long = cmdline(12, proc_root=tmp_path)
+    assert long.startswith("x aaa") and long.endswith("…") and len(long) == MAX_CMDLINE
+    assert cmdline(13, proc_root=tmp_path) == ""
+
+
+def test_the_ops_script_is_given_the_pid_set_the_supervisor_is_handed(
+    tmp_home: Path, workdir: Path, opsdir: Path, spool: Spool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    argv_file = tmp_home / "argv.json"
+    monkeypatch.setenv("HANDS_FAKE_MONITOR_ARGV", str(argv_file))
+    config = make_config(tmp_home, workdir, ops=opsdir, monitor_cmd="watch_monitor.sh")
+
+    async def body() -> None:
+        monitors = MonitorSupervisor(config, spool, pids=lambda job: [4242, 4343])
+        job = running(spool)
+        monitors.start(job)
+        await wait_for(lambda: monitor_events(spool), "the first block")
+        assert json.loads(argv_file.read_text())["pids"] == "4242,4343"
+        await monitors.stop(job.id)
+
+    run(body)
+
+
+def orphan_events(daemon: Any) -> list[Event]:
+    return [e for e in daemon.spool.events() if e.kind == "monitor.orphan_processes"]
+
+
+@pytest.mark.parametrize("stdio", ["", " keep-stdio"], ids=["detached", "holding-its-pipes"])
+def test_a_double_forked_orphan_is_filed_with_its_command_line_and_killed(
+    tmp_home: Path, tmp_path: Path, stdio: str
+) -> None:
+    """§24 through a real daemon, runner and fake_claude, in process-group mode.
+
+    The grandchild never calls setsid, so it is still in the job's group when
+    claude exits: that is what the fallback can see. `holding-its-pipes` keeps
+    the job's stdout open as well, so job end cannot wait for EOF to sweep.
+    """
+    workdir = tmp_path / "work"
+    workdir.mkdir()
+    write_project(tmp_home, config_body(tmp_home, workdir))
+    pidfile = tmp_path / "orphan.pid"
+    seen: list[str] = []
+
+    async def body(daemon: Any) -> None:
+        assert daemon.monitors.pids == daemon.runner.live_pids  # §5's `--pids`
+        dispatch = daemon.monitors.on_event
+        daemon.monitors.on_event = lambda kind, payload: (
+            seen.append(kind),
+            dispatch(kind, payload),
+        )
+        prompt = f"go\nFAKE:orphan {pidfile}{stdio}"
+        job = await ok("send", "--role", "builder", "--context", "clear", prompt)
+        assert (await ok("wait", job["id"]))["state"] == "done"
+        pid = int(pidfile.read_text())
+        events = orphan_events(daemon)
+        assert len(events) == 1
+        payload = events[0].payload
+        assert (payload["job"], payload["role"]) == (job["id"], "builder")
+        assert payload["isolation"] == "group"
+        assert payload["processes"] == [{"pid": pid, "cmdline": "sleep 300"}]
+        assert f"{pid} sleep 300" in payload["block"]
+        assert not process_live(pid)
+        assert seen.count("monitor.orphan_processes") == 1
+
+    try:
+        drive(body)
+    finally:
+        if pidfile.exists():
+            kill_quietly(int(pidfile.read_text()))
+
+
+def test_a_normal_run_files_no_orphan_processes(tmp_home: Path, tmp_path: Path) -> None:
+    workdir = tmp_path / "work"
+    workdir.mkdir()
+    write_project(tmp_home, config_body(tmp_home, workdir))
+
+    async def body(daemon: Any) -> None:
+        job = await ok("send", "--role", "builder", "--context", "clear", "go")
+        assert (await ok("wait", job["id"]))["state"] == "done"
+        assert orphan_events(daemon) == []
 
     drive(body)

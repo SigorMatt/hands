@@ -107,6 +107,7 @@ EVENT_KINDS = frozenset(
         "monitor.stall",
         "monitor.tripwire",
         "monitor.task_killed",  # a task inside a role job was killed (§5, §24)
+        "monitor.orphan_processes",  # alive in a job's scope or group at its end (§24)
         "monitor.event",
         "playbook.rule",
         "stop",

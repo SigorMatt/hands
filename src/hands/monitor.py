@@ -16,6 +16,13 @@ aux alike) is read for the harness's task-killed notice (§24): the runner hands
 each parsed event to `MonitorSupervisor.observe`, and a killed task is one
 `monitor.task_killed` event carrying the task's command line, once per task.
 
+At job end the runner hands over what was still alive in the job's scope or
+process group once claude had exited (§24): `MonitorSupervisor.orphan_processes`
+files it as one `monitor.orphan_processes` event with each process's command
+line. The readers of that pid set (`group_pids`, `cgroup_path`, `cgroup_pids`,
+`cmdline`) live here with the other `/proc` readers; the kill that follows is
+the runner's, because the runner owns the process it spawned.
+
 Invariant 4 of §1 is the whole of this module's authority: **it reports, it
 never intervenes**. Nothing here signals the job, cancels it, or sends a
 prompt; a monitor that raises is logged and dropped, and the job runs on.
@@ -43,6 +50,7 @@ from hands.spool import Job, Spool
 
 __all__ = [
     "DEFAULT_POLL_S",
+    "MAX_CMDLINE",
     "OPS_FLAGS",
     "TASK_MEMORY",
     "WATCHED_ROLES",
@@ -51,8 +59,12 @@ __all__ = [
     "MonitorSupervisor",
     "TaskKillWatch",
     "block_kind",
+    "cgroup_path",
+    "cgroup_pids",
+    "cmdline",
     "cpu_ticks",
     "descendants_of",
+    "group_pids",
     "pid_list",
 ]
 
@@ -72,6 +84,11 @@ MIN_POLL_S = 0.01
 STOP_GRACE_S = 5.0  # SIGTERM → this long → SIGKILL, and the same to drain stdout
 MAX_PIDS = 256  # a deep sub-agent tree must not build an unbounded command line
 STDERR_TAIL_LINES = 20
+PROC_ROOT = Path("/proc")
+CGROUP_ROOT = Path("/sys/fs/cgroup")  # the unified (v2) hierarchy
+#: Characters of one orphan's command line kept in its event (§24). Arguments
+#: can be whole scripts; past this the line ends in `…`.
+MAX_CMDLINE = 1024
 READ_LIMIT = 1024 * 1024  # one block line of an ops script, generously
 
 #: The kinds §5 names. Anything else the script says is `monitor.event`.
@@ -295,6 +312,70 @@ def pid_list(job: Job) -> list[int]:
     return descendants_of(job.pid)
 
 
+def cgroup_path(text: str) -> str | None:
+    """The unified-hierarchy path in `/proc/<pid>/cgroup` text: its `0::` line.
+
+    A transient scope's path ends in `/<unit>.scope`. None when there is no `0::`
+    line (a cgroup v1-only machine), which is one reason there is no scope.
+    """
+    for line in text.splitlines():
+        if line.startswith("0::"):
+            return line[3:].strip() or None
+    return None
+
+
+def cgroup_pids(path: str, *, root: Path = CGROUP_ROOT) -> list[int]:
+    """The pids in a cgroup's `cgroup.procs`: a scope's live pid set (§24).
+
+    Empty when the cgroup is gone, which is what a scope whose last process
+    exited is. Membership survives double forks and setsid.
+    """
+    pids: list[int] = []
+    for word in (_read(root / path.lstrip("/") / "cgroup.procs") or "").split():
+        with contextlib.suppress(ValueError):
+            pids.append(int(word))
+    return pids
+
+
+def group_pids(pgid: int, *, proc_root: Path = PROC_ROOT) -> list[int]:
+    """Every live process whose process group is `pgid`, from `/proc/*/stat` (§24).
+
+    The process-group fallback's live pid set. A zombie has exited and is left
+    out. A process that called setsid (or setpgid) has left the group and is not
+    here: that is why this fallback is weaker than a scope.
+    """
+    try:
+        entries = [entry for entry in proc_root.iterdir() if entry.name.isdigit()]
+    except OSError:  # pragma: no cover - no /proc
+        return []
+    found: list[int] = []
+    for entry in entries:
+        text = _read(entry / "stat")
+        if not text or ")" not in text:
+            continue  # it died between the listing and the read
+        # Fields after the parenthesised comm: state, ppid, pgrp, ...
+        fields = text[text.rindex(")") + 1 :].split()
+        if len(fields) < 3 or fields[0] in ("Z", "X") or fields[2] != str(pgid):
+            continue
+        found.append(int(entry.name))
+    return sorted(found)
+
+
+def cmdline(pid: int, *, proc_root: Path = PROC_ROOT) -> str:
+    """`/proc/<pid>/cmdline` with NULs as spaces, capped at `MAX_CMDLINE` (§24).
+
+    Empty when it cannot be read (the process is gone, or is a kernel thread).
+    """
+    try:
+        raw = (proc_root / str(pid) / "cmdline").read_bytes()
+    except OSError:
+        return ""
+    text = raw.rstrip(b"\0").replace(b"\0", b" ").decode("utf-8", errors="replace")
+    if len(text) > MAX_CMDLINE:
+        text = text[: MAX_CMDLINE - 1] + "…"
+    return text
+
+
 def cpu_ticks(pids: list[int]) -> int | None:
     """utime+stime (fields 14, 15 of `/proc/<pid>/stat`) summed over `pids`.
 
@@ -416,8 +497,12 @@ class MonitorSupervisor:
         poll_s: float = DEFAULT_POLL_S,
         clock: Callable[[], float] = time.monotonic,
         stop_grace_s: float = STOP_GRACE_S,
+        pids: Callable[[Job], list[int]] = pid_list,
     ) -> None:
         self.config = config
+        #: The live pid set of a job, which is what `--pids` carries (§5, §24). The
+        #: daemon passes `runner.live_pids`: the job's scope or process group.
+        self.pids = pids
         self.spool = spool
         #: Awaited before a watch begins: the daemon passes `runner.wait_for_session`,
         #: so `--transcript` and the pid list are real by the time they are read.
@@ -556,6 +641,32 @@ class MonitorSupervisor:
             description=kill.description,
         )
 
+    # ---------------------------------------------------- job end (§24)
+
+    def orphan_processes(
+        self, job: Job, processes: list[dict[str, Any]], isolation: str
+    ) -> None:
+        """What was still alive in a job's scope or group after claude exited (§24).
+
+        The runner calls this once per job, only with a non-empty list, and kills
+        the processes after it returns. One event, every process's pid and
+        command line in it.
+        """
+        where = "scope" if isolation == "scope" else "process group"
+        lines = [
+            f"ORPHAN_PROCESSES {job.id} ({job.role}) {len(processes)} process(es) "
+            f"still in the job's {where} after claude exited; they are killed now"
+        ]
+        lines += [f"{proc['pid']} {proc['cmdline'] or '(no command line)'}" for proc in processes]
+        self._file(
+            job,
+            "\n".join(lines),
+            source="job_end",
+            kind="orphan_processes",
+            isolation=isolation,
+            processes=processes,
+        )
+
     # ----------------------------------------------------------- the inbox
 
     def _file(
@@ -581,7 +692,7 @@ class MonitorSupervisor:
             self._file(job, f"event: {problem}", source="ops", kind="event")
             return
 
-        pids = pid_list(job)
+        pids = self.pids(job)
         values = (
             ",".join(str(pid) for pid in pids),
             job.transcript_path or "",
@@ -692,14 +803,14 @@ class MonitorSupervisor:
         return (
             _mtime(transcript),
             _mtime(transcript.parent / "subagents") if transcript is not None else None,
-            cpu_ticks(pid_list(job)),
+            cpu_ticks(self.pids(job)),
             index_mtime,
             await _git(cwd, "rev-parse", "HEAD"),
             await _git(cwd, "stash", "list"),
         )
 
     def _stall(self, job: Job, idle_s: float, interval_s: float) -> None:
-        pids = pid_list(job)
+        pids = self.pids(job)
         block = (
             f"STALL {job.id} ({job.role}) no progress and no liveness for "
             f"{idle_s / 60.0:.2f} minute(s) "

@@ -111,8 +111,15 @@ class Daemon:
         #: §5's watch: one per builder job, started with the job and stopped with
         #: it. It reports to the inbox and never touches a job (§1 invariant 4).
         self.monitors = MonitorSupervisor(
-            config, self.spool, ready=self.runner.wait_for_session, on_event=self._monitor_event
+            config,
+            self.spool,
+            ready=self.runner.wait_for_session,
+            on_event=self._monitor_event,
+            pids=self.runner.live_pids,  # §5's `--pids`: the job's scope or group (§24)
         )
+        #: §24: what is still alive in a job's scope or group when claude exits is
+        #: filed as `monitor.orphan_processes`; the runner then kills it.
+        self.runner.on_orphans = self.monitors.orphan_processes
         #: §24: every role job's stream-json reaches the monitor as it is read, so a
         #: task the harness killed is filed as `monitor.task_killed`.
         self.runner.on_stream_event = self.monitors.observe
@@ -451,7 +458,7 @@ class Daemon:
 
     def _monitor_event(self, kind: str, payload: dict[str, Any]) -> None:
         """§5's watch speaks to §10: `monitor.stall`, `monitor.tripwire` and §24's
-        `monitor.task_killed` are events."""
+        `monitor.task_killed` and `monitor.orphan_processes` are events."""
         self.playbook.dispatch(kind, payload=payload)
 
     # ------------------------------------------------------------ job waiting

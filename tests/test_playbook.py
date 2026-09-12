@@ -238,6 +238,7 @@ def test_the_events_and_actions_are_exactly_section_10s() -> None:
         "monitor.stall",
         "monitor.tripwire",
         "monitor.task_killed",  # §24: mission 8's detector, mapped to `stop`
+        "monitor.orphan_processes",  # §24: the other one, mapped to `stop` too
         "job.held",
         "job.denied",
     )
@@ -595,6 +596,23 @@ def test_a_task_killed_rule_loads_and_stops_the_pipeline(tmp_home: Path, workdir
     run(engine.on_event("monitor.task_killed", payload=payload))
     assert engine.pipeline()["paused"] is True
     assert "monitor.task_killed" in strip_paths(engine.pipeline()["stop_reason"])
+    assert recorder.sent == []
+
+
+def test_an_orphan_processes_rule_loads_and_stops_the_pipeline(
+    tmp_home: Path, workdir: Path
+) -> None:
+    """§24: `monitor.orphan_processes` is a name a rule may use, and it stops."""
+    body = EXAMPLE + '\n[[rule]]\non = "monitor.orphan_processes"\nthen = "stop"\n'
+    book = parse_playbook(body, path=workdir / "PLAYBOOK.toml")
+    assert (book.rules[-1].on, book.rules[-1].then) == ("monitor.orphan_processes", "stop")
+    engine, recorder = engine_for(tmp_home, workdir, body=body)
+    job = engine.spool.create_job(role="builder", context="clear", prompt="p", origin="cli")
+    run(engine.on_job_start(job))
+    payload = {"job": job.id, "processes": [{"pid": 7, "cmdline": "sleep 300"}], "block": "x"}
+    run(engine.on_event("monitor.orphan_processes", payload=payload))
+    assert engine.pipeline()["paused"] is True
+    assert "monitor.orphan_processes" in strip_paths(engine.pipeline()["stop_reason"])
     assert recorder.sent == []
 
 

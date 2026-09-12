@@ -70,10 +70,11 @@ __all__ = [
 log = logging.getLogger("hands.playbook")
 
 #: §10's "Events", in the order §10 lists them, with §24's `monitor.task_killed`
-#: after its monitor siblings (§24: the example playbook maps it to `stop`, so
-#: it has to be a name a rule may use). Closed: an event outside this
-#: list is not a playbook event and fires nothing (a `killed` job, for one, is a
-#: human's own `hands cancel`, and the human already knows).
+#: and `monitor.orphan_processes` after their monitor siblings (§24: the
+#: example playbook maps both to `stop`, so they have to be names a rule may
+#: use). Closed: an event outside this list is not a playbook event and fires
+#: nothing (a `killed` job, for one, is a human's own `hands cancel`, and the
+#: human already knows).
 EVENTS: tuple[str, ...] = (
     "builder.done",
     "builder.failed",
@@ -84,6 +85,7 @@ EVENTS: tuple[str, ...] = (
     "monitor.stall",
     "monitor.tripwire",
     "monitor.task_killed",
+    "monitor.orphan_processes",
     "job.held",
     "job.denied",
 )

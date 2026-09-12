@@ -104,3 +104,39 @@ def strip_paths(text: str, *extra: str | Path) -> str:
     for form in sorted(forms, key=len, reverse=True):
         text = text.replace(form, "<path>")
     return text
+
+
+@pytest.fixture(autouse=True)
+def _process_group_isolation(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Every job in the suite runs in process-group mode (DESIGN §24).
+
+    `hands.runner.detect_isolation` asks the machine whether a transient systemd
+    user scope can be started. A developer box with a user manager says yes and
+    CI may say no, so the suite would run jobs two different ways depending on
+    where it runs. It is pinned to the process group here; a test that wants the
+    scope path sets `Runner.isolation` or patches this function itself.
+    """
+    import hands.runner
+
+    monkeypatch.setattr(hands.runner, "detect_isolation", lambda: hands.runner.GROUP)
+
+
+def process_live(pid: int) -> bool:
+    """Is `pid` a running process? A zombie is not: it has already exited."""
+    try:
+        text = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return False
+    fields = text[text.rindex(")") + 1 :].split()
+    return bool(fields) and fields[0] not in ("Z", "X")
+
+
+def kill_quietly(pid: int) -> None:
+    """Teardown for a test that made a process meant to die: never leave one behind."""
+    import signal
+
+    if process_live(pid):
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except OSError:
+            pass

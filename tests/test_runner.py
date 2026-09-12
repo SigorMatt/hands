@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 import subprocess
 import time
 from datetime import UTC, datetime
@@ -16,19 +17,24 @@ from pathlib import Path
 
 import pytest
 
-from conftest import strip_paths
+from conftest import kill_quietly, process_live, strip_paths
 from hands.config import Config, parse_config
 from hands.limits import from_iso
 from hands.runner import (
+    GROUP,
     MAX_LAST_ARGV,
+    SCOPE,
     KeepRefused,
     Runner,
     RunnerError,
     extract_verdict,
     is_harness_termination,
+    probe_isolation,
     project_dir_name,
     reconcile_orphans,
+    spawn_argv,
     transcript_path_for,
+    unit_name,
 )
 from hands.spool import Job, Spool
 
@@ -821,6 +827,7 @@ def test_a_huge_stream_is_never_retained_by_the_runner(runner: Runner, spool: Sp
             await asyncio.sleep(0.02)
         assert runner.retained() == {
             "cancelled": 0,
+        "isolated": 1,
             "last_argv": 1,
             "logs": 1,
             "procs": 1,
@@ -836,6 +843,7 @@ def test_a_huge_stream_is_never_retained_by_the_runner(runner: Runner, spool: Sp
     # Everything per-job is released with the job; `last_argv` keeps the last few.
     assert runner.retained() == {
         "cancelled": 0,
+        "isolated": 0,
         "last_argv": 1,
         "logs": 0,
         "procs": 0,
@@ -877,3 +885,144 @@ def test_the_final_result_is_the_only_event_kept_after_a_huge_run(
     assert job.state == "done"
     assert job.result == "the last word"
     assert spool.stream_path(job.id).read_bytes().count(b"\n") == HUGE + 2
+
+
+# ------------------------------------------ per-job isolation (§24, backlog 2)
+
+
+def test_a_unit_name_is_hands_project_job_with_only_safe_characters() -> None:
+    assert unit_name("demo", "0mtygi953-ym63") == "hands-demo-0mtygi953-ym63"
+    assert unit_name("my proj.é/x", "j:1@2") == "hands-my_proj___x-j_1_2"
+    long = unit_name("p" * 300, "0mtygi953-ym63")
+    assert long == "hands-" + "p" * 64 + "-0mtygi953-ym63"
+    assert re.fullmatch(r"[A-Za-z0-9_-]+", long)
+
+
+def test_scope_mode_wraps_the_invocation_and_group_mode_does_not() -> None:
+    argv = ["claude", "-p", "--output-format", "stream-json"]
+    assert spawn_argv(argv, project="demo", job_id="j1", isolation=SCOPE) == [
+        "systemd-run", "--user", "--scope", "--quiet", "--unit", "hands-demo-j1", "--", *argv
+    ]
+    assert spawn_argv(argv, project="demo", job_id="j1", isolation=GROUP) == argv
+
+
+def cgroup_v2(root: Path) -> Path:
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "cgroup.controllers").write_text("cpu memory pids\n")
+    return root
+
+
+def test_the_probe_picks_a_scope_only_when_systemd_run_starts_one(tmp_path: Path) -> None:
+    calls: list[list[str]] = []
+
+    def answers(code: int):  # noqa: ANN202 - builds a fake subprocess.run
+        def fake(argv: list[str], **_kw: object) -> subprocess.CompletedProcess[str]:
+            calls.append(argv)
+            return subprocess.CompletedProcess(argv, code, "", "")
+
+        return fake
+
+    def times_out(argv: list[str], **_kw: object) -> subprocess.CompletedProcess[str]:
+        raise subprocess.TimeoutExpired(argv, 1.0)
+
+    found = lambda name: f"/usr/bin/{name}"  # noqa: E731
+    v2 = cgroup_v2(tmp_path / "v2")
+    assert probe_isolation(which=found, run=answers(0), cgroup_root=v2) == SCOPE
+    assert calls[0][:4] == ["systemd-run", "--user", "--scope", "--quiet"]
+    assert probe_isolation(which=found, run=answers(1), cgroup_root=v2) == GROUP
+    assert probe_isolation(which=found, run=times_out, cgroup_root=v2) == GROUP
+    assert probe_isolation(which=lambda name: None, run=answers(0), cgroup_root=v2) == GROUP
+    v1 = tmp_path / "v1"
+    v1.mkdir()
+    assert probe_isolation(which=found, run=answers(0), cgroup_root=v1) == GROUP
+
+
+def start(runner: Runner, spool: Spool, prompt: str) -> tuple[Job, asyncio.Task[Job]]:
+    job = spool.create_job(role="builder", context="clear", prompt=prompt, origin="cli")
+    return job, asyncio.create_task(runner.run(job))
+
+
+async def until(check, what: str, timeout: float = 15.0):  # noqa: ANN001, ANN201
+    for _ in range(int(timeout / 0.02)):
+        value = check()
+        if value:
+            return value
+        await asyncio.sleep(0.02)
+    raise AssertionError(f"timed out waiting for {what}")
+
+
+def test_group_mode_starts_each_job_as_its_own_process_group(runner: Runner, spool: Spool) -> None:
+    async def body() -> None:
+        job, task = start(runner, spool, "FAKE:block")
+        await runner.wait_for_session(job.id)
+        pid = spool.load_job(job.id).pid
+        assert pid is not None
+        assert os.getpgid(pid) == pid != os.getpgrp()
+        assert runner.live_pids(spool.load_job(job.id)) == [pid]
+        assert runner.last_argv[job.id][0] == str(FAKE)
+        await runner.cancel(job.id)
+        assert (await task).state == "killed"
+
+    asyncio.run(asyncio.wait_for(body(), 30))
+
+
+def test_scope_mode_spawns_through_systemd_run_with_the_unit_name(
+    runner: Runner, spool: Spool, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No systemd needed: a `systemd-run` on PATH records its argv and execs the rest."""
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    record = tmp_path / "systemd-run.argv"
+    (bindir / "systemd-run").write_text(
+        "#!/bin/sh\n"
+        f'printf "%s\\n" "$@" > "{record}"\n'
+        'while [ "$1" != "--" ]; do shift; done\nshift\nexec "$@"\n'
+    )
+    (bindir / "systemctl").write_text("#!/bin/sh\nexit 0\n")  # the scope is already gone
+    for tool in ("systemd-run", "systemctl"):
+        (bindir / tool).chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bindir}{os.pathsep}{os.environ['PATH']}")
+    runner.isolation = SCOPE
+
+    job = send(runner, spool, "FAKE:result scoped")
+    assert (job.state, job.result) == ("done", "scoped")
+    recorded = record.read_text().splitlines()
+    assert recorded[:6] == ["--user", "--scope", "--quiet", "--unit", f"hands-demo-{job.id}", "--"]
+    assert recorded[6] == str(FAKE)
+    assert runner.last_argv[job.id][:2] == ["systemd-run", "--user"]
+
+
+def test_a_normal_run_reports_no_orphans(runner: Runner, spool: Spool) -> None:
+    seen: list[object] = []
+    runner.on_orphans = lambda job, processes, isolation: seen.append(processes)
+    assert send(runner, spool, "FAKE:result ok").state == "done"
+    assert seen == []
+
+
+def test_a_cancelled_jobs_orphan_is_reported_and_killed(
+    runner: Runner, spool: Spool, tmp_path: Path
+) -> None:
+    pidfile = tmp_path / "orphan.pid"
+    seen: list[tuple[str, list[dict[str, object]]]] = []
+    runner.on_orphans = lambda job, processes, isolation: seen.append((job.id, processes))
+
+    def execd() -> bool:
+        if not pidfile.exists() or not pidfile.read_text():
+            return False
+        return Path(f"/proc/{pidfile.read_text()}/cmdline").read_bytes().startswith(b"sleep")
+
+    async def body() -> None:
+        job, task = start(runner, spool, f"FAKE:orphan {pidfile}\nFAKE:block")
+        await until(execd, "the orphan to exec")
+        await runner.cancel(job.id)
+        finished = await task
+        pid = int(pidfile.read_text())
+        assert finished.state == "killed"
+        assert seen == [(job.id, [{"pid": pid, "cmdline": "sleep 300"}])]
+        assert not process_live(pid)
+
+    try:
+        asyncio.run(asyncio.wait_for(body(), 30))
+    finally:
+        if pidfile.exists() and pidfile.read_text():
+            kill_quietly(int(pidfile.read_text()))
