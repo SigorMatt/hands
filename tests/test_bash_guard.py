@@ -8,7 +8,7 @@ command it let through or refused.
 
 That table ships with the guard, so on its own it can only agree with the guard
 (review 3 should-fix 1). `ADVERSARIAL` below is the second table: expectations
-`tests/` owns, written from DESIGN §12/§20 without reading `SELFTEST`.
+`tests/` owns, written from DESIGN §12/§20/§21 without reading `SELFTEST`.
 """
 
 from __future__ import annotations
@@ -66,11 +66,14 @@ def test_the_table_covers_the_prompt_file_route() -> None:
 # --- ADVERSARIAL ------------------------------------------------------------
 #
 # An expectation table owned by `tests/`, composed from the policy in DESIGN
-# §12/§20 and from the mission brief's case list — deliberately written without
+# §12/§20/§21 and from the mission brief's case list — deliberately written without
 # reading the guard's own `SELFTEST`, so that it can disagree with the guard
 # (review 3 should-fix 1). Blocks come from §20's rule that the git subcommand
 # allowlist applies to every `git` token anywhere in a command and that `find`
-# with `-exec`/`-execdir`/`-ok`/`-okdir`/`-delete` is forbidden. The allowed
+# with `-exec`/`-execdir`/`-ok`/`-okdir`/`-delete`/`-fprint*`/`-fls` is
+# forbidden, and from §21's git option policy: only `-C <path>` and
+# `--no-pager` before the subcommand, and no `--output`/`--ext-diff`/
+# `--textconv`/`-O`/`--open-files-in-pager`/`--config-env` after it. The allowed
 # cases are just as load-bearing: the driver's whole job is read-only git and
 # reads of the human's `~/git` workspace, and a guard that refuses those is
 # useless in a real session.
@@ -148,13 +151,70 @@ ADVERSARIAL: list[tuple[str, bool]] = [
     # §12 rule 6: quoted prose is text, even when it names a writing command
     ('hands send builder "run ./scripts/check and git commit the result" --context c', True),
     ("hands send --prompt-file ~/Downloads/U1.md builder --context c", True),
+    # --- §21: git options before the subcommand -------------------------
+    # Only `-C <path>` and `--no-pager` may precede a git subcommand. `-c`
+    # sets a config key for one invocation, and `diff.external`/`core.pager`
+    # are keys whose values git *executes*, so an allowlisted subcommand runs
+    # an arbitrary command (review 4 blocker 1: the first of these created
+    # /tmp/gprobe-pwned). The payload is quoted, so the guard sees it as text —
+    # the option is the write, whatever it carries.
+    ("git -c diff.external='touch /tmp/gprobe-pwned' diff --ext-diff", False),
+    ("git -c core.pager=touch log", False),
+    ('git -c protocol.ext.allow=always fetch "ext::sh -c touch% /tmp/x"', False),
+    ("git --config-env=core.pager=EVIL log", False),
+    ("git --config-env core.pager=EVIL log", False),
+    ("git --exec-path=/tmp/evil status", False),
+    ("git --git-dir=./repo/.git log --oneline", False),
+    ("git --work-tree=/tmp status", False),
+    ("git --namespace=x log", False),
+    ("git -p log", False),
+    ("git --paginate log", False),
+    ("git -C ./repo -c core.pager=touch log", False),
+    ("find . -exec git -c core.pager=touch log \\;", False),
+    # --- §21: git options after the subcommand ---------------------------
+    # `--output` writes a file at any path; `--ext-diff`/`--textconv` run a
+    # configured command; `-O`/`--open-files-in-pager` run the pager.
+    ("git diff --output=/tmp/x", False),
+    ("git show HEAD --output=/tmp/x", False),
+    ("git diff --output /tmp/x", False),
+    ("git -C ./repo log -p --output=/tmp/x", False),
+    ("git diff --ext-diff", False),
+    ("git log --ext-diff -1", False),
+    ("git show --textconv HEAD:x.bin", False),
+    ("git grep --textconv -n x", False),
+    ("git grep -O less pattern", False),
+    ("git grep --open-files-in-pager pattern", False),
+    ("git log --config-env=core.pager=EVIL", False),
+    # --- §21: `find`'s writing actions, alongside the exec ones -----------
+    ("find . -fprint /tmp/out", False),
+    ("find . -fprint0 /tmp/out", False),
+    ("find . -type f -fprintf /tmp/out %p", False),
+    ("find . -fls /tmp/out", False),
+    ("find ~/git -name '*.md' -fprint /tmp/list", False),
+    # --- the read-only git the driver actually relies on: ALLOWED ---------
+    ("git -C ./repo show origin/main:src/hands/config.py", True),
+    ("git -C ./repo log --grep=commit", True),
+    ("git -C ./repo rev-parse abc^{commit}", True),
+    ('git -C ./repo grep -n "git diff" origin/main -- docs', True),
+    ("git --no-pager log --oneline -5", True),
+    ("git --no-pager -C ./repo diff HEAD~1", True),
+    # the refusals are by exact option, not by prefix: these read
+    ("git -C ./repo diff --no-ext-diff HEAD", True),
+    ("git -C ./repo diff --output-indicator-new=X HEAD", True),
+    ("git -C ./repo log --no-textconv -1", True),
+    # a `find` printing to stdout is still a read
+    ("find . -name '*.md' -print", True),
+    ("find ~/git/hands -type f -printf %p", True),
 ]
 
 
 @pytest.mark.parametrize("cmd,allowed", ADVERSARIAL)
 def test_adversarial_case(cmd: str, allowed: bool) -> None:
-    """DESIGN §20: the allowlist applies to every `git` token; `find -exec` and
-    friends are forbidden — checked against expectations `tests/` owns."""
+    """DESIGN §20/§21: the allowlist applies to every `git` token, only
+    `-C <path>` and `--no-pager` may precede a git subcommand and the
+    file-writing / command-running options are refused after it; `find`'s
+    `-exec` and `-fprint` families are forbidden — checked against
+    expectations `tests/` owns."""
     reason = guard.check(cmd)
     if allowed:
         assert reason is None, f"the guard blocked a read-only command: {cmd} -> {reason}"

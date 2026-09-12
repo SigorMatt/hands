@@ -11,12 +11,19 @@ Quoted text is stripped before inspection: prose inside quotes is text, but
 $(...) and backticks inside double quotes are still executed and still checked.
 Every `git` token is checked against the read-only subcommand allowlist,
 wherever it sits: a wrapper puts the real command in argument position, so
-`find . -exec git remote add ... \\;` is a `git remote add`. The subcommand is
-read after the global flags (`-C <path>`, `-c k=v`), so `rev-parse
-<sha>^{commit}` and `log --grep=push` still read. A path token is not an
-invocation — the human's workspace is `~/git`, and `ls ~/git` is a read.
+`find . -exec git remote add ... \\;` is a `git remote add`. Before the
+subcommand only `-C <path>` and `--no-pager` are accepted and every other
+option is refused (DESIGN §21): `git -c diff.external=<cmd> diff --ext-diff`
+and `git -c core.pager=<cmd> log` execute `<cmd>` behind an allowlisted
+subcommand. The subcommand is still read as a word, so `rev-parse
+<sha>^{commit}` and `log --grep=push` still read. After the subcommand
+`--output`, `--ext-diff`, `--textconv`, `-O`, `--open-files-in-pager` and
+`--config-env` are refused in any spelling: they write a file at any path or
+run a configured command. A path token is not an invocation — the human's
+workspace is `~/git`, and `ls ~/git` is a read.
 `find` with `-exec`, `-execdir`, `-ok`, `-okdir` or `-delete` is forbidden
-outright: those run commands (or delete) whatever the payload looks like.
+outright: those run commands (or delete) whatever the payload looks like, and
+`-fprint`, `-fprint0`, `-fprintf` and `-fls` write a file at any path.
 
 Self-test: python3 bash_guard.py --selftest
 """
@@ -38,13 +45,24 @@ ALLOWED_GIT_SUBCOMMANDS = {
 }
 FORBIDDEN_GIT_FLAGS = {"--prune", "--delete", "-d", "-D", "-m", "-M",
                        "add", "set-url", "remove", "rename", "--set-upstream"}
-# `find` runs a command per match (`-exec`, `-execdir`, `-ok`, `-okdir`) or
-# deletes (`-delete`). The payload is irrelevant: the flag is the write.
-FIND_ACTION_FLAGS = {"-exec", "-execdir", "-ok", "-okdir", "-delete"}
-# git global flags that take their value as the next word, so that word is not
-# the subcommand: `git -c user.name=x commit` is still a commit.
-GIT_GLOBAL_FLAGS_WITH_ARG = {"-C", "-c", "--git-dir", "--work-tree", "--namespace",
-                             "--exec-path", "--config-env", "--super-prefix"}
+# `find` runs a command per match (`-exec`, `-execdir`, `-ok`, `-okdir`),
+# deletes (`-delete`) or writes its listing to a named file (`-fprint`,
+# `-fprint0`, `-fprintf`, `-fls`). The payload is irrelevant: the flag is the
+# write. `-print`/`-printf`/`-ls` write to stdout and are reads.
+FIND_ACTION_FLAGS = {"-exec", "-execdir", "-ok", "-okdir", "-delete",
+                     "-fprint", "-fprint0", "-fprintf", "-fls"}
+# DESIGN §21: before the subcommand only `-C <path>` and `--no-pager` are
+# accepted; every other leading option is refused. `-c`, `--config-env`,
+# `--exec-path`, `--git-dir` and friends each turn an allowlisted subcommand
+# into something else — `git -c core.pager=touch log` runs `touch`.
+GIT_PRE_FLAG_WITH_PATH = "-C"  # the next word is a path, not an option
+GIT_ALLOWED_PRE_FLAGS = {"--no-pager"}
+# DESIGN §21: options after the subcommand that write a file at any path
+# (`--output`) or run a configured command (`--ext-diff`, `--textconv`, the
+# pager ones). Matched exactly or with `=`, so `--no-ext-diff` and
+# `--output-indicator-new=X` stay reads.
+FORBIDDEN_GIT_OPTIONS = {"--output", "--ext-diff", "--textconv", "-O",
+                         "--open-files-in-pager", "--config-env"}
 # `hands open <job>` execs `claude --resume <id>` in the role's directory
 # (DESIGN §7): an interactive session inside the driver's Bash call, and a way
 # past the `claude` block. The driver reads jobs with show/log/tail instead.
@@ -153,21 +171,42 @@ def first_word(segment: str):
 
 
 def git_subcommand(words, start: int):
-    """Return the subcommand of the `git` at words[start - 1], or None.
+    """Read the option area of the `git` at words[start - 1].
 
-    Leading global flags are skipped, including the ones whose value is the
-    next word, so `git -C ./repo -c x=y commit` resolves to `commit`.
+    Returns `(subcommand, index, refused)`: the subcommand word and its index,
+    or `refused` set to the first option that the policy does not accept.
+    Only `-C <path>` (and the `-C=<path>` spelling) and `--no-pager` may
+    precede the subcommand — DESIGN §21. `-C`'s value is a path, not an
+    option, so it is stepped over without being judged.
     """
     i = start
     while i < len(words):
-        w = words[i]
-        if w in GIT_GLOBAL_FLAGS_WITH_ARG:
+        w = words[i].strip("()")
+        if w == GIT_PRE_FLAG_WITH_PATH:
             i += 2
             continue
-        if w.startswith("-"):
+        if w.startswith(GIT_PRE_FLAG_WITH_PATH + "=") or w in GIT_ALLOWED_PRE_FLAGS:
             i += 1
             continue
-        return w.strip("()")
+        if w.startswith("-"):
+            return None, i, w
+        return w, i, None
+    return None, len(words), None
+
+
+def forbidden_git_option(word: str):
+    """The refused post-subcommand option this word spells, or None.
+
+    Both spellings count (`--output=/tmp/x` and `--output /tmp/x`), and `-O`
+    also counts with its value attached. Matching is on the whole option, so
+    `--no-ext-diff` and `--output-indicator-new=X` are reads and stay allowed.
+    """
+    w = word.strip("()")
+    for opt in FORBIDDEN_GIT_OPTIONS:
+        if w == opt or w.startswith(opt + "="):
+            return opt
+    if w.startswith("-O") and len(w) > 2:
+        return "-O"
     return None
 
 
@@ -199,11 +238,23 @@ def git_violation(words, cmd):
     (`log --grep=push`) is still a word, not a verb.
     """
     for i in invocations(words, "git"):
-        sub = git_subcommand(words, i + 1)
+        sub, at, refused = git_subcommand(words, i + 1)
+        if refused is not None:
+            return (f"git option before the subcommand not allowed: {refused!r} in "
+                    f"{cmd!r} (policy: only `-C <path>` and `--no-pager` may come "
+                    f"before a git subcommand; `-c`, `--config-env` and the rest "
+                    f"can make a read-only subcommand run a command)")
         if sub not in ALLOWED_GIT_SUBCOMMANDS:
             return f"git subcommand not allowed: {sub!r} in {cmd!r}"
         if any(f in words for f in FORBIDDEN_GIT_FLAGS):
             return f"git flag not allowed in {cmd!r}"
+        for w in words[at + 1:]:
+            opt = forbidden_git_option(w)
+            if opt is not None:
+                return (f"git option not allowed: {opt!r} in {cmd!r} (policy: "
+                        f"`--output`, `--ext-diff`, `--textconv`, `-O`, "
+                        f"`--open-files-in-pager` and `--config-env` write a file "
+                        f"or run a command)")
     return None
 
 
@@ -310,6 +361,19 @@ SELFTEST = [
     ("git -C ./repo log --oneline -1 && git -C ./repo push", False),
     ("git -C ./repo status; git -C ./repo add -A", False),
     ("find . -name x -exec git push \\;", False),
+    # ... and an option can be the write, with no verb at all (§21)
+    ("git -c core.pager=vim log --oneline", False),
+    ("git -c diff.external=cat diff", False),
+    ("git --exec-path=/tmp/evil log", False),
+    ("git diff --output /tmp/out", False),
+    ("git show HEAD:x --textconv", False),
+    ("git grep -Oless pattern", False),
+    ("find . -type f -fprintf /tmp/list %p", False),
+    ("find . -fls /tmp/listing", False),
+    ("git --no-pager log --oneline -3", True),
+    ("git --no-pager -C ./repo show HEAD --stat", True),
+    ("git -C ./repo diff --no-ext-diff HEAD~1", True),
+    ("find . -name '*.md' -printf %p", True),
     # prose inside quotes is text, not shell
     ("hands send --role builder --context clear --gate \"apply kit\" \"Apply ~/Downloads/k.zip (it replaces DESIGN.md), then commit 'plan: kit (v3.1)' and push. Reply: VERDICT: kit applied <sha>.\"", True),
     ("hands send --role aux --context clear 'Review commits since abc123; report blockers=0 or blockers>0 (count them)'", True),
