@@ -69,3 +69,4 @@ One line per unit, appended by the builder: date, unit, sha, verdict.
 2026-09-12  m7a U5 Review base  f96938e  green 3/3 (1235 tests); docs/PLAYBOOK.md says a review reads every commit after the last review: commit and when {job.head_at_start} is wrong; root PLAYBOOK.toml loads; REVIEW-PROTOCOL is the kit copy
 2026-09-12  m7a U6 Final report  (this commit)  green 3/3 (1235 tests; 66.91s 65.63s 65.19s); mission 7 finished
 2026-09-13  m8 U0 Plan and corrections  9ae7975  green 3/3 (1238 tests); show failure line pinned on harness_terminated, nonzero_exit and done (red by mutation); H-015 filed; prototype in place from da8df27
+2026-09-13  m8 U1 Review 7 should-fix 2-4  df8c1fd  green 3/3 (1285 tests); matcher line-start, case-sensitive, digits+s, CEILING_MS= tail on the same line; success+turns+exit 0 is done per §6 (H-014 shape now done); sweep reads every tracked non-NUL file, meta/ history excluded by path, one named allowance (BUILDER-1 "background-wake check")

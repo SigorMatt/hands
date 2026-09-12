@@ -12,7 +12,7 @@ kit already placed `meta/prototypes/claudewho.py` (ruff excludes it).
       the prototype verified in place; H-015 (phone channel decision, §24);
       `hands show`'s `failure` line pinned on a failed and a done job
       (review 7 blocker 1)
-- [ ] U1 Review 7 should-fix 2, 3, 4 — anchored terminating-line matcher that
+- [x] U1 Review 7 should-fix 2, 3, 4 df8c1fd — anchored terminating-line matcher that
       never overrides success; the two over-match lines as negatives; the doc
       sweep reads every tracked non-binary file, `meta/` history excluded by
       path, live `meta/` instructions included (§6, §24)
