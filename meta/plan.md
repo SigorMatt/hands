@@ -35,7 +35,7 @@ the prose.
 - [x] U5 Review base — docs/PLAYBOOK.md and the example describe "every
       commit after the last `review:` commit"; the kit's REVIEW-PROTOCOL
       verified unchanged (§10, §23)
-- [ ] U6 Final report — meta/FINAL-REPORT-7.md (drafted under meta/drafts/),
+- [x] U6 Final report — meta/FINAL-REPORT-7.md (drafted under meta/drafts/),
       then the verdict line
 
 Review items by unit. Blocker 1 → U0 (the README sentence) and U3 (the sweep
