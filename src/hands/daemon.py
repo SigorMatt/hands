@@ -43,6 +43,7 @@ from hands.config import Config, ConfigError, load_config, resolve_project
 from hands.limits import LimitManager
 from hands.monitor import MonitorSupervisor
 from hands.notify import Notifier
+from hands.phone import PhoneChannel
 from hands.playbook import PlaybookEngine
 from hands.runner import LINE_LIMIT, Runner, RunnerError, reconcile_orphans
 from hands.spool import TERMINAL_STATES, Event, Job, Spool, now_iso
@@ -137,6 +138,10 @@ class Daemon:
             limits=self.limits,
             notify=self.notifier.notify,
         )
+        #: §24's command channel: on only when `[notify] cmd_topic` is set, which
+        #: the config refuses without `cmd_secret`. Its stream is an attribute, so
+        #: a test hands it a fake ntfy before `start()`.
+        self.phone: PhoneChannel | None = PhoneChannel(self) if config.notify.channel else None
         self.socket_path = Path(socket_path) if socket_path else config.server.socket
         self.started: str | None = None
 
@@ -194,6 +199,8 @@ class Daemon:
         self._beat = asyncio.create_task(self._heartbeat(), name="hands-heartbeat")
         # §6: a resume scheduled by a daemon that then died is owed by this one.
         await self.limits.reschedule_pending()
+        if self.phone is not None:
+            self.phone.start()
         self.notifier.notify(  # §11: daemon start is one of the four notifications
             "hands: handsd started",
             {"message": f"{self.config.project} on {self.socket_path}", "pid": os.getpid()},
@@ -222,6 +229,10 @@ class Daemon:
         # still being decided (§10).
         self.limits.cancel_all()
         self.playbook.cancel_all()
+        # No command from the phone lands in a daemon that is going down, and the
+        # nonces of its held jobs die with it (§24).
+        if self.phone is not None:
+            await self.phone.stop()
         if self._beat is not None:
             self._beat.cancel()
             with contextlib.suppress(asyncio.CancelledError):
@@ -494,12 +505,22 @@ class Daemon:
 
         Two jobs, both of which must be cheap: wake every armed `wait --for`,
         and raise the notification if this is one of §11's four.
+
+        With §24's command channel on, this is also where a held job's nonce is
+        minted (for the Approve/Deny buttons of its `job.held` notification) and
+        where it dies: every `gate.decided`, whoever decided, discards it.
         """
         for queue in list(self._subscribers):
             queue.put_nowait(event)
+        job_id = event.payload.get("job")
+        if self.phone is not None and event.kind == "gate.decided" and job_id:
+            self.phone.discard(str(job_id))
         title = NOTIFY_KINDS.get(event.kind)
         if title is not None:
-            self.notifier.notify(title, event.payload)
+            actions = None
+            if self.phone is not None and event.kind == "job.held" and job_id:
+                actions = self.phone.actions(str(job_id))
+            self.notifier.notify(title, event.payload, actions=actions)
 
     async def wait_for_event(
         self, kinds: frozenset[str], *, timeout: float | None = None

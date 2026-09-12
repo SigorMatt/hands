@@ -659,3 +659,54 @@ def test_doctor_says_which_isolation_is_in_force_and_never_fails_on_it(
     assert code == 0
     assert found["isolation"]["status"] == "ok"
     assert words in strip_paths(found["isolation"]["detail"])
+
+
+# -------------------------------------------- the phone channel (§24, U4)
+
+PHONE_SECRET = "doctor-Xyzzy-phone-secret-987"
+
+
+def test_the_command_channel_is_reported_off_without_a_cmd_topic(
+    tmp_home: Path, tmp_path: Path, fake_mode: None
+) -> None:
+    """§24: doctor reports the command channel as on/off, never as an error when off."""
+    write_config(tmp_home, tmp_path)
+    code, found = checks()
+    assert code == 0
+    assert found["phone"]["status"] == "ok"
+    assert "command channel off" in strip_paths(found["phone"]["detail"])
+
+
+def test_the_command_channel_is_reported_on_and_the_secret_is_never_printed(
+    tmp_home: Path, tmp_path: Path, fake_mode: None
+) -> None:
+    path = write_config(tmp_home, tmp_path)
+    path.write_text(
+        path.read_text()
+        + f'\n[notify]\ncmd_topic = "hands-cmd-doctor"\ncmd_secret = "{PHONE_SECRET}"\n'
+    )
+    code, out, err = run()
+    assert code == 0, f"{out}\n{err}"
+    assert "command channel on" in strip_paths(text_row(out, "phone"))
+    assert PHONE_SECRET not in strip_paths(out) and PHONE_SECRET not in strip_paths(err)
+    code, out, err = run("--json")
+    assert code == 0
+    found = {check["name"]: check for check in json.loads(out)["checks"]}
+    assert found["phone"]["status"] == "ok"
+    assert PHONE_SECRET not in strip_paths(out) and PHONE_SECRET not in strip_paths(err)
+
+
+def test_a_cmd_topic_without_a_cmd_secret_fails_doctor(
+    tmp_home: Path, tmp_path: Path, fake_mode: None
+) -> None:
+    """§24: `cmd_secret` is required when `cmd_topic` is set. The config does not
+    load, so the refusal is doctor's failed `config` row and exit 1 (§20)."""
+    path = write_config(tmp_home, tmp_path)
+    path.write_text(path.read_text() + '\n[notify]\ncmd_topic = "hands-cmd-doctor"\n')
+    code, out, err = run()
+    assert code == 1, f"{out}\n{err}"
+    assert "cmd_secret" in strip_paths(text_row(out, "config"))
+    code, found = checks()
+    assert code == 1
+    assert found["config"]["status"] == FAIL
+    assert "cmd_secret" in strip_paths(found["config"]["detail"])

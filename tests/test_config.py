@@ -320,6 +320,42 @@ OPTIONAL_STRING_KEYS = [
         "ntfy_url",
     ),
     (
+        "notify.ntfy_topic",
+        "[notify]\nntfy_topic = {v}\n[roles.builder]\ncwd = '~/g'\n",
+        "[notify]",
+        "ntfy_topic",
+    ),
+    (
+        "notify.ntfy_url",
+        "[notify]\nntfy_url = {v}\n[roles.builder]\ncwd = '~/g'\n",
+        "[notify]",
+        "ntfy_url",
+    ),
+    (
+        "notify.cmd_topic",
+        "[notify]\ncmd_topic = {v}\ncmd_secret = 's'\n[roles.builder]\ncwd = '~/g'\n",
+        "[notify]",
+        "cmd_topic",
+    ),
+    (
+        "notify.cmd_secret",
+        "[notify]\ncmd_topic = 'c'\ncmd_secret = {v}\n[roles.builder]\ncwd = '~/g'\n",
+        "[notify]",
+        "cmd_secret",
+    ),
+    (
+        "notify.who_topic",
+        "[notify]\nwho_topic = {v}\n[roles.builder]\ncwd = '~/g'\n",
+        "[notify]",
+        "who_topic",
+    ),
+    (
+        "notify.who_cmd_topic",
+        "[notify]\nwho_cmd_topic = {v}\n[roles.builder]\ncwd = '~/g'\n",
+        "[notify]",
+        "who_cmd_topic",
+    ),
+    (
         "roles.builder.model",
         "[roles.builder]\ncwd = '~/g'\nmodel = {v}\n",
         "[roles.builder]",
@@ -735,6 +771,12 @@ PADDED = """
 socket = "  ~/.hands/handsd.sock  "
 ntfy_topic = "  hands-abc123  "
 ntfy_url = "  https://ntfy.sh  "
+
+[notify]
+cmd_topic = "  hands-cmd-abc  "
+cmd_secret = "  s3cret-word  "
+who_topic = "  hands-who-abc  "
+who_cmd_topic = "  hands-who-cmd-abc  "
 
 [roles.builder]
 cwd = "  ~/g  "

@@ -319,7 +319,7 @@ def build_parser() -> argparse.ArgumentParser:
         nargs="?",
         const=notify_mod.DEFAULT_TEST_MESSAGE,
         metavar="MESSAGE",
-        help="publish this message (or a default line) to server.ntfy_topic now and "
+        help="publish this message (or a default line) to ntfy_topic now and "
         "print the HTTP status — the proof that delivery works",
     )
     check = command("doctor", "check the install end to end (§4, §14)")

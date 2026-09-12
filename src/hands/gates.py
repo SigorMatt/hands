@@ -18,6 +18,10 @@ CLAUDE.md forbids inventing them, and the quote is stored verbatim on the record
 so a human reading the job later can check it against what they actually said.
 That is an audit trail, not an authentication mechanism, and nothing here should
 be read as one.
+
+`phone` (§24) is the exception, and it does not come through the socket at all:
+`hands.phone` reads commands from ntfy, checks their token (the configured secret
+or the held job's nonce), and only then decides through `Api.decide_from_phone`.
 """
 
 from __future__ import annotations
@@ -80,6 +84,16 @@ DECIDERS: dict[str, Decider] = {
         requires_quote=False,
         available=False,
         note="ntfy Approve/Deny buttons; part of the deferred remote face (§9)",
+    ),
+    #: §24: the ntfy command channel. Unlike `driver`, this one is authenticated —
+    #: the command carried `cmd_secret` or the held job's single-use nonce — and it
+    #: is never reachable over the socket: no API command takes a decider, and
+    #: only `hands.phone` calls `Api.decide_from_phone`.
+    "phone": Decider(
+        name="phone",
+        requires_quote=False,
+        available=True,
+        note="the ntfy command channel: cmd_secret or the held job's nonce (§24)",
     ),
 }
 

@@ -47,8 +47,13 @@ cwd` is optional.
 
     [server]
     socket = "~/.hands/handsd.sock"      # default
-    ntfy_topic = "hands-<something-random>"
-    ntfy_url = "https://ntfy.sh"         # default
+
+    [notify]                             # the two ntfy keys are also read from
+    ntfy_topic = "hands-<something-random>"  # [server], where older configs have
+    ntfy_url = "https://ntfy.sh"         # them (default); never in both places
+    # cmd_topic = "hands-cmd-<another-random>"  # optional: the phone channel,
+    # cmd_secret = "<one long random word>"     # see "Optional: approve from the phone"
+    # who_topic, who_cmd_topic: parsed and not used yet
 
     [roles.builder]
     cwd = "~/git/<project>"              # required; the only required key
@@ -163,7 +168,7 @@ of delivery is one command, and it needs no daemon either:
     hands notify --test "ping from the laptop"
     hands notify --test                   # the same, with a default line
 
-It publishes one message to `server.ntfy_topic` through the same transport
+It publishes one message to `ntfy_topic` through the same transport
 §11's `stop` and `job.held` notifications use, and prints the HTTP status ntfy
 answered with — **whatever that status was**:
 
@@ -182,6 +187,65 @@ cannot run itself, because it ends on your phone. Run it by hand after step 5;
 the procedure is in doctor's own output. It is the check that matters now that
 the driver arms no wait of its own (§11, §22): ntfy is your doorbell, and your
 message `check` is the driver's.
+
+### Optional: approve from the phone (DESIGN §24)
+
+With `[notify] cmd_topic` set, handsd subscribes to that topic — an outbound
+long poll to ntfy, nothing listening on this machine — and takes five commands
+from it. Set it up once:
+
+    python3 -c 'import secrets; print("hands-cmd-" + secrets.token_urlsafe(16))'
+    python3 -c 'import secrets; print(secrets.token_urlsafe(32))'
+
+The first line is a topic name, the second the secret. Put both in the config
+beside the events topic, which must be a different topic:
+
+    [notify]
+    ntfy_topic = "hands-<something-random>"
+    cmd_topic = "hands-cmd-<the first line>"
+    cmd_secret = "<the second line>"
+
+Restart handsd (`systemctl --user restart handsd`). `hands doctor` has a
+`phone` row that says whether the command channel is on or off; it never prints
+the secret. A `cmd_topic` without a `cmd_secret` does not load: doctor fails its
+`config` row, and handsd refuses to start. So does a secret with a blank inside
+it, and a `cmd_topic` equal to `ntfy_topic`.
+
+Publish a command to `cmd_topic` from the ntfy app. The last word is the token:
+
+    approve <job> <secret>
+    deny <job> [reason words] <secret>
+    pause <secret>
+    resume <secret>
+    status <secret>
+
+- `approve` and `deny` decide a **held** job, exactly as `hands approve|deny`
+  does, and the job record says `decided_by: phone`. `pause` and `resume` are
+  `hands pause` and `hands resume` (`hands pipeline` shows `paused yes
+  (phone)`). `status` answers on `ntfy_topic` with a few lines: each role,
+  the held job ids, whether the pipeline is paused, the unread inbox count.
+- **The buttons.** With the channel on, a held job's notification has Approve
+  and Deny buttons. Each publishes `approve <job> <nonce>` or `deny <job>
+  <nonce>` to `cmd_topic`. The nonce is 32 random bytes minted for that one job
+  and kept only in handsd's memory. It can decide only that job, and only once.
+  It is gone as soon as the job is decided by any route (phone, `hands
+  approve`, the driver) and when handsd restarts. After a restart the old
+  buttons do nothing: type the command with the secret. `pause`, `resume` and
+  `status` take the secret only, never a nonce.
+- **Nothing is answered except `status`.** A wrong secret or nonce, a command
+  hands does not know, or a job that is not held is logged in handsd's journal
+  (`journalctl --user -u handsd`) and ignored. If a command seems to do
+  nothing, look there. The log never contains the token.
+- **Old messages are not replayed.** handsd acts only on messages sent after
+  it subscribed, judged by the time ntfy stamps on each message against this
+  machine's clock. After a dropped connection it resumes after the last
+  message it read, without acting on a message twice.
+- **The secret never goes into a notification**, but a typed command carries
+  it on `cmd_topic`. An ntfy topic is only as private as its name (or the
+  access control of a self-hosted server): anyone who can read `cmd_topic` can
+  read your secret. Anyone who can read `ntfy_topic` sees a held job's buttons,
+  and they can use them while that job is held. Keep both names random and to
+  yourself.
 
 ## 5. The driver session (§14 step 2)
 
@@ -423,3 +487,6 @@ of this terminal. The driver does not: it arms nothing, and your message
   is the command that proves the transport, and the notification check `hands
   doctor` prints is the one that proves an event you did not ask for arrives.
   Run them once at an install and record the answer.
+- **The phone channel has never read a real ntfy stream.** Its tests feed a
+  fake `/json` stream and record the buttons' `Actions` header; no command has
+  been sent from a real phone, and no button has been pressed on one.

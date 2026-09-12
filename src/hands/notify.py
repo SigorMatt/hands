@@ -28,7 +28,7 @@ import asyncio
 import json
 import logging
 import re
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import datetime, time, timedelta
 from typing import Any
@@ -44,7 +44,9 @@ __all__ = [
     "NotifyError",
     "QuietWindow",
     "accepted",
+    "actions_header",
     "http_post",
+    "http_stream",
     "parse_quiet_hours",
     "send_test",
 ]
@@ -53,6 +55,9 @@ log = logging.getLogger("hands.notify")
 
 #: ntfy is a phone notification, not a transfer: a slow one is a failed one.
 POST_TIMEOUT_S = 10.0
+#: The command stream is a long poll: ntfy sends a keepalive about every 45 s,
+#: so a connection silent for this long is dead and is reconnected (§24).
+STREAM_READ_TIMEOUT_S = 120.0
 
 #: `hands notify --test` with no message of its own (§4).
 DEFAULT_TEST_MESSAGE = "hands notify --test: if you can read this, delivery works."
@@ -114,7 +119,14 @@ def parse_quiet_hours(text: str | None) -> QuietWindow | None:
 # ------------------------------------------------------------ the transport
 
 
-async def http_post(url: str, *, title: str, message: str, transport: Any = None) -> int:
+async def http_post(
+    url: str,
+    *,
+    title: str,
+    message: str,
+    actions: list[dict[str, str]] | None = None,
+    transport: Any = None,
+) -> int:
     """Publish one ntfy message; answer with the HTTP status ntfy gave back.
 
     The only place in hands that speaks to a network. **Any** response is a
@@ -134,13 +146,43 @@ async def http_post(url: str, *, title: str, message: str, transport: Any = None
     """
     import httpx
 
+    headers = {"Title": title, "Tags": "robot"}
+    if actions:
+        headers["Actions"] = actions_header(actions)
     async with httpx.AsyncClient(timeout=POST_TIMEOUT_S, transport=transport) as client:
-        response = await client.post(
-            url,
-            content=message.encode("utf-8"),
-            headers={"Title": title, "Tags": "robot"},
-        )
+        response = await client.post(url, content=message.encode("utf-8"), headers=headers)
     return int(response.status_code)
+
+
+def actions_header(actions: list[dict[str, str]]) -> str:
+    """ntfy's `Actions` header, short form: `http, <label>, <url>, method=POST, body=…`.
+
+    Every value hands puts here is a label, a URL and a body of the shape
+    `approve <job> <nonce>` — no comma or semicolon in any of them (job ids are
+    base 36, the nonce is URL-safe base 64), so no quoting is needed.
+    """
+    return "; ".join(
+        f"http, {a['label']}, {a['url']}, method=POST, body={a['body']}, clear=true"
+        for a in actions
+    )
+
+
+async def http_stream(url: str, *, transport: Any = None) -> AsyncIterator[str]:
+    """One long-poll GET of an ntfy `/json` stream, line by line (§24).
+
+    The command channel's only transport: an outbound connection, no ingress.
+    A non-2xx raises; so does a connection that goes quiet for longer than
+    `STREAM_READ_TIMEOUT_S` (ntfy sends a keepalive well inside it). The caller
+    reconnects. `transport` is the same test seam `http_post` has.
+    """
+    import httpx
+
+    timeout = httpx.Timeout(POST_TIMEOUT_S, read=STREAM_READ_TIMEOUT_S)
+    async with httpx.AsyncClient(timeout=timeout, transport=transport) as client:
+        async with client.stream("GET", url) as response:
+            response.raise_for_status()
+            async for line in response.aiter_lines():
+                yield line
 
 
 def accepted(status: Any) -> bool:
@@ -182,7 +224,8 @@ async def send_test(
     topic = config.server.ntfy_topic
     if not topic:
         raise NotifyError(
-            f"no [server] ntfy_topic in {config.path}: there is nowhere to send to. "
+            f"no ntfy_topic ([notify], or [server]) in {config.path}: there is nowhere "
+            "to send to. "
             "Set one (a long random word — anyone who knows it can read your "
             "notifications) and subscribe to it in the ntfy app (§11, §16)."
         )
@@ -219,6 +262,10 @@ class Notification:
     title: str
     message: str
     payload: dict[str, Any] = field(default_factory=dict)
+    #: ntfy action buttons (§24's Approve/Deny on a held job). Kept apart from
+    #: `payload` on purpose: a failed delivery inboxes the payload, and the
+    #: buttons carry a nonce that must never reach the spool.
+    actions: list[dict[str, str]] | None = None
 
 
 class Notifier:
@@ -251,7 +298,13 @@ class Notifier:
 
     # ------------------------------------------------------------- the seam
 
-    def notify(self, title: str, payload: dict[str, Any] | None = None) -> None:
+    def notify(
+        self,
+        title: str,
+        payload: dict[str, Any] | None = None,
+        *,
+        actions: list[dict[str, str]] | None = None,
+    ) -> None:
         """Raise a notification and return at once (§11: never blocking a job).
 
         This is the seam the playbook engine and the daemon hold; it is
@@ -260,9 +313,24 @@ class Notifier:
         caller that looks at `queued` on the next line sees the truth.
         """
         payload = dict(payload or {})
-        note = Notification(title=title, message=_message(payload), payload=payload)
+        note = Notification(
+            title=title, message=_message(payload), payload=payload, actions=actions
+        )
         if self._route(note):
             self._spawn(self._publish(note), "hands-notify")
+
+    async def answer(self, title: str, message: str) -> bool:
+        """A reply to a phone command (§24's `status`), published now.
+
+        Not through `_route`: quiet hours delay notifications and never actions
+        (§11), and an answer is the second half of an action the human just took.
+        Best effort like every publish; with no `ntfy_topic` there is nowhere to
+        answer, and nothing is sent.
+        """
+        if not self.config.server.ntfy_topic:
+            log.info("no ntfy_topic; the answer %r has nowhere to go", title)
+            return False
+        return await self._publish(Notification(title=title, message=message))
 
     async def deliver(
         self, title: str, message: str, payload: dict[str, Any] | None = None
@@ -275,7 +343,7 @@ class Notifier:
     def _route(self, note: Notification) -> bool:
         """Publish now (True), or queue it for the end of quiet hours (False) (§11)."""
         if not self.config.server.ntfy_topic:
-            log.debug("no [server] ntfy_topic; not publishing %r", note.title)
+            log.debug("no ntfy_topic; not publishing %r", note.title)
             return False
         window = parse_quiet_hours(self.quiet_hours() if self.quiet_hours else None)
         now = self.clock()
@@ -293,7 +361,8 @@ class Notifier:
         url = f"{self.config.server.ntfy_url.rstrip('/')}/{self.config.server.ntfy_topic}"
         post = self.post if self.post is not None else http_post
         try:
-            status = await post(url, title=note.title, message=note.message)
+            extra = {"actions": note.actions} if note.actions else {}
+            status = await post(url, title=note.title, message=note.message, **extra)
         except asyncio.CancelledError:
             raise
         except Exception as exc:

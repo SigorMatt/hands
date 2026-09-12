@@ -26,6 +26,7 @@ __all__ = [
     "GatesConfig",
     "LimitsConfig",
     "MonitorConfig",
+    "NotifyConfig",
     "OpsConfig",
     "PlaybookConfig",
     "RoleConfig",
@@ -92,6 +93,35 @@ class ServerConfig:
     socket: Path
     ntfy_topic: str | None
     ntfy_url: str
+
+
+@dataclass(frozen=True)
+class NotifyConfig:
+    """`[notify]` (DESIGN §24): the events topic, and the phone's command channel.
+
+    `ntfy_topic` and `ntfy_url` are also accepted in `[server]`, where §13 shows
+    them and where every config written before §24 has them; `parse_config`
+    refuses the same key in both places. `ServerConfig` carries the same two
+    resolved values, so the code that read them there reads them unchanged.
+
+    The command channel is on when `cmd_topic` is set; `cmd_secret` is then
+    required (§24), which the loader enforces. The secret is kept out of `repr`,
+    so a config that reaches a log line or a traceback does not carry it.
+    `who_topic` and `who_cmd_topic` are parsed and not yet used (§24's `hands
+    who`, a later unit).
+    """
+
+    ntfy_url: str = DEFAULT_NTFY_URL
+    ntfy_topic: str | None = None
+    cmd_topic: str | None = None
+    cmd_secret: str | None = field(default=None, repr=False)
+    who_topic: str | None = None
+    who_cmd_topic: str | None = None
+
+    @property
+    def channel(self) -> bool:
+        """Does handsd subscribe to `cmd_topic` (§24)?"""
+        return self.cmd_topic is not None and self.cmd_secret is not None
 
 
 @dataclass(frozen=True)
@@ -282,6 +312,8 @@ class Config:
     files: FilesConfig
     gates: GatesConfig
     runner: RunnerConfig
+    #: `[notify]` (§24). Defaulted so a `Config` built by hand needs no table.
+    notify: NotifyConfig = field(default_factory=NotifyConfig)
 
     def role(self, name: str) -> RoleConfig:
         try:
@@ -348,13 +380,68 @@ def load_config(project: str, *, home: Path | None = None) -> Config:
 def parse_config(data: dict[str, Any], *, project: str, path: Path) -> Config:
     _check_keys(
         data,
-        ("server", "roles", "ops", "monitor", "limits", "playbook", "files", "gates", "runner"),
+        ("server", "notify", "roles", "ops", "monitor", "limits", "playbook", "files",
+         "gates", "runner"),
         "config",
         path,
     )
 
     server_t = _table(data, "server", path)
     _check_keys(server_t, ("socket", "ntfy_topic", "ntfy_url"), "[server]", path)
+    notify_t = _table(data, "notify", path)
+    _check_keys(
+        notify_t,
+        ("ntfy_url", "ntfy_topic", "cmd_topic", "cmd_secret", "who_topic", "who_cmd_topic"),
+        "[notify]",
+        path,
+    )
+    for key in ("ntfy_topic", "ntfy_url"):
+        if key in server_t and key in notify_t:
+            raise ConfigError(
+                f"{path}: {key} is set in both [server] and [notify]; set it once, "
+                "in [notify] (§24) — [server] is still read for configs written before it"
+            )
+    no_topic = _omit(
+        "§11's notifications then have nowhere to go, which doctor warns about", "topic"
+    )
+    default_url = _omit(f"notifications then go to {DEFAULT_NTFY_URL}", "URL")
+    ntfy_topic = _opt_str(notify_t, "ntfy_topic", "[notify]", path, blank=no_topic)
+    if ntfy_topic is None:
+        ntfy_topic = _opt_str(server_t, "ntfy_topic", "[server]", path, blank=no_topic)
+    ntfy_url = _opt_str(notify_t, "ntfy_url", "[notify]", path, blank=default_url)
+    if ntfy_url is None:
+        ntfy_url = _str(
+            server_t, "ntfy_url", DEFAULT_NTFY_URL, "[server]", path, blank=default_url
+        )
+    notify = NotifyConfig(
+        ntfy_url=ntfy_url,
+        ntfy_topic=ntfy_topic,
+        cmd_topic=_opt_str(
+            notify_t,
+            "cmd_topic",
+            "[notify]",
+            path,
+            blank=_omit("handsd then takes no commands from the phone", "topic"),
+        ),
+        cmd_secret=_opt_str(
+            notify_t,
+            "cmd_secret",
+            "[notify]",
+            path,
+            blank=_omit("allowed only when cmd_topic is not set", "secret"),
+        ),
+        who_topic=_opt_str(
+            notify_t, "who_topic", "[notify]", path, blank=_omit("no who view", "topic")
+        ),
+        who_cmd_topic=_opt_str(
+            notify_t,
+            "who_cmd_topic",
+            "[notify]",
+            path,
+            blank=_omit("the who view then takes no commands", "topic"),
+        ),
+    )
+    _check_channel(notify, path)
     server = ServerConfig(
         socket=_path(
             server_t,
@@ -364,23 +451,8 @@ def parse_config(data: dict[str, Any], *, project: str, path: Path) -> Config:
             path,
             blank=_omit(f"the socket is then {DEFAULT_SOCKET}", "path"),
         ),
-        ntfy_topic=_opt_str(
-            server_t,
-            "ntfy_topic",
-            "[server]",
-            path,
-            blank=_omit(
-                "§11's notifications then have nowhere to go, which doctor warns about", "topic"
-            ),
-        ),
-        ntfy_url=_str(
-            server_t,
-            "ntfy_url",
-            DEFAULT_NTFY_URL,
-            "[server]",
-            path,
-            blank=_omit(f"notifications then go to {DEFAULT_NTFY_URL}", "URL"),
-        ),
+        ntfy_topic=ntfy_topic,
+        ntfy_url=ntfy_url,
     )
 
     roles_t = _table(data, "roles", path)
@@ -517,6 +589,7 @@ def parse_config(data: dict[str, Any], *, project: str, path: Path) -> Config:
         files=files,
         gates=gates,
         runner=runner,
+        notify=notify,
     )
 
 
@@ -576,6 +649,36 @@ def _role(name: str, table: Any, path: Path) -> RoleConfig:
             ),
         ),
     )
+
+
+def _check_channel(notify: NotifyConfig, path: Path) -> None:
+    """§24's rules for the command channel, refused at load so handsd never starts
+    with a channel it cannot authenticate, and doctor reports it as a failed config.
+
+    * `cmd_topic` needs `cmd_secret` ("required when `cmd_topic` is set").
+    * The secret is one word: a typed command carries it as its *last word*, so a
+      secret with a blank inside could never match.
+    * `cmd_topic` is not `ntfy_topic`: the topic hands publishes to is not the one
+      it takes commands from ("a second random topic", backlog item 5).
+
+    No refusal prints the secret.
+    """
+    if notify.cmd_topic is not None and notify.cmd_secret is None:
+        raise ConfigError(
+            f"{path}: [notify] cmd_topic is set but cmd_secret is not; §24 requires "
+            "a secret for the command channel — set cmd_secret (one long random "
+            "word) or remove cmd_topic"
+        )
+    if notify.cmd_secret is not None and any(ch.isspace() for ch in notify.cmd_secret):
+        raise ConfigError(
+            f"{path}: [notify] cmd_secret must be one word with no blanks inside: a "
+            "command carries it as its last word (§24)"
+        )
+    if notify.cmd_topic is not None and notify.cmd_topic == notify.ntfy_topic:
+        raise ConfigError(
+            f"{path}: [notify] cmd_topic must not be ntfy_topic: commands come in on a "
+            "topic of their own (§24)"
+        )
 
 
 def _resume_line(table: dict[str, Any], where: str, path: Path) -> str | None:

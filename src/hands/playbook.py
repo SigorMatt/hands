@@ -974,8 +974,12 @@ class PlaybookEngine:
         log.warning("playbook: stop — %s", reason)
         self._notify("hands: the pipeline stopped", {**(payload or {}), "reason": reason})
 
-    async def pause(self) -> dict[str, Any]:
+    async def pause(self, *, by: str = "cli") -> dict[str, Any]:
         """`hands pause` (§4): no rule fires until it is resumed.
+
+        `by` is who paused: `cli` for `hands pause`, `phone` for §24's command
+        channel, which calls this same method. It is recorded as `paused_by` and
+        in the `stop` event's `by`; the API command takes no such argument.
 
         H-007: a pause is a stop like any other, so it goes through `stop()` —
         the `stop` event of §11 (reason `paused by human`) and its notification,
@@ -997,10 +1001,10 @@ class PlaybookEngine:
         `pipeline.stop_suppressed` record and changes nothing else.
         """
         already = self.state.paused
-        await self.stop(PAUSE_REASON, {"by": "hands pause"})
+        await self.stop(PAUSE_REASON, {"by": "hands pause" if by == "cli" else by})
         if already:
             return {**self.pipeline(), "already_stopped": True}
-        self.state.paused_by = "cli"  # `hands pipeline` still says who paused it
+        self.state.paused_by = by  # `hands pipeline` still says who paused it
         self._save()
         return self.pipeline()
 

@@ -573,8 +573,31 @@ class Api:
         is a declaration, and its whole force is the quote it must carry. See
         `hands.gates`.
         """
-        record = self._job(job)
         decided_by = gates.decider_for(human_confirmed=human_confirmed)
+        return await self._decide_as(job, decision, decided_by, reason=reason, quote=quote)
+
+    async def decide_from_phone(
+        self, job: str, decision: str, *, reason: str | None = None
+    ) -> dict[str, Any]:
+        """§24: a decision the ntfy command channel authenticated, `decided_by: phone`.
+
+        Not a command of §4 and not in `COMMANDS`, so no socket client can reach
+        it: `method()` answers None for any name outside that tuple. `hands.phone`
+        is its only caller, and calls it only for a job that is `held`, after the
+        command's token matched `cmd_secret` or that job's nonce.
+        """
+        return await self._decide_as(job, decision, "phone", reason=reason, quote=None)
+
+    async def _decide_as(
+        self,
+        job: str,
+        decision: str,
+        decided_by: str,
+        *,
+        reason: str | None,
+        quote: str | None,
+    ) -> dict[str, Any]:
+        record = self._job(job)
         try:
             gates.check_decider(decided_by, quote)
         except gates.GateRefused as exc:

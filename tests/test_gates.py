@@ -193,11 +193,14 @@ def test_the_authority_table_of_section_8(project: str, case: Case, decision: st
 
 
 def test_the_decider_vocabulary_is_section_8s(project: str) -> None:
-    """`button` is §9's deferred remote face: named, and not reachable."""
-    assert set(DECIDERS) == {"cli", "driver", "button"}
+    """`button` is §9's deferred remote face: named, and not reachable. `phone` is
+    §24's command channel: available, no quote (it is authenticated instead)."""
+    assert set(DECIDERS) == {"cli", "driver", "button", "phone"}
     assert DECIDERS["cli"].requires_quote is False
     assert DECIDERS["driver"].requires_quote is True
+    assert DECIDERS["phone"].requires_quote is False
     assert DECIDERS["cli"].available and DECIDERS["driver"].available
+    assert DECIDERS["phone"].available
     assert not DECIDERS["button"].available
 
 

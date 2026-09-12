@@ -56,7 +56,7 @@ or just `handsd --project <project>` in a terminal.
 Write `~/.hands/<project>.toml` (every key is listed in
 `docs/INTEGRATION.md` §3; only `[roles.builder] cwd` is required):
 
-    [server]
+    [notify]
     ntfy_topic = "hands-<something-random>"
 
     [roles.builder]

@@ -122,7 +122,7 @@ def run_checks(
     found += [_claude_check(config)]
     found += [_role_check(role) for role in config.roles.values()]
     found += [_roots_check(config), _ops_check(config), _isolation_check(config)]
-    found += [_playbook_check(config)]
+    found += [_playbook_check(config), _phone_check(config)]
     found += [_daemon_check(config, socket_path, daemon)]
     found += [_live_check(config, role, live=live) for role in config.roles.values()]
     return found
@@ -153,11 +153,41 @@ def _config_check(config: Config) -> Check:
         return Check(
             "config",
             WARN,
-            f"{detail}\nno server.ntfy_topic: §11's notifications (stop, job.held, "
-            "max_resumes, daemon crash) have nowhere to go, so you only learn you are "
-            "needed by looking",
+            f"{detail}\nno ntfy_topic ([notify], or [server]): §11's notifications "
+            "(stop, job.held, max_resumes, daemon crash) have nowhere to go, so you only "
+            "learn you are needed by looking",
         )
     return Check("config", OK, f"{detail}; ntfy topic set")
+
+
+def _phone_check(config: Config) -> Check:
+    """§24's command channel, on or off — never a failure from here.
+
+    A `cmd_topic` without a `cmd_secret` does not load at all, so that refusal is
+    the failed `config` row (`config_error`), not this one. Neither the secret nor
+    the topics are printed: both are only as private as nobody else seeing them.
+    """
+    notify = config.notify
+    if not notify.channel:
+        return Check(
+            "phone",
+            OK,
+            "command channel off: no [notify] cmd_topic, so handsd takes no commands "
+            "from the phone (§24)",
+        )
+    detail = (
+        "command channel on: handsd subscribes to [notify] cmd_topic and takes approve, "
+        "deny, pause, resume and status; a typed command ends with cmd_secret, and a "
+        "held job's notification carries Approve/Deny buttons with a single-use nonce"
+    )
+    if not notify.ntfy_topic:
+        return Check(
+            "phone",
+            WARN,
+            f"{detail}\nno ntfy_topic: the held-job notifications that carry the buttons "
+            "and the answer to `status` have nowhere to go",
+        )
+    return Check("phone", OK, detail)
 
 
 def _claude_check(config: Config) -> Check:
@@ -456,7 +486,7 @@ def wake_procedure(project: str) -> list[str]:
         "  your message `check` is the driver's. So what is worth proving here is",
         "  that an event you did not ask for reaches you.",
         "",
-        "  1. Subscribe your phone to the `server.ntfy_topic` of your config — the",
+        "  1. Subscribe your phone to the `ntfy_topic` of your config — the",
         "     ntfy app, or the topic's page in a browser — and allow its",
         "     notifications. Then put the phone down.",
         "",
@@ -488,7 +518,7 @@ def wake_procedure(project: str) -> list[str]:
         "",
         "  If nothing arrived: `hands notify --test` sends one message over the same",
         "  transport and prints the HTTP status ntfy answered with, and with no",
-        "  `server.ntfy_topic` set there is nowhere for any of it to go. Until it",
+        "  `ntfy_topic` set there is nowhere for any of it to go. Until it",
         "  works you learn you are needed by opening the Code tab and sending",
         "  `check` yourself.",
     ]
