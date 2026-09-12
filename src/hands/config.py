@@ -109,14 +109,80 @@ class RoleConfig:
         return f'limit resume: sends resume_line "{self.resume_line}" as a clear job'
 
 
+#: What to do about a `monitor_cmd` that names something else (§21).
+_MONITOR_CMD_FIX = 'name a script inside ops.repo, e.g. "watch_monitor.sh"'
+
+
+def _monitor_cmd_shape(cmd: str) -> str | None:
+    """Why `cmd` cannot name a script *inside* the ops repo (§21), or None.
+
+    Review 4 blocker 2: `monitor_path` was `repo / monitor_cmd` with no check on
+    the value, so `"."` made the ops *directory* the monitor script — `hands
+    status` reporting a directory as the deciding script while builder jobs went
+    unwatched behind monitor.py's "is not a file" (§5). This is the shape half,
+    which needs no filesystem; `_monitor_cmd_problem` adds what is on disk.
+    """
+    value = Path(cmd)
+    if value.is_absolute():
+        return f"must be relative to ops.repo, got {cmd!r}; {_MONITOR_CMD_FIX}"
+    if ".." in value.parts:
+        return f"must not contain '..', got {cmd!r}; {_MONITOR_CMD_FIX}"
+    if not value.parts:
+        return f"must name a script, not the ops repo directory, got {cmd!r}; {_MONITOR_CMD_FIX}"
+    return None
+
+
+def _monitor_cmd_problem(repo: Path | None, cmd: str) -> str | None:
+    """`_monitor_cmd_shape` plus what `<repo>/<cmd>` actually is on disk (§21).
+
+    hands runs this file (§5), so "an executable regular file" is the whole of
+    what it has to be. monitor.py and doctor.py still say what they find at run
+    time — a script can be deleted after the config loads — but that is no
+    longer the first place a human hears about a name that never named a script.
+    """
+    shape = _monitor_cmd_shape(cmd)
+    if shape is not None or repo is None:
+        return shape
+    target = repo / cmd
+    if not target.exists():
+        return f"names a script that does not exist, got {cmd!r} ({target}); {_MONITOR_CMD_FIX}"
+    if not target.is_file():
+        return f"must name a regular file, got {cmd!r} ({target}); {_MONITOR_CMD_FIX}"
+    if not os.access(target, os.X_OK):
+        return f"names a script that is not executable, got {cmd!r} (chmod +x {target})"
+    return None
+
+
 @dataclass(frozen=True)
 class OpsConfig:
     repo: Path | None
     monitor_cmd: str | None
 
+    def __post_init__(self) -> None:
+        """The shape of `monitor_cmd` is an invariant of the value, not of the load.
+
+        Review 4 blocker 2 was demonstrated by building this dataclass directly,
+        and `monitor_path`'s callers (`hands status`, the monitor supervisor,
+        `hands doctor`) read it without re-checking — so the refusal lives where
+        the state would be created. `parse_config` raises the same thing first,
+        with the config's path and section on it.
+        """
+        if self.monitor_cmd is None:
+            return
+        problem = _monitor_cmd_shape(self.monitor_cmd)
+        if problem is not None:
+            raise ConfigError(f"[ops] monitor_cmd {problem}")
+
     @property
     def monitor_path(self) -> Path | None:
-        """`<ops.repo>/<monitor_cmd>` when both are set (§5)."""
+        """`<ops.repo>/<monitor_cmd>` when both are set (§5).
+
+        The value is validated before it can be stored (§21): the path this
+        builds is under `ops.repo` and is never the repo directory itself, and
+        at load time it named an executable regular file. What is on disk can
+        still change afterwards, which is what monitor.py's `_script_problem`
+        and doctor's ops-script check are for.
+        """
         if self.repo is None or self.monitor_cmd is None:
             return None
         return self.repo / self.monitor_cmd
@@ -280,29 +346,27 @@ def parse_config(data: dict[str, Any], *, project: str, path: Path) -> Config:
 
     ops_t = _table(data, "ops", path)
     _check_keys(ops_t, ("repo", "monitor_cmd"), "[ops]", path)
-    repo = ops_t.get("repo")
-    ops = OpsConfig(
-        repo=(
-            None
-            if repo is None
-            else _abs(
-                _path(
-                    ops_t,
-                    "repo",
-                    "",
-                    "[ops]",
-                    path,
-                    blank=_omit(_BUILT_IN_MONITOR, "path"),
-                ),
-                "ops.repo",
-            )
-        ),
-        # Review 3 should-fix 5: `Path('/ops') / '' == Path('/ops')`, so a blank
-        # here used to make the ops *directory* the monitor script (§5).
-        monitor_cmd=_opt_str(
-            ops_t, "monitor_cmd", "[ops]", path, blank=_omit(_BUILT_IN_MONITOR, "script name")
-        ),
+    repo_value = ops_t.get("repo")
+    ops_repo = (
+        None
+        if repo_value is None
+        else _abs(
+            _path(ops_t, "repo", "", "[ops]", path, blank=_omit(_BUILT_IN_MONITOR, "path")),
+            "ops.repo",
+        )
     )
+    # Review 3 should-fix 5: `Path('/ops') / '' == Path('/ops')`, so a blank here
+    # used to make the ops *directory* the monitor script (§5). Review 4 blocker
+    # 2: so did `"."`, and `".."` or an absolute path named a script the ops repo
+    # does not hold — §21 makes the whole shape, and the file itself, a load error.
+    monitor_cmd = _opt_str(
+        ops_t, "monitor_cmd", "[ops]", path, blank=_omit(_BUILT_IN_MONITOR, "script name")
+    )
+    if monitor_cmd is not None:
+        problem = _monitor_cmd_problem(ops_repo, monitor_cmd)
+        if problem is not None:
+            raise ConfigError(f"{path}: [ops] monitor_cmd {problem}")
+    ops = OpsConfig(repo=ops_repo, monitor_cmd=monitor_cmd)
 
     monitor_t = _table(data, "monitor", path)
     _check_keys(monitor_t, ("stall_minutes",), "[monitor]", path)

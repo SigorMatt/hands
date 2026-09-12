@@ -201,9 +201,16 @@ def test_the_ops_script_gets_the_design_flags_and_blocks_arrive_as_they_happen(
 def test_a_missing_monitor_script_is_an_inbox_event_and_not_a_fallback(
     tmp_home: Path, workdir: Path, opsdir: Path, spool: Spool
 ) -> None:
+    # §21 refuses a monitor_cmd whose script is missing at load, so the script
+    # exists for the load and is deleted after it: the run-time check (§5) is
+    # what catches a script that goes away while hands is up, and it still runs.
+    script = opsdir / "not_there.sh"
+    shutil.copy(FAKE_MONITOR, script)
+    script.chmod(0o755)
     config = make_config(
         tmp_home, workdir, ops=opsdir, monitor_cmd="not_there.sh", stall_minutes=0.01
     )
+    script.unlink()
 
     async def body() -> None:
         monitors = MonitorSupervisor(config, spool, poll_s=0.05)
@@ -226,8 +233,9 @@ def test_a_missing_monitor_script_is_an_inbox_event_and_not_a_fallback(
 def test_a_monitor_script_that_is_not_executable_is_an_inbox_event(
     tmp_home: Path, workdir: Path, opsdir: Path, spool: Spool
 ) -> None:
-    (opsdir / "watch_monitor.sh").chmod(0o644)
+    # As above: executable at load (§21), chmod-ed away underneath the daemon.
     config = make_config(tmp_home, workdir, ops=opsdir, monitor_cmd="watch_monitor.sh")
+    (opsdir / "watch_monitor.sh").chmod(0o644)
 
     async def body() -> None:
         monitors = MonitorSupervisor(config, spool)

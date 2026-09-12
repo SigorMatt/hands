@@ -7,6 +7,7 @@ import pytest
 from hands.config import (
     DEFAULT_GATE_PATTERNS,
     ConfigError,
+    OpsConfig,
     config_path,
     load_config,
 )
@@ -70,6 +71,11 @@ def test_unparseable_toml_is_an_error(write_config) -> None:
 
 
 def test_full_config_loads_every_field(write_config, tmp_home: Path) -> None:
+    # §21: `ops.monitor_cmd` must name an executable script under `ops.repo`.
+    script = tmp_home / "spanweave-ops" / "watch_monitor.sh"
+    script.parent.mkdir()
+    script.write_text("#!/bin/sh\nexit 0\n")
+    script.chmod(0o755)
     write_config(FULL, project="spanweave")
     cfg = load_config("spanweave")
 
@@ -382,12 +388,100 @@ def test_an_empty_monitor_cmd_cannot_make_the_ops_repo_the_monitor(write_config)
     """Review 3 should-fix 5, stated as the behaviour it prevents.
 
     `OpsConfig(repo=Path('/x'), monitor_cmd="").monitor_path` was `/x` — a
-    directory as the monitor script. No config can reach that state now.
+    directory as the monitor script. The blank is refused at load; the other
+    ways to write the same state are refused below (review 4 blocker 2).
     """
     write_config("[roles.builder]\ncwd = '~/g'\n[ops]\nrepo = '~/ops'\nmonitor_cmd = ''\n")
     with pytest.raises(ConfigError) as exc:
         load_config("demo")
     assert "monitor_cmd" in str(exc.value)
+
+
+@pytest.fixture
+def ops_repo(tmp_home: Path) -> Path:
+    """An ops repo (§13 `[ops] repo`) holding one of each thing a name can hit."""
+    repo = tmp_home / "ops"
+    (repo / "sub").mkdir(parents=True)
+    for name in ("watch_monitor.sh", "sub/nested.sh", "plain.sh"):
+        script = repo / name
+        script.write_text("#!/bin/sh\nexit 0\n")
+        script.chmod(0o644 if name == "plain.sh" else 0o755)
+    return repo
+
+
+def ops_config(monitor_cmd: str) -> str:
+    return f"[roles.builder]\ncwd = '~/g'\n[ops]\nrepo = '~/ops'\nmonitor_cmd = '{monitor_cmd}'\n"
+
+
+@pytest.mark.parametrize(
+    "monitor_cmd,expected,advice",
+    [
+        (".", "the ops repo directory", "watch_monitor.sh"),
+        ("./", "the ops repo directory", "watch_monitor.sh"),
+        ("..", "'..'", "watch_monitor.sh"),
+        ("../watch_monitor.sh", "'..'", "inside ops.repo"),
+        ("/usr/bin/watch_monitor.sh", "relative", "inside ops.repo"),
+        ("sub", "regular file", "watch_monitor.sh"),
+        ("plain.sh", "not executable", "chmod +x"),
+        ("not_there.sh", "does not exist", "watch_monitor.sh"),
+    ],
+    ids=[
+        "dot",
+        "dot_slash",
+        "dotdot",
+        "parent",
+        "absolute",
+        "directory",
+        "not_executable",
+        "missing",
+    ],
+)
+def test_a_monitor_cmd_that_is_not_a_script_in_the_ops_repo_is_refused_at_load(
+    write_config, ops_repo: Path, monitor_cmd: str, expected: str, advice: str
+) -> None:
+    """§21 (review 4 blocker 2): the shape of `ops.monitor_cmd`, checked at load.
+
+    `monitor_cmd = "."` loaded clean and made `monitor_path` the ops *directory*:
+    `hands status` then reports a directory as the deciding script while builder
+    jobs go unwatched behind monitor.py's "is not a file" (§5). Every way of
+    writing something that is not an executable regular file under `ops.repo` is
+    refused here, where the human can act on it.
+    """
+    write_config(ops_config(monitor_cmd))
+    with pytest.raises(ConfigError) as exc:
+        load_config("demo")
+    message = str(exc.value)
+    assert "demo.toml" in message  # the `path` context every config error carries
+    assert "[ops]" in message and "monitor_cmd" in message
+    assert expected in message  # what is wrong with the value
+    assert advice in message  # what to do about it
+
+
+@pytest.mark.parametrize("monitor_cmd", ["watch_monitor.sh", "sub/nested.sh"])
+def test_a_monitor_cmd_naming_an_executable_script_under_the_ops_repo_loads(
+    write_config, ops_repo: Path, monitor_cmd: str
+) -> None:
+    """The other half of §21: a real script, at the top of the repo or under it."""
+    write_config(ops_config(monitor_cmd))
+    cfg = load_config("demo")
+    assert cfg.ops.monitor_cmd == monitor_cmd
+    assert cfg.ops.monitor_path == ops_repo / monitor_cmd
+
+
+def test_the_ops_repo_directory_can_never_be_the_monitor_script() -> None:
+    """Review 4 blocker 2, as the state it makes unreachable rather than as a load.
+
+    `OpsConfig(repo=Path('/x/ops'), monitor_cmd='.').monitor_path` was `/x/ops`,
+    the ops directory itself; `'..'` and an absolute path named something else
+    again. The shape is refused in `OpsConfig`, so `monitor_path` returns a path
+    under `ops.repo` or nothing — for the loader and for any other caller.
+    """
+    for cmd in (".", "./", "..", "../watch_monitor.sh", "/usr/bin/watch_monitor.sh"):
+        with pytest.raises(ConfigError) as exc:
+            OpsConfig(repo=Path("/x/ops"), monitor_cmd=cmd)
+        assert "monitor_cmd" in str(exc.value)
+    ops = OpsConfig(repo=Path("/x/ops"), monitor_cmd="watch_monitor.sh")
+    assert ops.monitor_path == Path("/x/ops/watch_monitor.sh")
 
 
 def test_empty_permission_flags_stay_legal(write_config) -> None:

@@ -257,13 +257,19 @@ def test_a_script_that_refuses_the_flags_fails(
     assert "§14" in found["ops script"]["detail"]
 
 
-def test_a_missing_ops_script_names_section_14_step_4(
+def test_a_missing_ops_script_is_refused_before_doctor_can_report_on_it(
     tmp_home: Path, tmp_path: Path, fake_mode: None
 ) -> None:
+    """§21 (review 4 blocker 2): a `monitor_cmd` with no script behind it does
+    not load at all, so doctor's own missing-script row (§14 step 4, still the
+    answer for a script deleted after the config was read) is not what the human
+    meets — the `config` row is, naming the key and the path it could not find."""
     write_config(tmp_home, tmp_path, monitor_cmd="watch_monitor.sh")
-    code, out, _err = run()
+    code, found = checks()
     assert code == 1
-    assert "§14" in out and "step 4" in out
+    assert found["config"]["status"] == "fail"
+    detail = found["config"]["detail"]
+    assert "monitor_cmd" in detail and "watch_monitor.sh" in detail
 
 
 def test_no_ops_script_configured_is_a_skip_not_a_failure(

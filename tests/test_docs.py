@@ -65,8 +65,17 @@ def test_every_hands_command_named_in_the_docs_exists() -> None:
             assert word in Api.COMMANDS, f"{where} names `hands {word}`, which does not exist"
 
 
-def test_the_integration_config_block_loads() -> None:
-    """§14 step 1's config is copied out of the doc: it has to be a real config."""
+def test_the_integration_config_block_loads(tmp_home: Path) -> None:
+    """§14 step 1's config is copied out of the doc: it has to be a real config.
+
+    Under `tmp_home` because §21 makes `ops.monitor_cmd` name a script that is
+    really there: the doc's `~/<project>-ops/watch_monitor.sh` is created here,
+    the way §14 step 4 tells the human to create theirs.
+    """
+    script = tmp_home / "demo-ops" / "watch_monitor.sh"
+    script.parent.mkdir()
+    script.write_text("#!/bin/sh\nexit 0\n")
+    script.chmod(0o755)
     text = (ROOT / "docs" / "INTEGRATION.md").read_text(encoding="utf-8")
     body = text.split("## 3. Write the config")[1].split("Notes that are easy")[0]
     block = textwrap.dedent(

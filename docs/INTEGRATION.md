@@ -104,6 +104,11 @@ Notes that are easy to get wrong:
   error names both valid choices: omit the key, or give it a real value. The one
   exception is `permission_flags`, whose `""` is its default and means "no
   flags".
+- **`ops.monitor_cmd` names a script inside `ops.repo`** (§21): a relative path
+  with no `..`, and the file it names has to be an executable regular file that
+  exists when the config loads. `"."` used to load and make the ops *directory*
+  the monitor script, which then failed silently and left builder jobs
+  unwatched; it is a load error now, naming the path it looked for.
 
 ## 4. `hands doctor` (§14 step 1)
 
