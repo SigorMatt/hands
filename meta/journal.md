@@ -47,3 +47,4 @@ One line per unit, appended by the builder: date, unit, sha, verdict.
 2026-09-12  m5 U2 ops.monitor_cmd shape  ce92ed6  green 3/3 (789 tests); blocker 2 closed; relative, no .., executable regular file under ops.repo
 2026-09-12  m5 U3 Determinism as a property  e35a2e7  green 3/3 + 5/5 crafted basetemps (794 tests); should-fix 1 and 2 closed; strip_paths + two AST audits
 2026-09-12  m5 U4 Prompt delivery  6d9664d  green 3/3 (804 tests); should-fix 3, 4, 5 closed; ensure_ascii=False, wire cap on both routes, S_ISREG, exit-2 docs; H-012 filed
+2026-09-12  m5 U5 Pipeline and config edges  06de18c  green 3/3 (812 tests); should-fix 7 and 8 closed; H-011 closed: pipeline.stop_suppressed; last_rule stale: true

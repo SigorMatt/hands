@@ -1,21 +1,24 @@
 # CHECKPOINT
 
 Mission: 5 (meta/BUILDER-5-PROMPT.md) — IN PROGRESS
-Unit in progress: U5 (pipeline and config edges)
-Intent: `hands pipeline` marks `last_rule` with `stale: true` when its
-`playbook_sha256` differs from the loaded one; the suppressed-stop event is
-renamed `pipeline.stop_suppressed` everywhere (code, tests, docs); the two
-config edges of REVIEW-4 should-fix 8 (`[ops] monitor_cmd` with no
-`ops.repo`; every accepted value stored unstripped) are closed as mission 4
-U4 closed the blank-value edge — by a mechanism a new key cannot skip.
-Done means: tests for each; `grep -rn 'stop\.suppressed' src tests docs
-driver` returns nothing; `./scripts/check` green three consecutive runs; one
-commit, pushed.
-Tip: 6d9664d (U4), green 3/3 — 804 passed, `check: green`.
+Unit in progress: U6 (daemon memory)
+Intent: find where the runner or daemon accumulates a job's stream-json
+(lists of events, captured stdout, log buffers) and replace it with
+streaming writes to the job's log file under `~/.hands/`, keeping in memory
+only the last N events needed for `tail` and the final `result`;
+`hands log <job>` and `hands log -f` read the file.
+Done means: a test with `fake_claude` emitting 200 000 events asserting the
+runner's retained structures stay bounded (on the length of what is
+retained, not on RSS); the commit body reports the daemon's RSS before and
+after on a real run if one is available, else says NOT PROVEN;
+`./scripts/check` green three consecutive runs; one commit, pushed.
+Tip: 06de18c (U5), green 3/3 — 812 passed, `check: green`;
+`grep -rn 'stop\.suppressed' src tests docs driver` returns nothing.
 Findings: H-001 open (needs a capture from a dotted cwd). H-009 open
 (design-side; no builder unit can close it). H-011 decided by U0 (068a091):
 the kind becomes `pipeline.stop_suppressed`, outside `stop`'s wake namespace;
-U5 makes the rename in code, tests and docs. H-012 filed by U4 (6d9664d):
+U5 makes the rename in code, tests and docs. H-011 closed on disk by U5 (06de18c).
+H-012 filed by U4 (6d9664d):
 §4's "cap plus one quarter" does not cover JSON escaping, so U4 measures the
 cap on the wire — design-side, open.
 H-002..H-008 and H-010 closed in missions 2, 3 and 4.
