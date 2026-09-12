@@ -27,7 +27,7 @@ the prose.
       new `[roles.<r>] env` sets it, doctor reports it; `builder.failed →
       resume` end to end (§2, §6, §13, H-014)
 - [x] U2 The hook covers background sub-agents (§2, §23)
-- [ ] U3 Doc-truth as a property — the sweep reads every tracked text file;
+- [x] U3 Doc-truth as a property — the sweep reads every tracked text file;
       the README and test_playbook wordings join the phrase list; the U6
       tests become non-circular (blocker 1, should-fix 1, 2)
 - [ ] U4 Client seams — one tree walk for UTF-8 and size; positionals
