@@ -115,7 +115,9 @@ UNPAUSE_ORIGINS = frozenset({"cli"})
 PAUSE_REASON = "paused by human"
 
 TOP_KEYS: tuple[str, ...] = ("version", "series", "limits", "rule")
-LIMIT_KEYS: tuple[str, ...] = ("auto_runs", "max_resumes", "quiet_hours")
+LIMIT_KEYS: tuple[str, ...] = ("auto_runs", "max_resumes")
+#: §11 (§25, decision 2026-09-12): the retired `[limits]` key, refused by name.
+RETIRED_LIMIT = "quiet_hours"
 RULE_KEYS: tuple[str, ...] = (
     "on",
     "verdict",
@@ -323,7 +325,6 @@ class Playbook:
     series: str | None
     auto_runs: tuple[int, ...]
     max_resumes: int | None
-    quiet_hours: str | None
     rules: tuple[Rule, ...]
 
     def rules_for(self, event: str) -> list[Rule]:
@@ -427,6 +428,13 @@ def parse_playbook(text: str, *, path: Path) -> Playbook:
     limits = data.get("limits", {})
     if not isinstance(limits, dict):
         raise PlaybookError(f"{path}: [limits] must be a table, got {limits!r}")
+    if RETIRED_LIMIT in limits:
+        # §11: named, not left to the unknown-key refusal, so an old playbook
+        # learns why the key it relied on is gone.
+        raise PlaybookError(
+            f"{path}: [limits] {RETIRED_LIMIT} is retired (decision 2026-09-12): "
+            "notifications are never delayed (§11); remove the key"
+        )
     _check_keys(limits, LIMIT_KEYS, "[limits]", path)
     auto_runs = limits.get("auto_runs", [])
     if not isinstance(auto_runs, list) or any(
@@ -442,9 +450,6 @@ def parse_playbook(text: str, *, path: Path) -> Playbook:
         raise PlaybookError(
             f"{path}: [limits] max_resumes must be a non-negative integer, got {max_resumes!r}"
         )
-    quiet_hours = limits.get("quiet_hours")
-    if quiet_hours is not None and not isinstance(quiet_hours, str):
-        raise PlaybookError(f"{path}: [limits] quiet_hours must be a string, got {quiet_hours!r}")
 
     raw_rules = data.get("rule", [])
     if not isinstance(raw_rules, list) or any(not isinstance(item, dict) for item in raw_rules):
@@ -461,7 +466,6 @@ def parse_playbook(text: str, *, path: Path) -> Playbook:
         series=series,
         auto_runs=tuple(auto_runs),
         max_resumes=max_resumes,
-        quiet_hours=quiet_hours,
         rules=rules,
     )
 

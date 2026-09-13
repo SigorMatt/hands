@@ -120,19 +120,13 @@ def test_the_playbook_doc_says_a_review_reads_from_the_last_review_commit() -> N
 def test_the_playbook_doc_maps_the_mission_8_detectors_to_stop_and_says_the_group_is_weaker(
 ) -> None:
     """§24: both detectors are `stop` rules, and the process-group fallback is
-    weaker than the scope. The playbook file reference shows `quiet_hours` only as
-    a key this project's playbooks never set (§11, §24 conventions)."""
+    weaker than the scope."""
     doc = (ROOT / "docs" / "PLAYBOOK.md").read_text(encoding="utf-8")
     prose = flattened(doc.split("## The example (DESIGN §10, verbatim)")[0])
     for event in ("monitor.task_killed", "monitor.orphan_processes"):
         assert f'on = "{event}" then = "stop"' in prose, f"no stop rule shown for {event}"
     assert "which is weaker" in prose
     assert "`setsid` has left the group and is not listed or killed" in prose
-    reference = doc.split("## The file")[1].split("## Events")[0]
-    assert not [
-        line for line in reference.splitlines()
-        if "quiet_hours" in line and not line.strip().startswith("#")
-    ], "the file reference shows quiet_hours set (§11: no playbook of this project sets it)"
 
 
 #: The key statements of INTEGRATION.md's optional section (§11, §24), each

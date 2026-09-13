@@ -45,7 +45,6 @@ job does — then `hands resume`. `hands doctor`'s playbook row is `ok` with
     [limits]
     auto_runs = [2, 3]           # run numbers hands may start on its own
     max_resumes = 3              # consecutive auto-resumes before a stop
-    # quiet_hours = "23:00-07:00"  # accepted, never set here: notifications are never delayed (§11)
 
     [[rule]]
     on = "<event>"               # required
@@ -100,9 +99,8 @@ An event with no matching rule stops anyway; each rule says it on purpose.
 DESIGN §24 puts both in the example playbook, and this repository's own
 `PLAYBOOK.toml` carries both.
 
-`quiet_hours` in `[limits]` is still read: a window like `"23:00-07:00"` delays
-notifications, never actions. No playbook of this project sets it, so
-notifications are never delayed (§11).
+`quiet_hours` is retired: a playbook whose `[limits]` sets it is refused at
+load with a message saying so. Notifications are never delayed (§11).
 
 ## Actions (`then`)
 

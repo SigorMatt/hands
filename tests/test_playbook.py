@@ -18,7 +18,6 @@ import asyncio
 import hashlib
 import json
 import subprocess
-import tomllib
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
@@ -191,7 +190,6 @@ def test_the_example_parses_into_the_rules_of_section_10(tmp_home: Path, workdir
     assert book.series == "audit-fixes"
     assert book.auto_runs == (2, 3)
     assert book.max_resumes == 3
-    assert book.quiet_hours is None
     assert [(rule.on, rule.then) for rule in book.rules] == [
         ("builder.done", "send"),
         ("aux.done", "send"),
@@ -230,11 +228,9 @@ def test_the_repositorys_own_playbook_loads_and_its_review_reads_from_the_last_r
     assert "meta/REVIEW-PROTOCOL.md" in strip_paths(prompt)
 
 
-def test_the_repositorys_own_playbook_stops_on_the_mission_8_detectors_and_sets_no_quiet_hours(
-) -> None:
-    """§24: `monitor.task_killed` and `monitor.orphan_processes` map to `stop`, and
-    playbooks of this project set no `quiet_hours` (§11, §24 conventions). Read
-    through the real loader, and the raw TOML for the key's absence."""
+def test_the_repositorys_own_playbook_stops_on_the_mission_8_detectors() -> None:
+    """§24: `monitor.task_killed` and `monitor.orphan_processes` map to `stop`.
+    Read through the real loader."""
     path = Path(__file__).parents[1] / "PLAYBOOK.toml"
     book = load_playbook(path)
     assert book is not None, "the repository's PLAYBOOK.toml is missing"
@@ -243,10 +239,6 @@ def test_the_repositorys_own_playbook_stops_on_the_mission_8_detectors_and_sets_
         assert rules, f"PLAYBOOK.toml has no rule for {event}"
         assert [rule.then for rule in rules] == ["stop"], (event, rules)
         assert rules[0].verdict is None, "a monitor event has no verdict to match"
-    assert book.quiet_hours is None
-    text = path.read_text(encoding="utf-8")
-    assert tomllib.loads(text).get("limits"), "PLAYBOOK.toml has no [limits] to check"
-    assert "quiet_hours" not in strip_paths(text), "the file names quiet_hours at all"
 
 
 def test_the_events_and_actions_are_exactly_section_10s() -> None:
@@ -415,6 +407,35 @@ def test_an_unparseable_playbook_stops_and_notifies_and_fires_nothing(
     assert recorder.notified
     run(engine.on_job(job))
     assert recorder.sent == []
+
+
+#: §11 (§25): the refusal a playbook setting the retired key gets, in two parts.
+QUIET_HOURS_RETIRED = "[limits] quiet_hours is retired"
+NEVER_DELAYED = "notifications are never delayed"
+
+
+def test_a_committed_playbook_that_sets_quiet_hours_is_refused_at_load_and_stops(
+    tmp_home: Path, workdir: Path
+) -> None:
+    """§11, §25: `quiet_hours` is retired (decision 2026-09-12). A committed
+    playbook whose `[limits]` sets it is refused at load with a message saying
+    so and that notifications are never delayed; the engine's one load-refusal
+    `stop()` carries that message as its reason."""
+    body = 'version = 1\n\n[limits]\nauto_runs = [2]\nquiet_hours = "23:00-07:00"\n'
+    commit_file(workdir, "PLAYBOOK.toml", body)
+    with pytest.raises(PlaybookError) as refused:
+        load_playbook(workdir / "PLAYBOOK.toml", cwd=workdir)
+    assert QUIET_HOURS_RETIRED in strip_paths(str(refused.value))
+    assert NEVER_DELAYED in strip_paths(str(refused.value))
+
+    engine, recorder = engine_for(tmp_home, workdir, body=body)
+    run(engine.on_job_start(finished(engine.spool, origin="cli")))
+    state = engine.pipeline()
+    assert state["paused"] is True
+    assert QUIET_HOURS_RETIRED in strip_paths(state["stop_reason"])
+    assert NEVER_DELAYED in strip_paths(state["stop_reason"])
+    assert [event.kind for event in engine.spool.events()] == ["stop"]
+    assert recorder.notified
 
 
 # --------------------------------- the playbook must match the committed file (§10)

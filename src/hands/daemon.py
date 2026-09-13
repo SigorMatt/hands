@@ -124,9 +124,8 @@ class Daemon:
         #: §24: every role job's stream-json reaches the monitor as it is read, so a
         #: task the harness killed is filed as `monitor.task_killed`.
         self.runner.on_stream_event = self.monitors.observe
-        #: §11's ntfy publisher. It is handed the playbook's `[limits] quiet_hours`
-        #: as a callable, because the playbook is re-read while the daemon runs.
-        self.notifier = Notifier(config, self.spool, quiet_hours=self._quiet_hours)
+        #: §11's ntfy publisher.
+        self.notifier = Notifier(config, self.spool)
         self.api = Api(self)
         #: §10's automaton. It fires through the API's own `send`, so a job hands
         #: starts on its own is gated by §8's patterns exactly as a human's is.
@@ -560,11 +559,6 @@ class Daemon:
         finally:
             self._subscribers.discard(queue)
 
-    def _quiet_hours(self) -> str | None:
-        """§10's `[limits] quiet_hours`, read afresh: the playbook is re-read per job."""
-        book = self.playbook.playbook
-        return book.quiet_hours if book is not None else None
-
     async def _heartbeat(self) -> None:
         """§11: an hourly inbox event while any job runs, so silence is not death.
 
@@ -850,12 +844,8 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 
 def _notify_crash(config: Config, exc: BaseException) -> None:
-    """§11: "daemon start/crash" — best effort, in a loop of its own.
-
-    Quiet hours are not consulted here, and that is the point: the queue lives in
-    the process, so a crash notification held until 07:00 would die with the
-    process that held it. A crash is the one message that is worthless late.
-    """
+    """§11: "daemon start/crash" — best effort, in a loop of its own, awaited
+    before the process exits so the publish is not lost with it."""
 
     async def publish() -> None:
         notifier = Notifier(config, Spool(config.path.parent))

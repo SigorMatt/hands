@@ -190,9 +190,7 @@ answered with — **whatever that status was**:
 A 2xx exits 0; any other code is printed with the same `ntfy <code> <url>` line
 and exits 1, because the message did not reach the topic. With no `ntfy_topic`
 set, or when nothing answered at all (no route, timeout, TLS), there is no code
-to print and it says so on stderr and exits 1. Quiet hours do not delay it: §11
-delays notifications, never actions, and a message you asked for at a terminal
-is an action.
+to print and it says so on stderr and exits 1.
 
 Doctor also prints the **notification check** of §11 — the one check hands
 cannot run itself, because it ends on your phone. Run it by hand after step 5;

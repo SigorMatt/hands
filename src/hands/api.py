@@ -721,8 +721,7 @@ class Api:
         install with no daemon yet; this method is the other half of the same
         surface (§9), for a caller that has only the daemon — and it sends
         through the daemon's own transport, so a test that replaced it sees this
-        message too. Quiet hours are not consulted here either: §11 delays
-        notifications, never actions.
+        message too.
 
         A refusal by ntfy (any non-2xx) comes back as the result, with
         `delivered: false` and the code — the same answer `hands notify --test`

@@ -1,9 +1,9 @@
 """U8: the wake path, ntfy notifications and the heartbeat (DESIGN §3, §8, §11, §13).
 
-Nothing here touches the network: the ntfy transport is a recorder, the quiet
-hours clock is injected and the scheduler's sleep records the delay instead of
-waiting it out. The heartbeat interval is a daemon parameter, so the test that
-watches one takes milliseconds rather than an hour.
+Nothing here touches the network: the ntfy transport is a recorder, and the
+scheduler's sleep records the delay instead of waiting it out. The heartbeat
+interval is a daemon parameter, so the test that watches one takes
+milliseconds rather than an hour.
 """
 
 from __future__ import annotations
@@ -31,7 +31,6 @@ from hands.notify import (
     Notifier,
     accepted,
     http_post,
-    parse_quiet_hours,
     send_test,
 )
 from hands.spool import Job, Spool, resolve_kinds
@@ -259,50 +258,23 @@ class Posts:
         return 200  # ntfy's answer: a double speaks the transport's `-> int` too
 
 
-class Clock:
-    def __init__(self, now: datetime = NOW) -> None:
-        self.now = now
-        self.slept: list[float] = []
-
-    def __call__(self) -> datetime:
-        return self.now
-
-    async def sleep(self, seconds: float) -> None:
-        self.slept.append(seconds)
-
-
 def notifier(
     tmp_home: Path,
     tmp_path: Path,
     *,
     posts: Posts | StatusPosts | None = None,
-    clock: Clock | None = None,
-    quiet: str | None = None,
     topic: str | None = "hands-abc123",
-) -> tuple[Notifier, Posts | StatusPosts, Clock, Spool]:
+) -> tuple[Notifier, Posts | StatusPosts, Spool]:
     posts = posts or Posts()
-    clock = clock or Clock()
     spool = Spool(tmp_home / ".hands")
     config = cfg_with(tmp_home, tmp_path, ntfy_topic=topic, ntfy_url="https://ntfy.example")
-    return (
-        Notifier(
-            config,
-            spool,
-            post=posts,
-            clock=clock,
-            sleep=clock.sleep,
-            quiet_hours=lambda: quiet,
-        ),
-        posts,
-        clock,
-        spool,
-    )
+    return Notifier(config, spool, post=posts), posts, spool
 
 
 def test_a_notification_is_published_to_the_configured_topic(
     tmp_home: Path, tmp_path: Path
 ) -> None:
-    note, posts, _, _ = notifier(tmp_home, tmp_path)
+    note, posts, _ = notifier(tmp_home, tmp_path)
 
     async def body() -> None:
         note.notify("hands: the pipeline stopped", {"reason": "blockers", "job": "j1"})
@@ -316,7 +288,7 @@ def test_a_notification_is_published_to_the_configured_topic(
 
 
 def test_with_no_topic_nothing_is_published(tmp_home: Path, tmp_path: Path) -> None:
-    note, posts, _, spool = notifier(tmp_home, tmp_path, topic=None)
+    note, posts, spool = notifier(tmp_home, tmp_path, topic=None)
 
     async def body() -> None:
         note.notify("hands: stop", {"reason": "x"})
@@ -329,7 +301,7 @@ def test_with_no_topic_nothing_is_published(tmp_home: Path, tmp_path: Path) -> N
 
 def test_a_failed_publish_is_inboxed_and_never_raised(tmp_home: Path, tmp_path: Path) -> None:
     """Best effort (§11): ntfy being down must never touch a job."""
-    note, posts, _, spool = notifier(tmp_home, tmp_path, posts=Posts(fail=True))
+    note, posts, spool = notifier(tmp_home, tmp_path, posts=Posts(fail=True))
 
     async def body() -> None:
         note.notify("hands: the pipeline stopped", {"reason": "blockers"})
@@ -340,72 +312,6 @@ def test_a_failed_publish_is_inboxed_and_never_raised(tmp_home: Path, tmp_path: 
     assert [event.kind for event in events] == ["notify"]
     assert events[0].payload["delivered"] is False
     assert "unreachable" in strip_paths(events[0].payload["error"])
-
-
-# ----------------------------------------------------------- quiet hours §10
-
-
-@pytest.mark.parametrize(
-    ("window", "moment", "inside"),
-    [
-        ("23:00-07:00", datetime(2026, 9, 11, 23, 30, tzinfo=UTC), True),
-        ("23:00-07:00", datetime(2026, 9, 11, 2, 0, tzinfo=UTC), True),
-        ("23:00-07:00", datetime(2026, 9, 11, 12, 0, tzinfo=UTC), False),
-        ("23:00-07:00", datetime(2026, 9, 11, 7, 0, tzinfo=UTC), False),
-        ("09:00-17:00", datetime(2026, 9, 11, 12, 0, tzinfo=UTC), True),
-        ("09:00-17:00", datetime(2026, 9, 11, 8, 59, tzinfo=UTC), False),
-    ],
-)
-def test_the_quiet_window_knows_when_it_is_quiet(
-    window: str, moment: datetime, inside: bool
-) -> None:
-    parsed = parse_quiet_hours(window)
-    assert parsed is not None
-    assert parsed.contains(moment) is inside
-
-
-def test_an_unreadable_quiet_window_is_no_window(tmp_home: Path, tmp_path: Path) -> None:
-    """A broken window must not silence notifications: it is ignored, not obeyed."""
-    assert parse_quiet_hours("all night") is None
-    note, posts, _, _ = notifier(tmp_home, tmp_path, quiet="all night")
-
-    async def body() -> None:
-        note.notify("hands: stop", {"reason": "x"})
-        await note.drain()
-
-    asyncio.run(body())
-    assert len(posts.sent) == 1
-
-
-def test_quiet_hours_delays_delivery_to_the_window_end(tmp_home: Path, tmp_path: Path) -> None:
-    """§11: quiet hours delay the notification; the scheduler flushes at the end."""
-    clock = Clock(datetime(2026, 9, 11, 23, 30, tzinfo=UTC))
-    note, posts, clock, _ = notifier(tmp_home, tmp_path, clock=clock, quiet="23:00-07:00")
-
-    async def body() -> None:
-        note.notify("hands: the pipeline stopped", {"reason": "blockers"})
-        assert posts.sent == []  # nothing goes out at 23:30
-        assert [item.title for item in note.queued] == ["hands: the pipeline stopped"]
-        await note.drain()  # the flush task's sleep is the recorder
-
-    asyncio.run(body())
-    assert clock.slept == [7.5 * 3600]  # 23:30 → 07:00
-    assert len(posts.sent) == 1, "the queue is flushed at the window end"
-    assert note.queued == []
-
-
-def test_two_quiet_notifications_share_one_flush(tmp_home: Path, tmp_path: Path) -> None:
-    clock = Clock(datetime(2026, 9, 11, 2, 0, tzinfo=UTC))
-    note, posts, clock, _ = notifier(tmp_home, tmp_path, clock=clock, quiet="23:00-07:00")
-
-    async def body() -> None:
-        note.notify("hands: one", {"reason": "a"})
-        note.notify("hands: two", {"reason": "b"})
-        await note.drain()
-
-    asyncio.run(body())
-    assert clock.slept == [5 * 3600]
-    assert [item["title"] for item in posts.sent] == ["hands: one", "hands: two"]
 
 
 # ------------------------------------------------------- wiring (§10 → §11)
@@ -441,9 +347,7 @@ def test_a_stop_notifies_and_a_held_job_notifies(tmp_home: Path, workdir: Path) 
 
 
 def test_a_hand_pause_notifies_like_any_other_stop(tmp_home: Path, workdir: Path) -> None:
-    """§11 lists `stop` among the notifications, and a pause files a `stop`. Quiet
-    hours are the Notifier's (they delay this exact title, see the quiet tests);
-    the action — the pause itself — is never delayed."""
+    """§11 lists `stop` among the notifications, and a pause files a `stop`."""
     config_with_ntfy(tmp_home, workdir)
     posts = Posts()
 
@@ -851,7 +755,7 @@ def test_a_background_notification_ntfy_refuses_still_fails(
     `raise_for_status` used to carry this; the status check replaces it, so the
     inbox still records the refusal and the job still learns nothing.
     """
-    note, _, _, spool = notifier(tmp_home, tmp_path, posts=StatusPosts(status=500))
+    note, _, spool = notifier(tmp_home, tmp_path, posts=StatusPosts(status=500))
 
     async def body() -> None:
         note.notify("hands: the pipeline stopped", {"reason": "blockers"})
@@ -862,23 +766,6 @@ def test_a_background_notification_ntfy_refuses_still_fails(
     assert [event.kind for event in events] == ["notify"]
     assert events[0].payload["delivered"] is False
     assert "500" in strip_paths(events[0].payload["error"])
-
-
-def test_notify_test_is_not_delayed_by_quiet_hours(
-    tmp_home: Path, workdir: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """§11: quiet hours delay notifications, never actions — and --test is an action."""
-    project = notify_project(tmp_home, workdir)
-    (workdir / "PLAYBOOK.toml").write_text(
-        'version = 1\n\n[limits]\nquiet_hours = "00:00-23:59"\n'
-    )
-    posts = StatusPosts()
-    monkeypatch.setattr("hands.notify.http_post", posts)
-
-    code, _, err = run_cli(project, "notify", "--test", "now, please")
-
-    assert code == 0, err
-    assert [item["message"] for item in posts.sent] == ["now, please"]
 
 
 def test_the_daemon_has_the_same_notify_method(tmp_home: Path, workdir: Path) -> None:
@@ -920,7 +807,7 @@ def test_a_publish_that_answers_no_status_is_a_failed_delivery(
 ) -> None:
     """Review 3 should-fix 6: a transport regression that returns None is not
     counted as delivered — on the §11 path (inboxed) or on `--test` (refused)."""
-    note, posts, _, spool = notifier(tmp_home, tmp_path, posts=SilentPosts())  # type: ignore[arg-type]
+    note, posts, spool = notifier(tmp_home, tmp_path, posts=SilentPosts())  # type: ignore[arg-type]
 
     async def body() -> None:
         note.notify("hands: the pipeline stopped", {"reason": "blockers"})

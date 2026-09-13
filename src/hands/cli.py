@@ -819,10 +819,7 @@ def _notify(config: Config, message: str | None, *, out: TextIO, as_json: bool) 
     is to prove delivery at an install (§14 step 1), when handsd may not be
     running — a proof you cannot run until the daemon is up proves the wrong
     thing. Nothing is lost by that: the topic and the URL are config (§13), and
-    the transport is `hands.notify.http_post`, the one §11 itself uses. What the
-    daemon adds — quiet hours — is exactly what a `--test` must not have: §11
-    delays notifications, never actions, and a message a human asked for at a
-    terminal is an action.
+    the transport is `hands.notify.http_post`, the one §11 itself uses.
     """
     if message is None:
         raise ValueError(
@@ -840,7 +837,7 @@ def _notify(config: Config, message: str | None, *, out: TextIO, as_json: bool) 
 def _notify_block(result: dict[str, Any], *, sender: str = "the CLI itself, not handsd") -> str:
     """What ntfy answered, and who sent it — the daemon's notifications are its own."""
     last = (
-        f"  sent by {sender}, and not delayed by quiet hours (§11)"
+        f"  sent by {sender}"
         if result["delivered"]
         else "  ntfy did not accept it: nothing was delivered to the topic"
     )

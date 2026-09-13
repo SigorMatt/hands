@@ -1,4 +1,4 @@
-"""Notifications — ntfy, best effort, quiet hours (DESIGN §11, §13).
+"""Notifications — ntfy, best effort, never delayed (DESIGN §11, §13).
 
 §11 names four notifications, and no others: `stop`, `job.held`, `max_resumes`
 exhausted (which is a `stop` of its own), and daemon start/crash. "Not for
@@ -11,15 +11,10 @@ Three properties this module exists to hold:
   `notify` event; it never raises into a job and never blocks one. `notify()` is
   a synchronous seam that schedules the delivery and returns, so a caller on the
   job path (the playbook engine, the daemon's inbox listener) pays nothing.
-* **Quiet hours delay delivery, never actions** (§11). A notification raised
-  inside the window is queued and one flush task delivers the queue at the end
-  of the window. The job that raised it has already happened; nothing waits.
-* **Nothing here reaches the network on its own terms.** `post` and `clock` and
-  `sleep` are injected, so a test drives every branch with a recorder.
-
-The quiet window is the playbook's `[limits] quiet_hours` (§10). §13's config
-table has no such key, and `config.py` refuses keys §13 does not list, so the
-playbook is the only source hands can read today — see the commit body.
+* **Never delayed** (§11). A notification is published when it is raised;
+  nothing is queued for later.
+* **Nothing here reaches the network on its own terms.** `post` is injected,
+  so a test drives every branch with a recorder.
 """
 
 from __future__ import annotations
@@ -27,10 +22,8 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import re
 from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass, field
-from datetime import datetime, time, timedelta
 from typing import Any
 
 from hands.config import Config
@@ -42,12 +35,10 @@ __all__ = [
     "Notification",
     "Notifier",
     "NotifyError",
-    "QuietWindow",
     "accepted",
     "actions_header",
     "http_post",
     "http_stream",
-    "parse_quiet_hours",
     "send_test",
 ]
 
@@ -63,57 +54,6 @@ STREAM_READ_TIMEOUT_S = 120.0
 DEFAULT_TEST_MESSAGE = "hands notify --test: if you can read this, delivery works."
 #: The title of that one message, so it is obvious on the phone what it is.
 TEST_TITLE = "hands: notify --test"
-
-_WINDOW_RE = re.compile(r"^\s*(\d{1,2}):(\d{2})\s*-\s*(\d{1,2}):(\d{2})\s*$")
-
-
-# ------------------------------------------------------------- quiet hours
-
-
-@dataclass(frozen=True)
-class QuietWindow:
-    """A `23:00-07:00` window of local wall-clock time (§10)."""
-
-    start: time
-    end: time
-
-    def contains(self, moment: datetime) -> bool:
-        """Is `moment` inside the window? The start is in it, the end is not."""
-        now = moment.time()
-        if self.start == self.end:
-            return False  # a zero-width window silences nothing
-        if self.start < self.end:
-            return self.start <= now < self.end
-        return now >= self.start or now < self.end  # the window crosses midnight
-
-    def ends_after(self, moment: datetime) -> float:
-        """Seconds from `moment` to the next end of the window."""
-        end = moment.replace(
-            hour=self.end.hour, minute=self.end.minute, second=0, microsecond=0
-        )
-        if end <= moment:
-            end += timedelta(days=1)
-        return (end - moment).total_seconds()
-
-
-def parse_quiet_hours(text: str | None) -> QuietWindow | None:
-    """`"23:00-07:00"` → a window; None for no window and for an unreadable one.
-
-    Unreadable is deliberately *not* an error: a typo in the playbook must not
-    silence hands, and it must not stop the pipeline either — the notification is
-    delivered at once and the typo is logged.
-    """
-    if not text:
-        return None
-    match = _WINDOW_RE.match(text)
-    if match is None:
-        log.warning("quiet_hours %r is not a HH:MM-HH:MM window; ignoring it", text)
-        return None
-    values = [int(part) for part in match.groups()]
-    if values[0] > 23 or values[2] > 23 or values[1] > 59 or values[3] > 59:
-        log.warning("quiet_hours %r is not a clock time; ignoring it", text)
-        return None
-    return QuietWindow(start=time(values[0], values[1]), end=time(values[2], values[3]))
 
 
 # ------------------------------------------------------------ the transport
@@ -211,10 +151,10 @@ async def send_test(
 ) -> dict[str, Any]:
     """One message to the configured topic, now, and the status it got back (§4).
 
-    Deliberately not routed through `Notifier`: quiet hours delay notifications
-    and never actions (§11), and a `--test` the human asked for at a terminal is
-    an action. The transport underneath is the same `http_post` every §11
-    notification uses — that is what makes this a proof of delivery.
+    Not routed through `Notifier`: a `--test` is a status the human reads at the
+    terminal, not a §11 notification whose failure goes to the inbox. The
+    transport underneath is the same `http_post` every §11 notification uses —
+    that is what makes this a proof of delivery.
 
     A refusal is **returned, not raised** (§19): `delivered` is False and
     `status` is the code ntfy answered with, so the caller can print the code and
@@ -269,7 +209,7 @@ class Notification:
 
 
 class Notifier:
-    """The ntfy publisher of §11, with §10's quiet hours in front of it."""
+    """The ntfy publisher of §11. It publishes when asked; nothing is delayed."""
 
     def __init__(
         self,
@@ -277,24 +217,13 @@ class Notifier:
         spool: Spool,
         *,
         post: Callable[..., Awaitable[int]] | None = None,
-        clock: Callable[[], datetime] | None = None,
-        sleep: Callable[[float], Awaitable[None]] | None = None,
-        quiet_hours: Callable[[], str | None] | None = None,
     ) -> None:
         self.config = config
         self.spool = spool
         #: The transport. None means the real one, looked up at call time so a
         #: test can replace `hands.notify.http_post` wholesale.
         self.post = post
-        self.clock = clock or _local_now
-        self.sleep: Callable[[float], Awaitable[None]] = sleep or asyncio.sleep
-        #: Read at every notification, not once: the playbook (and its
-        #: `[limits] quiet_hours`) is re-read whenever a job starts (§10).
-        self.quiet_hours = quiet_hours
-        #: Raised inside the window, waiting for the flush at its end.
-        self.queued: list[Notification] = []
         self._tasks: set[asyncio.Task[None]] = set()
-        self._flush: asyncio.Task[None] | None = None
 
     # ------------------------------------------------------------- the seam
 
@@ -309,21 +238,17 @@ class Notifier:
 
         This is the seam the playbook engine and the daemon hold; it is
         deliberately synchronous so neither has to know that delivery is async.
-        Quiet hours are decided here and now — only the publish is a task, so a
-        caller that looks at `queued` on the next line sees the truth.
         """
         payload = dict(payload or {})
         note = Notification(
             title=title, message=_message(payload), payload=payload, actions=actions
         )
-        if self._route(note):
+        if self._has_topic(note):
             self._spawn(self._publish(note), "hands-notify")
 
     async def answer(self, title: str, message: str) -> bool:
         """A reply to a phone command (§24's `status`), published now.
 
-        Not through `_route`: quiet hours delay notifications and never actions
-        (§11), and an answer is the second half of an action the human just took.
         Best effort like every publish; with no `ntfy_topic` there is nowhere to
         answer, and nothing is sent.
         """
@@ -337,20 +262,13 @@ class Notifier:
     ) -> None:
         """`notify` for a caller that wants to await the publish (the crash path)."""
         note = Notification(title=title, message=message, payload=dict(payload or {}))
-        if self._route(note):
+        if self._has_topic(note):
             await self._publish(note)
 
-    def _route(self, note: Notification) -> bool:
-        """Publish now (True), or queue it for the end of quiet hours (False) (§11)."""
+    def _has_topic(self, note: Notification) -> bool:
+        """Is there a topic to publish to? With none, nothing is sent (§11)."""
         if not self.config.server.ntfy_topic:
             log.debug("no ntfy_topic; not publishing %r", note.title)
-            return False
-        window = parse_quiet_hours(self.quiet_hours() if self.quiet_hours else None)
-        now = self.clock()
-        if window is not None and window.contains(now):
-            self.queued.append(note)
-            log.info("quiet hours: %r queued until the window ends", note.title)
-            self._arm_flush(window.ends_after(now))
             return False
         return True
 
@@ -390,18 +308,6 @@ class Notifier:
         )
         return False
 
-    def _arm_flush(self, seconds: float) -> None:
-        """One flush task for the whole queue, armed by the first quiet notification."""
-        if self._flush is not None and not self._flush.done():
-            return
-        self._flush = self._spawn(self._flush_after(seconds), "hands-notify-flush")
-
-    async def _flush_after(self, seconds: float) -> None:
-        await self.sleep(seconds)
-        pending, self.queued = self.queued, []
-        for note in pending:
-            await self._publish(note)
-
     # ----------------------------------------------------------------- tasks
 
     def _spawn(self, coro: Any, name: str) -> asyncio.Task[None]:
@@ -421,15 +327,10 @@ class Notifier:
             await asyncio.gather(*pending, return_exceptions=True)
 
     def cancel_all(self) -> None:
-        """Drop every scheduled delivery — the daemon is going down (§3).
-
-        The queue is in memory: a notification quiet hours delayed past the death
-        of the daemon is lost, exactly as a phone that was off would lose it.
-        """
+        """Drop every scheduled delivery — the daemon is going down (§3)."""
         for task in list(self._tasks):
             task.cancel()
         self._tasks.clear()
-        self._flush = None
 
 
 def _message(payload: dict[str, Any]) -> str:
@@ -447,8 +348,3 @@ def _message(payload: dict[str, Any]) -> str:
     if not lines:
         lines.append(json.dumps(payload, sort_keys=True))
     return "\n".join(lines)
-
-
-def _local_now() -> datetime:
-    """Now, aware, in this machine's timezone — quiet hours are wall-clock hours."""
-    return datetime.now().astimezone()
