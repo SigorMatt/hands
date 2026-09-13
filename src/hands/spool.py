@@ -127,6 +127,8 @@ EVENT_KINDS = frozenset(
         "notify",  # a notification hands could not deliver (§11, U8)
         "kit.received",  # a kit sent from the phone was written to kit_dir (§26)
         "kit.refused",  # a kit command with the secret was refused, with the check (§27)
+        "consult.sent",  # a playbook `consult` started a driver job (§27)
+        "consult.done",  # that driver job ended, with its verdict line (§27)
     }
 )
 

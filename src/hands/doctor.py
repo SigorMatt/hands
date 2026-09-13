@@ -554,7 +554,7 @@ def _playbook_check(config: Config) -> Check:
         "playbook",
         OK,
         f"{path}\nseries {book.series or '(unnamed)'}; {len(book.rules)} rule(s); "
-        f"auto_runs {runs}; sha256 {book.sha256[:12]}…\n"
+        f"auto_runs {runs}; max_consults {book.max_consults}; sha256 {book.sha256[:12]}…\n"
         "committed: the file matches `git show HEAD:<path>` in roles.builder.cwd (§10)",
     )
 

@@ -553,6 +553,11 @@ def _pipeline_block(result: dict[str, Any]) -> str:
     resumes = result.get("resumes") or {}
     counts = ", ".join(f"{role} {n}" for role, n in (resumes.get("used") or {}).items())
     lines.append(f"  resumes  {counts or 'none'} of max_resumes {resumes.get('max_resumes')}")
+    consults = result.get("consults") or {}
+    if consults:  # §27
+        lines.append(
+            f"  consults {consults.get('used')} of max_consults {consults.get('max_consults')}"
+        )
     rule = result.get("last_rule")
     if rule:
         fired = f" -> job {rule['fired_job']}" if rule.get("fired_job") else ""

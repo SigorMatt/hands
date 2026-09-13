@@ -45,8 +45,10 @@ The checks, in order (docs/ARCHITECT-HANDBOOK.md §11 says the same):
   (review 10 should-fix 4). One on `aux.done` matches at least one of the
   review protocol's `VERDICT: review …` lines — found in the send prompts and in
   the files they name — with each placeholder (`N`, `<k>`, `{n}`) read as a
-  count, tried as each of `PLACEHOLDER_VALUES`. A rule on any other event has
-  no vocabulary here to match, and fails.
+  count, tried as each of `PLACEHOLDER_VALUES`. One on `driver.done` matches at
+  least one of the driver's two lines (§27, `hands.playbook.DRIVER_VERDICTS`, the
+  lines the consult prompt requires), placeholders left as text. A rule on any
+  other event has no vocabulary here to match, and fails.
 * `wording` — the brief says neither "as before" nor has a "Budget guidance"
   section (a heading or a bold lead).
 * `protocol` — every file a `send` rule's prompt names (a `.md` or `.toml` path
@@ -70,7 +72,13 @@ from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from typing import Any, TextIO
 
-from hands.playbook import GIT_ENV_CLEARED, Playbook, PlaybookError, parse_playbook
+from hands.playbook import (
+    DRIVER_VERDICTS,
+    GIT_ENV_CLEARED,
+    Playbook,
+    PlaybookError,
+    parse_playbook,
+)
 
 __all__ = [
     "APPLY_VERDICT",
@@ -110,6 +118,8 @@ VOCABULARY_OPENERS = ("Your final reply begins with", "Reply with one of")
 BUILDER_DONE = "builder.done"
 #: The event whose verdict is the reviewer's, the one the review protocol fixes (§27).
 REVIEW_DONE = "aux.done"
+#: The event whose verdict is the driver's, the one the consult prompt fixes (§27).
+DRIVER_DONE = "driver.done"
 #: What `kit check` reads into memory (review 10 should-fix 5; hands' own numbers,
 #: the design names none). A kit is text: a DESIGN.md is some 100 KiB.
 MAX_ENTRY_BYTES = 16 * 1024 * 1024
@@ -585,7 +595,10 @@ def _check_verdicts(
     verdict_rules = [rule for rule in book.rules if rule.verdict is not None]
     rules = [rule for rule in verdict_rules if rule.on == BUILDER_DONE]
     reviews = [rule for rule in verdict_rules if rule.on == REVIEW_DONE]
-    others = [rule for rule in verdict_rules if rule.on not in (BUILDER_DONE, REVIEW_DONE)]
+    drivers = [rule for rule in verdict_rules if rule.on == DRIVER_DONE]
+    others = [
+        rule for rule in verdict_rules if rule.on not in (BUILDER_DONE, REVIEW_DONE, DRIVER_DONE)
+    ]
     problems: list[str] = []
     via_apply: list[str] = []
     for rule in rules:
@@ -626,11 +639,19 @@ def _check_verdicts(
                     f"rule {rule.index} verdict '{rule.verdict.pattern}' matches none of the "
                     f"review protocol's {shown_review} (placeholders read as counts)"
                 )
+    shown_driver = " | ".join(repr(literal) for literal in DRIVER_VERDICTS)
+    for rule in drivers:
+        assert rule.verdict is not None
+        if not any(rule.verdict.search(literal) for literal in DRIVER_VERDICTS):
+            problems.append(
+                f"rule {rule.index} verdict '{rule.verdict.pattern}' matches none of the "
+                f"driver's {shown_driver} (§27)"
+            )
     for rule in others:
         assert rule.verdict is not None
         problems.append(
             f"rule {rule.index} verdict '{rule.verdict.pattern}' is on {rule.on}, whose "
-            "replies neither the brief nor the review protocol fixes"
+            "replies neither the brief, the review protocol nor the consult prompt fixes"
         )
     notes = []
     if via_apply:
@@ -647,6 +668,10 @@ def _check_verdicts(
         parts.append(
             f"{len(reviews)} {REVIEW_DONE} verdict rule(s) match the review protocol's "
             f"{shown_review} (placeholders read as counts)"
+        )
+    if drivers:
+        parts.append(
+            f"{len(drivers)} {DRIVER_DONE} verdict rule(s) match the driver's {shown_driver}"
         )
     return Check("verdicts", True, "; ".join(parts))
 

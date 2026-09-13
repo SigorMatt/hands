@@ -30,12 +30,15 @@ from hands.config import Config, load_config, parse_config
 from hands.daemon import Daemon
 from hands.playbook import (
     ACTIONS,
+    CONSULT_QUESTION,
+    DRIVER_VERDICTS,
     EVENTS,
     JOB_PLACEHOLDERS,
     PipelineState,
     PlaceholderError,
     PlaybookEngine,
     PlaybookError,
+    consult_prompt,
     load_playbook,
     parse_playbook,
     playbook_path,
@@ -84,15 +87,20 @@ def git_repo(path: Path) -> str:
 
 
 def make_config(
-    tmp_home: Path, workdir: Path, *, builder: dict[str, Any] | None = None
+    tmp_home: Path,
+    workdir: Path,
+    *,
+    builder: dict[str, Any] | None = None,
+    driver: Path | None = None,
 ) -> Config:
+    roles: dict[str, Any] = {
+        "builder": {"cwd": str(workdir), **(builder or {})},
+        "aux": {"cwd": str(workdir)},
+    }
+    if driver is not None:
+        roles["driver"] = {"cwd": str(driver)}  # §27
     return parse_config(
-        {
-            "roles": {
-                "builder": {"cwd": str(workdir), **(builder or {})},
-                "aux": {"cwd": str(workdir)},
-            }
-        },
+        {"roles": roles},
         project=PROJECT,
         path=tmp_home / ".hands" / f"{PROJECT}.toml",
     )
@@ -135,10 +143,11 @@ def engine_for(
     body: str | None = EXAMPLE,
     *,
     builder: dict[str, Any] | None = None,
+    driver: Path | None = None,
 ) -> tuple[PlaybookEngine, Recorder]:
     if body is not None:
         commit_file(workdir, "PLAYBOOK.toml", body)  # §10: only the committed file loads
-    config = make_config(tmp_home, workdir, builder=builder)
+    config = make_config(tmp_home, workdir, builder=builder, driver=driver)
     recorder = Recorder()
     engine = PlaybookEngine(
         config,
@@ -291,6 +300,8 @@ def test_the_events_and_actions_are_exactly_section_10s() -> None:
         "builder.orphaned",
         "aux.done",
         "aux.failed",
+        "driver.done",  # §27: a consultation's driver job ended done
+        "driver.failed",  # §27: … or failed
         "monitor.stall",
         "monitor.tripwire",
         "monitor.task_killed",  # §24: mission 8's detector, mapped to `stop`
@@ -298,7 +309,7 @@ def test_the_events_and_actions_are_exactly_section_10s() -> None:
         "job.held",
         "job.denied",
     )
-    assert ACTIONS == ("send", "resume", "notify", "stop")
+    assert ACTIONS == ("send", "resume", "notify", "stop", "consult")
     assert JOB_PLACEHOLDERS == ("id", "head_at_start", "head_at_end", "session_id")
 
 
@@ -403,6 +414,19 @@ BAD_PLAYBOOKS: list[tuple[str, str, str]] = [
     ("empty series name", 'version = 1\n[series]\nname = ""', SERIES_EMPTY.format(key="name")),
     ("series neither a string nor a table", "version = 1\nseries = 3",
      "series must be a string (the series' name) or a [series] table, got 3"),
+    # §27 (mission 11 U5): `consult` builds its own prompt for the driver role.
+    ("consult with a prompt", 'version = 1\n[[rule]]\non = "builder.done"\n'
+     'then = "consult"\nprompt = "x"',
+     "a consult takes no prompt: hands writes the driver's prompt (§27)"),
+    ("consult to another role", 'version = 1\n[[rule]]\non = "builder.done"\n'
+     'then = "consult"\nrole = "aux"', "a consult's role is driver, got 'aux'"),
+    ("consult with keep", 'version = 1\n[[rule]]\non = "builder.done"\n'
+     'then = "consult"\ncontext = "keep"',
+     "a consult starts a fresh driver session: context is clear, got 'keep'"),
+    ("consult on a driver event", 'version = 1\n[[rule]]\non = "driver.done"\n'
+     'then = "consult"', "a consult on driver.done would consult the driver about itself"),
+    ("max_consults negative", 'version = 1\n[limits]\nmax_consults = -1',
+     "[limits] max_consults must be a non-negative integer, got -1"),
 ]
 
 
@@ -1789,3 +1813,358 @@ def test_the_verdict_regex_named_groups_reach_the_message(
     drive(body)
 
 
+
+
+# ------------------------------------------- §27: consult, driver.done, max_consults
+
+KICKOFF = "Kick off mission 11"
+
+CONSULT_BOOK = f"""version = 1
+
+[series]
+kickoff = "{KICKOFF}"
+
+[limits]
+max_consults = 2
+
+[[rule]]
+on = "builder.done"
+verdict = '^VERDICT: question'
+then = "consult"
+
+[[rule]]
+on = "builder.done"
+verdict = '^VERDICT: answered'
+then = "notify"
+message = "the builder answered"
+
+[[rule]]
+on = "driver.done"
+verdict = '^VERDICT: resolved (?P<what>.+)'
+then = "notify"
+message = "consult resolved: {{what}}"
+
+[[rule]]
+on = "driver.done"
+verdict = '^VERDICT: escalate (?P<reason>.+)'
+then = "stop"
+message = "driver escalated: {{reason}}"
+"""
+
+QUESTION_RESULT = (
+    "VERDICT: question may U5 count consults from the kickoff?\n"
+    "Details, verbatim: {not a placeholder} and a FAKE-free line.\n"
+)
+
+
+def test_the_consult_prompt_carries_the_event_the_record_and_the_reply_verbatim(
+    tmp_home: Path, workdir: Path
+) -> None:
+    driver = workdir.parent / "driver"
+    engine, recorder = engine_for(tmp_home, workdir, CONSULT_BOOK, driver=driver)
+    job = engine.spool.create_job(role="builder", context="clear", prompt="p", origin="cli")
+    engine.spool.transition(job, "running")
+    job = engine.spool.transition(
+        job, "done", verdict=QUESTION_RESULT.splitlines()[0], result=QUESTION_RESULT
+    )
+
+    run(engine.on_job(job))
+
+    assert not engine.state.paused, engine.state.stop_reason
+    assert recorder.sent == []  # never through Api.send, which refuses the driver (U4)
+    [call] = recorder.enqueued
+    assert call["role"] == "driver"
+    assert call["context"] == "clear"
+    assert call["origin"] == "playbook"
+    assert call["playbook_sha256"] == engine.playbook.sha256  # type: ignore[union-attr]
+    prompt = call["prompt"]
+    assert prompt == consult_prompt("builder.done", job)
+    assert QUESTION_RESULT in strip_paths(prompt)  # the role's last reply, verbatim
+    for said in ("builder.done", job.id, "builder", str(job.verdict), CONSULT_QUESTION,
+                 *DRIVER_VERDICTS, "hands send --role builder --context keep"):
+        assert said in strip_paths(prompt), said
+    assert CONSULT_QUESTION == (
+        "resolve within your authority, citing the mission file or DESIGN section, or escalate"
+    )
+    assert DRIVER_VERDICTS == (
+        "VERDICT: resolved <what was sent, and the section cited>",
+        "VERDICT: escalate <reason>",
+    )
+    events = engine.spool.events()
+    sent = [event for event in events if event.kind == "consult.sent"]
+    assert len(sent) == 1
+    assert sent[0].payload["job"] == "enq-1"
+    assert sent[0].payload["about"] == job.id
+    assert sent[0].payload["event"] == "builder.done"
+    rule = [event for event in events if event.kind == "playbook.rule"]
+    assert rule[-1].payload["then"] == "consult"
+    assert rule[-1].payload["fired_job"] == "enq-1"
+
+
+def test_a_consult_with_no_driver_role_configured_stops_and_starts_nothing(
+    tmp_home: Path, workdir: Path
+) -> None:
+    engine, recorder = engine_for(tmp_home, workdir, CONSULT_BOOK)
+    job = finished(engine.spool, verdict="VERDICT: question x")
+    run(engine.on_job(job))
+    assert recorder.enqueued == []
+    assert engine.state.paused
+    assert "[roles.driver]" in strip_paths(engine.state.stop_reason or "")
+
+
+def _driver_job(spool: Spool, *, state: str, verdict: str | None, about: Job) -> Job:
+    job = spool.create_job(
+        role="driver",
+        context="clear",
+        prompt=consult_prompt("builder.done", about),
+        origin="playbook",
+    )
+    spool.transition(job, "running")
+    return spool.transition(job, state, verdict=verdict, result=verdict)
+
+
+def test_an_unrecognised_driver_verdict_stops(tmp_home: Path, workdir: Path) -> None:
+    engine, recorder = engine_for(tmp_home, workdir, CONSULT_BOOK, driver=workdir.parent / "d")
+    about = finished(engine.spool, verdict="VERDICT: question x")
+    driver = _driver_job(engine.spool, state="done", verdict="VERDICT: maybe", about=about)
+    run(engine.on_job(driver))
+    assert engine.state.paused
+    assert "driver.done: no rule matches the verdict 'VERDICT: maybe'" in strip_paths(
+        engine.state.stop_reason or ""
+    )
+    assert recorder.enqueued == []
+
+
+def test_a_resolved_driver_verdict_notifies_and_does_not_stop(
+    tmp_home: Path, workdir: Path
+) -> None:
+    engine, recorder = engine_for(tmp_home, workdir, CONSULT_BOOK, driver=workdir.parent / "d")
+    about = finished(engine.spool, verdict="VERDICT: question x")
+    driver = _driver_job(
+        engine.spool, state="done", verdict="VERDICT: resolved sent keep, §27", about=about
+    )
+    run(engine.on_job(driver))
+    assert not engine.state.paused, engine.state.stop_reason
+    assert [title for title, _ in recorder.notified] == ["hands: consult resolved: sent keep, §27"]
+
+
+def test_a_failed_driver_job_stops_and_notifies(tmp_home: Path, workdir: Path) -> None:
+    engine, recorder = engine_for(tmp_home, workdir, CONSULT_BOOK, driver=workdir.parent / "d")
+    about = finished(engine.spool, verdict="VERDICT: question x")
+    driver = _driver_job(engine.spool, state="failed", verdict=None, about=about)
+    run(engine.on_job(driver))
+    assert engine.state.paused
+    assert "driver.failed: the playbook has no rule for it" in strip_paths(
+        engine.state.stop_reason or ""
+    )
+    assert [title for title, _ in recorder.notified] == ["hands: the pipeline stopped"]
+
+
+def test_a_driver_job_that_ends_files_consult_done_and_one_journal_line(
+    tmp_home: Path, workdir: Path
+) -> None:
+    engine, _recorder = engine_for(
+        tmp_home, workdir, CONSULT_BOOK, driver=workdir.parent / "d"
+    )
+    about = finished(engine.spool, verdict="VERDICT: question x")
+    verdict = "VERDICT: resolved sent the answer to builder, DESIGN §27"
+    driver = _driver_job(engine.spool, state="done", verdict=verdict, about=about)
+    run(engine.on_job(driver))
+    [done] = [event for event in engine.spool.events() if event.kind == "consult.done"]
+    assert done.payload["job"] == driver.id
+    assert done.payload["about"] == about.id
+    assert done.payload["state"] == "done"
+    assert done.payload["verdict"] == verdict
+    journal = workdir / "meta" / "journal.md"
+    lines = journal.read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 1
+    assert driver.id in lines[0] and about.id in lines[0] and verdict in strip_paths(lines[0])
+    assert engine.spool.load_job(driver.id).result == verdict  # stored verbatim (§6)
+
+
+def test_max_consults_is_counted_from_the_last_kickoff(tmp_home: Path, workdir: Path) -> None:
+    """§27: `[limits] max_consults` per mission; the mission starts at the last
+    builder job whose prompt is the `[series] kickoff` line (not a resume of it)."""
+    engine, recorder = engine_for(tmp_home, workdir, CONSULT_BOOK, driver=workdir.parent / "d")
+    spool = engine.spool
+    about = finished(spool, verdict="VERDICT: question x")
+    for _ in range(3):  # an earlier mission's consultations
+        _driver_job(spool, state="done", verdict="VERDICT: resolved a", about=about)
+    kickoff = spool.create_job(role="builder", context="clear", prompt=KICKOFF, origin="phone")
+    spool.transition(kickoff, "running")
+    spool.transition(kickoff, "done")
+    _driver_job(spool, state="done", verdict="VERDICT: resolved b", about=about)
+    assert engine.pipeline()["consults"] == {"used": 1, "max_consults": 2}
+
+    question = finished(spool, verdict="VERDICT: question y")
+    run(engine.on_job(question))
+    assert len(recorder.enqueued) == 1 and not engine.state.paused
+    # The Recorder files no job: the second consultation is put in the spool by hand.
+    _driver_job(spool, state="done", verdict="VERDICT: resolved c", about=question)
+
+    third = finished(spool, verdict="VERDICT: question z")
+    run(engine.on_job(third))
+    assert len(recorder.enqueued) == 1, "a consult beyond max_consults started a driver job"
+    assert engine.state.paused
+    assert "[limits] max_consults is 2" in strip_paths(engine.state.stop_reason or "")
+
+
+def test_max_consults_defaults_to_2(tmp_path: Path) -> None:
+    book = parse_playbook("version = 1", path=tmp_path / "PLAYBOOK.toml")
+    assert book.max_consults == 2
+    book = parse_playbook("version = 1\n[limits]\nmax_consults = 5", path=tmp_path / "P.toml")
+    assert book.max_consults == 5
+
+
+# ------------------------------------------------------- §27 end to end
+
+
+def _consult_project(tmp_home: Path, workdir: Path) -> Path:
+    driver = tmp_home.parent / "driver"
+    driver.mkdir()
+    write_project(
+        tmp_home, config_body(tmp_home, workdir, extra=f'[roles.driver]\ncwd = "{driver}"')
+    )
+    write_playbook(workdir, CONSULT_BOOK)
+    return driver
+
+
+def _keep_send_argv(prompt: str) -> list[str]:
+    """What the scripted driver runs: `hands send --context keep` to the builder."""
+    import sys
+
+    return [
+        sys.executable,
+        "-c",
+        "import sys; from hands.cli import main; sys.exit(main(sys.argv[1:]))",
+        "--project", PROJECT, "send", "--role", "builder", "--context", "keep", prompt,
+    ]
+
+
+async def _events(kind: str) -> list[dict[str, Any]]:
+    return [e for e in (await ok("inbox"))["events"] if e["kind"] == kind]
+
+
+async def _wait_events(kind: str, count: int) -> list[dict[str, Any]]:
+    async def check() -> Any:
+        found = await _events(kind)
+        return found if len(found) >= count else None
+
+    return await poll(check, f"{count} {kind} event(s)")
+
+
+def test_a_question_is_consulted_and_resolved_by_a_keep_send_without_a_stop(
+    tmp_home: Path, workdir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """(a) builder `VERDICT: question` → consult → the driver sends `keep` to the
+    builder and replies `VERDICT: resolved …` → no stop."""
+    _consult_project(tmp_home, workdir)
+    resolved = "VERDICT: resolved sent the answer to builder, DESIGN §27"
+    replies = tmp_home / "replies.json"
+    replies.write_text(
+        json.dumps(
+            [
+                QUESTION_RESULT,
+                {"result": resolved, "exec": _keep_send_argv("Yes: count from the kickoff")},
+                "VERDICT: answered",
+            ]
+        )
+    )
+    monkeypatch.setenv("HANDS_FAKE_CLAUDE_REPLIES", str(replies))
+
+    async def body(daemon: Daemon) -> None:
+        first = await ok("send", "--role", "builder", "--context", "clear", KICKOFF)
+        await ok("wait", first["id"])
+        await _wait_events("consult.done", 1)
+        rules = await _wait_events("playbook.rule", 3)  # consult, resolved, answered
+
+        rows = sorted((await ok("jobs", "-n", "50"))["jobs"], key=lambda row: row["id"])
+        assert [(row["role"], row["origin"]) for row in rows] == [
+            ("builder", "cli"),
+            ("driver", "playbook"),
+            ("builder", "cli"),  # the driver's own `hands send`
+        ]
+        builder, driver, keep = [await ok("result", row["id"]) for row in rows]
+        await ok("wait", keep["id"])
+        keep = await ok("result", keep["id"])
+        assert driver["context"] == "clear"
+        assert driver["result"] == resolved  # the reply, verbatim in the record
+        assert QUESTION_RESULT in strip_paths(driver["prompt"])
+        assert keep["context"] == "keep" and keep["prompt"] == "Yes: count from the kickoff"
+        assert keep["session_id"] == builder["session_id"]
+        assert [rule["payload"]["then"] for rule in rules][:2] == ["consult", "notify"]
+
+        state = await ok("pipeline")
+        assert state["paused"] is False, state["stop_reason"]
+        assert state["consults"] == {"used": 1, "max_consults": 2}
+        [sent] = await _events("consult.sent")
+        [done] = await _events("consult.done")
+        assert sent["payload"]["job"] == driver["id"] == done["payload"]["job"]
+        assert done["payload"]["verdict"] == resolved
+        lines = (workdir / "meta" / "journal.md").read_text(encoding="utf-8").splitlines()
+        assert len(lines) == 1 and driver["id"] in lines[0]
+
+    drive(body)
+
+
+def test_a_question_consulted_and_escalated_stops_with_the_reason(
+    tmp_home: Path, workdir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """(b) question → consult → `VERDICT: escalate …` → stopped, the reason in the message."""
+    _consult_project(tmp_home, workdir)
+    replies = tmp_home / "replies.json"
+    replies.write_text(
+        json.dumps([QUESTION_RESULT, "VERDICT: escalate the mission file does not decide it"])
+    )
+    monkeypatch.setenv("HANDS_FAKE_CLAUDE_REPLIES", str(replies))
+
+    async def body(daemon: Daemon) -> None:
+        first = await ok("send", "--role", "builder", "--context", "clear", KICKOFF)
+        await ok("wait", first["id"])
+        state = await wait_for_stop()
+        assert state["stop_reason"] == "driver escalated: the mission file does not decide it"
+        drivers = [row for row in (await ok("jobs", "-n", "50"))["jobs"]
+                   if row["role"] == "driver"]
+        assert len(drivers) == 1
+        assert len(await _events("consult.sent")) == 1
+        assert len(await _events("consult.done")) == 1
+
+    drive(body)
+
+
+def test_a_third_consult_in_one_mission_stops_naming_max_consults(
+    tmp_home: Path, workdir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """(c) two consultations resolve; the third question stops, and no third driver job."""
+    _consult_project(tmp_home, workdir)
+    replies = tmp_home / "replies.json"
+    replies.write_text(
+        json.dumps(
+            [
+                QUESTION_RESULT,
+                "VERDICT: resolved one, §27",
+                QUESTION_RESULT,
+                "VERDICT: resolved two, §27",
+                QUESTION_RESULT,
+            ]
+        )
+    )
+    monkeypatch.setenv("HANDS_FAKE_CLAUDE_REPLIES", str(replies))
+
+    async def body(daemon: Daemon) -> None:
+        for n, prompt in enumerate((KICKOFF, "Second question round"), start=1):
+            job = await ok("send", "--role", "builder", "--context", "clear", prompt)
+            await ok("wait", job["id"])
+            await _wait_events("consult.done", n)
+            await _wait_events("playbook.rule", 2 * n)
+            assert (await ok("pipeline"))["paused"] is False
+        job = await ok("send", "--role", "builder", "--context", "clear", "Third question round")
+        await ok("wait", job["id"])
+        state = await wait_for_stop()
+        assert "[limits] max_consults is 2" in strip_paths(state["stop_reason"])
+        drivers = [row for row in (await ok("jobs", "-n", "50"))["jobs"]
+                   if row["role"] == "driver"]
+        assert len(drivers) == 2
+        assert len(await _events("consult.sent")) == 2
+
+    drive(body)

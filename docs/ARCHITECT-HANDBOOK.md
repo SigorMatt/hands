@@ -130,10 +130,11 @@ Events: `builder.done`, `builder.failed`, `builder.limited` (handled by
 hands itself; a rule is authorization only), `builder.orphaned`,
 `aux.done`, `aux.failed`, `monitor.stall`, `monitor.tripwire`,
 `monitor.task_killed`, `monitor.orphan_processes`, `job.held`, `job.denied`,
-and after mission 11 `driver.done`.
+and since mission 11 `driver.done` and `driver.failed`.
 
 Actions: `send` (role, context, prompt), `resume`, `notify` (message),
-`stop` (message), and after mission 11 `consult`.
+`stop` (message), and since mission 11 `consult` (`[limits] max_consults`,
+default 2; docs/PLAYBOOK.md "Consult").
 
 Rules are tried in order; the first match wins; an event with no matching
 rule stops. So: specific verdict rules first, then a catch-all `stop` per
@@ -240,8 +241,10 @@ taken relative to the directory. It prints one line per check,
   send prompts and in the files they name. Each placeholder of that line
   (`N`, `<k>`, `<m>`, `{n}`) is read as a count and tried as 0, 1 and 12, so
   `blockers=0` and `blockers=[1-9]` both match, and `blockers=none` does not.
-  A verdict rule on any other event fails: kit check has no vocabulary for
-  it.
+  A rule on `driver.done` matches at least one of the driver's two lines,
+  `VERDICT: resolved <what was sent, and the section cited>` and `VERDICT:
+  escalate <reason>`, placeholders left as text. A verdict rule on any other
+  event fails: kit check has no vocabulary for it.
 - `wording`: the brief contains neither "as before" nor a "Budget
   guidance" section (a heading or a bold lead).
 - `protocol`: every file a `send` rule's prompt names is in the kit or inside

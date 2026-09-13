@@ -54,7 +54,10 @@ entry is taken, which is how a playbook-issued job ends the way the harness ends
 one it terminates (H-014); `"no_turns": true` in it leaves `num_turns` out of the
 result event, as `FAKE:no-turns` does; `"task_killed": [[<task-id>, <command>], …]`
 in it emits the task-killed notice for each pair before the result, as
-`FAKE:task-killed` does. A reply is taken only on the path that emits a
+`FAKE:task-killed` does; `"exec": [<argv>…]` in it runs that command (stdin from
+/dev/null, output to this process's stderr) before the result is emitted, which
+is how a scripted driver role performs its `hands send --context keep` (§27). A
+reply is taken only on the path that emits a
 successful result, so a prompt with `FAKE:error`, `FAKE:no-result` or
 `FAKE:rate-limit` leaves the queue where it was.
 
@@ -79,6 +82,7 @@ import fcntl
 import json
 import os
 import signal
+import subprocess
 import sys
 import time
 import uuid
@@ -453,6 +457,17 @@ def main(argv: list[str]) -> int:
     text, entry = _result(one)
     if entry.get("no_turns") is True:
         common.pop("num_turns", None)
+    command = entry.get("exec")
+    if isinstance(command, list) and command:
+        ran = subprocess.run(
+            [str(part) for part in command],
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        sys.stderr.write(f"exec exit {ran.returncode}\n{ran.stdout}{ran.stderr}")
+        sys.stderr.flush()
     killed = entry.get("task_killed")
     for pair in killed if isinstance(killed, list) else []:
         emit_task_killed(session_id, str(pair[0]), str(pair[1]))

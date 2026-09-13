@@ -777,3 +777,50 @@ def test_the_handbook_section_11_names_every_check_and_the_apply_literal() -> No
     assert "VERDICT: kit applied <sha>" in strip_paths(" ".join(section.split()))
     assert "PLAYBOOK.toml" in strip_paths(section)
     assert "meta/BUILDER-<N>-PROMPT.md" in strip_paths(section)
+
+
+# ------------------------------------------------- §27: consult and the driver
+
+def _consult_book(resolved: str = "'^VERDICT: resolved (?P<what>.+)'") -> str:
+    """PLAYBOOK with §27's consult rule on a builder question and its follow-ups."""
+    book = PLAYBOOK.replace(
+        "[limits]\nmax_resumes = 2", "[limits]\nmax_resumes = 2\nmax_consults = 2"
+    )
+    book = book.replace(
+        "verdict = '^VERDICT: question'\nthen = \"stop\"\nmessage = \"The builder has a question\"",
+        "verdict = '^VERDICT: question'\nthen = \"consult\"",
+    )
+    return book + (
+        "\n[[rule]]\non = \"driver.done\"\n"
+        f"verdict = {resolved}\nthen = \"notify\"\nmessage = \"consult resolved: {{what}}\"\n"
+        "\n[[rule]]\non = \"driver.done\"\n"
+        "verdict = '^VERDICT: escalate (?P<reason>.+)'\nthen = \"stop\"\n"
+        "message = \"driver escalated: {reason}\"\n"
+        "\n[[rule]]\non = \"driver.failed\"\nthen = \"stop\"\n"
+    )
+
+
+def test_kit_check_accepts_consult_rules_and_the_drivers_vocabulary(
+    tmp_path: Path, repo: Path
+) -> None:
+    """§27: `consult`, `driver.done` and `driver.failed` are playbook words, and a
+    verdict rule on `driver.done` is checked against the driver's two VERDICT lines."""
+    book = _consult_book()
+    assert 'then = "consult"' in strip_paths(book)
+    kit = write_tree(tmp_path / "k", {**good_kit(), "PLAYBOOK.toml": book})
+    code, out, err = run_check(kit, repo)
+    assert code == 0, out + err
+    assert "driver.done" in strip_paths(line(out, "verdicts"))
+
+
+def test_a_driver_rule_that_matches_neither_driver_verdict_fails(
+    tmp_path: Path, repo: Path
+) -> None:
+    kit = write_tree(
+        tmp_path / "k",
+        {**good_kit(), "PLAYBOOK.toml": _consult_book("'^VERDICT: settled (?P<what>.+)'")},
+    )
+    code, out, _ = run_check(kit, repo)
+    failed = assert_failed_only(code, out, "verdicts")
+    assert "settled" in strip_paths(failed)
+    assert "VERDICT: resolved <what was sent, and the section cited>" in strip_paths(failed)

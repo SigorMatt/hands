@@ -45,13 +45,14 @@ job does — then `hands resume`. `hands doctor`'s playbook row is `ok` with
     [limits]
     auto_runs = [2, 3]           # run numbers hands may start on its own
     max_resumes = 3              # consecutive auto-resumes before a stop
+    max_consults = 2             # consultations per mission (default 2); see consult
 
     [[rule]]
     on = "<event>"               # required
     verdict = '<regex>'          # optional; matched against the job's VERDICT: line
     then = "<action>"            # required
-    role = "builder" | "aux"     # a send needs one
-    context = "clear" | "keep"   # a send defaults to "clear"
+    role = "builder" | "aux"     # a send needs one; a consult's is "driver" or absent
+    context = "clear" | "keep"   # a send defaults to "clear"; a consult is always "clear"
     prompt = "<text>"            # a send needs one; placeholders allowed
     message = "<text>"           # a notify needs one; a stop may have one
     run = "{n+1}"                # a send only; see below
@@ -89,8 +90,12 @@ while it is paused.
 ## Events (`on`)
 
 `builder.done`, `builder.failed`, `builder.limited`, `builder.orphaned`,
-`aux.done`, `aux.failed`, `monitor.stall`, `monitor.tripwire`,
-`monitor.task_killed`, `monitor.orphan_processes`, `job.held`, `job.denied`.
+`aux.done`, `aux.failed`, `driver.done`, `driver.failed`, `monitor.stall`,
+`monitor.tripwire`, `monitor.task_killed`, `monitor.orphan_processes`,
+`job.held`, `job.denied`.
+
+`driver.done` and `driver.failed` (DESIGN §27) are a consultation's driver job
+ending done or failed; see `consult` below.
 
 The list is closed: anything else is not a playbook event and fires nothing. A
 job you cancelled yourself (`killed`) is not an event — you already know.
@@ -139,6 +144,7 @@ load with a message saying so. Notifications are never delayed (§11).
 | `resume` | the resumed job's own prompt again, or the role's `resume_line` from the config when it sets one, counted against `max_resumes` |
 | `notify` | one ntfy message (`message`), nothing else |
 | `stop` | pause the pipeline, notify, write the reason to the inbox |
+| `consult` | start a driver-role job whose prompt hands writes: the event, the job record and the role's last reply verbatim, with the question of DESIGN §27. See below |
 
 Always a `stop`, whatever the rules say: an event with no matching rule, a
 missing or unparseable `VERDICT:` line, an exhausted resume count, and any
@@ -166,6 +172,74 @@ notification check (§11) uses to put an event on your phone. Over a pipeline th
 *already* stopped it is that later stop: it prints the reason it is already
 stopped for, keeps that reason and its timestamp in `hands pipeline`, notifies
 nobody, and leaves only the `pipeline.stop_suppressed` record.
+
+## Consult (`then = "consult"`, DESIGN §27)
+
+A consult asks the driver role instead of stopping. It needs `[roles.driver]`
+in the config (docs/INTEGRATION.md). The rule takes no `prompt` and no `run`;
+`role`, when given, is `driver`, and `context`, when given, is `clear`: every
+consultation is a fresh driver session. A consult on `driver.done` or
+`driver.failed` is refused when the file is parsed.
+
+When it fires, handsd starts a driver job with `origin: playbook`. It does not
+go through `hands send`, which refuses the driver role, and it is not gated.
+The prompt's first line names the event, the job and its role. It carries the job's id, role, state and verdict, the job's `result` verbatim,
+the question "resolve within your authority, citing the mission file or DESIGN
+section, or escalate", the one send the driver may make (`hands send --role
+<role> --context keep` to the role the consultation is about), and the two
+first lines its reply may begin with:
+
+    VERDICT: resolved <what was sent, and the section cited>
+    VERDICT: escalate <reason>
+
+Always a `stop` instead, and no driver job: no `[roles.driver]` in the config
+(checked when the rule fires, because the playbook does not see the config), an
+event that carries no job, and a mission that has used `[limits]
+max_consults` (default 2). The stop reason names `max_consults`. The mission is
+counted from the last builder job whose prompt is the `[series] kickoff` line
+(not a resume of it). Every driver job after it counts, except a §6 resume of
+one. With no `kickoff`, or none sent yet, every driver job in the spool counts.
+
+Every consultation files `consult.sent` in the inbox when the driver job is
+created and `consult.done` when it ends, with its state and verdict line (a
+`limited` driver job has not ended: §6 resumes it). At the end, handsd also
+appends one line to `meta/journal.md` under `roles.builder.cwd`, creating the
+file and `meta/` when they are absent. The line is written to the working tree
+and never committed by hands. The driver's reply is its job's `result`, stored
+verbatim like every job's.
+
+The driver's reply is `driver.done`, matched by ordinary rules. §10 has no
+do-nothing action, so the rule for `resolved` is a `notify`: the driver already
+sent its answer, and the phone hears what it did. `escalate` is a `stop` whose
+message carries the reason. An unrecognised verdict matches no rule and stops,
+and so does `driver.failed` with no rule for it:
+
+    [limits]
+    max_consults = 2
+
+    [[rule]]                  # a builder question → the driver
+    on = "builder.done"
+    verdict = '^VERDICT: question'
+    then = "consult"
+
+    [[rule]]                  # the driver answered with a keep send → nothing more
+    on = "driver.done"
+    verdict = '^VERDICT: resolved (?P<what>.+)'
+    then = "notify"
+    message = "Consult resolved: {what}"
+
+    [[rule]]                  # the driver cannot decide → you
+    on = "driver.done"
+    verdict = '^VERDICT: escalate (?P<reason>.+)'
+    then = "stop"
+    message = "The driver escalated: {reason}"
+
+    [[rule]]
+    on = "driver.failed"
+    then = "stop"
+
+`hands kit check` checks a `verdict` rule on `driver.done` against those two
+lines, placeholders left as text.
 
 ## Verdict matching
 
@@ -241,7 +315,8 @@ its check.
 
 `hands pipeline` reports the file (path, sha256, series, rule count), whether
 the pipeline is paused and why, the stop reason, `auto_runs` used/allowed,
-resumes used per role against `max_resumes`, and the last rule that fired. The
+resumes used per role against `max_resumes`, consultations used against
+`max_consults`, and the last rule that fired. The
 last rule is cleared when a playbook with a different sha256 is loaded: rule 3
 of the file that fired is not rule 3 of the new one.
 

@@ -1,7 +1,7 @@
 """The playbook — the architect's pre-planned steps, run without a human (DESIGN §10).
 
     PLAYBOOK.toml (in the builder's repo, on the series branch)
-      └─ [[rule]] on = <event> [verdict = <regex>] then = send|resume|notify|stop
+      └─ [[rule]] on = <event> [verdict = <regex>] then = send|resume|notify|stop|consult
 
 The engine is a table lookup and nothing more: an event arrives, the first rule
 whose `on` matches it and whose `verdict` regex matches the job's `VERDICT:`
@@ -29,6 +29,12 @@ What lives here and what does not:
   reset first. A `then = "resume"` rule on `builder.limited` therefore records
   that the rule fired and leaves the scheduling alone: firing a second resume
   here would send two jobs into the same limit.
+* `consult` (§27) starts a driver-role job with a prompt hands writes itself
+  (`consult_prompt`) through the daemon's queue, like `resume`: `Api.send`
+  refuses the driver role from every origin, and a consultation is not re-gated.
+  The driver's reply comes back as `driver.done` / `driver.failed`, which are
+  ordinary events for ordinary rules; `[limits] max_consults` bounds how many a
+  mission may start.
 """
 
 from __future__ import annotations
@@ -53,6 +59,9 @@ from hands.spool import Job, Spool, SpoolError, atomic_write, now_iso
 
 __all__ = [
     "ACTIONS",
+    "CONSULT_QUESTION",
+    "DEFAULT_MAX_CONSULTS",
+    "DRIVER_VERDICTS",
     "PAUSE_REASON",
     "EVENTS",
     "JOB_PLACEHOLDERS",
@@ -68,6 +77,7 @@ __all__ = [
     "load_playbook",
     "parse_playbook",
     "playbook_path",
+    "consult_prompt",
     "render",
     "run_number",
 ]
@@ -87,6 +97,8 @@ EVENTS: tuple[str, ...] = (
     "builder.orphaned",
     "aux.done",
     "aux.failed",
+    "driver.done",
+    "driver.failed",
     "monitor.stall",
     "monitor.tripwire",
     "monitor.task_killed",
@@ -95,8 +107,30 @@ EVENTS: tuple[str, ...] = (
     "job.denied",
 )
 
-#: §10's "Actions".
-ACTIONS: tuple[str, ...] = ("send", "resume", "notify", "stop")
+#: §10's "Actions", and §27's `consult`.
+ACTIONS: tuple[str, ...] = ("send", "resume", "notify", "stop", "consult")
+
+#: §27: the role a `consult` starts, and the question its prompt asks, verbatim.
+DRIVER = "driver"
+CONSULT_QUESTION = (
+    "resolve within your authority, citing the mission file or DESIGN section, or escalate"
+)
+#: §27: the first line of the driver's reply is exactly one of these. `kit check`
+#: reads a `driver.done` verdict rule against them, placeholders left as text.
+DRIVER_VERDICTS: tuple[str, ...] = (
+    "VERDICT: resolved <what was sent, and the section cited>",
+    "VERDICT: escalate <reason>",
+)
+#: §27: `[limits] max_consults` when the playbook does not set it.
+DEFAULT_MAX_CONSULTS = 2
+#: The consult prompt's first line, which names what the consultation is about; the
+#: engine reads it back when the driver job ends (`consult.done`, the journal line).
+_CONSULT_HEAD_RE = re.compile(
+    r"\Ahands consult: (?P<event>\S+) on job (?P<job>\S+) \(role (?P<role>\S+)\)$",
+    re.MULTILINE,
+)
+#: §27: the journal a consultation appends one line to, under `roles.builder.cwd`.
+JOURNAL = Path("meta") / "journal.md"
 
 #: §10's "Placeholders": the job fields a rule may name as `{job.<field>}`.
 JOB_PLACEHOLDERS: tuple[str, ...] = ("id", "head_at_start", "head_at_end", "session_id")
@@ -119,7 +153,7 @@ UNPAUSE_ORIGINS = frozenset({"cli", "phone", "kit"})
 PAUSE_REASON = "paused by human"
 
 TOP_KEYS: tuple[str, ...] = ("version", "series", "limits", "rule")
-LIMIT_KEYS: tuple[str, ...] = ("auto_runs", "max_resumes")
+LIMIT_KEYS: tuple[str, ...] = ("auto_runs", "max_resumes", "max_consults")
 #: §26's `[series]` table: `kickoff`, and `name`, which is where the series' name
 #: goes when the table is used — TOML cannot hold `series = "…"` beside a
 #: `[series]` table (H-019).
@@ -339,6 +373,8 @@ class Playbook:
     rules: tuple[Rule, ...]
     #: §26: the series' fixed kickoff line, `[series] kickoff`; what `go` sends.
     kickoff: str | None = None
+    #: §27: consultations a mission may start, counted from the last kickoff.
+    max_consults: int = DEFAULT_MAX_CONSULTS
 
     def rules_for(self, event: str) -> list[Rule]:
         """Every rule on `event`, in file order — §10 reads top to bottom."""
@@ -475,6 +511,12 @@ def parse_playbook(text: str, *, path: Path) -> Playbook:
             f"{path}: [limits] max_resumes must be a non-negative integer, got {max_resumes!r}"
         )
 
+    max_consults = limits.get("max_consults", DEFAULT_MAX_CONSULTS)
+    if isinstance(max_consults, bool) or not isinstance(max_consults, int) or max_consults < 0:
+        raise PlaybookError(
+            f"{path}: [limits] max_consults must be a non-negative integer, got {max_consults!r}"
+        )
+
     raw_rules = data.get("rule", [])
     if not isinstance(raw_rules, list) or any(not isinstance(item, dict) for item in raw_rules):
         raise PlaybookError(f"{path}: [[rule]] must be a list of tables, got {raw_rules!r}")
@@ -492,6 +534,7 @@ def parse_playbook(text: str, *, path: Path) -> Playbook:
         max_resumes=max_resumes,
         rules=rules,
         kickoff=kickoff,
+        max_consults=max_consults,
     )
 
 
@@ -575,6 +618,24 @@ def _rule(index: int, table: dict[str, Any], path: Path, *, auto_runs: tuple[int
             raise PlaybookError(f"{where}: context must be clear or keep, got {context!r}")
     elif then == "notify" and not message:
         raise PlaybookError(f"{where}: a notify needs a message")
+    elif then == "consult":
+        # §27: hands writes the driver's prompt, to a fresh driver session.
+        if on.startswith(f"{DRIVER}."):
+            raise PlaybookError(
+                f"{where}: a consult on {on} would consult the driver about itself"
+            )
+        if prompt is not None:
+            raise PlaybookError(
+                f"{where}: a consult takes no prompt: hands writes the driver's prompt (§27)"
+            )
+        if role is not None and role != DRIVER:
+            raise PlaybookError(f"{where}: a consult's role is driver, got {role!r}")
+        if context is not None and context != "clear":
+            raise PlaybookError(
+                f"{where}: a consult starts a fresh driver session: context is clear, "
+                f"got {context!r}"
+            )
+        role, context = DRIVER, "clear"
 
     group_names = tuple(verdict.groupindex) if verdict is not None else ()
     for name, text in (("prompt", prompt), ("message", message)):
@@ -808,7 +869,13 @@ class PlaybookEngine:
     # -------------------------------------------------------------- events
 
     async def on_job(self, job: Job) -> None:
-        """A terminal job (§6) as one of §10's events, if it is one."""
+        """A terminal job (§6) as one of §10's events, if it is one.
+
+        A driver job's end is also the end of a consultation (§27): it is filed
+        before the event is decided, so a paused pipeline still records it.
+        """
+        if job.role == DRIVER:
+            self._consult_done(job)
         await self.on_event(f"{job.role}.{job.state}", job=job)
 
     def dispatch(self, event: str, *, payload: dict[str, Any] | None = None) -> None:
@@ -907,6 +974,8 @@ class PlaybookEngine:
                 await self._act_resume(rule, event, job)
             elif rule.then == "notify":
                 await self._act_notify(rule, event, job, groups)
+            elif rule.then == "consult":
+                await self._act_consult(rule, event, job)
             else:
                 await self._act_stop(rule, event, job, groups)
         except PlaceholderError as exc:
@@ -1016,6 +1085,120 @@ class PlaybookEngine:
             },
         )
         self._fired(rule, event, job, fired_job=resumed.id, prompt=prompt)
+
+    async def _act_consult(self, rule: Rule, event: str, job: Job | None) -> None:
+        """§27: start a driver-role job that carries the event, the job record and
+        the role's last reply — or stop, when there is no driver, no job, or the
+        mission has used its `[limits] max_consults`."""
+        book = self.playbook
+        assert book is not None
+        where = _payload(event, job, rule=rule.index)
+        if DRIVER not in self.config.roles:
+            await self.stop(
+                f"{event}: rule {rule.index} is a consult and this project configures no "
+                "[roles.driver] (§27)",
+                where,
+            )
+            return
+        if job is None:
+            await self.stop(
+                f"{event}: rule {rule.index} is a consult and the event carries no job to "
+                "consult about",
+                where,
+            )
+            return
+        used = self.consults_used(book)
+        if used >= book.max_consults:
+            await self.stop(
+                f"{event}: rule {rule.index} would start consultation {used + 1} of this "
+                f"mission and [limits] max_consults is {book.max_consults} (§27)",
+                {**where, "consults": used, "max_consults": book.max_consults},
+            )
+            return
+        try:
+            started = await self.enqueue(
+                role=DRIVER,
+                context="clear",
+                prompt=consult_prompt(event, job),
+                origin=ORIGIN,
+                playbook_sha256=book.sha256,
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            await self.stop(
+                f"{event}: rule {rule.index} could not start the driver: {exc}", where
+            )
+            return
+        self.spool.append_event(
+            "consult.sent",
+            {
+                "job": started.id,
+                "about": job.id,
+                "role": job.role,
+                "event": event,
+                "verdict": job.verdict,
+                "rule": rule.index,
+                "consults": used + 1,
+                "max_consults": book.max_consults,
+            },
+        )
+        self._fired(rule, event, job, fired_job=started.id)
+
+    def consults_used(self, book: Playbook | None) -> int:
+        """§27: the consultations of this mission — driver jobs (a §6 resume of one
+        is not another) after the last builder job whose prompt is the `[series]
+        kickoff` line (not a resume of it). With no kickoff, or none sent yet, every
+        driver job in the spool counts: the safe direction is to stop sooner."""
+        jobs = self.spool.list_jobs()
+        start = 0
+        kickoff = book.kickoff.strip() if book is not None and book.kickoff else None
+        if kickoff is not None:
+            for index, record in enumerate(jobs):
+                if (
+                    record.role == "builder"
+                    and record.resumed_from is None
+                    and record.prompt.strip() == kickoff
+                ):
+                    start = index + 1
+        return sum(
+            1 for record in jobs[start:] if record.role == DRIVER and record.resumed_from is None
+        )
+
+    def _consult_done(self, job: Job) -> None:
+        """§27: the inbox event and the `meta/journal.md` line of a consultation.
+
+        A `limited` driver job is not the end of its consultation: §6 resumes it.
+        """
+        if job.state == "limited":
+            return
+        head = _CONSULT_HEAD_RE.search(job.prompt)
+        about = head.group("job") if head else None
+        event = head.group("event") if head else None
+        role = head.group("role") if head else None
+        said = job.verdict if job.verdict is not None else "no VERDICT: line"
+        journal = self.config.role("builder").cwd / JOURNAL
+        line = (
+            f"{now_iso()}  consult {job.id} ({job.state}) on {event} of {role} job {about}: "
+            f"{said}"
+        )
+        payload: dict[str, Any] = {
+            "job": job.id,
+            "about": about,
+            "role": role,
+            "event": event,
+            "state": job.state,
+            "verdict": job.verdict,
+            "journal": str(journal),
+        }
+        try:
+            journal.parent.mkdir(parents=True, exist_ok=True)
+            with journal.open("a", encoding="utf-8") as handle:
+                handle.write(" ".join(line.splitlines()) + "\n")
+        except OSError as exc:
+            log.warning("playbook: cannot append to %s: %s", journal, exc)
+            payload["journal_error"] = str(exc)
+        self.spool.append_event("consult.done", payload)
 
     async def _act_notify(
         self, rule: Rule, event: str, job: Job | None, groups: dict[str, str]
@@ -1205,6 +1388,10 @@ class PlaybookEngine:
                 },
                 "max_resumes": self.max_resumes,
             },
+            "consults": {
+                "used": self.consults_used(book),
+                "max_consults": book.max_consults if book else DEFAULT_MAX_CONSULTS,
+            },
             "last_rule": self._shown_last_rule(book),
         }
 
@@ -1284,6 +1471,39 @@ class PlaybookEngine:
 
 async def _await(outcome: Any) -> None:  # pragma: no cover - U8's seam may be async
     await outcome
+
+
+def consult_prompt(event: str, job: Job) -> str:
+    """§27: what a `consult` sends the driver role — the event, the job record
+    (id, role, state, verdict) and the role's last reply, verbatim, with the
+    question and the two VERDICT lines the reply must begin with."""
+    verdict = job.verdict if job.verdict is not None else "(none: the reply has no VERDICT: line)"
+    result = job.result if job.result is not None else ""
+    return (
+        f"hands consult: {event} on job {job.id} (role {job.role})\n"
+        "\n"
+        "handsd started you as the driver role to resolve one consultation (DESIGN §27).\n"
+        "\n"
+        f"Event: {event}\n"
+        f"Job: {job.id}\n"
+        f"Role: {job.role}\n"
+        f"State: {job.state}\n"
+        f"Verdict: {verdict}\n"
+        f"The full record: hands show {job.id}\n"
+        "\n"
+        "The role's last reply (the job's result), verbatim between the markers:\n"
+        "----- BEGIN REPLY -----\n"
+        f"{result}\n"
+        "----- END REPLY -----\n"
+        "\n"
+        f"The question: {CONSULT_QUESTION}.\n"
+        f"To answer the {job.role}, send it `hands send --role {job.role} --context keep` "
+        "with your answer; that is the only send you may make.\n"
+        "\n"
+        "Your reply's first line is exactly one of:\n"
+        "\n"
+        + "".join(f"    {line}\n" for line in DRIVER_VERDICTS)
+    )
 
 
 def _payload(event: str, job: Job | None, **extra: Any) -> dict[str, Any]:

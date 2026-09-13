@@ -126,6 +126,21 @@ Notes that are easy to get wrong:
   is started by handsd only through a playbook `consult` action: `hands send
   --role driver` is refused. `hands doctor` prints a `role driver` row with the
   cwd, the clone, the guard and its mode, and fails on a permission bypass.
+- **The consult flow** (§27, docs/PLAYBOOK.md "Consult"). A rule `then =
+  "consult"` fires on an event, say a builder `VERDICT: question`. handsd starts
+  a driver-role job in the driver's cwd, `context: clear`, `origin: playbook`,
+  and files `consult.sent`. The prompt carries the event, the job's id, role,
+  state and verdict, and its `result` verbatim. The driver answers within its
+  authority with `hands send --role builder --context keep` (the one send role
+  mode allows) and replies `VERDICT: resolved <what was sent, and the section
+  cited>`, or replies `VERDICT: escalate <reason>`. When the driver job ends,
+  handsd files `consult.done` with its verdict and appends one line to
+  `meta/journal.md` under `roles.builder.cwd` (working tree only). The reply is
+  `driver.done` or `driver.failed` to the playbook: `resolved` notifies,
+  `escalate` stops with the reason, and anything else stops. A consult with no
+  `[roles.driver]`, or beyond `[limits] max_consults` (default 2, counted from
+  the last `[series] kickoff` job), stops and starts no driver job. `hands
+  pipeline` shows `consults <used> of max_consults <n>`.
 - **`[roles.<role>] env`** (§23, H-014) is a table of environment variables for
   that role's `claude -p` jobs, on top of handsd's own environment. Names are
   environment variable names (letters, digits, `_`); values are non-empty
