@@ -7,7 +7,7 @@ a push. `[x]` = done and pushed, `[b]` = blocked (two failures).
 Base of the mission: 61e1486 (`plan: mission 10 kit (DESIGN v3.9, handbook,
 templates)`).
 
-- [ ] U0 Plan and corrections (`plan:`) — this file, meta/CHECKPOINT.md;
+- [x] U0 Plan and corrections (`plan:`) cbb8fc8 — this file, meta/CHECKPOINT.md;
       REVIEW-9 SF2 (docs/INTEGRATION.md `done` statement follows §6), SF4
       (H-017 dated correction, appended); H-018 filed (§26 decisions; gaps:
       `origin: phone` outside §6, `go` after a stop would not chain, SF2's
