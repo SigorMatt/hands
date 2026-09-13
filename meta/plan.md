@@ -7,9 +7,10 @@ pushed, `[b]` = blocked (two failures).
 
 Base of the mission: 0fef436 (`plan: mission 11 kit (DESIGN v3.10)`).
 
-- [ ] U0 Plan and corrections (`plan:`) — this file, meta/CHECKPOINT.md;
+- [x] U0 Plan and corrections (`plan:`) e8daca8 — this file, meta/CHECKPOINT.md;
       H-018..H-021 v3.10 resolutions appended with status lines; REVIEW-10 SF7
-      (a test pins docs/INTEGRATION.md's `done` statement to §6)
+      (a test pins docs/INTEGRATION.md's `done` statement to §6; phrase
+      containment only)
 - [ ] U1 REVIEW-10 SF1, SF3, SF4, SF5, SF6 (§27) — `go` refused while the
       builder has a held job (message names it), rechecked after the playbook
       load; sweep signals a group only when its leader is the job's pid and all
