@@ -20,7 +20,9 @@ templates)`).
       beside `[series]`; the templates as written do not parse): H-019 filed,
       templates reconciled in U5; gate runs done in a throwaway worktree because
       the root-playbook test needs PLAYBOOK.toml to match HEAD
-- [ ] U3 Kit transport (§26, §13)
+- [x] U3 Kit transport (§26, §13) 6852751 — kit_dir outside roots refused on
+      arrival (not at load); exclusive os.link to first free name; the phone
+      channel reads no other command during a download (up to 300 s), untested
 - [ ] U4 Who by pid (§26)
 - [ ] U5 `hands kit check`; handbook and templates against the code (§4, §26)
 - [ ] U6 The closed loop in the docs; doctor rows (§26)

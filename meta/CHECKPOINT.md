@@ -1,24 +1,24 @@
 # CHECKPOINT
 
 Mission: 10 (meta/BUILDER-10-PROMPT.md, DESIGN v3.9 §26)
-Unit in progress: U3 Kit transport (§26, §13, §24/§25 phone channel).
-Intent: a `cmd_topic` message with body `kit <secret>` and an ntfy attachment:
-handsd reads `attachment.url`/`name`/`size` from the ntfy message; refuses a
-name that is not a `.zip` basename; refuses a size over `[files] kit_max_mb`
-(default 20) before downloading (ntfy reports the size; also cap while
-streaming); writes into `[files] kit_dir` (default `~/Downloads`, must be an
-allowed root) atomically (temp file in the same dir, rename); never unzips,
-never executes; an existing name gets a numeric suffix, never overwritten;
-files `kit.received` to the inbox and a notification
-`kit received <name> <bytes> <sha256>`. Refusals are logged without the secret.
-Done means: one commit, body names U3, §26/§13, lists every file; tests with a
-mocked ntfy stream and a local HTTP server for the attachment: happy path,
-oversize, bad name, duplicate name, missing secret; pushed; ./scripts/check
-green 3/3.
+Unit in progress: U4 Who by pid (§26, §11 who view, §4 `who`).
+Intent: `hands who` (src/hands/who.py) matches each interactive `claude`
+process to its transcript through the pid the transcript records (find the
+field in a real transcript's first entry under ~/.claude/projects and quote it,
+redacted of content, in a test fixture); falls back to the newest transcript in
+the directory only when no pid match exists, and the line says so
+(`transcript: by directory`). A job in the same directory as the human's session
+is never shown under it.
+Done means: one commit, body names U4, §26, lists every file; a fixture with two
+transcripts in one directory, one per pid, attributes each correctly; the
+fallback line tested; pushed; ./scripts/check green 3/3.
 Base: 61e1486.
-Done: U0 cbb8fc8 (1435 passed); U1 17ba97e (1443); U2 067b8fd (1461).
+Done: U0 cbb8fc8 (1435 passed); U1 17ba97e (1443); U2 067b8fd (1461);
+U3 6852751 (1501).
 Carried to U5: H-019 — templates/PLAYBOOK-*.toml carry `series = "…"` beside
 `[series]`, which TOML refuses; the loader takes `[series] name`.
+Carried to U7 NOT PROVEN: the phone channel reads no other command during a kit
+download (up to 300 s); real ntfy attachment delivery; real `go` from a phone.
 Standing constraints: one foreground sub-agent per product unit, commit and
 push every unit, ./scripts/check green three consecutive runs before each
 commit, explicit paths only in `git add` (never `-A`), reports drafted under
