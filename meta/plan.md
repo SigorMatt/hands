@@ -12,7 +12,9 @@ templates)`).
       (H-017 dated correction, appended); H-018 filed (§26 decisions; gaps:
       `origin: phone` outside §6, `go` after a stop would not chain, SF2's
       code half)
-- [ ] U1 REVIEW-9 SF1 and SF3 (+ SF2 code half, H-018 gap 3)
+- [x] U1 REVIEW-9 SF1 and SF3 (+ SF2 code half, H-018 gap 3) 17ba97e — kill
+      tied to claude's recorded start time (also in the post-exit sweep); symlinked
+      playbook still refused; other GIT_* vars still inherited
 - [ ] U2 `[series] kickoff` and `go` (§10, §11, §26; H-018 gaps 1, 2)
 - [ ] U3 Kit transport (§26, §13)
 - [ ] U4 Who by pid (§26)
