@@ -36,6 +36,8 @@ EXAMPLE = ROOT / "tests" / "fixtures" / "playbook_example.toml"
 
 #: Words that follow `hands ` in a command without naming a command of §4.
 NOT_COMMANDS = {"--help", "--version", "--project", "--json", "--socket", "<command>"}
+#: Commands of §4 the CLI answers itself, with no daemon method (`kit check`, §26).
+CLIENT_COMMANDS = {"kit"}
 #: `hands <command>`, where `hands` is the program and not the tail of a path
 #: (`git clone …/hands repo`) — hence the lookbehind.
 COMMAND_RE = re.compile(r"(?<![\w/.~-])hands (?:--\w+ [\w<>-]+ )?([a-z-]+|--[a-z-]+)")
@@ -64,7 +66,20 @@ def test_every_hands_command_named_in_the_docs_exists() -> None:
         for word in named:
             if word in NOT_COMMANDS:
                 continue
-            assert word in Api.COMMANDS, f"{where} names `hands {word}`, which does not exist"
+            assert word in Api.COMMANDS or word in CLIENT_COMMANDS, (
+                f"{where} names `hands {word}`, which does not exist"
+            )
+
+
+def test_the_client_only_commands_are_cli_commands_and_not_daemon_methods() -> None:
+    """§4 `kit check` (§26) is answered by the client with no daemon, so it is not
+    in `Api.COMMANDS`; the sweep above accepts it only because the CLI has it."""
+    for word in CLIENT_COMMANDS:
+        assert word not in Api.COMMANDS
+        result = subprocess.run(
+            ["uv", "run", "hands", word, "--help"], cwd=ROOT, capture_output=True, text=True
+        )
+        assert result.returncode == 0, result.stderr
 
 
 def test_the_integration_config_block_loads(tmp_home: Path) -> None:
@@ -213,6 +228,46 @@ def test_the_integration_doc_names_both_vocabularies_and_the_precedence() -> Non
     ):
         assert said in doc, f"docs/INTEGRATION.md does not say {said!r}"
     assert "whatever else stderr says" not in doc
+
+
+#: The closed phone loop (§26, M10 U6): one section, phone only, and the
+#: statements that must be in it — each a text the code prints or does.
+LOOP_SECTION = "### The closed loop, from the phone"
+LOOP_STATEMENTS = (
+    "`hands kit check",
+    "`kit <secret>`",
+    "`kit received <name> <bytes> <sha256>`",
+    "`Apply ~/Downloads/`",
+    "nothing on the phone can start the apply",
+    "`go <secret>`",
+    "`[series] kickoff`",
+    "`go: builder job <id> <state>`",
+    "`hands: the pipeline stopped`",
+    "the driver is the inspector",
+    "never required for the loop",
+    "No kit has been fetched from a real ntfy attachment",
+    "No `go` has been sent from a real phone",
+    "`hands who` still matches an interactive session to its transcript by directory",
+)
+
+
+def test_the_integration_doc_describes_the_closed_phone_loop_once() -> None:
+    """§26: `docs/INTEGRATION.md` describes the loop end to end, phone only, in one
+    place (inside the optional phone section), and says what is unproven."""
+    text = (ROOT / "docs" / "INTEGRATION.md").read_text(encoding="utf-8")
+    assert text.count(LOOP_SECTION) == 1, f"docs/INTEGRATION.md has no {LOOP_SECTION!r}"
+    optional = text.split(OPTIONAL_SECTION, 1)[1].split("\n## ", 1)[0]
+    assert LOOP_SECTION in optional, "the loop is not inside the optional phone section"
+    section = flattened(text.split(LOOP_SECTION, 1)[1].split("\n### ", 1)[0].split("\n## ")[0])
+    for said in LOOP_STATEMENTS:
+        assert flattened(said) in section, f"the loop section does not say {said!r}"
+
+
+def test_the_readme_names_kit_check_go_and_the_kit_transport() -> None:
+    readme = flattened((ROOT / "README.md").read_text(encoding="utf-8"))
+    for said in ("`hands kit check", "`go <secret>`", "`kit <secret>`", "kit_dir",
+                 "kit_max_mb", "docs/ARCHITECT-HANDBOOK.md"):
+        assert said in readme, f"README.md does not mention {said}"
 
 
 def test_the_readme_names_who_the_phone_channel_and_the_new_monitor_events() -> None:

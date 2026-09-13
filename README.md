@@ -14,6 +14,7 @@ stops and waits for you.
 
 `DESIGN.md` is the specification and the reasoning. `docs/INTEGRATION.md` is
 the install checklist; `docs/PLAYBOOK.md` is the playbook reference;
+`docs/ARCHITECT-HANDBOOK.md` is how the architect writes a kit;
 `driver/` is the kit for the Claude Code session that drives hands from your
 phone.
 
@@ -83,9 +84,14 @@ phone.
 
 `send`, `wait`, `result`, `jobs`, `show`, `open`, `log`, `cancel`, `put`,
 `get`, `ls`, `tail`, `inbox`, `pipeline`, `approve`, `deny`, `pause`,
-`resume`, `status`, `notify`, `who`, `doctor`. Every one takes `--json` (that is what the driver
+`resume`, `status`, `notify`, `who`, `doctor`, `kit check`. Every one takes `--json` (that is what the driver
 reads) and `--project`. `hands --help` is the reference; `handsd --help` is the
 daemon's.
+
+`hands kit check <zip|dir> [--repo path]` needs no daemon and no config: it
+checks a kit against a repository (paths, playbook, brief, verdict regexes,
+wording) and, only when every check passes, prints the apply prompt. The
+architect runs it before emitting a kit (`docs/ARCHITECT-HANDBOOK.md` §11).
 
 Three commands are worth knowing before the rest:
 
@@ -115,11 +121,22 @@ Off unless configured in `[notify]`; `docs/INTEGRATION.md` has the setup.
   `approve`, `deny`, `pause`, `resume` and `status` from your phone, and a held
   job's notification carries Approve/Deny buttons. A decision taken that way is
   recorded `decided_by: phone`.
+- **`go <secret>`** on `cmd_topic` sends the playbook's `[series] kickoff` line
+  to the builder as a `clear` send, `origin: phone`. It is the only way to start
+  work from the phone, and it is refused while a builder job is running or
+  queued.
+- **Kit transport**: a message `kit <secret>` on `cmd_topic` with a `.zip`
+  attached is fetched into `[files] kit_dir` (default `~/Downloads`, which must
+  be inside `allowed_roots`), capped at `[files] kit_max_mb` (default 20), never
+  unzipped or run; the phone gets `kit received <name> <bytes> <sha256>`.
+  Applying it is still a gated job. `docs/INTEGRATION.md` walks the whole loop
+  from the phone: kit, approve, `go`, the stop.
 - **The who view**: `hands who` prints one screen of this daemon's jobs and
   every other `claude` session on the machine; `handswho` pushes it to
   `who_topic` when it changes.
 
-`hands doctor` reports each as on or off.
+`hands doctor` reports each as on or off, `go` and the kit transport included,
+naming what is missing when off.
 
 ## Development
 

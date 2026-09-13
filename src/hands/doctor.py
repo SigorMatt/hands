@@ -50,6 +50,7 @@ import hands.runner
 from hands.config import BG_WAIT_CEILING_ENV, Config, RoleConfig
 from hands.playbook import PlaybookError, load_playbook, playbook_path
 from hands.runner import build_argv
+from hands.spool import SpoolError, resolve_under_roots
 
 __all__ = [
     "FAKE_ENV",
@@ -120,7 +121,7 @@ def run_checks(
     found += [_role_check(role) for role in config.roles.values()]
     found += [_roots_check(config), _ops_check(config), _isolation_check(config)]
     found += [_playbook_check(config), _notifications_check(config), _phone_check(config)]
-    found += [_who_check(config)]
+    found += [_go_check(config), _kit_check(config), _who_check(config)]
     found += [_daemon_check(config, socket_path, daemon)]
     found += [_live_check(config, role, live=live) for role in config.roles.values()]
     return found
@@ -237,6 +238,78 @@ def _phone_check(config: Config) -> Check:
             "and the answer to `status` have nowhere to go",
         )
     return Check("phone", OK, detail)
+
+
+def _go_check(config: Config) -> Check:
+    """§26's `go`, on or off — `ok` either way, never a failure from here.
+
+    On means what `hands.phone` needs to accept a `go`: the command channel, and
+    the playbook in force loading (by the same loader, from the builder's cwd)
+    with a `[series] kickoff`. A playbook that does not load is the `playbook`
+    row's failure; here it is only why `go` is off. Whether a builder job is
+    running or queued is a moment, not an install, so it is not checked.
+    """
+    if not config.notify.channel:
+        return Check(
+            "go",
+            OK,
+            "go off: no [notify] cmd_topic and cmd_secret, so the phone cannot send the "
+            "kickoff (§26)",
+        )
+    path = playbook_path(config)
+    try:
+        book = load_playbook(path, cwd=config.role("builder").cwd)
+    except PlaybookError:
+        return Check(
+            "go",
+            OK,
+            "go off: the playbook does not load (see the playbook row), so `go` is refused (§26)",
+        )
+    if book is None:
+        return Check("go", OK, f"go off: no playbook at {path}, so no [series] kickoff (§26)")
+    if book.kickoff is None:
+        return Check(
+            "go", OK, f"go off: {path} has no [series] kickoff, so `go` has nothing to send (§26)"
+        )
+    return Check(
+        "go",
+        OK,
+        f"go on: `go <secret>` on cmd_topic sends the builder, clear, origin phone: "
+        f"{book.kickoff}\nrefused while a builder job is running or queued (§26)",
+    )
+
+
+def _kit_check(config: Config) -> Check:
+    """§26's kit transport, on or off — `ok` either way, never a failure from here.
+
+    On means the command channel is on and `[files] kit_dir` resolves inside
+    `[files] allowed_roots`, the check `hands.phone` makes before a download.
+    Whether ntfy serves an attachment is not checked: doctor sends nothing.
+    """
+    files = config.files
+    if not config.notify.channel:
+        return Check(
+            "kit transport",
+            OK,
+            "kit transport off: no [notify] cmd_topic and cmd_secret, so no kit is taken "
+            "from the phone (§26)",
+        )
+    try:
+        resolve_under_roots(files.kit_dir, files.allowed_roots)
+    except SpoolError:
+        return Check(
+            "kit transport",
+            OK,
+            f"kit transport off: [files] kit_dir {files.kit_dir} is outside [files] "
+            "allowed_roots, so every kit is refused; list it there (§26)",
+        )
+    return Check(
+        "kit transport",
+        OK,
+        f"kit transport on: `kit <secret>` with a .zip attached is fetched into kit_dir "
+        f"{files.kit_dir}; kit_max_mb {files.kit_max_mb}\nnever unzipped or run; "
+        "`kit received <name> <bytes> <sha256>` answers on ntfy_topic (§26)",
+    )
 
 
 def _claude_check(config: Config) -> Check:

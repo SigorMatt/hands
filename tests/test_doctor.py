@@ -853,3 +853,138 @@ def test_the_probe_sends_whatever_flags_the_monitor_sends(
     assert code == 0, found
     detail = found["ops script"]["detail"]
     assert all(flag in strip_paths(detail) for flag in renamed), detail
+
+
+# ------------------------------------ go and kit transport: on/off (§26, M10 U6)
+
+KICKOFF = "Read meta/BUILDER-11-PROMPT.md and execute the mission below its divider."
+
+
+def with_channel(path: Path, files: str = "") -> None:
+    """Add §24's command channel (and, optionally, [files] keys) to the config."""
+    text = path.read_text()
+    if files:
+        text = text.replace("[files]\n", f"[files]\n{files}\n")
+    path.write_text(
+        text + f'\n[notify]\ncmd_topic = "hands-cmd-doctor"\ncmd_secret = "{PHONE_SECRET}"\n'
+    )
+
+
+def kickoff_playbook() -> str:
+    """§10's example with its name moved into §26's `[series]` table (H-019)."""
+    body = EXAMPLE_PLAYBOOK.read_text().replace('series = "audit-fixes"\n', "")
+    return body + f'\n[series]\nname = "audit-fixes"\nkickoff = "{KICKOFF}"\n'
+
+
+def test_go_is_off_without_the_command_channel_and_doctor_exits_0(
+    tmp_home: Path, tmp_path: Path, fake_mode: None
+) -> None:
+    write_config(tmp_home, tmp_path)
+    commit_file(tmp_path / "work", "PLAYBOOK.toml", kickoff_playbook())
+    code, out, err = run()
+    assert code == 0, f"{out}\n{err}"
+    assert "go off" in strip_paths(text_row(out, "go"))
+    code, found = checks()
+    assert code == 0
+    assert found["go"]["status"] == "ok"
+    assert "go off" in strip_paths(found["go"]["detail"])
+    assert "cmd_topic" in strip_paths(found["go"]["detail"])
+
+
+def test_go_is_off_without_a_playbook_and_names_it(
+    tmp_home: Path, tmp_path: Path, fake_mode: None
+) -> None:
+    with_channel(write_config(tmp_home, tmp_path))
+    code, found = checks()
+    assert code == 0, found
+    assert found["go"]["status"] == "ok"
+    assert "go off" in strip_paths(found["go"]["detail"])
+    assert "no playbook" in strip_paths(found["go"]["detail"])
+
+
+def test_go_is_off_when_the_playbook_has_no_series_kickoff(
+    tmp_home: Path, tmp_path: Path, fake_mode: None
+) -> None:
+    with_channel(write_config(tmp_home, tmp_path))
+    commit_file(tmp_path / "work", "PLAYBOOK.toml", EXAMPLE_PLAYBOOK.read_text())
+    code, found = checks()
+    assert code == 0, found
+    assert found["go"]["status"] == "ok"
+    assert "go off" in strip_paths(found["go"]["detail"])
+    assert "[series] kickoff" in strip_paths(found["go"]["detail"])
+
+
+def test_go_is_off_when_the_playbook_does_not_load_and_only_the_playbook_row_fails(
+    tmp_home: Path, tmp_path: Path, fake_mode: None
+) -> None:
+    with_channel(write_config(tmp_home, tmp_path))
+    commit_file(tmp_path / "work", "PLAYBOOK.toml", 'version = 1\n[[rule]]\non = "nope"\n')
+    code, found = checks()
+    assert code == 1
+    assert found["playbook"]["status"] == FAIL
+    assert found["go"]["status"] == "ok"
+    assert "go off" in strip_paths(found["go"]["detail"])
+
+
+def test_go_is_on_with_the_channel_and_a_kickoff_and_prints_no_secret(
+    tmp_home: Path, tmp_path: Path, fake_mode: None
+) -> None:
+    with_channel(write_config(tmp_home, tmp_path))
+    commit_file(tmp_path / "work", "PLAYBOOK.toml", kickoff_playbook())
+    code, out, err = run()
+    assert code == 0, f"{out}\n{err}"
+    assert "go on" in strip_paths(text_row(out, "go"))
+    code, found = checks()
+    assert code == 0
+    assert found["go"]["status"] == "ok"
+    assert "go on" in strip_paths(found["go"]["detail"])
+    assert KICKOFF in strip_paths(found["go"]["detail"])
+    for text in (out, err, json.dumps(found)):
+        assert PHONE_SECRET not in strip_paths(text)
+        assert "hands-cmd-doctor" not in strip_paths(text)
+
+
+def test_kit_transport_is_off_without_the_command_channel_and_doctor_exits_0(
+    tmp_home: Path, tmp_path: Path, fake_mode: None
+) -> None:
+    write_config(tmp_home, tmp_path)
+    code, out, err = run()
+    assert code == 0, f"{out}\n{err}"
+    assert "kit transport off" in strip_paths(text_row(out, "kit transport"))
+    code, found = checks()
+    assert code == 0
+    assert found["kit transport"]["status"] == "ok"
+    assert "kit transport off" in strip_paths(found["kit transport"]["detail"])
+    assert "cmd_topic" in strip_paths(found["kit transport"]["detail"])
+
+
+def test_kit_transport_is_off_when_kit_dir_is_outside_the_allowed_roots(
+    tmp_home: Path, tmp_path: Path, fake_mode: None
+) -> None:
+    """The default kit_dir (~/Downloads) is not among write_config's roots."""
+    with_channel(write_config(tmp_home, tmp_path))
+    code, found = checks()
+    assert code == 0, found
+    assert found["kit transport"]["status"] == "ok"
+    assert "kit transport off" in strip_paths(found["kit transport"]["detail"])
+    assert "allowed_roots" in strip_paths(found["kit transport"]["detail"])
+
+
+def test_kit_transport_is_on_inside_the_roots_and_shows_kit_dir_and_the_cap(
+    tmp_home: Path, tmp_path: Path, fake_mode: None
+) -> None:
+    kits = tmp_path / "work" / "kits"
+    kits.mkdir(parents=True)
+    with_channel(write_config(tmp_home, tmp_path), f'kit_dir = "{kits}"\nkit_max_mb = 7')
+    code, out, err = run()
+    assert code == 0, f"{out}\n{err}"
+    assert "kit transport on" in strip_paths(text_row(out, "kit transport"))
+    code, found = checks()
+    assert code == 0
+    assert found["kit transport"]["status"] == "ok"
+    assert "kit transport on" in strip_paths(found["kit transport"]["detail"])
+    assert str(kits) in found["kit transport"]["detail"]
+    assert "kit_max_mb 7" in strip_paths(found["kit transport"]["detail"])
+    for text in (out, err, json.dumps(found)):
+        assert PHONE_SECRET not in strip_paths(text)
+        assert "hands-cmd-doctor" not in strip_paths(text)

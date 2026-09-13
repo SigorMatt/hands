@@ -163,8 +163,8 @@ Notes that are easy to get wrong:
 It checks, all for free: the config, the `claude` binary and its `--version`,
 each role's `cwd` (and whether it is a git repository), the allowed roots, the
 ops script's flags, which per-job isolation is in force, the playbook, whether
-notifications, the command channel and the who view are on, and whether handsd
-is answering. A daemon
+notifications, the command channel, `go`, the kit transport and the who view
+are on, and whether handsd is answering. A daemon
 that is not running is a **warning**, not a failure — this step comes before
 you have to have started one. Exit code 1 means a check failed.
 
@@ -221,7 +221,12 @@ them:
 | the who view | `who_topic` is set | your phone; `handswho` publishes it |
 
 `hands doctor` reports each of the three as on or off, never as a failure: its
-`notifications`, `phone` and `who` rows. It prints no topic and no secret. The
+`notifications`, `phone` and `who` rows. Its `go` and `kit transport` rows
+(§26) are on/off the same way: `go` is on when the command channel is on and
+the playbook in force loads with a `[series] kickoff`, which the row prints;
+`kit transport` is on when the command channel is on and `[files] kit_dir` is
+inside `allowed_roots`, and it prints `kit_dir` and `kit_max_mb`. Off, each
+names what is missing. It prints no topic and no secret. The
 `config` row also warns when `ntfy_topic` is missing, since you then learn you
 are needed only by looking; and a config that does not load (a `cmd_topic`
 without a `cmd_secret`, below) is the failed `config` row, as always.
@@ -326,6 +331,74 @@ Publish a command to `cmd_topic` from the ntfy app. The last word is the token:
   `cmd_topic` can read your secret. Anyone who can read `ntfy_topic` sees a held job's buttons,
   and they can use them while that job is held. Keep both names random and to
   yourself.
+
+### The closed loop, from the phone
+
+DESIGN §26: one mission, from kit to stop, without the laptop's keyboard, once
+the apply prompt is sent. It needs the command channel, `ntfy_topic`, a
+playbook with `[series] kickoff`, and `[files] kit_dir` inside
+`allowed_roots`. `hands doctor` shows the `go` and `kit transport` rows as on
+when all of that holds, and says what is missing when it does not.
+
+1. **The architect emits a kit** and checks it first, in its own sandbox or at
+   the laptop:
+
+       hands kit check mission-11.zip --repo ~/git/<project>
+
+   It prints one PASS/FAIL line per check and, only when every check passes,
+   `apply prompt:` followed by the prompt, which begins `Apply
+   ~/Downloads/<kit>.zip to this repository:` and asks for the reply `VERDICT:
+   kit applied <sha>`. Keep that prompt: it is step 3.
+2. **Send the kit to `cmd_topic`** from the ntfy app, the `.zip` attached and
+   the message `kit <secret>`. handsd fetches it into `kit_dir`, and the phone
+   buzzes with `kit received <name> <bytes> <sha256>` (title `hands: kit
+   received`). `<name>` is the name written: if the file already existed it
+   is `<stem>-1.zip`, and the apply prompt must name that file.
+3. **The apply is sent from the laptop or by the driver.** Today, nothing on
+   the phone can start the apply: `go` sends only the kickoff line, and there
+   is no phone command that sends a prompt. At the laptop, or through the
+   driver (its rule 5 announces a gated send first):
+
+       hands send --role builder --context clear "<the apply prompt from step 1>"
+
+   It is a `cli` send. The prompt begins with `Apply ~/Downloads/`, a default
+   gate pattern, so the job is held, not run.
+4. **Approve it from the phone.** The held job's notification (`hands: a job is
+   held for a human`) carries Approve and Deny buttons. Approve publishes
+   `approve <job> <nonce>`; the typed `approve <job> <secret>` does the same.
+   If the playbook has no `job.held` rule, the hold also stopped the pipeline
+   (`hands: the pipeline stopped`); the approved job un-pauses it when it
+   starts. The builder commits the kit and replies `VERDICT: kit applied
+   <sha>`; this repository's `PLAYBOOK.toml` and the missions template notify
+   on it (`hands: Kit applied; the next kickoff is the driver's`), and the
+   kickoff can come from the phone instead, in the next step.
+5. **Send `go <secret>`** to `cmd_topic`. handsd reads the committed playbook,
+   sends its `[series] kickoff` line to the builder (`clear`, `origin:
+   phone`), and answers `go: builder job <id> <state>` (title `hands: go`). It
+   is refused, and only logged, while a builder job is running or queued.
+6. **Wait for the buzz.** The playbook chains the builder's verdict to the
+   review and on to a stop. Every stop reaches the phone as `hands: the
+   pipeline stopped` with the reason, which is the rule's message. Paste it to
+   the architect, and the loop starts again at step 1.
+
+Throughout, the driver is the inspector: it reads `hands inbox`, `hands show`
+and the fetched branch in its clone when you ask it to `check`, and reports.
+It is never required for the loop. The loop does not depend on it for
+anything but sending step 3, which the laptop can do instead.
+
+Not proven, and not built:
+
+- No kit has been fetched from a real ntfy attachment. The tests serve the
+  attachment from a local HTTP server; the ntfy app's attach and ntfy's own
+  attachment size limit are untested. While a kit downloads (up to 300 s) the
+  channel reads no other command.
+- No `go` has been sent from a real phone, and no Approve button has been
+  pressed on one; the tests feed a fake ntfy stream.
+- `hands who` still matches an interactive session to its transcript by
+  directory, not by pid (§26 asks for pid; FINDINGS H-020), so a builder job in
+  the same directory as your session can be shown under it.
+- `hands kit check` checks the builder's verdict rules only; review verdicts
+  have no literal in the brief to match (FINDINGS H-021).
 
 ### The who view
 
@@ -609,5 +682,7 @@ of this terminal. The driver does not: it arms nothing, and your message
   been sent from a real phone, and no button has been pressed on one. No kit has
   been fetched from a real ntfy attachment: the tests serve the attachment from a
   local HTTP server, so the curl line above and the ntfy app's attach are
-  unproven. Nor has
+  unproven. No `go` has been sent from a real phone, so the closed loop above
+  has never run end to end. `hands who` matches sessions by directory, not by
+  pid (H-020). Nor has
   `handswho` pushed a picture to, or read a command from, a real topic.
