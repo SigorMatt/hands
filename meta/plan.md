@@ -32,8 +32,11 @@ templates)`).
       name` (H-019); verdict check covers `builder.done` rules only, `aux.done`
       review rules counted but unchecked (H-021, §26 as written fails the kit);
       a kit with no brief fails the brief checks
-- [ ] U6 The closed loop in the docs; doctor rows (§26)
-- [ ] U7 Final report — meta/FINAL-REPORT-10.md (drafted under meta/drafts/)
+- [x] U6 The closed loop in the docs; doctor rows (§26) 7c5e854 — the apply
+      send comes from the laptop or driver (nothing on the phone starts it);
+      doctor does not check kit_dir exists or builder busy
+- [x] U7 Final report (the commit that carries this line) — meta/FINAL-REPORT-10.md
+      (drafted under meta/drafts/); mission ends `blocked U4`
 
 Deviation. REVIEW-9 SF2 said "fail on the subtype, or make the doc say what the
 code does"; §26 says the doc matches §6, and §6 fails an `error` result. A
