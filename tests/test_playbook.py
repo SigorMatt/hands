@@ -244,8 +244,126 @@ def test_the_repositorys_own_playbook_carries_the_series_kickoff() -> None:
     assert book is not None, "the repository's PLAYBOOK.toml is missing"
     assert book.series == "hands-missions"
     assert book.kickoff == (
-        "Read meta/BUILDER-11-PROMPT.md and execute the mission below its divider."
+        "Read meta/BUILDER-12-PROMPT.md and execute the mission below its divider."
     )
+
+
+ROOT_PLAYBOOK = Path(__file__).parents[1] / "PLAYBOOK.toml"
+
+
+def test_the_repositorys_own_playbook_consults_the_driver_on_questions_only_from_the_builder(
+) -> None:
+    """§27 Conventions (mission 11 U6): `max_consults = 2`; `builder.done` with
+    `^VERDICT: question` and the unrecognised-verdict catch-all route to `consult`
+    after every recognised builder verdict; `driver.done` resolved → notify,
+    escalate → stop with the reason, anything else and `driver.failed` → stop; no
+    other event consults. Read through the real loader."""
+    book = load_playbook(ROOT_PLAYBOOK)
+    assert book is not None, "the repository's PLAYBOOK.toml is missing"
+    assert book.max_consults == 2
+    builder = [
+        (rule.verdict.pattern if rule.verdict else None, rule.then)
+        for rule in book.rules_for("builder.done")
+    ]
+    assert builder == [
+        (r"^VERDICT: mission (?P<n>\d+) finished", "send"),
+        ("^VERDICT: kit applied", "notify"),
+        (r"^VERDICT: mission (?P<n>\d+) blocked", "stop"),
+        ("^VERDICT: question", "consult"),
+        ("^VERDICT:", "consult"),
+    ]
+    for rule in book.rules_for("builder.done")[3:]:
+        assert rule.role in (None, "driver") and rule.prompt is None
+    driver = [
+        (rule.verdict.pattern if rule.verdict else None, rule.then, rule.message)
+        for rule in book.rules_for("driver.done")
+    ]
+    assert [(pattern, then) for pattern, then, _ in driver] == [
+        ("^VERDICT: resolved (?P<what>.+)", "notify"),
+        ("^VERDICT: escalate (?P<reason>.+)", "stop"),
+        (None, "stop"),
+    ]
+    assert driver[1][2] == "The driver escalated: {reason}"
+    assert [rule.then for rule in book.rules_for("driver.failed")] == ["stop"]
+    assert {rule.on for rule in book.rules if rule.then == "consult"} == {"builder.done"}
+
+
+@pytest.mark.parametrize(
+    ("verdict", "sent", "enqueued", "paused", "reason"),
+    [
+        ("VERDICT: mission 12 finished", ["aux"], [], False, None),
+        ("VERDICT: kit applied abc123", [], [], False, None),
+        ("VERDICT: mission 12 blocked U3", [], [], True, "Mission 12 blocked"),
+        ("VERDICT: question which section?", [], ["driver"], False, None),
+        ("VERDICT: mission 12 half done", [], ["driver"], False, None),
+        (None, [], [], True, "has no VERDICT: line"),
+    ],
+)
+def test_the_repositorys_own_playbook_routes_builder_verdicts(
+    tmp_home: Path,
+    workdir: Path,
+    verdict: str | None,
+    sent: list[str],
+    enqueued: list[str],
+    paused: bool,
+    reason: str | None,
+) -> None:
+    """§27, §10 (mission 11 U6): the root playbook's text through the engine. A
+    question and an unrecognised verdict consult the driver; a reply with no
+    `VERDICT:` line still stops (§10), because the catch-all matches on `^VERDICT:`."""
+    body = ROOT_PLAYBOOK.read_text(encoding="utf-8")
+    engine, recorder = engine_for(tmp_home, workdir, body, driver=workdir.parent / "d")
+    run(engine.on_job(finished(engine.spool, verdict=verdict)))
+    assert [fields["role"] for fields in recorder.sent] == sent
+    assert [fields["role"] for fields in recorder.enqueued] == enqueued
+    assert engine.state.paused is paused, engine.state.stop_reason
+    if reason is not None:
+        assert reason in strip_paths(engine.state.stop_reason or "")
+
+
+@pytest.mark.parametrize(
+    ("state", "verdict", "paused", "reason"),
+    [
+        ("done", "VERDICT: resolved sent keep, DESIGN §27", False, None),
+        ("done", "VERDICT: escalate needs a design change", True, "needs a design change"),
+        ("done", "VERDICT: maybe", True, None),
+        ("failed", None, True, None),
+    ],
+)
+def test_the_repositorys_own_playbook_follows_up_the_driver(
+    tmp_home: Path, workdir: Path, state: str, verdict: str | None, paused: bool,
+    reason: str | None,
+) -> None:
+    """§27 (mission 11 U6): resolved notifies; escalate, anything else and a failed
+    driver job stop; a follow-up never starts another job."""
+    body = ROOT_PLAYBOOK.read_text(encoding="utf-8")
+    engine, recorder = engine_for(tmp_home, workdir, body, driver=workdir.parent / "d")
+    about = finished(engine.spool, verdict="VERDICT: question x")
+    run(engine.on_job(_driver_job(engine.spool, state=state, verdict=verdict, about=about)))
+    assert engine.state.paused is paused, engine.state.stop_reason
+    if reason is not None:
+        assert reason in strip_paths(engine.state.stop_reason or "")
+    assert recorder.sent == [] and recorder.enqueued == []
+
+
+@pytest.mark.parametrize(
+    ("event", "role", "state", "verdict"),
+    [
+        ("aux.done", "aux", "done", "VERDICT: review mission 11 blockers=0 should-fix=0"),
+        ("aux.done", "aux", "done", "VERDICT: review mission 11 blockers=2 should-fix=1"),
+        ("aux.done", "aux", "done", "VERDICT: something"),
+        ("aux.failed", "aux", "failed", None),
+    ],
+)
+def test_the_repositorys_own_playbook_never_consults_on_a_review(
+    tmp_home: Path, workdir: Path, event: str, role: str, state: str, verdict: str | None
+) -> None:
+    """§27: never review outcomes, never `aux.done`: each stops, no driver job."""
+    body = ROOT_PLAYBOOK.read_text(encoding="utf-8")
+    engine, recorder = engine_for(tmp_home, workdir, body, driver=workdir.parent / "d")
+    run(engine.on_job(finished(engine.spool, role=role, state=state, verdict=verdict)))
+    assert engine.state.paused, event
+    assert recorder.enqueued == []
 
 
 def test_a_series_table_carries_the_name_and_the_kickoff(tmp_path: Path) -> None:

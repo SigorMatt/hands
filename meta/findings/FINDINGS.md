@@ -1149,3 +1149,56 @@ H-021 (2026-09-13). §27: `hands kit check` verifies every `verdict` rule,
 a rule cannot match; a broken builder rule is never excused by the apply-verdict
 exception (REVIEW-10 SF4). The builder-only scope U5 shipped is superseded.
 Status: resolved by DESIGN v3.10 (code: mission 11 U1)
+
+## H-022 — `hands kit check .` on this repository cannot exit 0
+
+Severity: low · Component: mission 11 Acceptance ("`PLAYBOOK.toml` names
+BUILDER-12 and has `consult` rules; `hands kit check .` exits 0") and U6's gate
+against DESIGN §26/§27 `kit check`; `src/hands/kit.py` (`_read_dir`,
+`_check_paths`, `_find_brief`, `_check_playbook`)
+Filed by: mission 11, U6.
+
+Symptom. `kit check` reads its argument as a kit, and a kit of the whole working
+tree fails on this repository's layout, not on the playbook. With U6's
+`PLAYBOOK.toml` in the working tree (2026-09-13, each line cut to 300 columns):
+
+    $ uv run hands kit check .
+    FAIL paths: 1896 of 3068 entries are not repository paths under /home/msi/git/hands: .git/COMMIT_EDITMSG (a path inside .git); …
+    FAIL playbook: the kit's PLAYBOOK.toml loads; its [series] kickoff 'Read meta/BUILDER-12-PROMPT.md and execute the mission below its divider.' has no brief kickoff line to equal (see brief)
+    FAIL brief: the kit carries meta/BUILDER-1-PROMPT.md, meta/BUILDER-10-PROMPT.md, meta/BUILDER-11-PROMPT.md, … and meta/BU…; carry one
+    FAIL verdicts: no final-reply vocabulary to match (see brief)
+    FAIL wording: no brief to read (see brief)
+    PASS protocol: every file a send names is present: meta/REVIEW-PROTOCOL.md (kit)
+    kit check: FAIL (5 of 6 checks failed); no apply prompt for a failing kit
+    exit 1
+
+Three independent causes, none fixable from `PLAYBOOK.toml`: (1) `.git/` is in
+the directory, and every entry under it is refused (paths); (2) the repository
+keeps every mission's brief, `meta/BUILDER-1…11-PROMPT.md`, and a kit must carry
+exactly one (brief, then verdicts and wording); (3) §27's Conventions make the
+kickoff name the *next* mission (BUILDER-12), and a kit's kickoff must equal its
+brief's, while `meta/BUILDER-12-PROMPT.md` does not exist yet. Writing that
+brief would not fix (1) or (2).
+
+What does exit 0, and what does not (the same working tree, kits built under /tmp):
+
+- a kit of `meta/BUILDER-11-PROMPT.md` alone, `--repo .`: 6 of 6 PASS, exit 0.
+  The repository's `PLAYBOOK.toml` is in force (playbook: "loads, no
+  quiet_hours; its kickoff is not compared"). verdicts: 5 `builder.done` verdict
+  rules and the brief's 3 literals match each other (rule 1 through the apply
+  literal); 2 `aux.done` rules match the review protocol; 2 `driver.done` rules
+  match the driver's two lines. This checks the rules, not the kickoff.
+- a kit of `PLAYBOOK.toml` + `meta/BUILDER-11-PROMPT.md`: 5 PASS, FAIL
+  playbook ("its [series] kickoff 'Read meta/BUILDER-12-PROMPT.md …' is not the
+  brief's kickoff line 'Read meta/BUILDER-11-PROMPT.md …'"), exit 1. By §27's
+  convention this stays red until mission 12's brief exists and is the kit's.
+
+Needs: the architect says what the acceptance line means. Either (a) it is the
+brief-in-force kit above (exit 0 today, kickoff not compared), or (b) the check
+belongs to mission 12's kit (`PLAYBOOK.toml` + `meta/BUILDER-12-PROMPT.md`),
+whose brief must carry the literal `VERDICT: question`, or (c) `kit check`
+gains a repository mode (skip `.git`, pick the brief the kickoff names), which
+is a DESIGN change. U6 did not write BUILDER-12, did not edit BUILDER-11, and did
+not change `kit.py`.
+
+Status: open

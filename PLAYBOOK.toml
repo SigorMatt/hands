@@ -4,10 +4,11 @@ version = 1
 # lives in the table: TOML cannot hold `series = "…"` beside `[series]` (H-019).
 [series]
 name = "hands-missions"
-kickoff = "Read meta/BUILDER-11-PROMPT.md and execute the mission below its divider."
+kickoff = "Read meta/BUILDER-12-PROMPT.md and execute the mission below its divider."
 
 [limits]
 max_resumes = 2
+max_consults = 2
 
 # The builder finished a mission → cold review by aux, cold (no context).
 [[rule]]
@@ -32,16 +33,46 @@ verdict = '^VERDICT: mission (?P<n>\d+) blocked'
 then = "stop"
 message = "Mission {n} blocked; see the builder's reply"
 
+# §27: a question, and any verdict not recognised above, goes to the driver
+# role, not straight to the human. The catch-all matches on `^VERDICT:` so a
+# reply with no VERDICT: line still stops (§10). Never on review outcomes,
+# held gates or monitor events.
 [[rule]]
 on = "builder.done"
 verdict = '^VERDICT: question'
-then = "stop"
-message = "The builder has a question"
+then = "consult"
+role = "driver"
 
 [[rule]]
 on = "builder.done"
+verdict = '^VERDICT:'
+then = "consult"
+role = "driver"
+
+# The consultation's outcome. resolved: the driver already sent its keep
+# answer, so only the phone hears it. escalate, anything else, or a failed
+# driver job: the human.
+[[rule]]
+on = "driver.done"
+verdict = '^VERDICT: resolved (?P<what>.+)'
+then = "notify"
+message = "Consult resolved: {what}"
+
+[[rule]]
+on = "driver.done"
+verdict = '^VERDICT: escalate (?P<reason>.+)'
 then = "stop"
-message = "Builder finished without a recognised verdict"
+message = "The driver escalated: {reason}"
+
+[[rule]]
+on = "driver.done"
+then = "stop"
+message = "Driver finished without a recognised verdict"
+
+[[rule]]
+on = "driver.failed"
+then = "stop"
+message = "Driver job failed"
 
 # Review outcomes: no auto-continue in this series; every outcome is a stop
 # with a distinct message, so the notification says which.

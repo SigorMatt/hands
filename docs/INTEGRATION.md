@@ -78,8 +78,9 @@ cwd` is optional.
                                          # status` reports it as queue_capacity too
 
     [roles.driver]                       # optional (§27): the driver role
-    cwd = "~/hands-driver/<project>"     # the driver directory and its repo/ clone
-                                         # permission_flags must stay empty
+    cwd = "~/hands-driver/hands"         # the driver directory and its repo/ clone
+                                         # (~/hands-driver/<project>; this is hands'
+                                         # own); permission_flags must stay empty
 
     [ops]
     repo = "~/<project>-ops"

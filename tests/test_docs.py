@@ -103,6 +103,7 @@ def test_the_integration_config_block_loads(tmp_home: Path) -> None:
     )
     assert sorted(config.roles) == ["aux", "builder", "driver"]
     assert config.role("driver").permission_flags == ""  # §27
+    assert config.role("driver").cwd == tmp_home / "hands-driver" / "hands"  # m11 U6
     assert config.ops.monitor_cmd == "watch_monitor.sh"
     assert "kit_dir = " in block and "kit_max_mb = " in block  # §26's two keys
     assert config.files.kit_dir == tmp_home / "Downloads"
