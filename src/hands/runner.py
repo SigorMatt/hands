@@ -18,7 +18,8 @@ All six flags were checked against the installed binary (claude 2.1.268,
 `--permission-prompts` does take `none`.
 
 The process runs in handsd's environment plus the role's `spawn_env` (§23):
-`CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS=0` unless `[roles.<r>] env` sets it.
+`CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS=0` unless `[roles.<r>] env` sets it; and
+`HANDS_JOB=<job id>`, which the post-exit sweep reads (§27).
 
 Each process is isolated per job (§24). When `systemd-run --user --scope` can
 start a scope here, the invocation runs inside a transient user scope named
@@ -29,7 +30,9 @@ group's members (`live_pids`, the monitor's `--pids`). Once claude has exited,
 whatever is still in that set is handed to `on_orphans` (the daemon files
 `monitor.orphan_processes`) and then killed: the scope is stopped, the group is
 sent SIGTERM and, after `ORPHAN_GRACE_S`, SIGKILL. The group is weaker: a process
-that calls setsid leaves it and is neither seen nor killed.
+that calls setsid leaves it and is neither seen nor killed, and once claude is
+reaped the group is swept only when every member carries `HANDS_JOB` (§27,
+`_group_is_the_jobs`).
 
 A job is `done` only when the process ends cleanly with a final `result` event
 of subtype `success` that carries `num_turns`, and stderr never carried the
@@ -64,6 +67,7 @@ from hands.monitor import (
     cgroup_pids,
     cmdline,
     descendants_of,
+    environ_has,
     group_pids,
     start_time,
 )
@@ -72,6 +76,7 @@ from hands.spool import TERMINAL_STATES, Job, Spool, SpoolError
 __all__ = [
     "FAILURE_REASONS",
     "GROUP",
+    "JOB_ENV",
     "LINE_LIMIT",
     "MAX_PROMPT_BYTES",
     "SCOPE",
@@ -171,6 +176,10 @@ PROBE_S = 5.0
 SCOPE_STOP_S = 30.0
 #: SIGTERM → this long → SIGKILL, for what is left in a process group (§24).
 ORPHAN_GRACE_S = 2.0
+#: The variable every job runs with, set to its id. A process inherits it from the
+#: job, so a member of the job's process group that carries it descends from the
+#: job (§27, review 10 should-fix 3).
+JOB_ENV = "HANDS_JOB"
 #: Once claude has exited, how long its pipes may stay open before the sweep runs
 #: anyway: an orphan that inherited stdout would otherwise hold the job open.
 DRAIN_S = 1.0
@@ -568,7 +577,9 @@ class Runner:
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 limit=_STREAM_LIMIT,
-                env={**os.environ, **role.spawn_env},  # §23
+                # §23, plus the job's id: the mark the post-exit sweep reads to
+                # tell the job's descendants from strangers (§27).
+                env={**os.environ, **role.spawn_env, JOB_ENV: job.id},
                 start_new_session=isolation == GROUP,  # §24: its own process group
             )
         except OSError as exc:
@@ -666,7 +677,7 @@ class Runner:
         elif self._group_is_the_jobs(job):
             pids = group_pids(job.pid)
         else:
-            pids = []  # the id was reused after claude was reaped: not the job's
+            pids = []  # the id was reused, or its members are strangers: not the job's
         processes = [{"pid": pid, "cmdline": cmdline(pid)} for pid in pids[:MAX_PIDS]]
         if not processes:
             return []
@@ -686,7 +697,7 @@ class Runner:
         if isolation == SCOPE:
             await _systemctl("stop", f"{unit}.scope", timeout=SCOPE_STOP_S)
         else:
-            await _kill_group(job.pid, self._leader_start.get(job.id))
+            await _kill_group(job.pid, self._leader_start.get(job.id), job.id)
         return processes
 
     def _last_resort(self, job: Job, isolation: str) -> None:
@@ -705,16 +716,16 @@ class Runner:
                 )
         elif self._group_is_the_jobs(job):
             # Not a membership check: a group with members can be a new session
-            # leader's that took claude's pid after claude was reaped (review 9
-            # should-fix 1), and an empty group only makes killpg fail. The leader's
-            # start time recorded at spawn tells claude's group from a later one.
+            # leader's that took claude's pid after claude was reaped, whether that
+            # leader is alive (review 9 should-fix 1) or reaped too (review 10
+            # should-fix 3). `_group_is_the_jobs` says how the two are told apart.
             with contextlib.suppress(OSError):
                 os.killpg(job.pid, signal.SIGKILL)
 
     def _group_is_the_jobs(self, job: Job) -> bool:
         """Is the process group whose id is `job.pid` still the job's own? (§24)"""
         assert job.pid is not None
-        return _group_is_the_jobs(job.pid, self._leader_start.get(job.id))
+        return _group_is_the_jobs(job.pid, self._leader_start.get(job.id), job.id)
 
     # -------------------------------------------------------------- internals
 
@@ -952,32 +963,46 @@ def _read_text(path: str) -> str:
         return ""
 
 
-def _group_is_the_jobs(pgid: int, leader_start: int | None) -> bool:
-    """Is process group `pgid` still the one led by the process whose start time
-    was `leader_start` at spawn? (§24, review 9 should-fix 1)
+def _group_is_the_jobs(pgid: int, leader_start: int | None, job_id: str) -> bool:
+    """Is process group `pgid` still the job's? (§24, §27; review 9 should-fix 1,
+    review 10 should-fix 3)
 
-    Linux does not hand a pid out again while a process has it as its pid or as
-    its process-group id. So the group is the job's when its leader (running, or
-    a zombie) still holds the pid with the recorded start time, or when no
-    process holds the pid at all: every member left joined while the id was
-    reserved. It is not the job's when a process with another start time holds
-    the pid: the leader was reaped, the group emptied, and the pid was reused
-    (a leader whose start time could not be read at spawn, None, matches none).
-    This read and the signal sent after it are two steps, not one.
+    Linux does not hand a pid out again while a process has it as its pid, its
+    process-group id or its session id. The group is the job's in two cases:
+
+    * its leader (running, or a zombie) holds the pid with the start time recorded
+      at spawn. The group is then in the session claude leads (it was started with
+      a new session), and every member of a session descends from its leader;
+    * no process holds the pid, and every live member carries `HANDS_JOB=<job id>`
+      in the environment it was exec'd with, which only the job's own processes
+      inherit.
+
+    It is not the job's when a process with another start time holds the pid (the
+    pid was reused; a start time that could not be read at spawn, None, matches
+    none), when the group is empty, or when no process holds the pid and some
+    member does not carry the mark. That last case is a stranger's session leader
+    that took the pid after claude was reaped, forked, and was reaped in turn; it
+    is also a descendant of the job that exec'd with a cleared environment or whose
+    environment cannot be read, which is then left alive and unreported. Reading
+    the group and signalling it are two steps, not one.
     """
     now = start_time(pgid)
-    return now is None or now == leader_start
+    if now is not None:
+        return now == leader_start
+    marks = [environ_has(pid, JOB_ENV, job_id) for pid in group_pids(pgid)]
+    members = [mark for mark in marks if mark is not None]
+    return bool(members) and all(members)
 
 
 async def _kill_group(
-    pgid: int, leader_start: int | None, grace: float = ORPHAN_GRACE_S
+    pgid: int, leader_start: int | None, job_id: str, grace: float = ORPHAN_GRACE_S
 ) -> None:
     """SIGTERM the group, wait `grace`, SIGKILL what is left, wait again (§24).
 
     Before each signal the group must still be the job's (`_group_is_the_jobs`).
     """
     for signum in (signal.SIGTERM, signal.SIGKILL):
-        if not _group_is_the_jobs(pgid, leader_start):
+        if not _group_is_the_jobs(pgid, leader_start, job_id):
             return
         with contextlib.suppress(ProcessLookupError, PermissionError):
             os.killpg(pgid, signum)

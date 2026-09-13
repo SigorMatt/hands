@@ -296,12 +296,17 @@ Publish a command to `cmd_topic` from the ntfy app. The last word is the token:
   refuses (and logs) the kit before fetching anything when there is no
   attachment, when the name is not a plain `.zip` file name (no `/` or `\`, no
   leading dot, ending in lowercase `.zip`), when the size ntfy reports is
-  missing or over `[files] kit_max_mb` (MiB, default 20), or when `[files]
-  kit_dir` (default `~/Downloads`) is not inside `[files] allowed_roots` — the
-  default roots are only the role directories, so list `~/Downloads` there. The
+  missing or over `[files] kit_max_mb` (MiB, default 20), when the URL is not
+  http(s) or is malformed (httpx cannot parse it, or it has no host), or when
+  `[files] kit_dir` (default `~/Downloads`) is not inside `[files]
+  allowed_roots` — the default roots are only the role directories, so list
+  `~/Downloads` there. Each refusal of a kit whose secret was right, before or
+  during the download, is also filed in the inbox as `kit.refused` with the
+  check that refused it, never the attachment's name or URL (DESIGN §27). The
   download stops as soon as it passes the cap, and is refused unless it ends at
   the reported size. The file is written under its own name in `kit_dir`; if
-  that name exists it becomes `<name>-1.zip`, `<name>-2.zip`, …, and an existing
+  that name exists it becomes `<stem>-1.zip`, `<stem>-2.zip`, … (`kit.zip` →
+  `kit-1.zip`), and an existing
   file is never overwritten. It is never unzipped, never run, never made
   executable. handsd files `kit.received` in the inbox (the name written, bytes,
   sha256) and answers on `ntfy_topic` with `kit received <name> <bytes>
@@ -375,7 +380,9 @@ when all of that holds, and says what is missing when it does not.
 5. **Send `go <secret>`** to `cmd_topic`. handsd reads the committed playbook,
    sends its `[series] kickoff` line to the builder (`clear`, `origin:
    phone`), and answers `go: builder job <id> <state>` (title `hands: go`). It
-   is refused, and only logged, while a builder job is running or queued.
+   is refused, and only logged, while a builder job is running, queued or
+   held — the apply of step 4, if you have not approved it yet, is such a job,
+   and the refusal names it.
 6. **Wait for the buzz.** The playbook chains the builder's verdict to the
    review and on to a stop. Every stop reaches the phone as `hands: the
    pipeline stopped` with the reason, which is the rule's message. Paste it to

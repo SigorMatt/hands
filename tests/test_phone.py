@@ -28,6 +28,7 @@ import pytest
 
 from conftest import commit_file, strip_paths
 from hands import daemon as daemon_mod
+from hands import phone as phone_mod
 from hands.config import ConfigError, load_config
 from hands.daemon import Daemon
 from hands.notify import http_post, http_stream
@@ -658,6 +659,71 @@ def test_go_is_refused_while_the_builder_has_a_job_queued(
     assert_refused(caplog, "the builder has a job queued")
 
 
+def test_go_is_refused_while_the_builder_has_a_job_held_and_the_refusal_names_it(
+    project: str, workdir: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """§27 (review 10 should-fix 1): a held builder job — the kit's apply, say —
+    blocks `go` as a running or queued one does."""
+    caplog.set_level(logging.DEBUG)
+    with_playbook(workdir)
+    names: list[str] = []
+
+    async def body(daemon: Daemon, fake: FakeNtfy) -> None:
+        job = await ok(
+            "send", "--role", "builder", "--context", "clear", "--gate", "apply kit",
+            "FAKE:result ok",
+        )  # fmt: skip
+        assert (await ok("show", job["id"]))["state"] == "held"
+        names.append(job["id"])
+        await say(daemon, fake, f"go {SECRET}")
+        await say(daemon, fake, f"go {SECRET}")  # a second go makes no second job
+        await daemon.notifier.drain()
+        assert [row["id"] for row in (await ok("jobs"))["jobs"]] == [job["id"]]
+        assert go_answers(daemon) == []
+
+    phone_drive(body)
+    assert_refused(caplog, f"the builder has a job held ({names[0]})")
+
+
+def test_go_checks_the_builder_again_after_the_playbook_load(
+    project: str, workdir: Path, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The load runs in a thread; a `hands send` landing meanwhile must not give
+    the builder a second job (review 10 should-fix 1)."""
+    caplog.set_level(logging.DEBUG)
+    with_playbook(workdir)
+    filed: list[str] = []
+
+    async def body(daemon: Daemon, fake: FakeNtfy) -> None:
+        loop = asyncio.get_running_loop()
+        real = phone_mod.load_playbook
+
+        def loading(*args: Any, **kwargs: Any) -> Any:
+            sent = threading.Event()
+
+            def send() -> None:
+                job = daemon.enqueue(
+                    role="builder", context="clear", prompt="FAKE:result ok", origin="cli"
+                )
+                filed.append(job.id)
+                sent.set()
+
+            loop.call_soon_threadsafe(send)
+            assert sent.wait(TIMEOUT)
+            return real(*args, **kwargs)
+
+        monkeypatch.setattr(phone_mod, "load_playbook", loading)
+        await say(daemon, fake, f"go {SECRET}")
+        assert len(filed) == 1
+        await ok("wait", filed[0])
+        await daemon.notifier.drain()
+        assert [row["id"] for row in (await ok("jobs"))["jobs"]] == filed
+        assert go_answers(daemon) == []
+
+    phone_drive(body)
+    assert_refused(caplog, "the builder has a job ")
+
+
 def test_go_with_a_bad_or_missing_secret_or_a_nonce_is_refused(
     project: str, workdir: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
@@ -1123,6 +1189,10 @@ def kit_events(daemon: Daemon) -> list[dict[str, Any]]:
     return [event.payload for event in daemon.spool.events() if event.kind == "kit.received"]
 
 
+def kit_refusals(daemon: Daemon) -> list[dict[str, Any]]:
+    return [event.payload for event in daemon.spool.events() if event.kind == "kit.refused"]
+
+
 def assert_kit_refused(caplog: pytest.LogCaptureFixture, why: str) -> None:
     assert f"phone: command ignored (kit{why}" in strip_paths(caplog.text), caplog.text
     assert SECRET not in strip_paths(caplog.text)
@@ -1283,6 +1353,7 @@ def test_a_kit_with_a_missing_or_wrong_secret_is_refused_before_the_fetch(
         assert kit_server.hits == []
         assert list(downloads.iterdir()) == []
         assert kit_events(daemon) == [] and kit_answers(daemon) == []
+        assert kit_refusals(daemon) == []  # not authenticated: nothing is filed
 
     phone_drive(body)
     assert_kit_refused(caplog, ": bad secret")
@@ -1298,8 +1369,8 @@ def test_a_kit_with_a_missing_or_wrong_secret_is_refused_before_the_fetch(
         ({"size": 12.5}, ": the attachment reports no size in bytes"),
         ({"size": True}, ": the attachment reports no size in bytes"),
         ({"size": -1}, ": the attachment reports no size in bytes"),
-        ({"url": ...}, ": the attachment has no http(s) url"),
-        ({"url": "file:///etc/passwd"}, ": the attachment has no http(s) url"),
+        ({"url": ...}, ": the attachment has no valid http(s) url"),
+        ({"url": "file:///etc/passwd"}, ": the attachment has no valid http(s) url"),
     ],
     ids=["no-attachment", "no-size", "str-size", "float-size", "bool-size", "negative-size",
          "no-url", "file-url"],
@@ -1321,9 +1392,56 @@ def test_a_kit_without_an_attachment_a_size_or_an_http_url_is_refused_before_the
         assert kit_server.hits == []
         assert list(downloads.iterdir()) == []
         assert kit_events(daemon) == [] and kit_answers(daemon) == []
+        # §27: the refusal is an inbox event, and it names the check only
+        assert kit_refusals(daemon) == [{"reason": why.removeprefix(": ")}]
 
     phone_drive(body)
     assert_kit_refused(caplog, why)
+
+
+@pytest.mark.parametrize(
+    "url", ["http://[::1", "https://[::1/Xyzzy-url-marker.zip", "http://"],
+    ids=["unclosed-bracket", "unclosed-bracket-with-path", "no-host"],
+)
+def test_a_kit_with_a_malformed_url_is_refused_before_any_fetch_and_inboxed(
+    kit_project: str,
+    downloads: Path,
+    kit_server: KitServer,
+    tmp_home: Path,
+    caplog: pytest.LogCaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
+    url: str,
+) -> None:
+    """Review 10 should-fix 6: httpx's `InvalidURL` is not an `HTTPError`; the URL
+    is refused by the pre-fetch checks, with no traceback and without its text."""
+    caplog.set_level(logging.DEBUG)
+    fetched: list[object] = []
+
+    async def no_fetch(*args: Any, **kwargs: Any) -> Any:
+        fetched.append(args)
+        raise AssertionError("fetch_kit was called")
+
+    monkeypatch.setattr(phone_mod, "fetch_kit", no_fetch)
+
+    async def body(daemon: Daemon, fake: FakeNtfy) -> None:
+        attachment = kit_server.attach("kit.zip", ZIP, url=url)
+        await say(daemon, fake, f"kit {SECRET}", attachment=attachment)
+        await daemon.notifier.drain()
+        assert fetched == [] and kit_server.hits == []
+        assert list(downloads.iterdir()) == []
+        assert kit_events(daemon) == [] and kit_answers(daemon) == []
+        assert kit_refusals(daemon) == [{"reason": "the attachment has no valid http(s) url"}]
+        for item in daemon.notifier.post.sent:
+            assert url not in strip_paths(json.dumps(item, default=str)), item
+        for path in (tmp_home / ".hands").rglob("*"):
+            if path.is_file() and path.suffix != ".toml":
+                data = path.read_text(encoding="utf-8", errors="replace")
+                assert url not in strip_paths(data), path
+
+    phone_drive(body)
+    assert_kit_refused(caplog, ": the attachment has no valid http(s) url")
+    for said in ("a command raised", "Traceback", "Xyzzy-url-marker", "[::1"):
+        assert said not in strip_paths(caplog.text), said
 
 
 def test_a_kit_is_refused_when_kit_dir_is_outside_the_allowed_roots(

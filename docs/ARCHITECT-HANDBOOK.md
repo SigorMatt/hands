@@ -197,9 +197,12 @@ taken relative to the directory. It prints one line per check,
 `PASS <name>: <reason>` or `FAIL <name>: <reason>`, in this order:
 
 - `paths`: every entry is a repository path under the repo. That means
-  relative, with no `..`, `.` or empty component, no backslash and no drive
-  letter. Nothing may sit under `.git`, no entry may be a symlink, and
-  nothing may land outside the repo through one of the repo's own symlinks.
+  relative, with no `..`, `.` or empty component, no NUL, no backslash and no
+  drive letter. Nothing may sit under `.git` in any letter case (`.GIT`), no
+  entry may be a symlink, no zip entry name may appear twice, and nothing may
+  land outside the repo through one of the repo's own symlinks. No entry may
+  be over 16 MiB and the kit not over 64 MiB, by the sizes the zip declares,
+  read before any content is.
 - `playbook`: the playbook in force is the kit's `PLAYBOOK.toml` or
   `meta/PLAYBOOK.toml`, else the repo's at the same paths. It is parsed by
   the engine's own loader, which refuses `quiet_hours`. The committed-copy
@@ -212,19 +215,29 @@ taken relative to the directory. It prints one line per check,
   backticked literal in the paragraph after "Your final reply begins with"
   or "Reply with one of". The paragraph's lines are joined first, so a
   literal may wrap.
-- `verdicts`: every `verdict` regex on a `builder.done` rule matches at
-  least one literal, and every literal matches some such rule. Matching
-  uses `re.search`, as the engine does, with placeholders such as `<unit>`
-  left as text. A rule that matches no literal of the brief passes only if
-  it matches `VERDICT: kit applied <sha>`, the reply the apply prompt below
-  asks for. Verdict rules on other events (the review's `aux.done`) are
-  counted on the line, not matched. The brief fixes the builder's replies,
-  not the reviewer's (finding H-021).
+- `verdicts`: every `verdict` regex of the playbook is checked (DESIGN §27,
+  finding H-021). Matching uses `re.search`, as the engine does. A rule on
+  `builder.done` matches at least one literal of the brief, with
+  placeholders such as `<unit>` left as text, and every literal matches some
+  such rule. A builder rule that matches no literal of the brief passes only
+  if it exists for the apply: its pattern is plain text (an optional `^`, no
+  other regex syntax) found in `VERDICT: kit applied <sha>`, the reply the
+  apply prompt below asks for, such as `^VERDICT: kit applied`. A pattern
+  like `VERDICT: (kit applied|mission \d+ finished)` is not excused, because
+  its other branch is never checked. A rule on `aux.done` matches at least
+  one `VERDICT: review …` line of the review protocol, which is found in the
+  send prompts and in the files they name. Each placeholder of that line
+  (`N`, `<k>`, `<m>`, `{n}`) is read as a count and tried as 0, 1 and 12, so
+  `blockers=0` and `blockers=[1-9]` both match, and `blockers=none` does not.
+  A verdict rule on any other event fails: kit check has no vocabulary for
+  it.
 - `wording`: the brief contains neither "as before" nor a "Budget
   guidance" section (a heading or a bold lead).
-- `protocol`: every file a `send` rule's prompt names is in the kit or the
-  repo. A named file is a `.md` or `.toml` path without a `{placeholder}`,
-  such as `meta/REVIEW-PROTOCOL.md`.
+- `protocol`: every file a `send` rule's prompt names is in the kit or inside
+  the repo. A named file is a `.md` or `.toml` path without a
+  `{placeholder}`, such as `meta/REVIEW-PROTOCOL.md`. A named path that is
+  not a repository path (`../X.md`, `~/X.md`, `/X.md`) fails; it is not
+  skipped.
 
 When every check passes, it prints three things. First, the §3 apply
 prompt, which names each file the kit replaces (the file exists in the

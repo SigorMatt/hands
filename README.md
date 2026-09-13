@@ -123,8 +123,8 @@ Off unless configured in `[notify]`; `docs/INTEGRATION.md` has the setup.
   recorded `decided_by: phone`.
 - **`go <secret>`** on `cmd_topic` sends the playbook's `[series] kickoff` line
   to the builder as a `clear` send, `origin: phone`. It is the only way to start
-  work from the phone, and it is refused while a builder job is running or
-  queued.
+  work from the phone, and it is refused while a builder job is running,
+  queued or held.
 - **Kit transport**: a message `kit <secret>` on `cmd_topic` with a `.zip`
   attached is fetched into `[files] kit_dir` (default `~/Downloads`, which must
   be inside `allowed_roots`), capped at `[files] kit_max_mb` (default 20), never

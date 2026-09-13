@@ -247,7 +247,7 @@ def _go_check(config: Config) -> Check:
     the playbook in force loading (by the same loader, from the builder's cwd)
     with a `[series] kickoff`. A playbook that does not load is the `playbook`
     row's failure; here it is only why `go` is off. Whether a builder job is
-    running or queued is a moment, not an install, so it is not checked.
+    running, queued or held is a moment, not an install, so it is not checked.
     """
     if not config.notify.channel:
         return Check(
@@ -275,7 +275,7 @@ def _go_check(config: Config) -> Check:
         "go",
         OK,
         f"go on: `go <secret>` on cmd_topic sends the builder, clear, origin phone: "
-        f"{book.kickoff}\nrefused while a builder job is running or queued (§26)",
+        f"{book.kickoff}\nrefused while a builder job is running, queued or held (§27)",
     )
 
 

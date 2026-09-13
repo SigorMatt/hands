@@ -24,6 +24,7 @@ from hands.limits import from_iso
 from hands.monitor import group_pids
 from hands.runner import (
     GROUP,
+    JOB_ENV,
     MAX_LAST_ARGV,
     SCOPE,
     KeepRefused,
@@ -1121,17 +1122,29 @@ def test_the_last_resort_kills_the_group_while_its_leader_is_the_one_spawned(
         leader.wait()
 
 
+def _vacated_group(job: Job | None) -> subprocess.Popen[bytes]:
+    """A group whose leader was reaped and whose background sleep lives on. With
+    `job`, the group was started in that job's environment (its descendants);
+    without, it is a stranger's — review 10 should-fix 3's reused-then-vacated
+    leader, which no process holds either."""
+    env = {**os.environ, JOB_ENV: job.id} if job is not None else None
+    leader = subprocess.Popen(
+        ["sh", "-c", "sleep 30 & exit 0"], start_new_session=True, env=env
+    )
+    leader.wait()  # reaped: /proc/<pgid> is gone, the background sleep is not
+    return leader
+
+
 def test_the_last_resort_kills_the_members_of_a_group_whose_leader_was_reaped(
     runner: Runner, spool: Spool
 ) -> None:
-    """While a member holds the id as its group, the pid cannot be reused: the group
-    is still the job's, whatever start time was recorded."""
-    leader = subprocess.Popen(["sh", "-c", "sleep 30 & exit 0"], start_new_session=True)
-    leader.wait()  # reaped: /proc/<pgid> is gone, the background sleep is not
+    """No process holds the id and every member descends from the job (it carries
+    the job's `HANDS_JOB`): the group is the job's, whatever start time was recorded."""
+    job = spool.create_job(role="builder", context="clear", prompt="x", origin="cli")
+    leader = _vacated_group(job)
     members = group_pids(leader.pid)
     assert members, "the background sleep should still be in the group"
     try:
-        job = spool.create_job(role="builder", context="clear", prompt="x", origin="cli")
         job.pid = leader.pid
         runner._leader_start = {job.id: 1}
         runner._last_resort(job, GROUP)
@@ -1143,6 +1156,42 @@ def test_the_last_resort_kills_the_members_of_a_group_whose_leader_was_reaped(
     finally:
         for pid in members:
             kill_quietly(pid)
+
+
+@pytest.mark.parametrize("path", ["last_resort", "sweep"])
+def test_a_vacated_group_of_strangers_with_the_jobs_pid_as_its_id_is_left_alone(
+    runner: Runner, spool: Spool, path: str
+) -> None:
+    """Review 10 should-fix 3: claude was reaped, a stranger's session leader took
+    the pid, forked and was reaped. No process holds the id, but the members are
+    not the job's descendants, so neither the sweep nor the last resort signals
+    them, and nothing is reported."""
+    job = spool.create_job(role="builder", context="clear", prompt="x", origin="cli")
+    leader = _vacated_group(None)
+    members = group_pids(leader.pid)
+    assert members, "the background sleep should still be in the group"
+    seen: list[object] = []
+    runner.on_orphans = lambda job, processes, isolation: seen.append(processes)
+    try:
+        job.pid = leader.pid
+        runner._leader_start = {job.id: 1}
+        if path == "sweep":
+            assert asyncio.run(runner._sweep(job, GROUP)) == []
+        else:
+            runner._last_resort(job, GROUP)
+        time.sleep(0.3)
+        assert all(process_live(pid) for pid in members), "the stranger's group was killed"
+        assert seen == []
+    finally:
+        for pid in members:
+            kill_quietly(pid)
+
+
+def test_a_job_runs_with_its_id_in_hands_job(runner: Runner, spool: Spool) -> None:
+    """The mark the sweep reads to tell the job's descendants from strangers."""
+    prompt = f"FAKE:env {JOB_ENV}"
+    job = spool.create_job(role="builder", context="clear", prompt=prompt, origin="cli")
+    assert asyncio.run(runner.run(job)).result == job.id
 
 
 def test_a_cancelled_run_is_killed_by_the_last_resort_through_run(

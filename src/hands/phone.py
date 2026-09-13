@@ -18,9 +18,10 @@ commands, each ending in its token:
 **`go`** (§26) is the one way to start work from the phone: it sends the
 playbook's `[series] kickoff` line to the builder as a `clear` send with
 `origin: phone`, through `Api.send`, so §8's gate patterns still apply. It is
-refused while the builder has a job running or queued, when there is no
-playbook (none in the builder's cwd, or one that cannot be loaded), and when
-the playbook has no `[series] kickoff`. A stopped pipeline's playbook is still a
+refused while the builder has a job running, queued or held (§27; the refusal
+names the job), checked before the playbook is read and again after it; when
+there is no playbook (none in the builder's cwd, or one that cannot be loaded);
+and when the playbook has no `[series] kickoff`. A stopped pipeline's playbook is still a
 playbook: a `go` is accepted, and its job un-pauses the pipeline when it starts
 (`UNPAUSE_ORIGINS`, H-018 gap 2).
 
@@ -28,8 +29,11 @@ playbook: a `go` is accepted, and its job un-pauses the pipeline when it starts
 else with it. The message's ntfy `attachment` (`name`, `size`, `url`) is checked
 before anything is fetched: the name must be a `.zip` basename (printable, no
 `/` or `\\`, no leading dot, a non-empty stem, ending in lowercase `.zip`), the
-reported `size` an integer no larger than `[files] kit_max_mb` MiB, the `url`
-http(s), and `[files] kit_dir` inside `[files] allowed_roots`. The download is
+reported `size` an integer no larger than `[files] kit_max_mb` MiB, the `url` a
+well-formed http(s) URL with a host (httpx parses it), and `[files] kit_dir`
+inside `[files] allowed_roots`. Once the secret is accepted, every refusal —
+before the fetch or during it — is logged and filed as `kit.refused` with the
+check that refused it, never the attachment's name or URL (§27). The download is
 streamed by httpx on the event loop into a temp file in `kit_dir`, capped while
 it streams, and must end at exactly the reported size; the temp file is then
 hard-linked to the name (`os.link`, which never replaces an existing entry) or,
@@ -299,21 +303,21 @@ class PhoneChannel:
         return self._ignore("not a command")
 
     async def _go(self) -> None:
-        """§26: the series' kickoff line to the builder, `clear`, `origin: phone`.
+        """§26, §27: the series' kickoff line to the builder, `clear`, `origin: phone`.
 
-        The builder's queue is checked first, with nothing awaited before it, so
-        what is refused is the state the command arrived in. The playbook is read
-        from the builder's cwd now, by the same loader the engine uses (only the
-        committed file loads, §10) — not taken from the engine's last load, which
-        happens only when a job starts — and a read never files a stop.
+        Refused while the builder has a job running, queued or held (§27). The
+        builder is checked first, with nothing awaited before it, and again after
+        the playbook is read: the read runs in a thread, and a `hands send` can
+        land meanwhile (review 10 should-fix 1). `Api.send` awaits nothing before
+        its enqueue, so the second check and the job it allows are one step of the
+        event loop. The playbook is read from the builder's cwd now, by the same
+        loader the engine uses (only the committed file loads, §10) — not taken
+        from the engine's last load, which happens only when a job starts — and a
+        read never files a stop.
         """
-        builder = self.daemon.status()["roles"]["builder"]
-        if builder["running"]:
-            running = builder["running"]["id"]
-            return self._ignore(f"go: the builder has a job running ({running})")
-        if builder["queued"]:
-            queued = ", ".join(builder["queued"])
-            return self._ignore(f"go: the builder has a job queued ({queued})")
+        busy = self._builder_busy()
+        if busy is not None:
+            return self._ignore(f"go: {busy}")
         config = self.daemon.config
         try:
             book = await asyncio.to_thread(
@@ -325,6 +329,9 @@ class PhoneChannel:
             return self._ignore("go: no playbook is loaded")
         if book.kickoff is None:
             return self._ignore("go: the playbook has no [series] kickoff")
+        busy = self._builder_busy()
+        if busy is not None:
+            return self._ignore(f"go: {busy}")
         try:
             job = await self.daemon.api.send(
                 role="builder", context="clear", prompt=book.kickoff, origin="phone"
@@ -335,44 +342,62 @@ class PhoneChannel:
         await self.daemon.notifier.answer(GO_TITLE, f"go: builder job {job['id']} {job['state']}")
         return None
 
+    def _builder_busy(self) -> str | None:
+        """Why the builder cannot take a `go` now — a job running, queued or held — or None."""
+        builder = self.daemon.status()["roles"]["builder"]
+        if builder["running"]:
+            return f"the builder has a job running ({builder['running']['id']})"
+        if builder["queued"]:
+            return f"the builder has a job queued ({', '.join(builder['queued'])})"
+        held = [
+            job.id
+            for job in self.daemon.spool.list_jobs()
+            if job.role == "builder" and job.state == "held"
+        ]
+        if held:
+            return f"the builder has a job held ({', '.join(held)})"
+        return None
+
     async def _kit(self, attachment: object) -> None:
         """§26: the message's attachment, fetched into `[files] kit_dir`.
 
         Every check that needs no network runs first, so a refused kit never
         reaches the attachment's server. A refusal names the check, never the
-        attachment's name or URL (text the sender chose).
+        attachment's name or URL (text the sender chose), and is filed as
+        `kit.refused` (§27).
         """
         if not isinstance(attachment, dict):
-            return self._ignore("kit: the message carries no attachment")
+            return self._refuse_kit("the message carries no attachment")
         name = attachment.get("name")
         if not _is_kit_name(name):
-            return self._ignore("kit: the attachment name is not a .zip basename")
+            return self._refuse_kit("the attachment name is not a .zip basename")
         assert isinstance(name, str)
         files = self.daemon.config.files
         size = attachment.get("size")
         if isinstance(size, bool) or not isinstance(size, int) or size < 0:
-            return self._ignore("kit: the attachment reports no size in bytes")
+            return self._refuse_kit("the attachment reports no size in bytes")
         cap = files.kit_max_mb * MIB
         if size > cap:
-            return self._ignore(
-                f"kit: the attachment is {size} bytes, over [files] kit_max_mb = "
+            return self._refuse_kit(
+                f"the attachment is {size} bytes, over [files] kit_max_mb = "
                 f"{files.kit_max_mb} ({cap} bytes)"
             )
         url = attachment.get("url")
-        if not isinstance(url, str) or not url.startswith(("https://", "http://")):
-            return self._ignore("kit: the attachment has no http(s) url")
+        if not _is_http_url(url):
+            return self._refuse_kit("the attachment has no valid http(s) url")
+        assert isinstance(url, str)
         try:
             directory = resolve_under_roots(files.kit_dir, files.allowed_roots)
         except PathEscape:
-            return self._ignore("kit: [files] kit_dir is outside [files] allowed_roots")
+            return self._refuse_kit("[files] kit_dir is outside [files] allowed_roots")
         if not directory.is_dir():
-            return self._ignore("kit: [files] kit_dir is not a directory")
+            return self._refuse_kit("[files] kit_dir is not a directory")
         try:
             written, total, digest = await fetch_kit(
                 url, directory, name, cap=cap, expected=size
             )
         except _KitRefused as exc:
-            return self._ignore(f"kit: {exc}")
+            return self._refuse_kit(str(exc))
         self.daemon.spool.append_event(
             "kit.received", {"name": written, "bytes": total, "sha256": digest}
         )
@@ -380,6 +405,15 @@ class PhoneChannel:
         log.info("phone: %s", text)
         await self.daemon.notifier.answer(KIT_TITLE, text)
         return None
+
+    def _refuse_kit(self, why: str) -> None:
+        """An authenticated `kit` refused: logged, and filed as `kit.refused` (§27).
+
+        `why` is hands' own text naming the check; it never carries the attachment's
+        name or URL. A `kit` with a bad secret is only logged, like any command.
+        """
+        self.daemon.spool.append_event("kit.refused", {"reason": why})
+        self._ignore(f"kit: {why}")
 
     def _is_secret(self, token: str) -> bool:
         secret = self.notify.cmd_secret
@@ -429,6 +463,23 @@ def status_summary(daemon: Daemon) -> str:
 
 class _KitRefused(Exception):
     """A kit download that is not written; the text is the logged reason."""
+
+
+def _is_http_url(url: object) -> bool:
+    """An http(s) URL httpx can parse, with a host (review 10 should-fix 6).
+
+    `httpx.InvalidURL` is not an `httpx.HTTPError`: raised from the fetch it
+    escaped the refusal path, so it is caught here, before any request.
+    """
+    import httpx
+
+    if not isinstance(url, str) or not url.startswith(("https://", "http://")):
+        return False
+    try:
+        parsed = httpx.URL(url)
+    except (httpx.InvalidURL, ValueError, TypeError):
+        return False
+    return parsed.scheme in ("http", "https") and bool(parsed.host)
 
 
 def _is_kit_name(name: object) -> bool:
@@ -485,7 +536,7 @@ async def fetch_kit(
                                     )
                                 digest.update(chunk)
                                 out.write(chunk)
-            except httpx.HTTPError as exc:
+            except (httpx.HTTPError, httpx.InvalidURL) as exc:
                 raise _KitRefused(f"the download failed ({_failure(exc)})") from exc
             except TimeoutError as exc:
                 raise _KitRefused(f"the download took longer than {KIT_DEADLINE_S:.0f} s") from exc

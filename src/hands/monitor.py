@@ -394,6 +394,28 @@ def start_time(pid: int, *, proc_root: Path = PROC_ROOT) -> int | None:
         return None
 
 
+def environ_has(pid: int, name: str, value: str, *, proc_root: Path = PROC_ROOT) -> bool | None:
+    """Does `/proc/<pid>/environ` hold `name=value`? None when no live process holds
+    `pid` any more (it exited, or is a zombie, since it was listed) (§27).
+
+    The environment read is the one the process was exec'd with. One that cannot be
+    read (another user's process, or one that made itself undumpable) is False.
+    """
+    try:
+        data = (proc_root / str(pid) / "environ").read_bytes()
+    except (FileNotFoundError, ProcessLookupError):
+        return None
+    except OSError:
+        data = b""
+    if f"{name}={value}".encode() in data.split(b"\0"):
+        return True
+    text = _read(proc_root / str(pid) / "stat")
+    if not text or ")" not in text:
+        return None
+    fields = text[text.rindex(")") + 1 :].split()
+    return None if fields and fields[0] in ("Z", "X") else False
+
+
 def cmdline(pid: int, *, proc_root: Path = PROC_ROOT) -> str:
     """`/proc/<pid>/cmdline` with NULs as spaces, capped at `MAX_CMDLINE` (§24).
 

@@ -14,12 +14,14 @@ import io
 import json
 import re
 import subprocess
+import warnings
 import zipfile
 from pathlib import Path
 
 import pytest
 
 from conftest import strip_paths
+from hands import kit as kit_mod
 from hands.cli import main
 
 ROOT = Path(__file__).parents[1]
@@ -93,7 +95,10 @@ then = "stop"
 message = "Mission {n} reviewed clean"
 """
 
-PROTOCOL = "# REVIEW-PROTOCOL\n\nYour reply's first line is exactly:\n\n    VERDICT: review\n"
+PROTOCOL = (
+    "# REVIEW-PROTOCOL\n\nYour reply's first line is exactly:\n\n"
+    "    VERDICT: review mission N blockers=<k> should-fix=<m>\n"
+)
 
 
 def run_check(kit: Path, repo: Path | None, *extra: str) -> tuple[int, str, str]:
@@ -170,10 +175,13 @@ def test_a_passing_dir_kit_prints_six_passes_and_the_apply_prompt(
     assert "Reply with one line: VERDICT: kit applied <sha>." in strip_paths(flat), out
     # The kit carries a playbook, so it is the one in force and its kickoff is compared.
     assert "the kit's PLAYBOOK.toml" in strip_paths(line(out, "playbook"))
-    # §26's regex ↔ literal check covers builder.done; the aux rule is said, not hidden.
+    # §27: builder.done rules against the brief, aux.done against the protocol.
     verdicts = line(out, "verdicts")
     assert "VERDICT: kit applied <sha>" in strip_paths(verdicts)
-    assert "not matched against the brief" in strip_paths(verdicts)
+    assert (
+        "1 aux.done verdict rule(s) match the review protocol's "
+        "'VERDICT: review mission N blockers=<k> should-fix=<m>'"
+    ) in strip_paths(verdicts)
 
 
 def test_a_passing_zip_kit(tmp_path: Path, repo: Path) -> None:
@@ -235,7 +243,10 @@ def test_a_kit_that_does_not_exist_is_an_error(tmp_path: Path, repo: Path) -> No
 
 @pytest.mark.parametrize(
     "name",
-    ["../escape.md", "/etc/passwd", "meta/../../x.md", "a\\b.md", "C:/x.md", ".git/config"],
+    [
+        "../escape.md", "/etc/passwd", "meta/../../x.md", "a\\b.md", "C:/x.md", ".git/config",
+        ".GIT/config", "docs/.Git/hooks/post-checkout",
+    ],
 )
 def test_a_zip_entry_that_is_not_a_repository_path_fails(
     tmp_path: Path, repo: Path, name: str
@@ -247,6 +258,60 @@ def test_a_zip_entry_that_is_not_a_repository_path_fails(
         archive.writestr(name, "x")
     code, out, _ = run_check(kit, repo)
     assert name in strip_paths(assert_failed_only(code, out, "paths"))
+
+
+def zipped(kit: Path, extra: list[tuple[str, bytes]]) -> Path:
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")  # zipfile warns on a duplicate name, and writes it
+        with zipfile.ZipFile(kit, "w") as archive:
+            for good, text in good_kit().items():
+                archive.writestr(good, text)
+            for name, data in extra:
+                archive.writestr(name, data)
+    return kit
+
+
+def test_a_zip_with_a_duplicate_entry_name_fails(tmp_path: Path, repo: Path) -> None:
+    """Review 10 should-fix 5: the second entry was silently collapsed into the first."""
+    kit = zipped(tmp_path / "dup.zip", [("docs/NOTE.md", b"one"), ("docs/NOTE.md", b"two")])
+    failed = assert_failed_only(*run_check(kit, repo)[:2], "paths")
+    assert "docs/NOTE.md (a duplicate entry)" in strip_paths(failed)
+
+
+def test_a_zip_entry_name_with_a_nul_fails(tmp_path: Path, repo: Path) -> None:
+    """zipfile cuts a name at its first NUL (`docs/a`); the name as stored is checked."""
+    kit = zipped(tmp_path / "nul.zip", [("docs/aXb.md", b"x")])
+    kit.write_bytes(kit.read_bytes().replace(b"docs/aXb.md", b"docs/a\x00b.md"))
+    failed = assert_failed_only(*run_check(kit, repo)[:2], "paths")
+    assert "docs/a\\0b.md (a NUL in the name)" in strip_paths(failed)
+
+
+@pytest.mark.parametrize("cap", ["entry", "total"])
+def test_a_zip_over_the_size_cap_fails_before_its_bytes_are_read(
+    tmp_path: Path, repo: Path, monkeypatch: pytest.MonkeyPatch, cap: str
+) -> None:
+    """The sizes are the zip directory's, read before any entry is decompressed."""
+    kit = zipped(tmp_path / "big.zip", [("docs/BIG.md", b"x" * 5000)])
+    if cap == "entry":
+        monkeypatch.setattr(kit_mod, "MAX_ENTRY_BYTES", 4096)
+        said = "docs/BIG.md (5000 bytes, over the 4096-byte cap on one entry)"
+    else:
+        monkeypatch.setattr(kit_mod, "MAX_TOTAL_BYTES", 4096)
+        said = "over the 4096-byte cap on a kit's total"
+    read: list[str] = []
+    real = zipfile.ZipFile.read
+
+    def reading(self: zipfile.ZipFile, name: object, pwd: bytes | None = None) -> bytes:
+        read.append(getattr(name, "filename", str(name)))
+        return real(self, name, pwd)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(zipfile.ZipFile, "read", reading)
+    code, out, _ = run_check(kit, repo)
+    assert code == 1
+    assert line(out, "paths").startswith("FAIL") and said in strip_paths(line(out, "paths"))
+    assert read.count("docs/BIG.md") == 0
+    if cap == "total":
+        assert read == []
 
 
 def test_a_zip_symlink_entry_fails(tmp_path: Path, repo: Path) -> None:
@@ -366,6 +431,55 @@ def test_a_rule_that_matches_only_a_literal_nobody_prints_fails_even_beside_kit_
     assert "kit rejected" in strip_paths(assert_failed_only(code, out, "verdicts"))
 
 
+def test_a_builder_rule_with_a_broken_branch_is_not_excused_by_the_apply_literal(
+    tmp_path: Path, repo: Path
+) -> None:
+    """Review 10 should-fix 4's probe: the `misison` branch can never match the
+    builder's reply; matching `VERDICT: kit applied <sha>` does not excuse it."""
+    probe = "'^VERDICT: (kit applied|misison \\d+ finished)'"
+    book = PLAYBOOK.replace("'^VERDICT: kit applied'", probe)
+    kit = write_tree(tmp_path / "k", {**good_kit(), "PLAYBOOK.toml": book})
+    code, out, _ = run_check(kit, repo)
+    assert "misison" in strip_paths(assert_failed_only(code, out, "verdicts"))
+
+
+def test_a_review_rule_that_matches_nothing_the_protocol_says_fails(
+    tmp_path: Path, repo: Path
+) -> None:
+    """§27 (H-021): aux.done rules are checked against the protocol's VERDICT line."""
+    book = PLAYBOOK.replace("blockers=0'", "blockers=none'")
+    kit = write_tree(tmp_path / "k", {**good_kit(), "PLAYBOOK.toml": book})
+    code, out, _ = run_check(kit, repo)
+    failed = assert_failed_only(code, out, "verdicts")
+    assert "blockers=none" in strip_paths(failed)
+    assert "VERDICT: review mission N blockers=<k> should-fix=<m>" in strip_paths(failed)
+
+
+def test_the_protocol_placeholders_are_read_as_counts(tmp_path: Path, repo: Path) -> None:
+    """`N`, `<k>`, `<m>` stand for digits: `blockers=[1-9]` matches, `blockers=x` not."""
+    extra = (
+        "\n[[rule]]\non = \"aux.done\"\nverdict = '^VERDICT: review mission \\d+ "
+        "blockers=[1-9]\\d* should-fix=\\d+$'\nthen = \"stop\"\nmessage = \"m\"\n"
+    )
+    kit = write_tree(tmp_path / "k", {**good_kit(), "PLAYBOOK.toml": PLAYBOOK + extra})
+    code, out, err = run_check(kit, repo)
+    assert code == 0, out + err
+    bad = extra.replace("blockers=[1-9]", "blockers=x")
+    kit = write_tree(tmp_path / "k2", {**good_kit(), "PLAYBOOK.toml": PLAYBOOK + bad})
+    code, out, _ = run_check(kit, repo)
+    assert "blockers=x" in strip_paths(assert_failed_only(code, out, "verdicts"))
+
+
+def test_a_review_rule_with_no_protocol_verdict_line_fails(tmp_path: Path) -> None:
+    bare = write_tree(
+        tmp_path / "bare", {"meta/REVIEW-PROTOCOL.md": "# REVIEW-PROTOCOL\n\nNo line here.\n"}
+    )
+    kit = write_tree(tmp_path / "k", good_kit())
+    code, out, _ = run_check(kit, bare)
+    failed = assert_failed_only(code, out, "verdicts")
+    assert "no review vocabulary" in strip_paths(failed)
+
+
 def test_a_brief_without_a_kickoff_line_fails(tmp_path: Path, repo: Path) -> None:
     brief = BRIEF.replace("Kickoff line (the only", "Start (the only")
     kit = write_tree(tmp_path / "k", {**good_kit(), "meta/BUILDER-11-PROMPT.md": brief})
@@ -397,7 +511,7 @@ def test_the_runs_form_reads_workplan_and_reply_with_one_of(tmp_path: Path, repo
         "<reason>` | `VERDICT: question <one line>`\n"
     )
     book = (
-        PLAYBOOK.replace("mission (?P<n>", "run (?P<n>")
+        PLAYBOOK.replace("VERDICT: mission (?P<n>", "VERDICT: run (?P<n>")
         .replace("Read meta/BUILDER-11-PROMPT.md and execute the mission below its divider.",
                  "Execute WORKPLAN.md run 1")
     )  # fmt: skip
@@ -431,9 +545,43 @@ def test_a_protocol_file_named_by_a_send_that_is_nowhere_fails(tmp_path: Path) -
     bare = write_tree(tmp_path / "bare", {"PLAYBOOK.toml": PLAYBOOK})
     kit = write_tree(tmp_path / "k", good_kit())
     code, out, _ = run_check(kit, bare)
-    failed = assert_failed_only(code, out, "protocol")
+    # With the protocol missing, the aux.done rule has no review line to match
+    # either (§27), so verdicts fails beside protocol and points at it.
+    assert code == 1
+    for other in ("paths", "playbook", "brief", "wording"):
+        assert line(out, other).startswith("PASS"), (other, out)
+    failed = line(out, "protocol")
+    assert failed.startswith("FAIL")
     assert "meta/REVIEW-PROTOCOL.md" in strip_paths(failed)
     assert "REVIEW-{n}" not in strip_paths(failed)
+    assert line(out, "verdicts").startswith("FAIL")
+    assert "(see protocol)" in strip_paths(line(out, "verdicts"))
+
+
+@pytest.mark.parametrize("named", ["../X.md", "~/X.md", "/etc/X.md", "meta/../X.md"])
+def test_a_send_path_the_check_cannot_resolve_fails(
+    tmp_path: Path, repo: Path, named: str
+) -> None:
+    """Review 10 should-fix 5: such a path was skipped, so it passed unchecked."""
+    book = PLAYBOOK.replace(
+        "Read meta/REVIEW-PROTOCOL.md,", f"Read meta/REVIEW-PROTOCOL.md and {named},"
+    )
+    assert book != PLAYBOOK
+    kit = write_tree(tmp_path / "k", {**good_kit(), "PLAYBOOK.toml": book})
+    code, out, _ = run_check(kit, repo)
+    failed = assert_failed_only(code, out, "protocol")
+    assert named in strip_paths(failed) and "not a repository path" in strip_paths(failed)
+
+
+def test_a_protocol_path_that_lands_outside_the_repo_fails(tmp_path: Path) -> None:
+    outside = write_tree(tmp_path / "outside", {"REVIEW-PROTOCOL.md": PROTOCOL})
+    bare = write_tree(tmp_path / "bare", {"README.md": "x"})
+    (bare / "meta").symlink_to(outside)
+    kit = write_tree(tmp_path / "k", good_kit())
+    code, out, _ = run_check(kit, bare)
+    assert code == 1
+    assert line(out, "protocol").startswith("FAIL")
+    assert "meta/REVIEW-PROTOCOL.md" in strip_paths(line(out, "protocol"))
 
 
 def test_a_protocol_file_carried_by_the_kit_passes(tmp_path: Path) -> None:

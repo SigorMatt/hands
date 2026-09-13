@@ -69,9 +69,10 @@ Unknown keys are refused, at the top level, in `[series]`, in `[limits]` and in 
 phone's `cmd_topic` sends exactly that line to the builder as a `clear` send,
 and the job record says `origin: phone` (docs/INTEGRATION.md, the command
 channel). The send goes through the same path as `hands send`, so the gate
-patterns still apply. `go` is refused while the builder has a job running or
-queued, when there is no playbook (or it cannot be loaded), and when the
-playbook has no `kickoff`.
+patterns still apply. `go` is refused while the builder has a job running,
+queued or held (DESIGN §27; the refusal names the job, and the builder is
+checked again once the playbook is read), when there is no playbook (or it
+cannot be loaded), and when the playbook has no `kickoff`.
 
 The series' name goes in the table as `name` when the table is used. TOML does
 not allow `series = "<name>"` and a `[series]` table in the same file: the
