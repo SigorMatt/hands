@@ -1,26 +1,24 @@
 # CHECKPOINT
 
 Mission: 10 (meta/BUILDER-10-PROMPT.md, DESIGN v3.9 §26)
-Unit in progress: U2 `[series] kickoff` and `go` (§10, §11, §26; H-018 gaps 1, 2).
-Intent:
-- Playbook loader accepts `[series] kickoff = "<line>"` (optional, non-empty
-  string per §20); any other key in `[series]` refused at load.
-- Phone channel (`cmd_topic`) accepts `go <secret>`. Refused, with a logged
-  reason, when no playbook is loaded, when `[series] kickoff` is absent, or when
-  the builder has a running or queued job. Otherwise: that line as a `clear`
-  send to the builder with `origin: phone`, and an answer on `ntfy_topic` with
-  the job id.
-- H-018 gap 1: `phone` added to the origin vocabulary (spool ORIGINS). Gap 2:
-  `phone` un-pauses the pipeline when its job starts (UNPAUSE_ORIGINS), so a `go`
-  after a stop chains the review; a paused playbook is still "loaded".
-- docs/PLAYBOOK.md and docs/INTEGRATION.md updated; root PLAYBOOK.toml gains
-  `[series] kickoff = "Read meta/BUILDER-11-PROMPT.md and execute the mission
-  below its divider."`.
-Done means: one commit, body names U2, §10/§11/§26, H-018, lists every file;
-tests for each refusal and the happy path; the playbook end-to-end still
-passes; pushed; ./scripts/check green 3/3.
+Unit in progress: U3 Kit transport (§26, §13, §24/§25 phone channel).
+Intent: a `cmd_topic` message with body `kit <secret>` and an ntfy attachment:
+handsd reads `attachment.url`/`name`/`size` from the ntfy message; refuses a
+name that is not a `.zip` basename; refuses a size over `[files] kit_max_mb`
+(default 20) before downloading (ntfy reports the size; also cap while
+streaming); writes into `[files] kit_dir` (default `~/Downloads`, must be an
+allowed root) atomically (temp file in the same dir, rename); never unzips,
+never executes; an existing name gets a numeric suffix, never overwritten;
+files `kit.received` to the inbox and a notification
+`kit received <name> <bytes> <sha256>`. Refusals are logged without the secret.
+Done means: one commit, body names U3, §26/§13, lists every file; tests with a
+mocked ntfy stream and a local HTTP server for the attachment: happy path,
+oversize, bad name, duplicate name, missing secret; pushed; ./scripts/check
+green 3/3.
 Base: 61e1486.
-Done: U0 cbb8fc8 (1435 passed); U1 17ba97e (1443).
+Done: U0 cbb8fc8 (1435 passed); U1 17ba97e (1443); U2 067b8fd (1461).
+Carried to U5: H-019 — templates/PLAYBOOK-*.toml carry `series = "…"` beside
+`[series]`, which TOML refuses; the loader takes `[series] name`.
 Standing constraints: one foreground sub-agent per product unit, commit and
 push every unit, ./scripts/check green three consecutive runs before each
 commit, explicit paths only in `git add` (never `-A`), reports drafted under

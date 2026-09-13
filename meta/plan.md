@@ -15,7 +15,11 @@ templates)`).
 - [x] U1 REVIEW-9 SF1 and SF3 (+ SF2 code half, H-018 gap 3) 17ba97e — kill
       tied to claude's recorded start time (also in the post-exit sweep); symlinked
       playbook still refused; other GIT_* vars still inherited
-- [ ] U2 `[series] kickoff` and `go` (§10, §11, §26; H-018 gaps 1, 2)
+- [x] U2 `[series] kickoff` and `go` (§10, §11, §26; H-018 gaps 1, 2) 067b8fd —
+      `[series]` table takes `name` + `kickoff` (TOML forbids `series = "…"`
+      beside `[series]`; the templates as written do not parse): H-019 filed,
+      templates reconciled in U5; gate runs done in a throwaway worktree because
+      the root-playbook test needs PLAYBOOK.toml to match HEAD
 - [ ] U3 Kit transport (§26, §13)
 - [ ] U4 Who by pid (§26)
 - [ ] U5 `hands kit check`; handbook and templates against the code (§4, §26)
