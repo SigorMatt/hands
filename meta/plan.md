@@ -25,7 +25,11 @@ Base of the mission: 0fef436 (`plan: mission 11 kit (DESIGN v3.10)`).
       outside the repo / absolute / `..` / a missing protocol path refused;
       malformed attachment URL refused before any fetch with `kit.refused`;
       INTEGRATION :304 name-clash wording
-- [ ] U2 Who by the sessions file (§27; H-020; REVIEW-10 blocker 1)
+- [x] U2 Who by the sessions file (§27; H-020; REVIEW-10 blocker 1) 525dc66 —
+      transcript by `<sessionId>.jsonl` (cwd project dir first, then any); bad
+      or foreign sessions file = no file (`by directory`); job transcript = a
+      session id held by any spool job record; another human's transcript can
+      still show under `by directory`
 - [ ] U3 The apply from the kit (§27; REVIEW-10 SF2; H-018 `kit` origin and
       un-pause for `phone`/`kit`)
 - [ ] U4 The driver role (§8, §27)
