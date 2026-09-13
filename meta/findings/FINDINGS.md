@@ -1018,3 +1018,66 @@ is dropped) so they load; §10/§26 in the next DESIGN revision state the
 table's keys (a different choice there supersedes this one).
 
 Status: open (code U2; templates U5; DESIGN next revision)
+
+## H-020 — no transcript records a pid; §26's "the transcript's first line records" it does not hold
+
+Severity: medium · Component: DESIGN §26 (`hands who` bullet), §4 `who` row,
+§11/§24 who view; `src/hands/who.py`
+Filed by: mission 10, U4 (BACKLOG "Mission 10" item 4). No code changed.
+
+The claim. §26: "`hands who` matches an interactive session to its transcript
+by pid, which the transcript's first line records, never by directory". U4's
+brief: find that field in real transcripts; if none records a pid, stop and
+file this memo instead of inventing one.
+
+Evidence (Claude Code 2.1.270, this machine, 2026-09-13; read-only; ids, paths
+and content replaced by placeholders):
+
+1. First line of every transcript, `~/.claude/projects/*/*.jsonl` (470 files),
+   tallied by `type` and key set:
+   ```
+   353 queue-operation  {content, operation, sessionId, timestamp, type}
+    93 custom-title     {customTitle, sessionId, type}
+    22 mode             {mode, sessionId, type}
+     2 ai-title         {aiTitle, sessionId, type}
+   ```
+   No first line carries a pid. The first `user` entry carries `cwd`,
+   `sessionId`, `entrypoint`, `version`, `gitBranch`, `permissionMode`,
+   `userType`, `promptSource`, `promptId`, `uuid`, `parentUuid`,
+   `isSidechain`, `timestamp`, `message` — no pid.
+2. Every key on every line of all 470 transcripts (138,369 lines; `message`,
+   `toolUseResult`, `content`, `snapshot`, `attachment` payloads excluded as
+   user data), matched against `(?i).*(pid|process_?id|processid)`: no key.
+   The only `pid`-substring keys in a 50-lines-per-file scan were
+   `totalAPIDuration` and `totalAPIDurationWithoutRetries`.
+3. For each live `claude` process from `pgrep -x claude` (3: two interactive,
+   one `claude -p` hands job), `grep -E '"[A-Za-z_]*[Pp]id"\s*:\s*"?<pid>\b'`
+   over all transcripts: no file.
+
+Where the pid IS recorded: outside the transcript, in
+`~/.claude/sessions/<pid>.json`, one file per live process:
+```
+{"pid": <pid>, "sessionId": "<uuid>", "cwd": "<path>", "kind": "interactive",
+ "entrypoint": "cli" | "sdk-cli", "startedAt": <ms>, "procStart": "<s>",
+ "status": "<s>", "updatedAt": <ms>, "version": "<s>", "name": "<s>", ...}
+```
+(plus a `<pid>.<hash>.key` file holding a peer token, not read further). For all
+3 live processes `sessionId` names an existing transcript
+`~/.claude/projects/<dir>/<sessionId>.jsonl`. The hands job (`claude -p`) also
+writes one, with `kind: "interactive"` and `entrypoint: "sdk-cli"`; the two
+human sessions have `entrypoint: "cli"`. So `kind` does not separate a job
+from a human session here; `entrypoint` did in this sample of 3.
+
+Why U4 stops. Matching through `~/.claude/sessions/<pid>.json` → `sessionId` →
+transcript basename would meet §26's intent (a job in the same directory never
+shown under the human's session), but it reads a file §26 does not name, whose
+format is undocumented, and whose `.key` sibling holds a credential-like token.
+That is a design choice, not a silence to fill.
+
+Needs: the next DESIGN revision states the source of the pid → transcript
+match (e.g. `~/.claude/sessions/<pid>.json` `sessionId`, reading only `pid` and
+`sessionId`, never the `.key` file), what is shown when that file is absent
+(the `transcript: by directory` fallback), and whether `entrypoint` may be
+used. U4 is then re-run against it.
+
+Status: open (U4 blocked on DESIGN)
