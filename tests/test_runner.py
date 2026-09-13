@@ -21,6 +21,7 @@ import pytest
 from conftest import kill_quietly, process_live, strip_paths
 from hands.config import Config, parse_config
 from hands.limits import from_iso
+from hands.monitor import group_pids
 from hands.runner import (
     GROUP,
     MAX_LAST_ARGV,
@@ -443,6 +444,21 @@ def test_an_error_subtype_is_a_final_result_and_fails_as_an_error(
 ) -> None:
     """The error family of claude 2.1.x's result subtypes counts as §23's `error`."""
     job = send(runner, spool, f"FAKE:error stopped\nFAKE:subtype {subtype}")
+    assert job.state == "failed"
+    assert job.failure_reason == "error_result"
+
+
+@pytest.mark.parametrize("subtype", ["error", "error_max_turns", "error_during_execution"])
+def test_an_error_subtype_fails_as_an_error_even_when_is_error_is_false(
+    runner: Runner, spool: Spool, subtype: str
+) -> None:
+    """§6 (REVIEW-9 should-fix 2, H-018 gap 3): the subtype decides, not `is_error`.
+    FAKE:subtype without FAKE:error emits `is_error: false`, `num_turns` and exit 0."""
+    job = send(runner, spool, f"FAKE:result partial\nFAKE:subtype {subtype}")
+    events = [json.loads(line) for line in spool.stream_path(job.id).read_text().splitlines()]
+    final = [event for event in events if event.get("type") == "result"]
+    assert [(e["subtype"], e["is_error"]) for e in final] == [(subtype, False)]
+    assert (job.exit_code, job.num_turns) == (0, 1)
     assert job.state == "failed"
     assert job.failure_reason == "error_result"
 
@@ -1041,32 +1057,116 @@ def test_a_cancelled_jobs_orphan_is_reported_and_killed(
             kill_quietly(int(pidfile.read_text()))
 
 
-@pytest.mark.parametrize(
-    ("members", "killed"),
-    [([], False), ([424242, 424243], True)],
-    ids=["no-members", "members"],
-)
-def test_the_last_resort_signals_a_group_only_while_it_has_members(
-    runner: Runner,
-    spool: Spool,
-    monkeypatch: pytest.MonkeyPatch,
-    members: list[int],
-    killed: bool,
-) -> None:
-    """Review 8 should-fix 3: an empty group's id may belong to someone else now."""
-    asked: list[int] = []
-    kills: list[tuple[int, int]] = []
+def _start_ticks(pid: int) -> int:
+    """Field 22 of `/proc/<pid>/stat`: the start time, in clock ticks since boot."""
+    text = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8")
+    return int(text[text.rindex(")") + 1 :].split()[19])
 
-    def fake_group_pids(pgid: int) -> list[int]:
-        asked.append(pgid)
-        return list(members)
 
-    monkeypatch.setattr("hands.runner.group_pids", fake_group_pids)
-    monkeypatch.setattr(os, "killpg", lambda pgid, signum: kills.append((pgid, signum)))
+def _exit_within(proc: subprocess.Popen[bytes], seconds: float) -> int | None:
+    try:
+        return proc.wait(timeout=seconds)
+    except subprocess.TimeoutExpired:
+        return None
+
+
+def _reused_group(runner: Runner, spool: Spool) -> tuple[Job, subprocess.Popen[bytes]]:
+    """REVIEW-9 should-fix 1's case: claude was reaped, its pid was free, and a new
+    session leader took it, so a group with the job's pid as its id has members
+    again. The recorded leader is claude, which started before the new one."""
+    other = subprocess.Popen(["sleep", "30"], start_new_session=True)
     job = spool.create_job(role="builder", context="clear", prompt="x", origin="cli")
-    job.pid = 424242
+    job.pid = other.pid
+    runner._leader_start = {job.id: _start_ticks(other.pid) - 1}
+    return job, other
 
-    runner._last_resort(job, GROUP)
 
-    assert asked == [424242]
-    assert kills == ([(424242, signal.SIGKILL)] if killed else [])
+def test_the_last_resort_leaves_a_reused_group_alone(runner: Runner, spool: Spool) -> None:
+    """A membership check cannot tell this group from claude's; the start time can."""
+    job, other = _reused_group(runner, spool)
+    try:
+        runner._last_resort(job, GROUP)
+        assert _exit_within(other, 0.5) is None, "the reused group was killed"
+    finally:
+        other.kill()
+        other.wait()
+
+
+def test_the_sweep_leaves_a_reused_group_alone(runner: Runner, spool: Spool) -> None:
+    """The sweep runs after claude is reaped, so it has the same window."""
+    job, other = _reused_group(runner, spool)
+    seen: list[object] = []
+    runner.on_orphans = lambda job, processes, isolation: seen.append(processes)
+    try:
+        assert asyncio.run(runner._sweep(job, GROUP)) == []
+        assert seen == []
+        assert _exit_within(other, 0.5) is None, "the reused group was killed"
+    finally:
+        other.kill()
+        other.wait()
+
+
+def test_the_last_resort_kills_the_group_while_its_leader_is_the_one_spawned(
+    runner: Runner, spool: Spool
+) -> None:
+    leader = subprocess.Popen(["sleep", "30"], start_new_session=True)
+    try:
+        job = spool.create_job(role="builder", context="clear", prompt="x", origin="cli")
+        job.pid = leader.pid
+        runner._leader_start = {job.id: _start_ticks(leader.pid)}
+        runner._last_resort(job, GROUP)
+        assert _exit_within(leader, 5) == -signal.SIGKILL
+    finally:
+        leader.kill()
+        leader.wait()
+
+
+def test_the_last_resort_kills_the_members_of_a_group_whose_leader_was_reaped(
+    runner: Runner, spool: Spool
+) -> None:
+    """While a member holds the id as its group, the pid cannot be reused: the group
+    is still the job's, whatever start time was recorded."""
+    leader = subprocess.Popen(["sh", "-c", "sleep 30 & exit 0"], start_new_session=True)
+    leader.wait()  # reaped: /proc/<pgid> is gone, the background sleep is not
+    members = group_pids(leader.pid)
+    assert members, "the background sleep should still be in the group"
+    try:
+        job = spool.create_job(role="builder", context="clear", prompt="x", origin="cli")
+        job.pid = leader.pid
+        runner._leader_start = {job.id: 1}
+        runner._last_resort(job, GROUP)
+
+        async def gone() -> None:
+            await until(lambda: not any(process_live(pid) for pid in members), "members dead", 5)
+
+        asyncio.run(gone())
+    finally:
+        for pid in members:
+            kill_quietly(pid)
+
+
+def test_a_cancelled_run_is_killed_by_the_last_resort_through_run(
+    runner: Runner, spool: Spool
+) -> None:
+    """The exception path of `run()` itself: the start time recorded at spawn is
+    claude's, so the still-running claude is killed."""
+
+    async def body() -> int:
+        job, task = start(runner, spool, "FAKE:block\nFAKE:ignore-int")
+        await runner.wait_for_session(job.id)
+        pid = spool.load_job(job.id).pid
+        assert pid is not None and process_live(pid)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        return pid
+
+    pid = asyncio.run(asyncio.wait_for(body(), 30))
+    try:
+
+        async def gone() -> None:
+            await until(lambda: not process_live(pid), "claude to die", 5)
+
+        asyncio.run(gone())
+    finally:
+        kill_quietly(pid)

@@ -376,6 +376,24 @@ def group_pids(pgid: int, *, proc_root: Path = PROC_ROOT) -> list[int]:
     return sorted(found)
 
 
+def start_time(pid: int, *, proc_root: Path = PROC_ROOT) -> int | None:
+    """Field 22 of `/proc/<pid>/stat`, the process's start time in clock ticks since
+    boot, or None when no process holds `pid` (§24).
+
+    A zombie still has its entry and its start time. Two processes that held the
+    same pid one after the other have different start times, which is how the
+    runner tells the job's process group from a later one with the same id.
+    """
+    text = _read(proc_root / str(pid) / "stat")
+    if not text or ")" not in text:
+        return None
+    fields = text[text.rindex(")") + 1 :].split()
+    try:
+        return int(fields[19])
+    except (IndexError, ValueError):  # pragma: no cover - a torn read
+        return None
+
+
 def cmdline(pid: int, *, proc_root: Path = PROC_ROOT) -> str:
     """`/proc/<pid>/cmdline` with NULs as spaces, capped at `MAX_CMDLINE` (§24).
 

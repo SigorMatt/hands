@@ -65,6 +65,7 @@ from hands.monitor import (
     cmdline,
     descendants_of,
     group_pids,
+    start_time,
 )
 from hands.spool import TERMINAL_STATES, Job, Spool, SpoolError
 
@@ -183,7 +184,9 @@ MAX_UNIT_PROJECT = 64
 #: Every `failure_reason` the runner writes, in the order it checks them (§23):
 #:   harness_terminated  stderr carried the harness's `terminating` line
 #:   no_final_result     no `result` event, or its subtype is not success/error_*
-#:   error_result        the final result says `is_error`
+#:   error_result        the final result's subtype is `error`/`error_*`, or it
+#:                       says `is_error` (§6: the subtype decides, whatever
+#:                       `is_error` says)
 #:   nonzero_exit        a clean result, but the process exited non-zero
 #:   no_num_turns        a clean result with no `num_turns`
 #:   spawn_error         the process could not be started at all
@@ -418,6 +421,10 @@ class Runner:
         self.isolation: str | None = None
         #: job id → the isolation its process was started under, for the run only.
         self._isolated: dict[str, str] = {}
+        # Job id -> the start time of the process group's leader (claude) read
+        # at spawn, None when it could not be read: what ties a group kill to
+        # the job's own group and not a later one with the same id (§24).
+        self._leader_start: dict[str, int | None] = {}
         #: Handed (job, processes, isolation) once claude has exited, when anything
         #: is still alive in its scope or group; each process is {pid, cmdline}. The
         #: daemon passes the monitor's `orphan_processes` (§24). Killed afterwards.
@@ -575,6 +582,8 @@ class Runner:
         self._procs[job.id] = proc
         self._isolated[job.id] = isolation
         job.pid = proc.pid
+        if isolation == GROUP:
+            self._leader_start[job.id] = start_time(proc.pid)
         self.spool.save_job(job)
         self._running.setdefault(job.id, asyncio.Event()).set()
 
@@ -609,6 +618,7 @@ class Runner:
             if not swept:
                 self._last_resort(job, isolation)
             self._isolated.pop(job.id, None)
+            self._leader_start.pop(job.id, None)
             self._close_log(job.id)
             self._procs.pop(job.id, None)
             self._running.pop(job.id, None)
@@ -653,8 +663,10 @@ class Runner:
                 "show", "--property", "ControlGroup", "--value", f"{unit}.scope"
             )
             pids = cgroup_pids(path) if path else []
-        else:
+        elif self._group_is_the_jobs(job):
             pids = group_pids(job.pid)
+        else:
+            pids = []  # the id was reused after claude was reaped: not the job's
         processes = [{"pid": pid, "cmdline": cmdline(pid)} for pid in pids[:MAX_PIDS]]
         if not processes:
             return []
@@ -674,7 +686,7 @@ class Runner:
         if isolation == SCOPE:
             await _systemctl("stop", f"{unit}.scope", timeout=SCOPE_STOP_S)
         else:
-            await _kill_group(job.pid)
+            await _kill_group(job.pid, self._leader_start.get(job.id))
         return processes
 
     def _last_resort(self, job: Job, isolation: str) -> None:
@@ -691,11 +703,18 @@ class Runner:
                     stderr=subprocess.DEVNULL,
                     timeout=PROBE_S,
                 )
-        elif group_pids(job.pid):
-            # Only a group with live members: an empty group's id may already be
-            # another session leader's (review 8 should-fix 3), as in `_kill_group`.
+        elif self._group_is_the_jobs(job):
+            # Not a membership check: a group with members can be a new session
+            # leader's that took claude's pid after claude was reaped (review 9
+            # should-fix 1), and an empty group only makes killpg fail. The leader's
+            # start time recorded at spawn tells claude's group from a later one.
             with contextlib.suppress(OSError):
                 os.killpg(job.pid, signal.SIGKILL)
+
+    def _group_is_the_jobs(self, job: Job) -> bool:
+        """Is the process group whose id is `job.pid` still the job's own? (§24)"""
+        assert job.pid is not None
+        return _group_is_the_jobs(job.pid, self._leader_start.get(job.id))
 
     # -------------------------------------------------------------- internals
 
@@ -894,8 +913,8 @@ def _failure_reason(parsed: _Parsed, exit_code: int | None) -> str | None:
         return "harness_terminated"  # §6: wins even over a `success` result (H-014)
     if not parsed.saw_result or not _is_final_subtype(parsed.subtype):
         return "no_final_result"
-    if parsed.is_error:
-        return "error_result"
+    if parsed.is_error or parsed.subtype != "success":
+        return "error_result"  # §6: `error`/`error_*` fails whatever `is_error` says
     if exit_code != 0:
         return "nonzero_exit"
     if parsed.num_turns is None:
@@ -933,9 +952,33 @@ def _read_text(path: str) -> str:
         return ""
 
 
-async def _kill_group(pgid: int, grace: float = ORPHAN_GRACE_S) -> None:
-    """SIGTERM the group, wait `grace`, SIGKILL what is left, wait again (§24)."""
+def _group_is_the_jobs(pgid: int, leader_start: int | None) -> bool:
+    """Is process group `pgid` still the one led by the process whose start time
+    was `leader_start` at spawn? (§24, review 9 should-fix 1)
+
+    Linux does not hand a pid out again while a process has it as its pid or as
+    its process-group id. So the group is the job's when its leader (running, or
+    a zombie) still holds the pid with the recorded start time, or when no
+    process holds the pid at all: every member left joined while the id was
+    reserved. It is not the job's when a process with another start time holds
+    the pid: the leader was reaped, the group emptied, and the pid was reused
+    (a leader whose start time could not be read at spawn, None, matches none).
+    This read and the signal sent after it are two steps, not one.
+    """
+    now = start_time(pgid)
+    return now is None or now == leader_start
+
+
+async def _kill_group(
+    pgid: int, leader_start: int | None, grace: float = ORPHAN_GRACE_S
+) -> None:
+    """SIGTERM the group, wait `grace`, SIGKILL what is left, wait again (§24).
+
+    Before each signal the group must still be the job's (`_group_is_the_jobs`).
+    """
     for signum in (signal.SIGTERM, signal.SIGKILL):
+        if not _group_is_the_jobs(pgid, leader_start):
+            return
         with contextlib.suppress(ProcessLookupError, PermissionError):
             os.killpg(pgid, signum)
         deadline = time.monotonic() + grace

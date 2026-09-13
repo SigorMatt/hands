@@ -525,6 +525,45 @@ def test_a_playbook_outside_any_git_repository_is_refused(workdir: Path) -> None
     assert "untracked" in strip_paths(str(refused.value))
 
 
+def test_a_crlf_checkout_of_an_lf_commit_loads(workdir: Path) -> None:
+    """REVIEW-9 should-fix 3, §26: committed with LF, checked out with CRLF under
+    `core.autocrlf=true`; `git status` calls it clean, so it is not refused."""
+    commit_file(workdir, "PLAYBOOK.toml", EXAMPLE)
+    assert EXAMPLE.encode("utf-8").count(b"\r") == 0  # committed with LF only
+
+    def git(*args: str) -> str:
+        done = subprocess.run(
+            ["git", "-C", str(workdir), *args], check=True, capture_output=True, text=True
+        )
+        return done.stdout
+
+    git("config", "--local", "core.autocrlf", "true")
+    (workdir / "PLAYBOOK.toml").unlink()
+    git("checkout", "--", "PLAYBOOK.toml")
+    assert b"\r\n" in (workdir / "PLAYBOOK.toml").read_bytes()
+    assert git("status", "--porcelain") == ""
+
+    book = load_playbook(workdir / "PLAYBOOK.toml", cwd=workdir)
+    assert book is not None
+
+
+def test_git_dir_in_the_daemons_environment_does_not_vouch_for_an_untracked_playbook(
+    tmp_path: Path, workdir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """REVIEW-9 should-fix 3, §26: another repository whose HEAD has an identical file,
+    named by the daemon's GIT_DIR, must not stand in for the playbook's own."""
+    other = tmp_path / "other"
+    commit_file(other, "PLAYBOOK.toml", EXAMPLE)
+    git_repo(workdir)  # the playbook's own repository: a commit, not this file
+    (workdir / "PLAYBOOK.toml").write_text(EXAMPLE)
+    monkeypatch.setenv("GIT_DIR", str(other / ".git"))
+    monkeypatch.setenv("GIT_INDEX_FILE", str(other / ".git" / "index"))
+
+    with pytest.raises(PlaybookError) as refused:
+        load_playbook(workdir / "PLAYBOOK.toml", cwd=workdir)
+    assert "untracked" in strip_paths(str(refused.value))
+
+
 # ----------------------------------------------------------- placeholders (§10)
 
 

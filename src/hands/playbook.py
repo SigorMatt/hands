@@ -142,6 +142,9 @@ class PlaybookNotCommitted(PlaybookError):
 
 #: How long `git show HEAD:<path>` may take before the playbook is refused (§10).
 GIT_SHOW_TIMEOUT_S = 10.0
+#: Environment variables that would point `git show` at another repository,
+#: work tree or index than the one `cwd` is in; never passed to it (§26).
+GIT_ENV_CLEARED = frozenset({"GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE"})
 
 
 class PlaceholderError(Exception):
@@ -375,13 +378,21 @@ def _check_committed(path: Path, raw: bytes, cwd: Path) -> None:
     * git exits zero with other bytes: refused as **dirty**;
     * git cannot be run or does not answer in time: refused — a file that could
       not be compared is not known to be the committed copy.
+
+    §26 (review 9 should-fix 3): git runs without the daemon's `GIT_DIR`,
+    `GIT_WORK_TREE` and `GIT_INDEX_FILE`, so the repository is the one `cwd` is
+    in, and with `core.autocrlf=false`; both sides are compared with CRLF read as
+    LF, so a CRLF checkout of an LF commit is the committed copy. The sha256s
+    named are of the bytes as they are, on disk and in HEAD.
     """
     spec = "HEAD:./" + Path(os.path.relpath(path, cwd)).as_posix()
     working = hashlib.sha256(raw).hexdigest()
+    env = {name: value for name, value in os.environ.items() if name not in GIT_ENV_CLEARED}
     try:
         proc = subprocess.run(
-            ["git", "show", spec],
+            ["git", "-c", "core.autocrlf=false", "show", spec],
             cwd=cwd,
+            env=env,
             stdin=subprocess.DEVNULL,
             capture_output=True,
             timeout=GIT_SHOW_TIMEOUT_S,
@@ -402,12 +413,17 @@ def _check_committed(path: Path, raw: bytes, cwd: Path) -> None:
             "commit it on the series branch (§10)"
         )
     committed = hashlib.sha256(proc.stdout).hexdigest()
-    if committed != working:
+    if _lf(proc.stdout) != _lf(raw):
         raise PlaybookNotCommitted(
             f"{path} is dirty: it differs from `git show {spec}` in {cwd}: "
             f"working sha256 {working}, committed sha256 {committed}; "
             "commit it or restore the committed copy (§10)"
         )
+
+
+def _lf(data: bytes) -> bytes:
+    """`data` with every CRLF read as LF (§26)."""
+    return data.replace(b"\r\n", b"\n")
 
 
 def parse_playbook(text: str, *, path: Path) -> Playbook:
