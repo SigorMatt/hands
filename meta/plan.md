@@ -11,7 +11,12 @@ Base of the mission: 0fef436 (`plan: mission 11 kit (DESIGN v3.10)`).
       H-018..H-021 v3.10 resolutions appended with status lines; REVIEW-10 SF7
       (a test pins docs/INTEGRATION.md's `done` statement to §6; phrase
       containment only)
-- [ ] U1 REVIEW-10 SF1, SF3, SF4, SF5, SF6 (§27) — `go` refused while the
+- [x] U1 REVIEW-10 SF1, SF3, SF4, SF5, SF6 (§27) efe4d56 — descendant = the
+      job's `HANDS_JOB=<id>` env mark in /proc (a member that cleared or hides
+      its env leaves the group unsignalled); apply literal excuses only a plain
+      `^VERDICT: kit applied` rule; aux.done placeholders tried as 0/1/12; any
+      pre-fetch refusal after a good secret files `kit.refused`; zip caps 16/64
+      MiB — `go` refused while the
       builder has a held job (message names it), rechecked after the playbook
       load; sweep signals a group only when its leader is the job's pid and all
       members are descendants (foreign-group test); `kit check`: apply-verdict
