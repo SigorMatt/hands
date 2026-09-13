@@ -16,11 +16,11 @@ The `meta/prototypes/` ruff exclude is already absent from `pyproject.toml`
 at the base (removed by mission 8 U6, a93e3a7); `grep -n prototypes
 pyproject.toml` returns nothing. U0 records this; there is nothing to remove.
 
-- [ ] U0 Plan and corrections (`plan:`) — this file, meta/CHECKPOINT.md;
+- [x] U0 Plan and corrections (`plan:`) 1c17d84 — this file, meta/CHECKPOINT.md;
       H-014 and H-016 get the v3.8 resolutions (§25); H-017 filed for
       review 8 should-fix 2 (`fixed by DESIGN v3.8`); §10 example copied
       into tests/fixtures/playbook_example.toml and docs/PLAYBOOK.md (base red)
-- [ ] U1 Termination precedence and vocabularies (§6, §25; H-014)
+- [x] U1 Termination precedence and vocabularies (§6, §25; H-014) 4da83f8
 - [ ] U2 Review 8 should-fix 1, 3, 4
 - [ ] U3 Playbook must match the committed file (§10)
 - [ ] U4 `quiet_hours` retired (§11, §25)
