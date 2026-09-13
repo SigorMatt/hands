@@ -64,6 +64,8 @@ DEFAULT_MAX_RESUMES = 3  # §10 example; the playbook may override it
 DEFAULT_PLAYBOOK_PATH = "PLAYBOOK.toml"  # §10, relative to roles.builder.cwd
 DEFAULT_CLAUDE = "claude"
 DEFAULT_CANCEL_GRACE_S = 20.0  # §2: SIGINT, wait, SIGTERM
+DEFAULT_KIT_DIR = "~/Downloads"  # §26: where a kit sent from the phone lands
+DEFAULT_KIT_MAX_MB = 20  # §26: the largest kit fetched, in MiB
 
 #: §2's "10-minute idle ceiling": how long `claude -p` stays open for a background
 #: task before it terminates the process and exits 0 (H-014).
@@ -286,6 +288,14 @@ class PlaybookConfig:
 @dataclass(frozen=True)
 class FilesConfig:
     allowed_roots: tuple[Path, ...]
+    #: §26: the directory a kit from the phone is written to. Not checked
+    #: against `allowed_roots` here: the default roots are the role working
+    #: directories, which do not hold `~/Downloads`, so a load-time refusal
+    #: would refuse every config that never uses the kit transport. The phone
+    #: channel confines it when a kit arrives, and refuses the kit otherwise.
+    kit_dir: Path = Path(DEFAULT_KIT_DIR).expanduser()
+    #: §26: the size cap of a kit, in MiB (1 MB = 1024 * 1024 bytes).
+    kit_max_mb: int = DEFAULT_KIT_MAX_MB
 
 
 @dataclass(frozen=True)
@@ -522,7 +532,7 @@ def parse_config(data: dict[str, Any], *, project: str, path: Path) -> Config:
     playbook = PlaybookConfig(path=playbook_path)
 
     files_t = _table(data, "files", path)
-    _check_keys(files_t, ("allowed_roots",), "[files]", path)
+    _check_keys(files_t, ("allowed_roots", "kit_dir", "kit_max_mb"), "[files]", path)
     if "allowed_roots" in files_t:
         roots = tuple(
             _abs(Path(item).expanduser(), "files.allowed_roots")
@@ -540,7 +550,19 @@ def parse_config(data: dict[str, Any], *, project: str, path: Path) -> Config:
         # Default: exactly the role working directories. Nothing else is reachable
         # by `hands put/get/ls` until the human names it.
         roots = tuple(dict.fromkeys(role.cwd for role in roles.values()))
-    files = FilesConfig(allowed_roots=roots)
+    kit_dir = _abs(
+        _path(
+            files_t,
+            "kit_dir",
+            DEFAULT_KIT_DIR,
+            "[files]",
+            path,
+            blank=_omit(f"a kit from the phone then lands in {DEFAULT_KIT_DIR}", "path"),
+        ),
+        "files.kit_dir",
+    )
+    kit_max_mb = _int(files_t, "kit_max_mb", DEFAULT_KIT_MAX_MB, "[files]", path, minimum=1)
+    files = FilesConfig(allowed_roots=roots, kit_dir=kit_dir, kit_max_mb=kit_max_mb)
 
     gates_t = _table(data, "gates", path)
     _check_keys(gates_t, ("patterns",), "[gates]", path)

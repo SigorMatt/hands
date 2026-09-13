@@ -11,11 +11,15 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import hashlib
 import itertools
 import json
 import logging
+import threading
 import time
+from collections.abc import Iterator
 from functools import partial
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 
@@ -27,7 +31,7 @@ from hands import daemon as daemon_mod
 from hands.config import ConfigError, load_config
 from hands.daemon import Daemon
 from hands.notify import http_post, http_stream
-from hands.phone import GO_TITLE
+from hands.phone import GO_TITLE, KIT_TITLE
 from harness import PROJECT, TIMEOUT, config_body, ok, poll, running_job
 
 SECRET = "Xyzzy-PHONE-s3cret-0123456789abcdef"
@@ -106,17 +110,24 @@ class Recorder:
 _ids = itertools.count(1)
 
 
-def message(text: str, *, at: int | None = None, msg_id: str | None = None) -> str:
-    """One `message` event of ntfy's JSON stream."""
-    return json.dumps(
-        {
-            "id": msg_id or f"msg{next(_ids)}",
-            "time": int(time.time()) + 5 if at is None else at,
-            "event": "message",
-            "topic": CMD_TOPIC,
-            "message": text,
-        }
-    )
+def message(
+    text: str,
+    *,
+    at: int | None = None,
+    msg_id: str | None = None,
+    attachment: Any = None,
+) -> str:
+    """One `message` event of ntfy's JSON stream, with an `attachment` when given."""
+    event = {
+        "id": msg_id or f"msg{next(_ids)}",
+        "time": int(time.time()) + 5 if at is None else at,
+        "event": "message",
+        "topic": CMD_TOPIC,
+        "message": text,
+    }
+    if attachment is not None:
+        event["attachment"] = attachment
+    return json.dumps(event)
 
 
 async def no_sleep(seconds: float) -> None:
@@ -1000,3 +1011,366 @@ def test_who_topics_are_parsed(tmp_home: Path, workdir: Path) -> None:
     config = load_config(PROJECT)
     assert config.notify.who_topic == "hands-who"
     assert config.notify.who_cmd_topic == "hands-who-cmd"
+
+
+# ------------------------------------------------------ kit transport (§26)
+
+MIB = 1024 * 1024
+#: An empty zip archive's end record and some bytes: what is moved is bytes.
+ZIP = b"PK\x05\x06" + bytes(18) + bytes(range(256)) * 40
+
+
+class KitServer:
+    """ntfy's attachment host, as a real socket on 127.0.0.1 (stdlib, in a thread).
+
+    `files` maps a request path to the bytes served there; `hits` records every
+    GET, so a test can prove a refused kit never reached the server. With
+    `release` set, a GET waits on it before answering — a download in flight.
+    """
+
+    def __init__(self) -> None:
+        self.files: dict[str, bytes] = {}
+        self.hits: list[str] = []
+        self.release: threading.Event | None = None
+        owner = self
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_GET(self) -> None:  # noqa: N802 - http.server's name
+                owner.hits.append(self.path)
+                if owner.release is not None:
+                    owner.release.wait(TIMEOUT)
+                body = owner.files.get(self.path)
+                if body is None:
+                    self.send_response(404)
+                    self.send_header("Content-Length", "0")
+                    self.end_headers()
+                    return
+                self.send_response(200)
+                self.send_header("Content-Type", "application/zip")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                try:
+                    self.wfile.write(body)
+                except OSError:  # the client stopped reading at the cap
+                    pass
+
+            def log_message(self, format: str, *args: Any) -> None:  # noqa: A002
+                pass
+
+        self.httpd = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        self.httpd.daemon_threads = True
+        self.thread = threading.Thread(target=self.httpd.serve_forever, daemon=True)
+
+    def url(self, path: str) -> str:
+        return f"http://127.0.0.1:{self.httpd.server_address[1]}{path}"
+
+    def attach(self, name: Any, body: bytes, **fields: Any) -> dict[str, Any]:
+        """ntfy's `attachment` object for `body`, served at a path of the server's own."""
+        path = f"/file/k{next(_ids)}.zip"
+        self.files[path] = body
+        attachment = {
+            "name": name,
+            "type": "application/zip",
+            "size": len(body),
+            "expires": int(time.time()) + 3600,
+            "url": self.url(path),
+        }
+        attachment.update(fields)
+        return {key: value for key, value in attachment.items() if value is not ...}
+
+
+@pytest.fixture
+def kit_server() -> Iterator[KitServer]:
+    server = KitServer()
+    server.thread.start()
+    try:
+        yield server
+    finally:
+        if server.release is not None:
+            server.release.set()
+        server.httpd.shutdown()
+        server.httpd.server_close()
+
+
+@pytest.fixture
+def downloads(tmp_home: Path) -> Path:
+    d = tmp_home / "Downloads"
+    d.mkdir()
+    return d
+
+
+def kit_config(tmp_home: Path, workdir: Path, files: str) -> None:
+    (tmp_home / ".hands" / f"{PROJECT}.toml").write_text(
+        config_body(tmp_home, workdir, extra=f"{NOTIFY}\n[files]\n{files}\n")
+    )
+
+
+@pytest.fixture
+def kit_project(tmp_home: Path, workdir: Path, downloads: Path) -> str:
+    kit_config(
+        tmp_home,
+        workdir,
+        f'allowed_roots = ["{workdir}", "{downloads}"]\nkit_dir = "{downloads}"\nkit_max_mb = 1\n',
+    )
+    return PROJECT
+
+
+def kit_answers(daemon: Daemon) -> list[dict[str, Any]]:
+    return [item for item in daemon.notifier.post.sent if item["title"] == KIT_TITLE]
+
+
+def kit_events(daemon: Daemon) -> list[dict[str, Any]]:
+    return [event.payload for event in daemon.spool.events() if event.kind == "kit.received"]
+
+
+def assert_kit_refused(caplog: pytest.LogCaptureFixture, why: str) -> None:
+    assert f"phone: command ignored (kit{why}" in strip_paths(caplog.text), caplog.text
+    assert SECRET not in strip_paths(caplog.text)
+
+
+def assert_no_secret_anywhere(daemon: Daemon, tmp_home: Path) -> None:
+    for item in daemon.notifier.post.sent:
+        assert SECRET not in strip_paths(json.dumps(item, default=str)), item
+    for path in (tmp_home / ".hands").rglob("*"):
+        if path.is_file() and path.suffix != ".toml":
+            data = path.read_text(encoding="utf-8", errors="replace")
+            assert SECRET not in strip_paths(data), path
+
+
+def test_a_kit_is_written_to_kit_dir_inboxed_and_notified_with_its_sha256(
+    kit_project: str,
+    downloads: Path,
+    kit_server: KitServer,
+    tmp_home: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level(logging.DEBUG)
+    digest = hashlib.sha256(ZIP).hexdigest()
+
+    async def body(daemon: Daemon, fake: FakeNtfy) -> None:
+        attachment = kit_server.attach("mission-11.zip", ZIP)
+        await say(daemon, fake, f"kit {SECRET}", attachment=attachment)
+        await daemon.notifier.drain()
+        assert len(kit_server.hits) == 1
+        # the file, and nothing else: no temp file is left beside it
+        assert [path.name for path in downloads.iterdir()] == ["mission-11.zip"]
+        written = downloads / "mission-11.zip"
+        assert written.read_bytes() == ZIP
+        assert written.stat().st_mode & 0o111 == 0  # never made executable
+        assert kit_events(daemon) == [
+            {"name": "mission-11.zip", "bytes": len(ZIP), "sha256": digest}
+        ]
+        (answer,) = kit_answers(daemon)
+        assert answer["url"] == f"{NTFY}/{EVENTS_TOPIC}"  # on ntfy_topic
+        assert answer["message"] == f"kit received mission-11.zip {len(ZIP)} {digest}"
+        assert answer.get("actions") is None
+        assert (await ok("jobs"))["jobs"] == []  # a kit starts nothing
+        assert_no_secret_anywhere(daemon, tmp_home)
+
+    phone_drive(body)
+    assert SECRET not in strip_paths(caplog.text)
+
+
+def test_a_kit_over_kit_max_mb_by_its_reported_size_is_refused_before_the_fetch(
+    kit_project: str, downloads: Path, kit_server: KitServer, caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level(logging.DEBUG)
+
+    async def body(daemon: Daemon, fake: FakeNtfy) -> None:
+        attachment = kit_server.attach("big.zip", ZIP, size=MIB + 1)
+        await say(daemon, fake, f"kit {SECRET}", attachment=attachment)
+        await daemon.notifier.drain()
+        assert kit_server.hits == []  # the server was never asked
+        assert list(downloads.iterdir()) == []
+        assert kit_events(daemon) == [] and kit_answers(daemon) == []
+
+    phone_drive(body)
+    assert_kit_refused(caplog, f": the attachment is {MIB + 1} bytes, over [files] kit_max_mb")
+
+
+@pytest.mark.parametrize(
+    "reported,served,why",
+    [
+        (10, MIB + 1, ": the download passed [files] kit_max_mb"),
+        (len(ZIP) + 1, len(ZIP), f": the download is {len(ZIP)} bytes, not the {len(ZIP) + 1}"),
+    ],
+    ids=["over-the-cap-while-streaming", "shorter-than-reported"],
+)
+def test_a_download_that_does_not_match_its_reported_size_is_refused_and_leaves_nothing(
+    kit_project: str,
+    downloads: Path,
+    kit_server: KitServer,
+    caplog: pytest.LogCaptureFixture,
+    reported: int,
+    served: int,
+    why: str,
+) -> None:
+    caplog.set_level(logging.DEBUG)
+
+    async def body(daemon: Daemon, fake: FakeNtfy) -> None:
+        attachment = kit_server.attach("liar.zip", bytes(served), size=reported)
+        await say(daemon, fake, f"kit {SECRET}", attachment=attachment)
+        await daemon.notifier.drain()
+        assert len(kit_server.hits) == 1
+        assert list(downloads.iterdir()) == []  # neither the kit nor its temp file
+        assert kit_events(daemon) == [] and kit_answers(daemon) == []
+
+    phone_drive(body)
+    assert_kit_refused(caplog, why)
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "../evil.zip", "sub/kit.zip", "sub\\kit.zip", "/abs/kit.zip", "..", ".zip",
+        ".hidden.zip", "kit.tar.gz", "kit.zip.sh", "kit.ZIP", "kit\n.zip", "", None, 7,
+    ],
+)  # fmt: skip
+def test_a_kit_whose_name_is_not_a_zip_basename_is_refused_before_the_fetch(
+    kit_project: str,
+    downloads: Path,
+    kit_server: KitServer,
+    caplog: pytest.LogCaptureFixture,
+    name: Any,
+) -> None:
+    caplog.set_level(logging.DEBUG)
+
+    async def body(daemon: Daemon, fake: FakeNtfy) -> None:
+        attachment = kit_server.attach(name, ZIP)
+        await say(daemon, fake, f"kit {SECRET}", attachment=attachment)
+        await daemon.notifier.drain()
+        assert kit_server.hits == []
+        assert list(downloads.iterdir()) == []
+        assert list(downloads.parent.glob("*.zip")) == []  # nothing escaped either
+        assert kit_events(daemon) == [] and kit_answers(daemon) == []
+
+    phone_drive(body)
+    assert_kit_refused(caplog, ": the attachment name is not a .zip basename")
+
+
+def test_a_kit_whose_name_exists_gets_the_first_free_suffix_and_the_original_is_intact(
+    kit_project: str, downloads: Path, kit_server: KitServer
+) -> None:
+    (downloads / "kit.zip").write_bytes(b"the original")
+    second, third = ZIP + b"2", ZIP + b"3"
+
+    async def body(daemon: Daemon, fake: FakeNtfy) -> None:
+        await say(daemon, fake, f"kit {SECRET}", attachment=kit_server.attach("kit.zip", second))
+        await say(daemon, fake, f"kit {SECRET}", attachment=kit_server.attach("kit.zip", third))
+        await daemon.notifier.drain()
+        assert sorted(path.name for path in downloads.iterdir()) == [
+            "kit-1.zip", "kit-2.zip", "kit.zip",
+        ]  # fmt: skip
+        assert (downloads / "kit.zip").read_bytes() == b"the original"
+        assert (downloads / "kit-1.zip").read_bytes() == second
+        assert (downloads / "kit-2.zip").read_bytes() == third
+        assert [event["name"] for event in kit_events(daemon)] == ["kit-1.zip", "kit-2.zip"]
+        messages = [answer["message"] for answer in kit_answers(daemon)]
+        assert [text.split()[2] for text in messages] == ["kit-1.zip", "kit-2.zip"]
+
+    phone_drive(body)
+
+
+def test_a_kit_with_a_missing_or_wrong_secret_is_refused_before_the_fetch(
+    kit_project: str, downloads: Path, kit_server: KitServer, caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level(logging.DEBUG)
+
+    async def body(daemon: Daemon, fake: FakeNtfy) -> None:
+        for text in ("kit", "kit not-the-secret", f"kit now {SECRET}"):
+            await say(daemon, fake, text, attachment=kit_server.attach("kit.zip", ZIP))
+        await daemon.notifier.drain()
+        assert kit_server.hits == []
+        assert list(downloads.iterdir()) == []
+        assert kit_events(daemon) == [] and kit_answers(daemon) == []
+
+    phone_drive(body)
+    assert_kit_refused(caplog, ": bad secret")
+    assert "phone: command ignored (kit takes only the secret)" in strip_paths(caplog.text)
+
+
+@pytest.mark.parametrize(
+    "fields,why",
+    [
+        (None, ": the message carries no attachment"),
+        ({"size": ...}, ": the attachment reports no size in bytes"),
+        ({"size": "12"}, ": the attachment reports no size in bytes"),
+        ({"size": 12.5}, ": the attachment reports no size in bytes"),
+        ({"size": True}, ": the attachment reports no size in bytes"),
+        ({"size": -1}, ": the attachment reports no size in bytes"),
+        ({"url": ...}, ": the attachment has no http(s) url"),
+        ({"url": "file:///etc/passwd"}, ": the attachment has no http(s) url"),
+    ],
+    ids=["no-attachment", "no-size", "str-size", "float-size", "bool-size", "negative-size",
+         "no-url", "file-url"],
+)  # fmt: skip
+def test_a_kit_without_an_attachment_a_size_or_an_http_url_is_refused_before_the_fetch(
+    kit_project: str,
+    downloads: Path,
+    kit_server: KitServer,
+    caplog: pytest.LogCaptureFixture,
+    fields: dict[str, Any] | None,
+    why: str,
+) -> None:
+    caplog.set_level(logging.DEBUG)
+
+    async def body(daemon: Daemon, fake: FakeNtfy) -> None:
+        attachment = None if fields is None else kit_server.attach("kit.zip", ZIP, **fields)
+        await say(daemon, fake, f"kit {SECRET}", attachment=attachment)
+        await daemon.notifier.drain()
+        assert kit_server.hits == []
+        assert list(downloads.iterdir()) == []
+        assert kit_events(daemon) == [] and kit_answers(daemon) == []
+
+    phone_drive(body)
+    assert_kit_refused(caplog, why)
+
+
+def test_a_kit_is_refused_when_kit_dir_is_outside_the_allowed_roots(
+    tmp_home: Path,
+    workdir: Path,
+    downloads: Path,
+    kit_server: KitServer,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level(logging.DEBUG)
+    kit_config(tmp_home, workdir, f'allowed_roots = ["{workdir}"]\nkit_dir = "{downloads}"\n')
+
+    async def body(daemon: Daemon, fake: FakeNtfy) -> None:
+        await say(daemon, fake, f"kit {SECRET}", attachment=kit_server.attach("kit.zip", ZIP))
+        await daemon.notifier.drain()
+        assert kit_server.hits == []
+        assert list(downloads.iterdir()) == []
+        assert kit_events(daemon) == [] and kit_answers(daemon) == []
+
+    phone_drive(body)
+    assert_kit_refused(caplog, ": [files] kit_dir is outside [files] allowed_roots")
+
+
+def test_the_daemon_answers_its_socket_while_a_kit_download_is_in_flight(
+    kit_project: str, downloads: Path, kit_server: KitServer
+) -> None:
+    kit_server.release = threading.Event()
+
+    async def body(daemon: Daemon, fake: FakeNtfy) -> None:
+        assert daemon.phone is not None
+        before = daemon.phone.handled
+        fake.push(message(f"kit {SECRET}", attachment=kit_server.attach("slow.zip", ZIP)))
+
+        async def asked() -> bool:
+            return bool(kit_server.hits)
+
+        await poll(asked, "the kit server to be asked")
+        # the server has not answered yet, and the daemon's event loop still serves
+        assert (await ok("status"))["daemon"] is not None
+        assert daemon.phone.handled == before
+        assert kit_server.release is not None
+        kit_server.release.set()
+
+        async def done() -> bool:
+            return daemon.phone is not None and daemon.phone.handled > before
+
+        await poll(done, "the kit to be written")
+        assert (downloads / "slow.zip").read_bytes() == ZIP
+
+    phone_drive(body)

@@ -124,6 +124,7 @@ EVENT_KINDS = frozenset(
         "resume",
         "heartbeat",
         "notify",  # a notification hands could not deliver (§11, U8)
+        "kit.received",  # a kit sent from the phone was written to kit_dir (§26)
     }
 )
 

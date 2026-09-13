@@ -88,6 +88,9 @@ def test_the_integration_config_block_loads(tmp_home: Path) -> None:
     )
     assert sorted(config.roles) == ["aux", "builder"]
     assert config.ops.monitor_cmd == "watch_monitor.sh"
+    assert "kit_dir = " in block and "kit_max_mb = " in block  # §26's two keys
+    assert config.files.kit_dir == tmp_home / "Downloads"
+    assert config.files.kit_max_mb == 20
 
 
 def test_the_playbook_doc_carries_the_section_10_example_verbatim() -> None:

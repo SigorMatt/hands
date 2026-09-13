@@ -93,6 +93,9 @@ cwd` is optional.
 
     [files]
     allowed_roots = ["~/git/<project>", "~/Downloads", "~/<project>-ops"]
+    kit_dir = "~/Downloads"              # default: where a kit from the phone lands;
+                                         # must be inside allowed_roots to be used
+    kit_max_mb = 20                      # default: the largest kit fetched (MiB)
 
     [gates]
     patterns = ["...", "..."]            # added to the defaults, never replacing them
@@ -232,7 +235,7 @@ not ask for arrives (step 4 above).
 ### The command channel: approve from the phone
 
 With `[notify] cmd_topic` set, handsd subscribes to that topic — an outbound
-long poll to ntfy, nothing listening on this machine — and takes six commands
+long poll to ntfy, nothing listening on this machine — and takes seven commands
 from it. Set it up once:
 
     python3 -c 'import secrets; print("hands-cmd-" + secrets.token_urlsafe(16))'
@@ -259,6 +262,7 @@ Publish a command to `cmd_topic` from the ntfy app. The last word is the token:
     resume <secret>
     status <secret>
     go <secret>
+    kit <secret>                  (with a .zip attached to the message)
 
 - `approve` and `deny` decide a **held** job, exactly as `hands approve|deny`
   does, and the job record says `decided_by: phone`. `pause` and `resume` are
@@ -275,6 +279,30 @@ Publish a command to `cmd_topic` from the ntfy app. The last word is the token:
   playbook has no `[series] kickoff`. A stopped pipeline still has its playbook:
   `go` is accepted, and its job un-pauses the pipeline when it starts, as a
   `cli` send's does, so the builder's `done` fires its rule.
+- `kit` moves a kit from the phone to this machine (DESIGN §26). Publish the
+  message `kit <secret>` to `cmd_topic` with the `.zip` attached, from the ntfy
+  app or with curl (the body is the file, so the command goes in the `Message`
+  header):
+
+      curl -T mission-11.zip -H "Filename: mission-11.zip" \
+           -H "Message: kit <secret>" https://ntfy.sh/<cmd_topic>
+
+  handsd reads the attachment's `name`, `size` and `url` from the message, and
+  refuses (and logs) the kit before fetching anything when there is no
+  attachment, when the name is not a plain `.zip` file name (no `/` or `\`, no
+  leading dot, ending in lowercase `.zip`), when the size ntfy reports is
+  missing or over `[files] kit_max_mb` (MiB, default 20), or when `[files]
+  kit_dir` (default `~/Downloads`) is not inside `[files] allowed_roots` — the
+  default roots are only the role directories, so list `~/Downloads` there. The
+  download stops as soon as it passes the cap, and is refused unless it ends at
+  the reported size. The file is written under its own name in `kit_dir`; if
+  that name exists it becomes `<name>-1.zip`, `<name>-2.zip`, …, and an existing
+  file is never overwritten. It is never unzipped, never run, never made
+  executable. handsd files `kit.received` in the inbox (the name written, bytes,
+  sha256) and answers on `ntfy_topic` with `kit received <name> <bytes>
+  <sha256>`. Applying the kit is still a job you send, and its gate still holds
+  it for your approval. An ntfy server has its own attachment size limit, which
+  may be lower than `kit_max_mb`.
 - **The buttons.** With the channel on, a held job's notification has Approve
   and Deny buttons. Each publishes `approve <job> <nonce>` or `deny <job>
   <nonce>` to `cmd_topic`. The nonce is 32 random bytes minted for that one job
@@ -284,7 +312,7 @@ Publish a command to `cmd_topic` from the ntfy app. The last word is the token:
   buttons do nothing, but handsd re-sends the notification of every job still
   held, with new buttons; the command with the secret works too. `pause`, `resume`,
   `status` and `go` take the secret only, never a nonce.
-- **Nothing is answered except `status` and an accepted `go`.** A wrong secret or nonce, a command
+- **Nothing is answered except `status`, an accepted `go` and a written kit.** A wrong secret or nonce, a command
   hands does not know, or a job that is not held is logged in handsd's journal
   (`journalctl --user -u handsd`) and ignored. If a command seems to do
   nothing, look there. The log never contains the token.
@@ -578,5 +606,8 @@ of this terminal. The driver does not: it arms nothing, and your message
   Run them once at an install and record the answer.
 - **The phone channel has never read a real ntfy stream.** Its tests feed a
   fake `/json` stream and record the buttons' `Actions` header; no command has
-  been sent from a real phone, and no button has been pressed on one. Nor has
+  been sent from a real phone, and no button has been pressed on one. No kit has
+  been fetched from a real ntfy attachment: the tests serve the attachment from a
+  local HTTP server, so the curl line above and the ntfy app's attach are
+  unproven. Nor has
   `handswho` pushed a picture to, or read a command from, a real topic.

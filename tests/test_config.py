@@ -146,9 +146,22 @@ def test_every_optional_key_has_a_default(write_config, tmp_home: Path) -> None:
     assert cfg.limits.backoff_minutes == 30
     assert cfg.limits.max_resumes == 3
     assert cfg.playbook.path == "PLAYBOOK.toml"
+    # §26: kits land in ~/Downloads, 20 MB at most.
+    assert cfg.files.kit_dir == tmp_home / "Downloads"
+    assert cfg.files.kit_max_mb == 20
     assert cfg.gates.patterns == DEFAULT_GATE_PATTERNS
     assert cfg.runner.claude == "claude"
     assert cfg.runner.cancel_grace_s == 20
+
+
+def test_the_kit_keys_of_files_load(write_config, tmp_home: Path) -> None:
+    """§26: `[files] kit_dir` and `kit_max_mb`, as written."""
+    write_config(
+        "[roles.builder]\ncwd = '~/g'\n[files]\nkit_dir = '~/kits'\nkit_max_mb = 5\n"
+    )
+    cfg = load_config("demo")
+    assert cfg.files.kit_dir == tmp_home / "kits"
+    assert cfg.files.kit_max_mb == 5
 
 
 def test_aux_queue_depth_defaults_to_four(write_config) -> None:
@@ -393,6 +406,12 @@ OPTIONAL_STRING_KEYS = [
         "allowed_roots",
     ),
     (
+        "files.kit_dir",
+        "[roles.builder]\ncwd = '~/g'\n[files]\nkit_dir = {v}\n",
+        "[files]",
+        "kit_dir",
+    ),
+    (
         "gates.patterns",
         "[roles.builder]\ncwd = '~/g'\n[gates]\npatterns = [{v}]\n",
         "[gates]",
@@ -627,6 +646,13 @@ def test_unknown_key_in_a_role_is_refused(write_config) -> None:
         "[roles.builder]\ncwd = '~/g'\n[gates]\npatterns = 'decisions-'\n",
         "[roles.builder]\ncwd = '~/g'\n[gates]\npatterns = [1, 2]\n",
         "[roles.builder]\ncwd = '~/g'\n[files]\nallowed_roots = '~/g'\n",
+        "[roles.builder]\ncwd = '~/g'\n[files]\nkit_dir = 'Downloads'\n",
+        "[roles.builder]\ncwd = '~/g'\n[files]\nkit_dir = 3\n",
+        "[roles.builder]\ncwd = '~/g'\n[files]\nkit_max_mb = 0\n",
+        "[roles.builder]\ncwd = '~/g'\n[files]\nkit_max_mb = -5\n",
+        "[roles.builder]\ncwd = '~/g'\n[files]\nkit_max_mb = '20'\n",
+        "[roles.builder]\ncwd = '~/g'\n[files]\nkit_max_mb = 2.5\n",
+        "[roles.builder]\ncwd = '~/g'\n[files]\nkit_max_mb = true\n",
         "[roles.builder]\ncwd = '~/g'\n[playbook]\npath = '/abs/PLAYBOOK.toml'\n",
         "[roles.builder]\ncwd = '~/g'\n[runner]\ncancel_grace_s = -3\n",
         "roles = 1\n",
@@ -798,6 +824,7 @@ path = "  P.toml  "
 
 [files]
 allowed_roots = ["  ~/g  ", "  ~/ops  "]
+kit_dir = "  ~/ops  "
 
 [gates]
 patterns = ["  gh pr create  ", "  decisions-  "]

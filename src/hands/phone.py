@@ -4,7 +4,7 @@
        ▲                                                   │
        └──────────── one JSON line per message ────────────┘
 
-The daemon subscribes to `[notify] cmd_topic` with a long-poll and accepts six
+The daemon subscribes to `[notify] cmd_topic` with a long-poll and accepts seven
 commands, each ending in its token:
 
     approve <job> <secret|nonce>
@@ -13,6 +13,7 @@ commands, each ending in its token:
     resume <secret>
     status <secret>
     go <secret>
+    kit <secret>        (a message that carries an ntfy attachment)
 
 **`go`** (§26) is the one way to start work from the phone: it sends the
 playbook's `[series] kickoff` line to the builder as a `clear` send with
@@ -22,6 +23,21 @@ playbook (none in the builder's cwd, or one that cannot be loaded), and when
 the playbook has no `[series] kickoff`. A stopped pipeline's playbook is still a
 playbook: a `go` is accepted, and its job un-pauses the pipeline when it starts
 (`UNPAUSE_ORIGINS`, H-018 gap 2).
+
+**`kit`** (§26) moves a file from the phone to this machine and does nothing
+else with it. The message's ntfy `attachment` (`name`, `size`, `url`) is checked
+before anything is fetched: the name must be a `.zip` basename (printable, no
+`/` or `\\`, no leading dot, a non-empty stem, ending in lowercase `.zip`), the
+reported `size` an integer no larger than `[files] kit_max_mb` MiB, the `url`
+http(s), and `[files] kit_dir` inside `[files] allowed_roots`. The download is
+streamed by httpx on the event loop into a temp file in `kit_dir`, capped while
+it streams, and must end at exactly the reported size; the temp file is then
+hard-linked to the name (`os.link`, which never replaces an existing entry) or,
+if that exists, to `<stem>-1.zip`, `<stem>-2.zip`, … and unlinked. Nothing is
+unzipped, executed, or made executable. A written kit is filed as
+`kit.received` (name as written, bytes, sha256) and answered on `ntfy_topic` as
+`kit received <name> <bytes> <sha256>`. The channel reads its next command when
+the download has ended.
 
 **The token.** A typed command carries `cmd_secret` as its last word. A held
 job's notification carries Approve/Deny buttons that publish `approve <job>
@@ -37,8 +53,9 @@ the new buttons (§25; `Daemon._renotify_held`). `pause`, `resume`,
 `status` and `go` take the secret only. The secret is compared with
 `hmac.compare_digest` and never published: a notification carries only nonces.
 
-**What is answered.** `status` publishes a short summary to `ntfy_topic`, and an
-accepted `go` publishes the id and state of the job it filed there. Nothing else
+**What is answered.** `status` publishes a short summary to `ntfy_topic`, an
+accepted `go` publishes the id and state of the job it filed there, and a
+written kit publishes its name, size and sha256. Nothing else
 is answered: a bad token, an unknown or malformed command, a
 command for a job that is not held — each is logged (without the token, and
 without any word of the message that could be one) and ignored.
@@ -54,26 +71,32 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import hashlib
 import hmac
+import itertools
 import json
 import logging
+import os
 import secrets
+import tempfile
 import time
 from collections import deque
 from collections.abc import AsyncIterator, Awaitable, Callable
-from typing import TYPE_CHECKING
+from pathlib import Path
+from typing import IO, TYPE_CHECKING
 from urllib.parse import quote
 
 from hands import notify as notify_mod
 from hands.api import ApiError
 from hands.playbook import PlaybookError, load_playbook, playbook_path
-from hands.spool import SpoolError
+from hands.spool import PathEscape, SpoolError, resolve_under_roots
 
 if TYPE_CHECKING:  # pragma: no cover
     from hands.daemon import Daemon
 
 __all__ = [
-    "BACKOFF_S", "GO_TITLE", "NONCE_BYTES", "STATUS_TITLE", "PhoneChannel", "status_summary",
+    "BACKOFF_S", "GO_TITLE", "KIT_TITLE", "NONCE_BYTES", "STATUS_TITLE", "PhoneChannel",
+    "status_summary",
 ]  # fmt: skip
 
 log = logging.getLogger("hands.phone")
@@ -89,8 +112,19 @@ SEEN_IDS = 1024
 #: The titles of the two answers the channel gives.
 STATUS_TITLE = "hands: status"
 GO_TITLE = "hands: go"
+KIT_TITLE = "hands: kit received"
 
-_SECRET_ONLY = ("pause", "resume", "status", "go")
+#: §26's size cap is in MB; hands reads that as MiB.
+MIB = 1024 * 1024
+#: Connect, read and write timeout of one kit download, per operation.
+KIT_TIMEOUT_S = 30.0
+#: The ceiling on a whole kit download: a server that trickles is refused.
+KIT_DEADLINE_S = 300.0
+#: The temp file a kit is streamed into, in `kit_dir` itself (a hidden name).
+KIT_TEMP_PREFIX = ".hands-kit-"
+KIT_SUFFIX = ".zip"
+
+_SECRET_ONLY = ("pause", "resume", "status", "go", "kit")
 _DECISIONS = {"approve": "approved", "deny": "denied"}
 
 
@@ -209,7 +243,7 @@ class PhoneChannel:
                 return
             text = event.get("message")
             if isinstance(text, str):
-                await self.command(text)
+                await self.command(text, attachment=event.get("attachment"))
         except asyncio.CancelledError:
             raise
         except Exception:  # a bug here must not end the subscription
@@ -217,8 +251,11 @@ class PhoneChannel:
         finally:
             self.handled += 1
 
-    async def command(self, text: str) -> None:
-        """Authenticate and carry out one command; anything else is logged and ignored."""
+    async def command(self, text: str, *, attachment: object = None) -> None:
+        """Authenticate and carry out one command; anything else is logged and ignored.
+
+        `attachment` is the ntfy message's `attachment` object; only `kit` reads it.
+        """
         words = text.split()
         verb = words[0].lower() if words else ""
         token = words[-1] if words else ""
@@ -229,6 +266,8 @@ class PhoneChannel:
                 return self._ignore(f"{verb}: bad secret")
             if verb == "go":
                 return await self._go()
+            if verb == "kit":
+                return await self._kit(attachment)
             if verb == "pause":
                 await self.daemon.playbook.pause(by="phone")
             elif verb == "resume":
@@ -296,6 +335,52 @@ class PhoneChannel:
         await self.daemon.notifier.answer(GO_TITLE, f"go: builder job {job['id']} {job['state']}")
         return None
 
+    async def _kit(self, attachment: object) -> None:
+        """§26: the message's attachment, fetched into `[files] kit_dir`.
+
+        Every check that needs no network runs first, so a refused kit never
+        reaches the attachment's server. A refusal names the check, never the
+        attachment's name or URL (text the sender chose).
+        """
+        if not isinstance(attachment, dict):
+            return self._ignore("kit: the message carries no attachment")
+        name = attachment.get("name")
+        if not _is_kit_name(name):
+            return self._ignore("kit: the attachment name is not a .zip basename")
+        assert isinstance(name, str)
+        files = self.daemon.config.files
+        size = attachment.get("size")
+        if isinstance(size, bool) or not isinstance(size, int) or size < 0:
+            return self._ignore("kit: the attachment reports no size in bytes")
+        cap = files.kit_max_mb * MIB
+        if size > cap:
+            return self._ignore(
+                f"kit: the attachment is {size} bytes, over [files] kit_max_mb = "
+                f"{files.kit_max_mb} ({cap} bytes)"
+            )
+        url = attachment.get("url")
+        if not isinstance(url, str) or not url.startswith(("https://", "http://")):
+            return self._ignore("kit: the attachment has no http(s) url")
+        try:
+            directory = resolve_under_roots(files.kit_dir, files.allowed_roots)
+        except PathEscape:
+            return self._ignore("kit: [files] kit_dir is outside [files] allowed_roots")
+        if not directory.is_dir():
+            return self._ignore("kit: [files] kit_dir is not a directory")
+        try:
+            written, total, digest = await fetch_kit(
+                url, directory, name, cap=cap, expected=size
+            )
+        except _KitRefused as exc:
+            return self._ignore(f"kit: {exc}")
+        self.daemon.spool.append_event(
+            "kit.received", {"name": written, "bytes": total, "sha256": digest}
+        )
+        text = f"kit received {written} {total} {digest}"
+        log.info("phone: %s", text)
+        await self.daemon.notifier.answer(KIT_TITLE, text)
+        return None
+
     def _is_secret(self, token: str) -> bool:
         secret = self.notify.cmd_secret
         return secret is not None and hmac.compare_digest(token.encode(), secret.encode())
@@ -340,6 +425,105 @@ def status_summary(daemon: Daemon) -> str:
     lines.append(f"pipeline: {'paused' if pipeline.get('paused') else 'running'}")
     lines.append(f"inbox: {status['inbox']['unacked']} unacked")
     return "\n".join(lines)
+
+
+class _KitRefused(Exception):
+    """A kit download that is not written; the text is the logged reason."""
+
+
+def _is_kit_name(name: object) -> bool:
+    """§26's "sanitized to a basename; `.zip` only", as a refusal, not a rewrite.
+
+    Printable, no path separator of either platform, no leading dot (which also
+    rules out `.`, `..` and a bare `.zip`), and a lowercase `.zip` after a
+    non-empty stem. A name that fails is refused rather than cleaned up, so the
+    name written is the name the sender chose.
+    """
+    return (
+        isinstance(name, str)
+        and name.isprintable()
+        and "/" not in name
+        and "\\" not in name
+        and not name.startswith(".")
+        and name.endswith(KIT_SUFFIX)
+        and len(name) > len(KIT_SUFFIX)
+    )
+
+
+async def fetch_kit(
+    url: str, directory: Path, name: str, *, cap: int, expected: int
+) -> tuple[str, int, str]:
+    """Stream `url` into `directory` under `name` (or its first free suffix).
+
+    Answers the name written, the bytes and the sha256. The body is streamed on
+    the event loop into a temp file in `directory`; the fsync and the link run in
+    a thread. The cap is enforced on the bytes read, whatever `Content-Length`
+    or the attachment said, and a body that does not end at `expected` bytes is
+    refused. `Accept-Encoding: identity` keeps the bytes counted the bytes
+    stored. On any refusal the temp file is removed and nothing is written.
+    """
+    import httpx
+
+    handle, temp_name = tempfile.mkstemp(prefix=KIT_TEMP_PREFIX, suffix=".part", dir=directory)
+    temp = Path(temp_name)
+    digest = hashlib.sha256()
+    total = 0
+    try:
+        with os.fdopen(handle, "wb") as out:
+            try:
+                async with asyncio.timeout(KIT_DEADLINE_S):
+                    async with httpx.AsyncClient(timeout=httpx.Timeout(KIT_TIMEOUT_S)) as client:
+                        async with client.stream(
+                            "GET", url, headers={"Accept-Encoding": "identity"}
+                        ) as response:
+                            response.raise_for_status()
+                            async for chunk in response.aiter_raw():
+                                total += len(chunk)
+                                if total > cap:
+                                    raise _KitRefused(
+                                        f"the download passed [files] kit_max_mb ({cap} bytes)"
+                                    )
+                                digest.update(chunk)
+                                out.write(chunk)
+            except httpx.HTTPError as exc:
+                raise _KitRefused(f"the download failed ({_failure(exc)})") from exc
+            except TimeoutError as exc:
+                raise _KitRefused(f"the download took longer than {KIT_DEADLINE_S:.0f} s") from exc
+            if total != expected:
+                raise _KitRefused(
+                    f"the download is {total} bytes, not the {expected} the attachment reported"
+                )
+            await asyncio.to_thread(_flush, out)
+        written = await asyncio.to_thread(_link_first_free, temp, directory, name)
+    except OSError as exc:
+        raise _KitRefused(f"the kit could not be written ({type(exc).__name__})") from exc
+    finally:
+        with contextlib.suppress(FileNotFoundError):
+            temp.unlink()
+    return written, total, digest.hexdigest()
+
+
+def _flush(out: IO[bytes]) -> None:
+    out.flush()
+    os.fsync(out.fileno())
+
+
+def _link_first_free(temp: Path, directory: Path, name: str) -> str:
+    """Link `temp` to `name`, else `<stem>-1.zip`, `<stem>-2.zip`, …; never replace.
+
+    `os.link` fails with `FileExistsError` when the new name exists (a dangling
+    symlink included), so an existing file is never overwritten, even by a
+    writer racing this one: the check and the create are one system call.
+    """
+    stem = name[: -len(KIT_SUFFIX)]
+    for n in itertools.count():
+        candidate = name if n == 0 else f"{stem}-{n}{KIT_SUFFIX}"
+        try:
+            os.link(temp, directory / candidate)
+        except FileExistsError:
+            continue
+        return candidate
+    raise AssertionError("unreachable")  # pragma: no cover
 
 
 def _failure(exc: BaseException) -> str:
