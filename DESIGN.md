@@ -1,13 +1,12 @@
-# hands — DESIGN v3.7
+# hands — DESIGN v3.8
 
 Machinery that replaces the human relay between the planning brain and the two
 Claude Code roles (builder, aux) on the Ubuntu laptop, and that keeps a series
 moving without a human while everything goes by plan. Working name: `hands`.
 The method it serves is described in WORKING-MODEL.md (agile-skills) and
 OPERATING-MODEL.md (spanweave); hands changes the topology, not the method.
-v3.7 (2026-09-13) folds in the mission 7a review and specifies mission 8
-(detectors, the phone channel, `hands who`); changes are in §24; earlier
-changes in §23–§17.
+v3.8 (2026-09-13) folds in the mission 8 review and its open decisions;
+changes are in §25; earlier changes in §24–§17.
 
 Status: proposal, 2026-09-10. Items marked DECIDED were settled in discussion.
 
@@ -231,18 +230,23 @@ Job record (returned verbatim, stored forever):
     stderr_tail       # last 50 lines
     permission_denials, num_turns, duration_ms, total_cost_usd
     limit             # {category, message, reset_at} when state == limited
-    failure_reason    # harness_terminated | nonzero_exit | no_result, when failed
-    gate              # {reason, decided_by: cli|driver|button, decided_at}
+    failure_reason    # when failed: harness_terminated | nonzero_exit |
+                      # no_final_result | error_result | no_num_turns | spawn_error
+    gate              # {reason, decided_by: cli|driver|phone, decided_at, quote?}
     resumed_from      # job id, when this job is an auto-resume
 
 Rules:
 - A job is `failed` when the process ends without a final `result` event
-  of subtype `success` or `error` (`no_result`), when it exits non-zero
-  without a limit (`nonzero_exit`), or when stderr carries the harness's
-  own termination line, anchored to its exact shape (`harness_terminated`).
-  Precedence: a cancel stays `killed` and a limit stays `limited` even when
-  the termination line is present; a job with a `success` result, turns
-  and exit 0 is `done` whatever else stderr says.
+  (`no_final_result`), with a `result` of subtype `error` (`error_result`),
+  without `num_turns` (`no_num_turns`), when it exits non-zero without a
+  limit (`nonzero_exit`), when it could not be spawned (`spawn_error`), or
+  when stderr carries the harness's own termination line, anchored to its
+  exact shape (`harness_terminated`). Precedence: a cancel stays `killed`
+  and a limit stays `limited`; otherwise the termination line wins even
+  over a `success` result, because the harness ends the session mid-turn
+  and the "result" is whatever the model had said last (H-014's own case).
+  With the bg-wait ceiling disabled the line should never appear; if it
+  does, `resume` is the right reaction.
 - One running job per role. A `send` to a busy role is queued (FIFO);
   builder queue depth 1, aux 4 (configurable).
 - `keep` resumes `roles/<role>.json: last_session_id`; refused if absent or
@@ -349,14 +353,16 @@ a decisions file: a gated `hands send --role builder "Apply … as
 PLAYBOOK.toml with one plan-only sub-agent (single commit `plan: playbook …`,
 push)"`. Your approval of that job is your approval of every launch the
 playbook may make. hands loads the tracked file from `role.cwd` when a job
-starts and records its sha256 in every job it fires. Deleted at series close
+starts, refuses it when it differs from the committed copy (`git show
+HEAD:<path>`; an unzipped, uncommitted playbook was found in force on
+2026-09-12), and records its sha256 in every job it fires. Deleted at series close
 with `WORKPLAN.md`.
 
 ### Events
 
 `builder.done`, `builder.failed`, `builder.limited`, `builder.orphaned`,
-`aux.done`, `aux.failed`, `monitor.stall`, `monitor.tripwire`, `job.held`,
-`job.denied`.
+`aux.done`, `aux.failed`, `monitor.stall`, `monitor.tripwire`,
+`monitor.task_killed`, `monitor.orphan_processes`, `job.held`, `job.denied`.
 
 ### Actions
 
@@ -423,6 +429,14 @@ allowed: `{n+1}`), and job fields: `{job.id}`, `{job.head_at_start}`,
 
     [[rule]]
     on = "monitor.tripwire"
+    then = "stop"
+
+    [[rule]]
+    on = "monitor.task_killed"
+    then = "stop"
+
+    [[rule]]
+    on = "monitor.orphan_processes"
     then = "stop"
 
 The `VERDICT:` line contract is the prompt contract's existing one-line
@@ -493,8 +507,8 @@ and it is not worth its price on Claude Code 2.1.x.
 
 **Notifications** (ntfy, in scope — it is how you learn you are needed):
 `stop`, `job.held`, `max_resumes` exhausted, daemon start/crash. Not for
-routine progress. `quiet_hours` exists but no playbook of this project sets it; notifications
-are never delayed (decision 2026-09-12).
+routine progress. Notifications are never delayed: `quiet_hours` is retired (decision
+2026-09-12; a playbook that sets it is refused at load with a message).
 Topic: random, private; ntfy.sh or self-hosted (§16).
 
 ---
@@ -910,3 +924,25 @@ Conventions (docs/ARCHITECT-INSTRUCTION.md): mission files are
 self-contained (the sub-agent brief and §R written out every time); no
 budget guidance, since limits pause and resume; no `quiet_hours`; the
 architect reads the branch on ntfy and writes the next kit from disk.
+
+---
+
+## 25. Changes from v3.7 (mission 8 review and open decisions)
+
+- §6 vocabularies reconciled with the wire: `failure_reason` and
+  `decided_by` list what the code writes (review 8 should-fix 2). The
+  termination-line precedence is reversed back to H-014's reading: it wins
+  over a `success` result (FINAL-REPORT-8 §5 item 1).
+- H-016 closed: §10's events list and example carry the two detector rules.
+- `quiet_hours` retired from the code, §11, doctor's text and the config
+  (FINAL-REPORT-8 §5 item 3); a playbook setting it is refused.
+- Playbook must match the committed file (§10).
+- Phone channel after a daemon restart: nonces are re-minted for every job
+  still `held` and their notifications re-sent with fresh buttons
+  (FINAL-REPORT-8 §5 item 5). `who_cmd_topic` stays secret-less: its words
+  are read-only (item 4). `monitor.task_killed` cannot tell a harness reap
+  from a `TaskStop`; the event says so in its payload (`cause: unknown`).
+- Review 8 should-fix 1, 3, 4: `main()`'s exit code pinned on the socket
+  route; `_last_resort` checks group membership before `killpg`; the
+  reconnect warning never carries the topic URL.
+- Stale `meta/prototypes/` ruff exclude removed.
