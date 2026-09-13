@@ -691,7 +691,9 @@ class Runner:
                     stderr=subprocess.DEVNULL,
                     timeout=PROBE_S,
                 )
-        else:
+        elif group_pids(job.pid):
+            # Only a group with live members: an empty group's id may already be
+            # another session leader's (review 8 should-fix 3), as in `_kill_group`.
             with contextlib.suppress(OSError):
                 os.killpg(job.pid, signal.SIGKILL)
 

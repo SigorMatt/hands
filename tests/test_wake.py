@@ -967,3 +967,39 @@ def test_notify_over_the_socket_answers_a_refusal_as_the_cli_does(
     assert hands.cli.exit_code("notify", result) == 1
     assert hands.cli.exit_code("notify", {**result, "status": 200, "delivered": True}) == 0
     assert hands.cli.exit_code("status", {}) == 0
+
+
+SENTINEL_EXIT = 7  # no real route answers with 7
+
+
+def test_main_returns_the_exit_code_of_the_socket_answer(
+    project: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Review 8 should-fix 1: `main()`'s socket route returns `exit_code(...)`.
+
+    No command that reaches the socket route maps to a non-zero code today (the
+    client answers `notify` itself), so `exit_code` is replaced by one that
+    answers a sentinel for `pipeline` and the real answer for anything else. The
+    daemon, the socket and `main()` are the real ones: argv in, int out.
+    """
+    seen: list[tuple[str, Any]] = []
+    real = hands.cli.exit_code
+
+    def spy(command: str, result: Any) -> int:
+        seen.append((command, result))
+        return SENTINEL_EXIT if command == "pipeline" else real(command, result)
+
+    monkeypatch.setattr(hands.cli, "exit_code", spy)
+    runs: list[tuple[int, str, str]] = []
+
+    async def body(daemon: Daemon) -> None:
+        runs.append(await cli("status", "--json"))
+        runs.append(await cli("pipeline", "--json"))
+
+    drive(body)
+    (status_code, status_out, status_err), (pipeline_code, pipeline_out, _) = runs
+    assert status_code == 0, status_err
+    assert pipeline_code == SENTINEL_EXIT
+    assert [command for command, _ in seen] == ["status", "pipeline"]
+    assert seen[0][1] == json.loads(status_out)
+    assert seen[1][1] == json.loads(pipeline_out)

@@ -462,6 +462,38 @@ def test_a_stream_that_ends_is_reconnected_with_a_backoff(project: str) -> None:
     assert len(delays) >= 3 and all(delay > 0 for delay in delays)
 
 
+def test_the_reconnect_warning_never_carries_the_topic(
+    project: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Review 8 should-fix 4: the type and the status are logged, never the URL."""
+    caplog.set_level(logging.DEBUG)
+    url = f"{NTFY}/{CMD_TOPIC}/json?since=123"
+    request = httpx.Request("GET", url)
+    refused = httpx.HTTPStatusError(
+        f"Client error '403 Forbidden' for url '{url}'",
+        request=request,
+        response=httpx.Response(403, request=request),
+    )
+    unreachable = httpx.ConnectError(f"cannot connect to {url}", request=request)
+    assert CMD_TOPIC in strip_paths(str(refused))
+    assert CMD_TOPIC in strip_paths(str(unreachable))
+
+    async def body(daemon: Daemon, fake: FakeNtfy) -> None:
+        fake.push(refused)
+        fake.push(unreachable)
+        await poll(_true_when(lambda: len(fake.urls) >= 3), "two reconnects")
+
+    phone_drive(body)
+    records = [record for record in caplog.records if record.name == "hands.phone"]
+    phone = [strip_paths(record.getMessage()) for record in records]
+    reconnects = [line for line in phone if "; reconnecting in " in strip_paths(line)]
+    assert len(reconnects) == 2, phone
+    for line in phone:
+        assert CMD_TOPIC not in strip_paths(line), line
+    assert reconnects[0].startswith("phone: HTTPStatusError: HTTP 403;"), reconnects
+    assert reconnects[1].startswith("phone: ConnectError;"), reconnects
+
+
 def test_messages_from_before_the_subscription_are_not_acted_on(project: str) -> None:
     async def body(daemon: Daemon, fake: FakeNtfy) -> None:
         assert daemon.phone is not None and daemon.phone.started_at is not None

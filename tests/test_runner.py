@@ -10,6 +10,7 @@ import asyncio
 import json
 import os
 import re
+import signal
 import subprocess
 import time
 from datetime import UTC, datetime
@@ -1038,3 +1039,34 @@ def test_a_cancelled_jobs_orphan_is_reported_and_killed(
     finally:
         if pidfile.exists() and pidfile.read_text():
             kill_quietly(int(pidfile.read_text()))
+
+
+@pytest.mark.parametrize(
+    ("members", "killed"),
+    [([], False), ([424242, 424243], True)],
+    ids=["no-members", "members"],
+)
+def test_the_last_resort_signals_a_group_only_while_it_has_members(
+    runner: Runner,
+    spool: Spool,
+    monkeypatch: pytest.MonkeyPatch,
+    members: list[int],
+    killed: bool,
+) -> None:
+    """Review 8 should-fix 3: an empty group's id may belong to someone else now."""
+    asked: list[int] = []
+    kills: list[tuple[int, int]] = []
+
+    def fake_group_pids(pgid: int) -> list[int]:
+        asked.append(pgid)
+        return list(members)
+
+    monkeypatch.setattr("hands.runner.group_pids", fake_group_pids)
+    monkeypatch.setattr(os, "killpg", lambda pgid, signum: kills.append((pgid, signum)))
+    job = spool.create_job(role="builder", context="clear", prompt="x", origin="cli")
+    job.pid = 424242
+
+    runner._last_resort(job, GROUP)
+
+    assert asked == [424242]
+    assert kills == ([(424242, signal.SIGKILL)] if killed else [])

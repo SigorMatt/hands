@@ -156,7 +156,7 @@ class PhoneChannel:
             except asyncio.CancelledError:
                 raise
             except Exception as exc:  # any transport failure: reconnect, never die
-                why = f"{type(exc).__name__}: {exc}"
+                why = _failure(exc)
             delay = BACKOFF_S[min(failures, len(BACKOFF_S) - 1)]
             failures += 1
             log.warning("phone: %s; reconnecting in %.0f s", why, delay)
@@ -284,3 +284,15 @@ def status_summary(daemon: Daemon) -> str:
     lines.append(f"pipeline: {'paused' if pipeline.get('paused') else 'running'}")
     lines.append(f"inbox: {status['inbox']['unacked']} unacked")
     return "\n".join(lines)
+
+
+def _failure(exc: BaseException) -> str:
+    """The reconnect warning's reason: the exception type and HTTP status only.
+
+    Never the exception's text: httpx puts the request URL in it, and the URL
+    carries `cmd_topic`, which reveals the secret (review 8 should-fix 4). An
+    exception without a response (a refused connection, a timeout) is its type.
+    """
+    status = getattr(getattr(exc, "response", None), "status_code", None)
+    name = type(exc).__name__
+    return f"{name}: HTTP {status}" if isinstance(status, int) else name
