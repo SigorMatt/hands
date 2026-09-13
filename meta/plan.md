@@ -27,7 +27,11 @@ templates)`).
       transcript records a pid (470 transcripts, claude 2.1.270); the pid lives
       in ~/.claude/sessions/<pid>.json, a source §26 does not name. Not retried:
       a second run under the same rules stops at the same memo. No code changed
-- [ ] U5 `hands kit check`; handbook and templates against the code (§4, §26)
+- [x] U5 `hands kit check`; handbook and templates against the code (§4, §26)
+      9e962a4 — mission 10 kit passes (6 of 6); templates moved to `[series]
+      name` (H-019); verdict check covers `builder.done` rules only, `aux.done`
+      review rules counted but unchecked (H-021, §26 as written fails the kit);
+      a kit with no brief fails the brief checks
 - [ ] U6 The closed loop in the docs; doctor rows (§26)
 - [ ] U7 Final report — meta/FINAL-REPORT-10.md (drafted under meta/drafts/)
 
