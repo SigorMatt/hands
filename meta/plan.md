@@ -48,8 +48,15 @@ Base of the mission: 0fef436 (`plan: mission 11 kit (DESIGN v3.10)`).
       `notify` (§10 has no no-op); max_consults counts driver jobs after the
       last builder job whose prompt is the kickoff; consult.done/journal on any
       end but `limited`; fake_claude gains `exec`
-- [ ] U6 This repository's playbook (BUILDER-12 kickoff, consult rules)
-- [ ] U7 Final report — meta/FINAL-REPORT-11.md (drafted under meta/drafts/)
+- [x] U6 This repository's playbook (BUILDER-12 kickoff, consult rules)
+      089e72f — catch-all is `^VERDICT:` → consult (a reply with no VERDICT
+      line still stops); playbook loads (tests). Gate half open: `hands kit
+      check .` exits 1 (H-022: `.git/` in the dir, eleven briefs, kickoff names
+      the unwritten BUILDER-12); BUILDER-11 alone with `--repo .` passes 6 of
+      6. Not retried: a second run under the same rules stops at the same memo
+- [x] U7 Final report (the commit that carries this line) —
+      meta/FINAL-REPORT-11.md (drafted under meta/drafts/); mission ends
+      `blocked U6` (acceptance `kit check .` exit 0, H-022)
 
 Review items by unit. REVIEW-10 blocker 1 → U2; SF1, SF3, SF4, SF5, SF6 → U1;
 SF2 → U3 (§27 resolves it by the apply from the kit, so no separate finding);
