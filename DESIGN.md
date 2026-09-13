@@ -1,13 +1,13 @@
-# hands — DESIGN v3.9
+# hands — DESIGN v3.10
 
 Machinery that replaces the human relay between the planning brain and the two
 Claude Code roles (builder, aux) on the Ubuntu laptop, and that keeps a series
 moving without a human while everything goes by plan. Working name: `hands`.
 The method it serves is described in WORKING-MODEL.md (agile-skills) and
 OPERATING-MODEL.md (spanweave); hands changes the topology, not the method.
-v3.9 (2026-09-13) specifies mission 10, the closed phone loop and the
-architect's tooling, and folds in the mission 9 review; changes are in §26;
-earlier changes in §25–§17.
+v3.10 (2026-09-13) folds in the mission 10 review and specifies mission
+11: the apply-from-kit, the driver role and `consult`; changes are in §27;
+earlier changes in §26–§17.
 
 Status: proposal, 2026-09-10. Items marked DECIDED were settled in discussion.
 
@@ -224,7 +224,7 @@ States: `held` → `queued` → `running` → `done` | `failed` | `limited` |
 
 Job record (returned verbatim, stored forever):
 
-    id, role, context, created, started, ended, origin (driver|playbook|cli|limit)
+    id, role, context, created, started, ended, origin (driver|playbook|cli|limit|phone|kit)
     prompt, files_written, session_id, transcript_path, pid, exit_code
     head_at_start, head_at_end
     result            # the `result` field of the final message, untouched
@@ -993,3 +993,74 @@ Mission 10, the architect's tooling:
   review, the protocol file it names exists. Output: one line per check,
   the apply prompt for the kit, exit 0 only when everything passes. It
   runs anywhere hands installs, including an architect's sandbox.
+
+---
+
+## 27. Changes from v3.9 (mission 10 review; mission 11 specification)
+
+Resolutions of the mission 10 findings and review:
+- H-020: `hands who` matches an interactive `claude` process to its
+  transcript through `~/.claude/sessions/<pid>.json`, whose `sessionId`
+  names the transcript; the transcript remains the source of the session's
+  state; when no sessions file exists for a pid the line says
+  `transcript: by directory` and is never attributed a job's transcript.
+- H-021: `hands kit check` verifies every `verdict` rule of the playbook,
+  `aux.done` included, against the vocabulary the review protocol
+  specifies (the `VERDICT: review …` line), and refuses a kit whose brief or
+  protocol vocabulary a rule cannot match; a broken builder rule is never
+  excused by the apply-verdict exception (review 10 should-fix 4).
+- H-019: the playbook's `[series]` table is `name` and `kickoff`; a bare
+  `series = "…"` string remains accepted as the name.
+- H-018: `phone` and `kit` are job origins (§6); a job of either origin
+  un-pauses the pipeline when it starts, as a `cli` one does.
+- `go` is refused while the builder has a running, queued or **held** job
+  (should-fix 1). The post-exit sweep signals only a group whose leader is
+  the job's own pid and whose members are all descendants (should-fix 3).
+  `kit check` refuses paths outside the repo, absolute paths, `..`, and a
+  protocol path a rule names that the kit or repo lacks (should-fix 5). A
+  malformed attachment URL is refused before any fetch and the refusal is
+  an inbox event (should-fix 6). `docs/INTEGRATION.md`'s `done` statement
+  is pinned by a test (should-fix 7).
+
+Mission 11, the apply from the kit (review 10 should-fix 2):
+- When `kit <secret>` receives a zip, `handsd` creates a **held** builder
+  job whose prompt is the standard apply prompt built from the zip: the
+  files it replaces and adds (from the zip's entries against the repo), the
+  commit message (the first line of a `KIT.md` inside the zip, else `plan:
+  kit <name>`), the plan-only sub-agent, the `VERDICT: kit applied <sha>`
+  reply; `origin: kit`; gate reason `apply <name>`. The held notification
+  carries the buttons. The zip itself is never unzipped by `handsd`; the
+  builder does that. `hands kit check` writes `KIT.md`'s expected shape
+  and prints the same prompt, so what the architect saw is what runs.
+- The loop is then phone-only: kit → buttons → `go` → buzz.
+
+Mission 11, the driver role and `consult` (§8, §10, §11):
+- A third role, `driver`: headless, started by `handsd` only through a
+  `consult` action; cwd is the driver directory (`~/hands-driver/<project>`)
+  with its fetch-only clone, `driver/CLAUDE.md`, and the driver guard in
+  **role mode** (`HANDS_ROLE=driver` in the environment): read-only git,
+  `hands show|jobs|inbox|pipeline|status|tail|kit check`, `hands send
+  --context keep` to the role named in the consultation, `hands resume`;
+  refused: `approve`, `deny`, any `--context clear` send, `put`, `pause`,
+  `go`, and every write. No permission bypass: the role runs with
+  `permission_flags` empty so `settings.json` and the hook are the law.
+- `then = "consult"`: sends the driver role the event, the job record and
+  the role's last reply verbatim, with the question "resolve within your
+  authority, citing the mission file or DESIGN section, or escalate". The
+  reply's first line is `VERDICT: resolved <what was sent, and the section
+  cited>` or `VERDICT: escalate <reason>`. Events `driver.done` and
+  `driver.failed`; follow-up rules match those verdicts; `escalate`, an
+  unrecognised verdict, and `driver.failed` stop and notify. `[limits]
+  max_consults` per mission (default 2); exceeded → stop. Every
+  consultation is an inbox event and a `meta/journal.md` line, and the
+  driver's reply is stored verbatim in the job record for the cold review.
+- Which events consult is the playbook's choice. The example routes
+  `builder.done` with `^VERDICT: question` and an unrecognised builder
+  verdict to `consult`; never review outcomes, never held gates, never
+  `aux.done`.
+- `hands doctor` reports the driver role (cwd, clone, guard mode) and
+  refuses a driver role with a permission bypass.
+
+Conventions: this repository's `PLAYBOOK.toml` sets `[series] kickoff` to
+the next mission's line; each kit that ships a new mission also ships the
+playbook line.
