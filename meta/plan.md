@@ -30,8 +30,12 @@ Base of the mission: 0fef436 (`plan: mission 11 kit (DESIGN v3.10)`).
       or foreign sessions file = no file (`by directory`); job transcript = a
       session id held by any spool job record; another human's transcript can
       still show under `by directory`
-- [ ] U3 The apply from the kit (§27; REVIEW-10 SF2; H-018 `kit` origin and
-      un-pause for `phone`/`kit`)
+- [x] U3 The apply from the kit (§27; REVIEW-10 SF2; H-018 `kit` origin and
+      un-pause for `phone`/`kit`) d4bea98 — one `plan_apply` for kit check and
+      daemon; commit message `KIT.md` first line else `plan: kit <stem>` (old
+      `plan: mission <N> kit` gone); only the paths check blocks the apply; a
+      busy builder does not; the prompt names the file where written, so
+      byte-equal with kit check only for `~/Downloads/<same name>`
 - [ ] U4 The driver role (§8, §27)
 - [ ] U5 `consult` (§10, §27)
 - [ ] U6 This repository's playbook (BUILDER-12 kickoff, consult rules)
