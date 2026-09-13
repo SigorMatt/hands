@@ -505,6 +505,27 @@ def test_the_supervisor_files_the_kill_and_hands_it_on(
     run(lambda: monitors.stop(job.id))
 
 
+def test_the_kill_payload_says_its_cause_is_unknown_for_a_bash_kill_and_a_task_stop(
+    tmp_home: Path, workdir: Path, spool: Spool
+) -> None:
+    """§25: the stream cannot tell a harness reap from a `TaskStop`, so the event
+    says `cause: unknown`. The fixture's case A is a Bash command killed with its
+    sub-agent (bar46gi30); case B is one stopped by the `TaskStop` tool (bs3zkkxlo)."""
+    seen: list[tuple[str, dict[str, Any]]] = []
+    monitors = MonitorSupervisor(
+        make_config(tmp_home, workdir), spool, on_event=lambda kind, p: seen.append((kind, p))
+    )
+    job = running(spool, role="builder")
+    for event in recorded_events():
+        monitors.observe(job, event)
+    by_task = {event.payload["task_id"]: event.payload for event in monitor_events(spool)}
+    assert set(by_task) == {"bar46gi30", "bs3zkkxlo"}
+    assert by_task["bar46gi30"]["cause"] == "unknown"  # A: the Bash kill
+    assert by_task["bs3zkkxlo"]["cause"] == "unknown"  # B: TaskStop
+    assert [payload["cause"] for _, payload in seen] == ["unknown", "unknown"]
+    run(lambda: monitors.stop(job.id))
+
+
 KILL_A = "FAKE:task-killed bg1 sleep 600"
 KILL_B = "FAKE:task-killed bg2 tail -f /tmp/app.log"
 
@@ -537,6 +558,7 @@ def test_a_role_job_through_the_daemon_files_one_task_killed_per_task(
             assert event.payload["job"] == job["id"]
             assert event.payload["role"] == role
             assert event.payload["command"] in event.payload["block"]
+            assert event.payload["cause"] == "unknown"  # §25
 
     drive(body)
 

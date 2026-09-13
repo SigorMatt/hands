@@ -266,7 +266,8 @@ Publish a command to `cmd_topic` from the ntfy app. The last word is the token:
   and kept only in handsd's memory. It can decide only that job, and only once.
   It is gone as soon as the job is decided by any route (phone, `hands
   approve`, the driver) and when handsd restarts. After a restart the old
-  buttons do nothing: type the command with the secret. `pause`, `resume` and
+  buttons do nothing, but handsd re-sends the notification of every job still
+  held, with new buttons; the command with the secret works too. `pause`, `resume` and
   `status` take the secret only, never a nonce.
 - **Nothing is answered except `status`.** A wrong secret or nonce, a command
   hands does not know, or a job that is not held is logged in handsd's journal
@@ -357,7 +358,9 @@ stash) — the tripwire rules of §5 are the ops script's, though.
 Whichever of the two decides, hands also reads every role job's stream-json
 (builder and aux) for claude's task-killed notice and files
 `monitor.task_killed` with the task's command line, once per task (§24). It
-needs no script and no flag.
+needs no script and no flag. The stream cannot tell a harness reap from the
+agent's own `TaskStop` (or a killed parent agent), so the event's `cause` is
+always `unknown` (§25), and the example playbook maps the event to `stop`.
 
 Each `claude -p` also runs isolated per job (§24). When `systemd-run --user
 --scope` can start a scope on this machine (systemd-run and systemctl on PATH,

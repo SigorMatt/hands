@@ -654,6 +654,9 @@ class MonitorSupervisor:
             tool_use_id=kill.tool_use_id,
             command=kill.command,
             description=kill.description,
+            # §25: the notice does not say who killed the task — a harness reap,
+            # the agent's own `TaskStop` and a killed parent agent look the same.
+            cause="unknown",
         )
 
     # ---------------------------------------------------- job end (§24)

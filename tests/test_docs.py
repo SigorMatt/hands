@@ -129,6 +129,17 @@ def test_the_playbook_doc_maps_the_mission_8_detectors_to_stop_and_says_the_grou
     assert "`setsid` has left the group and is not listed or killed" in prose
 
 
+def test_both_docs_say_the_task_killed_cause_is_always_unknown() -> None:
+    """§25: the stream cannot tell a harness reap from a `TaskStop`; the docs say
+    so, name `cause` as always `unknown`, and say what the example maps it to."""
+    for name in ("PLAYBOOK.md", "INTEGRATION.md"):
+        doc = flattened((ROOT / "docs" / name).read_text(encoding="utf-8"))
+        assert "`TaskStop`" in doc, f"docs/{name} does not name `TaskStop`"
+        assert "`cause` is always `unknown`" in doc, f"docs/{name} does not say cause is unknown"
+    integration = flattened((ROOT / "docs" / "INTEGRATION.md").read_text(encoding="utf-8"))
+    assert "handsd re-sends the notification of every job still held" in integration
+
+
 #: The key statements of INTEGRATION.md's optional section (§11, §24), each
 #: true of the code today; pinned so the section cannot drift silently.
 OPTIONAL_SECTION = "## Optional: notifications, the command channel and the who view"

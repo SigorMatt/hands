@@ -21,7 +21,9 @@ held. The nonce lives in this object's memory only — never in the job record,
 an event, the spool or a log line — and it authorizes a decision on that one
 job only. It is spent by the decision it authorizes; a wrong token spends
 nothing. It is dropped when the job is decided by any route (the daemon calls
-`discard` on every `gate.decided`), and with the daemon. `pause`, `resume` and
+`discard` on every `gate.decided`), and with the daemon. A restarted daemon
+mints a fresh nonce for every job still held and re-sends its notification with
+the new buttons (§25; `Daemon._renotify_held`). `pause`, `resume` and
 `status` take the secret only. The secret is compared with
 `hmac.compare_digest` and never published: a notification carries only nonces.
 

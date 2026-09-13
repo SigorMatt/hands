@@ -204,10 +204,38 @@ class Daemon:
             "hands: handsd started",
             {"message": f"{self.config.project} on {self.socket_path}", "pid": os.getpid()},
         )
+        self._renotify_held()
         log.info(
             "handsd %s listening on %s (project %s)",
             __version__, self.socket_path, self.config.project,
         )
+
+    def _renotify_held(self) -> None:
+        """§25: after a restart, every job still `held` gets fresh phone buttons.
+
+        The nonces died with the previous daemon, so the buttons already on the
+        phone do nothing. For each held job a new nonce is minted (by the same
+        `PhoneChannel.actions` the hold uses) and the `job.held` notification is
+        published again with it, its payload rebuilt from the job record in the
+        shape `Api.send` files. Without the command channel nothing is re-sent:
+        that notification never carried buttons, so nothing on the phone died.
+        """
+        if self.phone is None:
+            return
+        for job in self.spool.list_jobs():
+            if job.state != "held":
+                continue
+            gate = job.gate or {}
+            payload = {
+                "job": job.id,
+                "role": job.role,
+                "state": "held",
+                "reason": gate.get("reason"),
+                "gate": gate.get("kind"),
+            }
+            self.notifier.notify(
+                NOTIFY_KINDS["job.held"], payload, actions=self.phone.actions(job.id)
+            )
 
     async def serve_forever(self) -> None:
         if self._server is None:  # pragma: no cover - defensive

@@ -73,8 +73,9 @@ role job's stream-json, builder and aux, for the notice claude writes when that
 happens and files one event per task, with its `task_id` and its command line
 (`command`, taken from the `Bash` call that started it; empty when that call is
 not in the stream). The stream does not say who killed the task: the harness
-reaping it, the `TaskStop` tool and a killed parent agent look the same. Work
-the job was waiting on did not finish, so the rule is `stop`:
+reaping it, the agent's own `TaskStop` and a killed parent agent look the same,
+so the event's `cause` is always `unknown` (DESIGN §25). Work the job was
+waiting on did not finish, so the rule is `stop`:
 
     [[rule]]
     on = "monitor.task_killed"

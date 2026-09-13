@@ -352,7 +352,9 @@ def test_the_nonce_dies_with_the_daemon(project: str) -> None:
         kept["job"], kept["nonce"] = job["id"], await nonce_for(daemon, job["id"])
 
     async def second(daemon: Daemon, fake: FakeNtfy) -> None:
-        assert daemon.phone is not None and daemon.phone.nonces == {}
+        # §25: the job is still held, so it has a nonce again — a fresh one.
+        assert daemon.phone is not None and set(daemon.phone.nonces) == {kept["job"]}
+        assert daemon.phone.nonces[kept["job"]] != kept["nonce"]
         await say(daemon, fake, f"approve {kept['job']} {kept['nonce']}")
         assert await state(kept["job"]) == "held"
         await say(daemon, fake, f"approve {kept['job']} {SECRET}")  # the secret still works
@@ -360,6 +362,108 @@ def test_the_nonce_dies_with_the_daemon(project: str) -> None:
 
     phone_drive(first)
     phone_drive(second)
+
+
+def test_a_restart_re_sends_each_held_job_with_a_fresh_nonce(project: str) -> None:
+    """§25: "nonces are re-minted for every job still `held` and their
+    notifications re-sent with fresh buttons" (FINAL-REPORT-8 §5 item 5).
+
+    Two daemons over the same spool, each through `Daemon.start()`. The first
+    leaves two jobs held, one approved (decided, then done) and one never gated
+    (done). The second publishes one held notification per held job, with
+    buttons whose nonce is new; the old nonce is refused, the new one decides.
+    """
+    kept: dict[str, Any] = {}
+
+    async def first(daemon: Daemon, fake: FakeNtfy) -> None:
+        one, two, decided = await held(), await held(), await held()
+        kept["held"] = [one["id"], two["id"]]
+        kept["old"] = {job: await nonce_for(daemon, job) for job in kept["held"]}
+        await ok("approve", decided["id"])
+        plain = await ok("send", "--role", "aux", "--context", "clear", "FAKE:result ok")
+        kept["other"] = [decided["id"], plain["id"]]
+        for job in kept["other"]:
+            assert (await ok("wait", job))["state"] == "done"
+
+    async def second(daemon: Daemon, fake: FakeNtfy) -> None:
+        posts = daemon.notifier.post
+        await daemon.notifier.drain()
+        resent = posts.titled("held")
+        buttons = {
+            action["body"].split()[1]: action["body"].split()[2]
+            for item in resent
+            for action in item.get("actions") or []
+        }
+        assert len(resent) == 2, posts.sent  # one publish per held job, none for the others
+        assert set(buttons) == set(kept["held"])
+        for item in resent:
+            assert item["url"] == f"{NTFY}/{EVENTS_TOPIC}"
+            assert [a["label"] for a in item["actions"]] == ["Approve", "Deny"]
+            assert SECRET not in strip_paths(json.dumps(item))  # §24: never the secret
+        for job in kept["held"]:
+            assert buttons[job] != kept["old"][job]
+            assert daemon.phone is not None and daemon.phone.nonces[job] == buttons[job]
+
+        one, two = kept["held"]
+        await say(daemon, fake, f"approve {one} {kept['old'][one]}")  # the old button
+        assert await state(one) == "held"
+        await say(daemon, fake, f"approve {one} {buttons[one]}")  # the re-sent button
+        record = await ok("show", one)
+        assert record["gate"]["decision"] == "approved"
+        assert record["gate"]["decided_by"] == "phone"
+        assert daemon.phone is not None and daemon.phone.nonces.get(one) is None
+        await say(daemon, fake, f"deny {two} {buttons[one]}")  # bound to its own job
+        assert await state(two) == "held"
+        await say(daemon, fake, f"deny {two} {buttons[two]}")
+        assert (await ok("show", two))["gate"]["decided_by"] == "phone"
+        assert await state(two) == "denied"
+
+    phone_drive(first)
+    phone_drive(second)
+
+
+def test_a_restart_without_held_jobs_re_sends_nothing(project: str) -> None:
+    async def first(daemon: Daemon, fake: FakeNtfy) -> None:
+        job = await held()
+        await ok("deny", job["id"])
+
+    async def second(daemon: Daemon, fake: FakeNtfy) -> None:
+        await daemon.notifier.drain()
+        assert daemon.notifier.post.titled("held") == []
+        assert all(item.get("actions") is None for item in daemon.notifier.post.sent)
+        assert daemon.phone is not None and daemon.phone.nonces == {}
+
+    phone_drive(first)
+    phone_drive(second)
+
+
+def test_without_the_channel_a_restart_re_sends_no_held_notification(
+    tmp_home: Path, workdir: Path
+) -> None:
+    """The simplest consistent reading of §25 where it is silent: the re-send
+    replaces buttons that died with the old daemon. Without `cmd_topic` the held
+    notification never had buttons, nothing died, and nothing is re-sent."""
+    body_text = config_body(tmp_home, workdir, extra=NOTIFY.split("cmd_topic")[0])
+    (tmp_home / ".hands" / f"{PROJECT}.toml").write_text(body_text)
+
+    async def once(hold: bool) -> Recorder:
+        daemon = Daemon(load_config(PROJECT))
+        posts = Recorder()
+        daemon.notifier.post = posts
+        await daemon.start()
+        try:
+            if hold:
+                await held()
+            await daemon.notifier.drain()
+        finally:
+            await daemon.stop()
+        return posts
+
+    before = asyncio.run(once(hold=True))
+    assert len(before.titled("held")) == 1
+    after = asyncio.run(once(hold=False))
+    assert after.titled("held") == [], after.sent
+    assert after.titled("started"), after.sent
 
 
 def test_pause_resume_and_status_refuse_a_nonce(project: str) -> None:
