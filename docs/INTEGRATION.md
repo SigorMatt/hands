@@ -386,6 +386,10 @@ ops script.
 - The plan kit gains `PLAYBOOK.toml` (see `docs/PLAYBOOK.md`). It is applied
   like a decisions file — a gated `hands send` the human approves — and the
   approval of that job is the approval of every launch the playbook may make.
+  The file must be committed: hands refuses a playbook that differs from
+  `git show HEAD:<path>` (dirty) or is not in HEAD (untracked) when a job
+  starts, stops the pipeline with a reason naming both sha256s, and `hands
+  doctor` fails its playbook row the same way.
 - Every builder run prompt and aux review prompt must require the reply's
   first line to begin with `VERDICT:` in the playbook's vocabulary.
 - Retire: the status+arm aux prompt, the `~/Downloads` relay of prompts (files

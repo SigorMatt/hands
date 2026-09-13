@@ -25,7 +25,7 @@ from typing import Any
 
 import pytest
 
-from conftest import strip_paths
+from conftest import commit_file, strip_paths
 from hands.cli import _pipeline_block
 from hands.config import Config, load_config, parse_config
 from hands.daemon import Daemon
@@ -138,7 +138,7 @@ def engine_for(
     builder: dict[str, Any] | None = None,
 ) -> tuple[PlaybookEngine, Recorder]:
     if body is not None:
-        (workdir / "PLAYBOOK.toml").write_text(body)
+        commit_file(workdir, "PLAYBOOK.toml", body)  # §10: only the committed file loads
     config = make_config(tmp_home, workdir, builder=builder)
     recorder = Recorder()
     engine = PlaybookEngine(
@@ -415,6 +415,93 @@ def test_an_unparseable_playbook_stops_and_notifies_and_fires_nothing(
     assert recorder.notified
     run(engine.on_job(job))
     assert recorder.sent == []
+
+
+# --------------------------------- the playbook must match the committed file (§10)
+
+
+def _sha(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def test_a_committed_and_clean_playbook_loads(tmp_home: Path, workdir: Path) -> None:
+    """§10, §25: the tracked file, byte for byte `git show HEAD:<path>`, loads."""
+    committed = commit_file(workdir, "PLAYBOOK.toml", EXAMPLE)
+    book = load_playbook(workdir / "PLAYBOOK.toml", cwd=workdir)
+    assert book is not None and book.sha256 == committed
+
+    engine, recorder = engine_for(tmp_home, workdir, body=None)
+    run(engine.on_job_start(finished(engine.spool, origin="cli")))
+    state = engine.pipeline()
+    assert state["paused"] is False
+    assert state["playbook"]["loaded"] is True and state["playbook"]["sha256"] == committed
+    assert [event.kind for event in engine.spool.events()] == []
+    assert recorder.notified == []
+
+
+def test_a_dirty_playbook_is_refused_naming_both_sha256s_and_stops_the_pipeline(
+    tmp_home: Path, workdir: Path
+) -> None:
+    """§10, §25: a file modified after its commit is refused at load; the one
+    `stop()` takes the refusal as its reason and the `stop` event carries it."""
+    committed = commit_file(workdir, "PLAYBOOK.toml", EXAMPLE)
+    dirty = EXAMPLE + "\n# edited after the commit\n"
+    (workdir / "PLAYBOOK.toml").write_text(dirty)
+    working = _sha(dirty)
+    assert working != committed
+
+    with pytest.raises(PlaybookError) as refused:
+        load_playbook(workdir / "PLAYBOOK.toml", cwd=workdir)
+    assert "dirty" in strip_paths(str(refused.value))
+    assert f"working sha256 {working}" in strip_paths(str(refused.value))
+    assert f"committed sha256 {committed}" in strip_paths(str(refused.value))
+
+    engine, recorder = engine_for(tmp_home, workdir, body=None)
+    job = finished(engine.spool, verdict="VERDICT: run 2 finished", origin="cli")
+    run(engine.on_job_start(job))
+    state = engine.pipeline()
+    assert state["paused"] is True
+    assert state["playbook"]["loaded"] is False
+    reason = state["stop_reason"]
+    assert "dirty" in strip_paths(reason)
+    assert f"working sha256 {working}" in strip_paths(reason)
+    assert f"committed sha256 {committed}" in strip_paths(reason)
+    events = engine.spool.events()
+    assert [event.kind for event in events] == ["stop"]
+    assert events[0].payload["reason"] == reason
+    assert len(recorder.notified) == 1 and recorder.notified[0][1]["reason"] == reason
+    run(engine.on_job(job))
+    assert recorder.sent == [] and recorder.enqueued == []
+
+
+def test_an_untracked_playbook_is_refused_and_stops_the_pipeline(
+    tmp_home: Path, workdir: Path
+) -> None:
+    """§10, §25: a playbook that is not in HEAD has no committed copy to match."""
+    git_repo(workdir)  # a repository with a commit, just not this file
+    (workdir / "PLAYBOOK.toml").write_text(EXAMPLE)
+    with pytest.raises(PlaybookError) as refused:
+        load_playbook(workdir / "PLAYBOOK.toml", cwd=workdir)
+    assert "untracked" in strip_paths(str(refused.value))
+    assert f"working sha256 {_sha(EXAMPLE)}" in strip_paths(str(refused.value))
+    assert "committed sha256 none" in strip_paths(str(refused.value))
+
+    engine, recorder = engine_for(tmp_home, workdir, body=None)
+    run(engine.on_job_start(finished(engine.spool, origin="cli")))
+    state = engine.pipeline()
+    assert state["paused"] is True
+    assert "untracked" in strip_paths(state["stop_reason"])
+    assert [event.kind for event in engine.spool.events()] == ["stop"]
+    assert recorder.notified
+
+
+def test_a_playbook_outside_any_git_repository_is_refused(workdir: Path) -> None:
+    """§10 refuses what differs from the committed copy; with no repository there
+    is no committed copy, so the file is refused as untracked."""
+    (workdir / "PLAYBOOK.toml").write_text(EXAMPLE)
+    with pytest.raises(PlaybookError) as refused:
+        load_playbook(workdir / "PLAYBOOK.toml", cwd=workdir)
+    assert "untracked" in strip_paths(str(refused.value))
 
 
 # ----------------------------------------------------------- placeholders (§10)
@@ -905,8 +992,10 @@ def test_last_rule_is_cleared_when_a_playbook_with_another_sha_loads(
     run(engine.on_job_start(finished(engine.spool, origin="playbook")))
     assert engine.pipeline()["last_rule"] == fired, "the same file keeps it"
 
-    (workdir / "PLAYBOOK.toml").write_text(
-        'version = 1\n[[rule]]\non = "aux.done"\nthen = "notify"\nmessage = "hi"\n'
+    commit_file(
+        workdir,
+        "PLAYBOOK.toml",
+        'version = 1\n[[rule]]\non = "aux.done"\nthen = "notify"\nmessage = "hi"\n',
     )
     run(engine.on_job_start(finished(engine.spool, origin="playbook")))
     assert engine.pipeline()["last_rule"] is None
@@ -1016,7 +1105,7 @@ def project(tmp_home: Path, workdir: Path) -> str:
 
 
 def write_playbook(workdir: Path, body: str) -> None:
-    (workdir / "PLAYBOOK.toml").write_text(body)
+    commit_file(workdir, "PLAYBOOK.toml", body)  # §10: only the committed file loads
 
 
 async def wait_for_jobs(count: int, role: str | None = None) -> list[dict[str, Any]]:
@@ -1352,6 +1441,36 @@ def test_the_daemon_stops_the_pipeline_on_an_unmatched_event(
         assert "builder.done" in strip_paths(state["stop_reason"])
         events = (await ok("inbox"))["events"]
         assert [event["kind"] for event in events][-1] == "stop"
+
+    drive(body)
+
+
+def test_a_dirty_playbook_is_refused_at_job_start(project: str, workdir: Path) -> None:
+    """Mission 9 acceptance (§10, §25), through the daemon's real job-start path:
+    a `PLAYBOOK.toml` edited after its commit is refused when a job starts, the
+    pipeline stops with the refusal as its reason, the inbox `stop` event says so,
+    and no rule of the edited file fires."""
+    committed = commit_file(workdir, "PLAYBOOK.toml", EXAMPLE)
+    dirty = EXAMPLE + "\n# edited after the commit\n"
+    (workdir / "PLAYBOOK.toml").write_text(dirty)
+    working = hashlib.sha256(dirty.encode("utf-8")).hexdigest()
+
+    async def body(daemon: Daemon) -> None:
+        job = await ok(
+            "send", "--role", "builder", "--context", "clear",
+            "FAKE:result VERDICT: run 2 finished",
+        )
+        await ok("wait", job["id"])
+        state = await wait_for_stop()
+        reason = state["stop_reason"]
+        assert "dirty" in strip_paths(reason)
+        assert f"working sha256 {working}" in strip_paths(reason)
+        assert f"committed sha256 {committed}" in strip_paths(reason)
+        assert state["playbook"]["loaded"] is False
+        stops = [e for e in (await ok("inbox"))["events"] if e["kind"] == "stop"]
+        assert len(stops) == 1
+        assert stops[0]["payload"]["reason"] == reason
+        assert len((await ok("jobs", "-n", "50"))["jobs"]) == 1, "a refused file fired a rule"
 
     drive(body)
 

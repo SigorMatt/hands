@@ -17,6 +17,24 @@ A playbook that does not parse is not — the engine refuses to fire a rule out
 of a half-read file, and `hands doctor` and `hands pipeline` both show the
 error.
 
+**The playbook must be committed.** When a job starts, hands compares the
+file's bytes with `git show HEAD:./<playbook.path>` run in `roles.builder.cwd`
+(DESIGN §10). A file edited after its commit is refused as **dirty**; a file
+that is not in HEAD — never added, or `roles.builder.cwd` is not a git
+repository — is refused as **untracked**. A refusal stops the pipeline like any
+other stop: one `stop` event in the inbox and one notification, with a reason
+that names both sha256s, for example
+
+    the playbook is not the committed copy, so no rule can be trusted to fire:
+    …/PLAYBOOK.toml is dirty: it differs from `git show HEAD:./PLAYBOOK.toml` in …:
+    working sha256 <64 hex>, committed sha256 <64 hex>; commit it or restore the
+    committed copy (§10)
+
+(an untracked file says `committed sha256 none`, with git's own line). No rule
+of a refused file fires. Commit the playbook — the gated `plan: playbook …`
+job does — then `hands resume`. `hands doctor`'s playbook row is `ok` with
+`committed` for the committed copy and fails with the same refusal otherwise.
+
 ---
 
 ## The file

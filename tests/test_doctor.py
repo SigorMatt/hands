@@ -11,6 +11,7 @@ by default, and `HANDS_DOCTOR_FAKE=1` refuses it even when it is asked for.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import io
 import json
 import os
@@ -22,7 +23,7 @@ from typing import Any
 import pytest
 
 import hands.runner
-from conftest import strip_paths
+from conftest import commit_file, strip_paths
 from hands.cli import call, main
 from hands.config import load_config
 from hands.daemon import Daemon
@@ -421,19 +422,53 @@ def test_the_playbook_is_loaded_when_there_is_one(
     tmp_home: Path, tmp_path: Path, fake_mode: None
 ) -> None:
     write_config(tmp_home, tmp_path)
-    (tmp_path / "work" / "PLAYBOOK.toml").write_text(EXAMPLE_PLAYBOOK.read_text())
+    commit_file(tmp_path / "work", "PLAYBOOK.toml", EXAMPLE_PLAYBOOK.read_text())
     code, found = checks()
     assert code == 0
     assert found["playbook"]["status"] == "ok"
     assert "audit-fixes" in strip_paths(found["playbook"]["detail"])
+    assert "committed" in strip_paths(found["playbook"]["detail"]), (
+        "§25: the row says the file is the committed copy"
+    )
+
+
+def test_a_dirty_playbook_fails_the_row_naming_both_sha256s(
+    tmp_home: Path, tmp_path: Path, fake_mode: None
+) -> None:
+    """§10, §25: doctor's playbook row reports a file modified after its commit."""
+    write_config(tmp_home, tmp_path)
+    committed = commit_file(tmp_path / "work", "PLAYBOOK.toml", EXAMPLE_PLAYBOOK.read_text())
+    dirty = EXAMPLE_PLAYBOOK.read_text() + "\n# edited after the commit\n"
+    (tmp_path / "work" / "PLAYBOOK.toml").write_text(dirty)
+    code, found = checks()
+    assert code == 1
+    assert found["playbook"]["status"] == "fail"
+    assert "dirty" in strip_paths(found["playbook"]["detail"])
+    assert f"committed sha256 {committed}" in strip_paths(found["playbook"]["detail"])
+    working = hashlib.sha256(dirty.encode("utf-8")).hexdigest()
+    assert f"working sha256 {working}" in strip_paths(found["playbook"]["detail"])
+
+
+def test_an_untracked_playbook_fails_the_row(
+    tmp_home: Path, tmp_path: Path, fake_mode: None
+) -> None:
+    write_config(tmp_home, tmp_path)
+    commit_file(tmp_path / "work", "WORKPLAN.md", "run 2\n")
+    (tmp_path / "work" / "PLAYBOOK.toml").write_text(EXAMPLE_PLAYBOOK.read_text())
+    code, found = checks()
+    assert code == 1
+    assert found["playbook"]["status"] == "fail"
+    assert "untracked" in strip_paths(found["playbook"]["detail"])
 
 
 def test_an_unparseable_playbook_fails(tmp_home: Path, tmp_path: Path, fake_mode: None) -> None:
     write_config(tmp_home, tmp_path)
-    (tmp_path / "work" / "PLAYBOOK.toml").write_text('version = 1\n[[rule]]\non = "nope"\n')
+    commit_file(tmp_path / "work", "PLAYBOOK.toml", 'version = 1\n[[rule]]\non = "nope"\n')
     code, found = checks()
     assert code == 1
     assert found["playbook"]["status"] == "fail"
+    assert "dirty" not in strip_paths(found["playbook"]["detail"])
+    assert "untracked" not in strip_paths(found["playbook"]["detail"])
 
 
 def test_a_daemon_that_is_not_running_is_a_warning(

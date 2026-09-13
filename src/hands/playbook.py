@@ -18,7 +18,9 @@ What lives here and what does not:
 * the playbook is **a file in the builder's repo**, read when a job starts, and
   its sha256 is stamped on every job the engine fires. A missing file is not an
   error — hands still runs jobs, nothing chains. An unparseable or invalid one
-  **is**: the engine stops rather than fire a rule out of a half-read file.
+  **is**: the engine stops rather than fire a rule out of a half-read file. So
+  is one that differs from `git show HEAD:<path>` (dirty) or is not in HEAD
+  (untracked): only the committed file loads (§10, §25).
 * the engine never spawns anything itself. `send` goes through the same API
   method `hands send` uses, so §8's gate patterns still apply to a job hands
   starts on its own; `resume` goes through the daemon's queue directly, like
@@ -36,7 +38,9 @@ import hashlib
 import inspect
 import json
 import logging
+import os
 import re
+import subprocess
 import tomllib
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
@@ -59,6 +63,7 @@ __all__ = [
     "Playbook",
     "PlaybookEngine",
     "PlaybookError",
+    "PlaybookNotCommitted",
     "Rule",
     "load_playbook",
     "parse_playbook",
@@ -127,6 +132,14 @@ CONTEXTS = ("clear", "keep")
 
 class PlaybookError(Exception):
     """The playbook is unparseable, or says something §10 does not allow."""
+
+
+class PlaybookNotCommitted(PlaybookError):
+    """The file on disk is not the committed copy (§10, §25): dirty or untracked."""
+
+
+#: How long `git show HEAD:<path>` may take before the playbook is refused (§10).
+GIT_SHOW_TIMEOUT_S = 10.0
 
 
 class PlaceholderError(Exception):
@@ -323,11 +336,16 @@ def playbook_path(config: Config) -> Path:
     return config.role("builder").cwd / config.playbook.path
 
 
-def load_playbook(path: Path) -> Playbook | None:
+def load_playbook(path: Path, *, cwd: Path | None = None) -> Playbook | None:
     """The playbook at `path`, or None when there is no file there (§10).
 
     A missing playbook is not an error: hands runs jobs, nothing chains. Every
     other problem is a `PlaybookError` — a half-read file must never fire a rule.
+
+    §10 (§25): the file is loaded only when it is the committed copy. Its bytes
+    are compared with `git show HEAD:./<path relative to cwd>` run in `cwd`
+    (`roles.builder.cwd` for the engine and doctor; the file's own directory
+    when no `cwd` is given), before it is parsed — see `_check_committed`.
     """
     try:
         raw = path.read_bytes()
@@ -335,11 +353,60 @@ def load_playbook(path: Path) -> Playbook | None:
         return None
     except OSError as exc:
         raise PlaybookError(f"cannot read the playbook {path}: {exc}") from exc
+    _check_committed(path, raw, path.parent if cwd is None else cwd)
     try:
         text = raw.decode("utf-8")
     except UnicodeDecodeError as exc:
         raise PlaybookError(f"{path} is not valid UTF-8: {exc}") from exc
     return parse_playbook(text, path=path)
+
+
+def _check_committed(path: Path, raw: bytes, cwd: Path) -> None:
+    """§10: refuse the file when it differs from `git show HEAD:<path>` in `cwd`.
+
+    `HEAD:./<relative>` is git's cwd-relative spelling, so `playbook.path` means
+    what §13 says — relative to `roles.builder.cwd` — even when that directory
+    is below the repository root. Every refusal names the working file's sha256
+    and the committed one's (`none` when git has no committed copy).
+
+    * git exits non-zero (the path is not in HEAD, HEAD has no commit, `cwd` is
+      not a git repository): refused as **untracked**, with git's own line;
+    * git exits zero with other bytes: refused as **dirty**;
+    * git cannot be run or does not answer in time: refused — a file that could
+      not be compared is not known to be the committed copy.
+    """
+    spec = "HEAD:./" + Path(os.path.relpath(path, cwd)).as_posix()
+    working = hashlib.sha256(raw).hexdigest()
+    try:
+        proc = subprocess.run(
+            ["git", "show", spec],
+            cwd=cwd,
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            timeout=GIT_SHOW_TIMEOUT_S,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise PlaybookNotCommitted(
+            f"{path} cannot be compared with its committed copy (`git show {spec}` in "
+            f"{cwd}: {exc}): working sha256 {working}, committed sha256 unknown; "
+            "only the committed file loads (§10)"
+        ) from exc
+    if proc.returncode != 0:
+        lines = proc.stderr.decode("utf-8", errors="replace").strip().splitlines()
+        said = lines[0] if lines else f"exit {proc.returncode}"
+        raise PlaybookNotCommitted(
+            f"{path} is untracked: `git show {spec}` in {cwd} found no committed copy "
+            f"({said}): working sha256 {working}, committed sha256 none; "
+            "commit it on the series branch (§10)"
+        )
+    committed = hashlib.sha256(proc.stdout).hexdigest()
+    if committed != working:
+        raise PlaybookNotCommitted(
+            f"{path} is dirty: it differs from `git show {spec}` in {cwd}: "
+            f"working sha256 {working}, committed sha256 {committed}; "
+            "commit it or restore the committed copy (§10)"
+        )
 
 
 def parse_playbook(text: str, *, path: Path) -> Playbook:
@@ -643,12 +710,19 @@ class PlaybookEngine:
         path = playbook_path(self.config)
         self._loaded = True
         try:
-            book = load_playbook(path)
+            book = load_playbook(path, cwd=self.config.role("builder").cwd)
         except PlaybookError as exc:
             self.playbook = None
             self.load_error = str(exc)
+            # §10, §25: a dirty or untracked file is refused through this same
+            # path — the one `stop()`, its reason naming both sha256s.
+            what = (
+                "is not the committed copy"
+                if isinstance(exc, PlaybookNotCommitted)
+                else "cannot be read"
+            )
             await self.stop(
-                f"the playbook cannot be read, so no rule can be trusted to fire: {exc}",
+                f"the playbook {what}, so no rule can be trusted to fire: {exc}",
                 {"playbook": str(path)},
             )
             return
@@ -1042,7 +1116,9 @@ class PlaybookEngine:
         if not self._loaded:
             # A read-only command must still say what the file on disk is.
             try:
-                self.playbook = load_playbook(playbook_path(self.config))
+                self.playbook = load_playbook(
+                    playbook_path(self.config), cwd=self.config.role("builder").cwd
+                )
                 self._loaded = True
             except PlaybookError as exc:
                 self.load_error = str(exc)

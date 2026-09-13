@@ -121,6 +121,37 @@ def _process_group_isolation(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(hands.runner, "detect_isolation", lambda: hands.runner.GROUP)
 
 
+def commit_file(repo: Path, name: str, body: str | bytes) -> str:
+    """Write `repo/name` and commit it; return the sha256 of the bytes committed.
+
+    DESIGN §10 (§25): hands refuses a playbook that differs from `git show
+    HEAD:<path>`, so a test that loads one has to commit it first. `repo` is
+    `git init`ed when it is not a repository yet, with its identity, signing and
+    hooks set in the repository's *local* config only — the global config is
+    never written.
+    """
+    import hashlib
+    import subprocess
+
+    def git(*args: str) -> None:
+        subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True)
+
+    repo.mkdir(parents=True, exist_ok=True)
+    if not (repo / ".git" / "HEAD").exists():  # an empty `.git` stand-in is not a repo
+        git("init", "-q")
+    git("config", "--local", "user.name", "hands tests")
+    git("config", "--local", "user.email", "tests@hands.invalid")
+    git("config", "--local", "commit.gpgsign", "false")
+    git("config", "--local", "core.hooksPath", "/dev/null")
+    data = body.encode("utf-8") if isinstance(body, str) else body
+    target = repo / name
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(data)
+    git("add", "--", name)
+    git("commit", "-q", "--allow-empty", "-m", f"test: {name}")
+    return hashlib.sha256(data).hexdigest()
+
+
 def process_live(pid: int) -> bool:
     """Is `pid` a running process? A zombie is not: it has already exited."""
     try:

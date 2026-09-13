@@ -399,10 +399,14 @@ def _isolation_check(config: Config) -> Check:
 
 
 def _playbook_check(config: Config) -> Check:
-    """§10: no playbook is fine (nothing chains); a broken one is not."""
+    """§10: no playbook is fine (nothing chains); a broken one is not.
+
+    §25: nor is a dirty or untracked one — the row fails with the refusal, which
+    says `dirty` or `untracked` and names both sha256s; `ok` means committed.
+    """
     path = playbook_path(config)
     try:
-        book = load_playbook(path)
+        book = load_playbook(path, cwd=config.role("builder").cwd)
     except PlaybookError as exc:
         return Check("playbook", FAIL, str(exc))
     if book is None:
@@ -417,7 +421,8 @@ def _playbook_check(config: Config) -> Check:
         "playbook",
         OK,
         f"{path}\nseries {book.series or '(unnamed)'}; {len(book.rules)} rule(s); "
-        f"auto_runs {runs}; sha256 {book.sha256[:12]}…",
+        f"auto_runs {runs}; sha256 {book.sha256[:12]}…\n"
+        "committed: the file matches `git show HEAD:<path>` in roles.builder.cwd (§10)",
     )
 
 
