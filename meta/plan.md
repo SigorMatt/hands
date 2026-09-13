@@ -27,8 +27,8 @@ pyproject.toml` returns nothing. U0 records this; there is nothing to remove.
       verbatim example comment (fixture, docs/PLAYBOOK.md:233), the doc sentence
       stating the refusal, and docs/ARCHITECT-INSTRUCTION.md's convention; none
       is the feature
-- [ ] U5 Phone channel after restart; detector payload (§25)
-- [ ] U6 Final report — meta/FINAL-REPORT-9.md (drafted under meta/drafts/)
+- [x] U5 Phone channel after restart; detector payload (§25) f96c88b
+- [x] U6 Final report (the commit that carries this line) — meta/FINAL-REPORT-9.md (drafted under meta/drafts/)
 
 Review items by unit. REVIEW-8 should-fix 1, 3, 4 → U2. Should-fix 2 →
 DESIGN v3.8 §6 (H-017) and U1. FINAL-REPORT-8 §5 item 1 → U1; item 2
