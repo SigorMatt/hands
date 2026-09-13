@@ -11,6 +11,7 @@ by default, and `HANDS_DOCTOR_FAKE=1` refuses it even when it is asked for.
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import hashlib
 import io
 import json
@@ -988,3 +989,97 @@ def test_kit_transport_is_on_inside_the_roots_and_shows_kit_dir_and_the_cap(
     for text in (out, err, json.dumps(found)):
         assert PHONE_SECRET not in strip_paths(text)
         assert "hands-cmd-doctor" not in strip_paths(text)
+
+
+# ----------------------------------------------- the driver role (§27, U4)
+
+GUARD = Path(__file__).parents[1] / "driver" / "hooks" / "bash_guard.py"
+
+
+def driver_dir(tmp_path: Path, *, clone: bool = True, guard: bool = True) -> Path:
+    """`~/hands-driver/<project>` as driver/README.md builds it (§12)."""
+    d = tmp_path / "hands-driver"
+    d.mkdir(exist_ok=True)
+    if clone:
+        (d / "repo" / ".git").mkdir(parents=True, exist_ok=True)
+    if guard:
+        (d / ".claude" / "hooks").mkdir(parents=True, exist_ok=True)
+        shutil.copy(GUARD, d / ".claude" / "hooks" / "bash_guard.py")
+    return d
+
+
+def add_driver(path: Path, cwd: Path, extra: str = "") -> None:
+    path.write_text(path.read_text() + f'\n[roles.driver]\ncwd = "{cwd}"\n{extra}\n')
+
+
+def test_no_driver_role_is_a_row_saying_so_and_not_a_failure(
+    tmp_home: Path, tmp_path: Path, fake_mode: None
+) -> None:
+    write_config(tmp_home, tmp_path)
+    code, found = checks()
+    assert code == 0
+    row = found["role driver"]
+    assert row["status"] == "ok"
+    assert "no [roles.driver]" in strip_paths(row["detail"])
+
+
+def test_a_good_driver_role_reports_cwd_clone_and_guard_mode(
+    tmp_home: Path, tmp_path: Path, fake_mode: None
+) -> None:
+    d = driver_dir(tmp_path)
+    add_driver(write_config(tmp_home, tmp_path), d)
+    code, out, err = run()
+    assert code == 0, f"{out}\n{err}"
+    row = strip_paths(text_row(out, "role driver"))
+    code, found = checks()
+    assert code == 0
+    assert found["role driver"]["status"] == "ok", found["role driver"]
+    detail = strip_paths(found["role driver"]["detail"])
+    for text in (row, detail):
+        assert "<path>/hands-driver  model opus" in strip_paths(text)
+        assert "clone <path>/hands-driver/repo" in strip_paths(text)
+        assert "guard <path>/hands-driver/.claude/hooks/bash_guard.py" in strip_paths(text)
+        assert "role mode (HANDS_ROLE=driver" in strip_paths(text)
+        assert "permission_flags (none)" in strip_paths(text)
+    # the generic role row is not printed for the driver: it has its own
+    assert list(found).count("role driver") == 1
+
+
+def test_a_driver_role_without_its_clone_or_its_guard_is_a_warning(
+    tmp_home: Path, tmp_path: Path, fake_mode: None
+) -> None:
+    d = driver_dir(tmp_path, clone=False, guard=False)
+    add_driver(write_config(tmp_home, tmp_path), d)
+    code, found = checks()
+    assert code == 0
+    row = found["role driver"]
+    assert row["status"] == "warn", row
+    assert "no clone" in strip_paths(row["detail"])
+    assert "no guard" in strip_paths(row["detail"])
+
+
+def test_a_driver_role_with_a_permission_bypass_fails_doctor(
+    tmp_home: Path, tmp_path: Path, fake_mode: None
+) -> None:
+    """§27: doctor "refuses a driver role with a permission bypass". The config does
+    not load (the `config` row fails), and a `Config` built by hand with the flag
+    fails the `role driver` row itself."""
+    d = driver_dir(tmp_path)
+    path = write_config(tmp_home, tmp_path)
+    base = path.read_text()
+    add_driver(path, d)
+    good = load_config("demo")
+    path.write_text(base)
+    add_driver(path, d, 'permission_flags = "--dangerously-skip-permissions"')
+    code, found = checks()
+    assert code == 1
+    assert found["config"]["status"] == "fail"
+    assert "permission_flags" in strip_paths(found["config"]["detail"])
+
+    bypass = dataclasses.replace(
+        good.roles["driver"], permission_flags="--dangerously-skip-permissions"
+    )
+    config = dataclasses.replace(good, roles={**good.roles, "driver": bypass})
+    rows = {check.name: check for check in run_checks(config)}
+    assert rows["role driver"].status == FAIL
+    assert "permission_flags" in strip_paths(rows["role driver"].detail)

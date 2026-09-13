@@ -142,6 +142,13 @@ class Api:
         if role not in self.config.roles:
             known = ", ".join(sorted(self.config.roles))
             raise ApiError(f"unknown role {role!r}; this project configures: {known}")
+        if role == "driver":
+            # §27: the driver role is "started by `handsd` only through a `consult`
+            # action" — not by a send from the CLI, the phone or a playbook rule.
+            raise ApiError(
+                "the driver role is started by handsd only through a playbook `consult` "
+                "action (§27); `hands send --role driver` is refused"
+            )
         if context not in ("clear", "keep"):
             raise ApiError(f"--context must be clear or keep, got {context!r}")
         if not prompt.strip():

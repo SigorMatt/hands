@@ -28,9 +28,23 @@ an invocation — the human's workspace is `~/git`, and `ls ~/git` is a read.
 outright: those run commands (or delete) whatever the payload looks like, and
 `-fprint`, `-fprint0`, `-fprintf` and `-fls` write a file at any path.
 
+Role mode (DESIGN §27): with `HANDS_ROLE=driver` in the environment the guard
+guards the driver ROLE, a headless session handsd starts to resolve one
+consultation, and the allowlist narrows to §27's: read-only git (the table
+above), `hands show|jobs|inbox|pipeline|status|tail|kit check`, `hands send`
+with an explicit `--context keep` to builder or aux, and `hands resume`.
+Everything else is refused: `approve`, `deny`, `pause`, `go`, `put`, a send
+with `--context clear` or no `--context`, a send with `--file` (it writes a
+file), and every command word that is not `git` or `hands` — the read-only
+inspection words above included, since §27 does not list them; the role reads
+its clone with `git show`/`git grep`/`git cat-file`. argparse accepts an
+unambiguous prefix of an option, so `--cont clear` is read as `--context
+clear` and `--fi` as `--file`. Any other non-empty `HANDS_ROLE` fails closed.
+
 Self-test: python3 bash_guard.py --selftest
 """
 import json
+import os
 import re
 import sys
 
@@ -88,6 +102,15 @@ GIT_ALLOWED_PRE_FLAGS = {"--no-pager"}
 # (DESIGN §7): an interactive session inside the driver's Bash call, and a way
 # past the `claude` block. The driver reads jobs with show/log/tail instead.
 FORBIDDEN_HANDS_SUBCOMMANDS = {"open"}
+# DESIGN §27, role mode: the environment variable, its one value, and the
+# allowlist. `send` and `kit` are judged by their arguments below.
+ROLE_ENV = "HANDS_ROLE"
+DRIVER_ROLE = "driver"
+ROLE_HANDS_SUBCOMMANDS = {"show", "jobs", "inbox", "pipeline", "status", "tail", "resume"}
+ROLE_SEND_TARGETS = {"builder", "aux"}
+# `hands` options that may precede the subcommand: two take a value, one does not.
+HANDS_VALUE_OPTIONS = ("--project", "--socket")
+HANDS_FLAG_OPTIONS = ("--json",)
 SHELL_KEYWORDS = {"for", "while", "until", "do", "done", "if", "then", "else",
                   "elif", "fi", "in", "break", "continue", "!", "{", "}", "("}
 
@@ -308,8 +331,76 @@ def find_action(words):
     return None
 
 
-def check(cmd: str):
-    """Return None if allowed, else a reason string."""
+def option_is(word: str, name: str) -> bool:
+    """Does argparse read `word` (before any `=`) as the option `name`?
+
+    argparse takes an unambiguous prefix of a long option as that option, so
+    `--cont` is `--context`. Two dashes and at least one letter are required.
+    """
+    head = word.split("=", 1)[0]
+    return len(head) > 2 and head.startswith("--") and name.startswith(head)
+
+
+def option_values(args, name: str):
+    """Every value given to the long option `name` in `args`, as argparse reads it."""
+    values = []
+    for i, a in enumerate(args):
+        if not option_is(a, name):
+            continue
+        if "=" in a:
+            values.append(a.split("=", 1)[1])
+        else:
+            values.append(args[i + 1] if i + 1 < len(args) else "")
+    return values
+
+
+def hands_role_violation(words, cmd):
+    """Reason this `hands` invocation is outside §27's role-mode allowlist, or None."""
+    args = [w.strip("()") for w in words[1:]]
+    i = 0
+    while i < len(args):
+        a = args[i]
+        if any(option_is(a, name) for name in HANDS_VALUE_OPTIONS):
+            i += 1 if "=" in a else 2
+            continue
+        if any(option_is(a, name) for name in HANDS_FLAG_OPTIONS):
+            i += 1
+            continue
+        break
+    if i >= len(args) or args[i].startswith("-"):
+        got = args[i] if i < len(args) else "nothing"
+        return f"hands needs an allowed subcommand in role mode, got {got!r}: {cmd!r}"
+    sub, rest = args[i], args[i + 1:]
+    if sub in ROLE_HANDS_SUBCOMMANDS:
+        return None
+    if sub == "kit":
+        if rest and rest[0] == "check":
+            return None
+        return f"only `hands kit check` is allowed in role mode: {cmd!r}"
+    if sub == "send":
+        if any(option_is(a, "--file") for a in rest):
+            return f"hands send --file writes a file, refused in role mode: {cmd!r}"
+        contexts = option_values(rest, "--context")
+        if not contexts or any(value != "keep" for value in contexts):
+            return (f"role mode sends only with an explicit --context keep "
+                    f"(§27), got {contexts or 'no --context'}: {cmd!r}")
+        roles = option_values(rest, "--role")
+        if not roles or any(value not in ROLE_SEND_TARGETS for value in roles):
+            return (f"role mode sends keep only to builder or aux (§27), got "
+                    f"{roles or 'no --role'}: {cmd!r}")
+        return None
+    return (f"hands {sub} is not allowed for the driver role (§27: show, jobs, inbox, "
+            f"pipeline, status, tail, kit check, send --context keep, resume): {cmd!r}")
+
+
+def check(cmd: str, role=None):
+    """Return None if allowed, else a reason string.
+
+    `role` is `HANDS_ROLE`: None for the human's driver session, `driver` for
+    §27's role mode, and anything else is refused outright (fail closed).
+    """
+    if role is not None and role != DRIVER_ROLE:
+        return f"unknown {ROLE_ENV} {role!r} (only {DRIVER_ROLE!r} is a mode): {cmd!r}"
     try:
         bare = strip_quoted(cmd)
     except UnbalancedQuotes as e:
@@ -336,6 +427,13 @@ def check(cmd: str):
             continue
         if w == "git":
             continue  # every git token was checked above
+        if role == DRIVER_ROLE:
+            if w != "hands":
+                return f"command not allowed for the driver role (§27): {w!r} in {cmd!r}"
+            reason = hands_role_violation(words, cmd)
+            if reason:
+                return reason
+            continue
         if w == "hands":
             sub = next((x for x in words[1:] if not x.startswith("-")), None)
             if sub in FORBIDDEN_HANDS_SUBCOMMANDS:
@@ -470,15 +568,33 @@ SELFTEST = [
 ]
 
 
+# Role mode (§27): `check(cmd, role="driver")`.
+ROLE_SELFTEST = [
+    ("git -C ./repo log --oneline -5", True),
+    ("hands show job-1 --json", True),
+    ("hands send --role builder --context keep 'Answer per DESIGN §27.'", True),
+    ("hands kit check ~/Downloads/kit.zip", True),
+    ("hands resume", True),
+    ("hands send --role builder --context clear 'Execute run 2'", False),
+    ("hands approve job-1 --human-confirmed --quote 'yes'", False),
+    ("hands go", False),
+    ("cat ./repo/DESIGN.md", False),
+    ("echo x > f", False),
+]
+
+
 def selftest() -> int:
     bad = 0
-    for cmd, expected in SELFTEST:
-        reason = check(cmd)
+    cases = [(cmd, expected, None) for cmd, expected in SELFTEST]
+    cases += [(cmd, expected, DRIVER_ROLE) for cmd, expected in ROLE_SELFTEST]
+    for cmd, expected, role in cases:
+        reason = check(cmd, role=role)
         ok = (reason is None) == expected
         if not ok:
             bad += 1
-            print(f"FAIL expected {'allow' if expected else 'block'}: {cmd}  -> {reason}")
-    print(f"selftest: {len(SELFTEST) - bad}/{len(SELFTEST)} ok")
+            mode = f" [{ROLE_ENV}={role}]" if role else ""
+            print(f"FAIL expected {'allow' if expected else 'block'}{mode}: {cmd}  -> {reason}")
+    print(f"selftest: {len(cases) - bad}/{len(cases)} ok")
     return 1 if bad else 0
 
 
@@ -493,9 +609,17 @@ def main() -> int:
     if data.get("tool_name") != "Bash":
         return 0
     cmd = (data.get("tool_input") or {}).get("command", "")
-    reason = check(cmd)
+    role = os.environ.get(ROLE_ENV) or None
+    reason = check(cmd, role=role)
     if reason is None:
         return 0
+    if role is not None:
+        print(f"bash_guard blocked this command ({reason}). The driver role may only run "
+              f"read-only git, hands show|jobs|inbox|pipeline|status|tail|kit check, "
+              f"hands send --context keep to builder or aux, and hands resume (§27). "
+              f"If the consultation needs more, reply VERDICT: escalate <reason>.",
+              file=sys.stderr)
+        return 2
     print(f"bash_guard blocked this command ({reason}). The driver may only run "
           f"hands, read-only git, and read-only inspection commands; "
           f"it never writes. If the task needs a write, say 'this is for aux' and stop.",

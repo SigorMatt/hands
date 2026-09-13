@@ -20,6 +20,7 @@ __all__ = [
     "BG_WAIT_CEILING_ENV",
     "DEFAULT_GATE_PATTERNS",
     "DEFAULT_ROLE_ENV",
+    "DRIVER_ROLE",
     "Config",
     "ConfigError",
     "FilesConfig",
@@ -29,6 +30,7 @@ __all__ = [
     "NotifyConfig",
     "OpsConfig",
     "PlaybookConfig",
+    "ROLE_ENV",
     "RoleConfig",
     "RunnerConfig",
     "ServerConfig",
@@ -53,8 +55,8 @@ DEFAULT_GATE_PATTERNS: tuple[str, ...] = (
     "open the PR",
 )
 
-KNOWN_ROLES: tuple[str, ...] = ("builder", "aux")
-DEFAULT_QUEUE_DEPTH = {"builder": 1, "aux": 4}  # §6
+KNOWN_ROLES: tuple[str, ...] = ("builder", "aux", "driver")  # §27: driver is the third
+DEFAULT_QUEUE_DEPTH = {"builder": 1, "aux": 4, "driver": 1}  # §6; §27 is silent for driver
 DEFAULT_MODEL = "opus"
 DEFAULT_NTFY_URL = "https://ntfy.sh"
 DEFAULT_SOCKET = "~/.hands/handsd.sock"
@@ -73,6 +75,9 @@ BG_WAIT_CEILING_ENV = "CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS"
 #: What every role job's environment carries unless `[roles.<r>] env` sets the
 #: same name (§23): `0` is the harness's own "wait indefinitely".
 DEFAULT_ROLE_ENV: dict[str, str] = {BG_WAIT_CEILING_ENV: "0"}
+#: §27: the driver guard's role mode is this name set to `driver` in the environment.
+ROLE_ENV = "HANDS_ROLE"
+DRIVER_ROLE = "driver"
 #: A name `[roles.<r>] env` may set: what a POSIX shell accepts as a variable name.
 _ENV_NAME_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 
@@ -145,7 +150,11 @@ class RoleConfig:
 
         `DEFAULT_ROLE_ENV` under the configured table, so a configured value
         wins and an unset ceiling is `0` — whatever handsd itself inherited.
+        A driver-role job also carries `HANDS_ROLE=driver` (§27), on top of the
+        table: the guard's role mode is not something a config can switch off.
         """
+        if self.name == DRIVER_ROLE:
+            return {**DEFAULT_ROLE_ENV, **self.env, ROLE_ENV: DRIVER_ROLE}
         return {**DEFAULT_ROLE_ENV, **self.env}
 
     @property
@@ -627,6 +636,14 @@ def _role(name: str, table: Any, path: Path) -> RoleConfig:
     )
     if "cwd" not in table:
         raise ConfigError(f"{path}: {where} needs a cwd")
+    if name == DRIVER_ROLE and _str(table, "permission_flags", "", where, path, blank=None):
+        # §27: "no permission bypass: the role runs with `permission_flags` empty
+        # so `settings.json` and the hook are the law". Refused at load, so handsd
+        # never holds a driver role that could run with one; doctor reports it.
+        raise ConfigError(
+            f"{path}: {where} permission_flags must be empty (§27): the driver role "
+            "runs under its settings.json and the Bash guard, with no permission bypass"
+        )
     return RoleConfig(
         name=name,
         cwd=_abs(

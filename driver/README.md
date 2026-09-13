@@ -33,6 +33,11 @@ Notes:
   harmless command. Hooks are read at session start, so after changing either
   file restart the session. If a permission prompt appears, that is the driver
   trying something outside its role; answer no.
+- The same guard has a role mode (§27): with `HANDS_ROLE=driver` in the
+  environment, which handsd sets for a `[roles.driver]` job, it allows only
+  read-only git, `hands show|jobs|inbox|pipeline|status|tail|kit check`,
+  `hands send --context keep` to builder or aux, and `hands resume`. This
+  interactive session never sets it, so the rules above are the ones in force.
 - `hands open <job>` is blocked in both layers: it execs an interactive
   `claude --resume` in the role's directory, which is not something a driver
   can drive. Jobs are read with `hands show`, `hands log` and `hands tail`.

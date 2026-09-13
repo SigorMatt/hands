@@ -364,3 +364,160 @@ def test_the_adversarial_table_is_independent_of_the_guard() -> None:
     assert len(ADVERSARIAL) >= 20
     assert sum(1 for _, allowed in ADVERSARIAL if allowed) >= 10
     assert sum(1 for _, allowed in ADVERSARIAL if not allowed) >= 10
+
+
+# --- ROLE MODE (DESIGN §27) ------------------------------------------------
+#
+# With `HANDS_ROLE=driver` in the environment the guard is in role mode: the
+# driver started by handsd to resolve one consultation. §27's allowlist is
+# read-only git; `hands show|jobs|inbox|pipeline|status|tail|kit check`;
+# `hands send --context keep` to the role named in the consultation; `hands
+# resume`; everything else refused, including `approve`, `deny`, `pause`, `go`,
+# `put`, any `--context clear` send, and every write. Choices where §27 is
+# silent, pinned here: a send with no `--context` is refused (only an explicit
+# `keep` passes); the keep target is builder or aux, never driver, and a send
+# with no `--role` is refused; `--file` on a send writes a file, so it is
+# refused; the read-only inspection words of the human driver's guard (`cat`,
+# `ls`, `grep`, ...) are not on §27's list, so they are refused — the role
+# reads the clone with `git show`/`git grep`/`git cat-file`.
+ROLE_MODE: list[tuple[str, bool]] = [
+    # read-only git: whatever the guard already treats as read-only
+    ("git status", True),
+    ("git -C ./repo log --oneline -5", True),
+    ("git -C ./repo diff --stat HEAD~1", True),
+    ("git -C ./repo show origin/main:DESIGN.md", True),
+    ("git -C ./repo grep -n consult origin/main -- DESIGN.md", True),
+    ("git -C ./repo fetch -q", True),
+    ("git commit -m x", False),
+    ("git -C ./repo push", False),
+    ("git reset --hard HEAD~1", False),
+    ("git -c core.pager=touch log", False),
+    # the hands reads §27 lists
+    ("hands show job-1", True),
+    ("hands show job-1 --json", True),
+    ("hands --json show job-1", True),
+    ("hands --project hands jobs --role builder -n 5", True),
+    ("hands inbox", True),
+    ("hands inbox --json", True),
+    ("hands pipeline", True),
+    ("hands status --json", True),
+    ("hands tail --role builder -n 20", True),
+    ("hands kit check ~/Downloads/kit.zip --repo ./repo", True),
+    ("hands resume", True),
+    # send: only an explicit keep, only to builder or aux
+    ("hands send --role builder --context keep 'Answer: use §27, then continue.'", True),
+    ("hands send --role aux --context keep --prompt-file ~/Downloads/answer.txt", True),
+    ("hands send --role=builder --context=keep 'ok'", True),
+    ("hands --json send --context keep --role builder 'ok'", True),
+    ("hands send --role builder --context clear 'Execute run 2'", False),
+    ("hands send --role builder --context=clear 'Execute run 2'", False),
+    ("hands send --role builder 'no context'", False),
+    ("hands send --role builder --context keep --context clear 'last one wins'", False),
+    ("hands send --role builder --context keep --cont clear 'an abbreviation'", False),
+    ("hands send --context keep 'no role'", False),
+    ("hands send --role driver --context keep 'to itself'", False),
+    ("hands send --role builder --role driver --context keep 'last one wins'", False),
+    ("hands send --role builder --context keep --file ./x=y 'a write'", False),
+    ("hands send --role builder --context keep --fi ./x=y 'an abbreviated write'", False),
+    # every other hands command is refused, the authority ones by name
+    ("hands approve job-1 --human-confirmed --quote 'yes'", False),
+    ("hands deny job-1 --human-confirmed --quote 'no'", False),
+    ("hands pause", False),
+    ("hands go", False),
+    ("hands put ./x --content y", False),
+    ("hands cancel job-1 --reason x", False),
+    ("hands open job-1", False),
+    ("hands kit", False),
+    ("hands", False),
+    ("hands --socket /tmp/s approve job-1", False),
+    ("hands --bogus show job-1", False),
+    ("git status && hands approve job-1 --human-confirmed --quote 'y'", False),
+    ("hands inbox; hands go", False),
+    ("echo $(hands pause)", False),
+    ("HANDS_PROJECT=x hands deny job-1", False),
+    # every write, and every command word §27 does not list
+    ("echo x > f", False),
+    ("echo x >> f", False),
+    ("rm -rf repo", False),
+    ("touch f", False),
+    ("cat x | tee f", False),
+    ("python3 -c 'print(1)'", False),
+    ("claude -p hi", False),
+    ("cat ./repo/DESIGN.md", False),
+    ("ls ./repo", False),
+    ("git -C ./repo log --oneline -5 | head -1", False),
+]
+
+ROLE_MODE_ALLOWED_HANDS = {"show", "jobs", "inbox", "pipeline", "status", "tail", "kit", "resume",
+                           "send"}
+
+
+@pytest.mark.parametrize("cmd,allowed", ROLE_MODE)
+def test_role_mode_case(cmd: str, allowed: bool) -> None:
+    """DESIGN §27: the driver role's allowlist, from `tests/`' own table."""
+    reason = guard.check(cmd, role="driver")
+    if allowed:
+        assert reason is None, f"role mode blocked an allowed command: {cmd} -> {reason}"
+    else:
+        assert reason is not None, f"role mode allowed a refused command: {cmd}"
+
+
+def test_the_role_mode_table_names_every_listed_hands_command_and_both_verdicts() -> None:
+    named = {cmd.split()[1] for cmd, ok in ROLE_MODE if ok and cmd.startswith("hands ")
+             and not cmd.split()[1].startswith("-")}
+    named |= {"send", "jobs"}  # listed behind a global option above
+    assert named == ROLE_MODE_ALLOWED_HANDS
+    assert sum(1 for _, ok in ROLE_MODE if ok) >= 15
+    assert sum(1 for _, ok in ROLE_MODE if not ok) >= 30
+
+
+# Without HANDS_ROLE the guard is the human driver's guard, unchanged: a spot
+# check of the same commands under today's rules.
+HUMAN_MODE_SPOT_CHECK: list[tuple[str, bool]] = [
+    ("git status", True),
+    ("git commit -m x", False),
+    ("git -C ./repo push", False),
+    ("hands approve job-1 --human-confirmed --quote 'yes'", True),
+    ("hands send --role builder --context clear 'Execute run 2'", True),
+    ("hands send --role builder 'no context'", True),
+    ("hands pause", True),
+    ("hands go", True),
+    ("hands open job-1", False),
+    ("cat ./repo/DESIGN.md", True),
+    ("git -C ./repo log --oneline -5 | head -1", True),
+    ("echo x > f", False),
+]
+
+
+@pytest.mark.parametrize("cmd,allowed", HUMAN_MODE_SPOT_CHECK)
+def test_without_a_role_the_same_commands_follow_todays_rules(cmd: str, allowed: bool) -> None:
+    for reason in (guard.check(cmd), guard.check(cmd, role=None)):
+        assert (reason is None) == allowed, (cmd, reason)
+
+
+def run_hook(monkeypatch: pytest.MonkeyPatch, cmd: str, role: str | None) -> int:
+    import io
+    import json
+
+    if role is None:
+        monkeypatch.delenv("HANDS_ROLE", raising=False)
+    else:
+        monkeypatch.setenv("HANDS_ROLE", role)
+    monkeypatch.setattr("sys.argv", ["bash_guard.py"])
+    monkeypatch.setattr(
+        "sys.stdin", io.StringIO(json.dumps({"tool_name": "Bash", "tool_input": {"command": cmd}}))
+    )
+    return guard.main()
+
+
+def test_the_hook_takes_role_mode_from_the_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+    """§27: role mode is `HANDS_ROLE=driver` in the environment the hook runs in."""
+    assert run_hook(monkeypatch, "hands pause", None) == 0
+    assert run_hook(monkeypatch, "hands pause", "") == 0
+    assert run_hook(monkeypatch, "hands pause", "driver") == 2
+    assert run_hook(monkeypatch, "hands status", "driver") == 0
+
+
+def test_an_unknown_hands_role_fails_closed(monkeypatch: pytest.MonkeyPatch) -> None:
+    assert guard.check("hands status", role="builder") is not None
+    assert run_hook(monkeypatch, "hands status", "Driver") == 2

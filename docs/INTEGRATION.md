@@ -77,6 +77,10 @@ cwd` is optional.
     queue_depth = 4                      # default for aux (builder 1); `hands
                                          # status` reports it as queue_capacity too
 
+    [roles.driver]                       # optional (§27): the driver role
+    cwd = "~/hands-driver/<project>"     # the driver directory and its repo/ clone
+                                         # permission_flags must stay empty
+
     [ops]
     repo = "~/<project>-ops"
     monitor_cmd = "watch_monitor.sh"     # both, or hands uses its built-in monitor
@@ -112,7 +116,16 @@ Notes that are easy to get wrong:
 - `gates.patterns` is a **union** with the defaults (`Apply ~/Downloads/`,
   `decisions-`, `playbook-`, `gh pr create`, `open the PR`). A config can only
   widen the gate, never disable it (§8).
-- `roles` are exactly `builder` and `aux`; `[roles.builder]` is required.
+- `roles` are `builder`, `aux` and `driver`; `[roles.builder]` is required.
+- **`[roles.driver]`** (§27) is optional and takes the same keys. Its cwd is the
+  driver directory of section 5, with the fetch-only clone under `repo/`.
+  `permission_flags` must be empty: a driver role with any value does not load,
+  so `settings.json` and the Bash guard are the law. Every driver-role job's
+  environment carries `HANDS_ROLE=driver`, on top of its `env` table and
+  whatever that table says, which puts the guard in role mode. The driver role
+  is started by handsd only through a playbook `consult` action: `hands send
+  --role driver` is refused. `hands doctor` prints a `role driver` row with the
+  cwd, the clone, the guard and its mode, and fails on a permission bypass.
 - **`[roles.<role>] env`** (§23, H-014) is a table of environment variables for
   that role's `claude -p` jobs, on top of handsd's own environment. Names are
   environment variable names (letters, digits, `_`); values are non-empty

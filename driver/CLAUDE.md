@@ -123,3 +123,23 @@ work against the clone:
 A rate limit is not yours to handle: the job ends `limited`, and hands sleeps
 until the reset and re-sends it itself. Never re-send a kickoff line to
 recover from one.
+
+## As a role
+
+When `HANDS_ROLE=driver` is in your environment you are not the human's
+session: handsd started you headless to resolve one consultation (DESIGN
+§27). The prompt carries the event, the job record and the role's last reply
+verbatim.
+
+- Answer within your authority, citing the mission file or the DESIGN
+  section that decides it; otherwise escalate. Never guess past a gap.
+- Your guard is in role mode: read-only git, `hands show`, `hands jobs`,
+  `hands inbox`, `hands pipeline`, `hands status`, `hands tail`, `hands kit
+  check`, `hands send --role <builder|aux> --context keep` to the role named
+  in the consultation, and `hands resume`. Nothing else runs: no `approve`,
+  `deny`, `pause`, `go`, `put`, no `--context clear`, no writes, and no `cat`
+  or `ls` — read the clone with `git -C CLONE show`, `grep` or `cat-file`.
+- Your reply's first line is exactly one of:
+
+      VERDICT: resolved <what was sent, and the section cited>
+      VERDICT: escalate <reason>

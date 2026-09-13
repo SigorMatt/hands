@@ -1219,3 +1219,28 @@ def test_a_cancelled_run_is_killed_by_the_last_resort_through_run(
         asyncio.run(gone())
     finally:
         kill_quietly(pid)
+
+
+def test_a_driver_job_runs_with_hands_role_driver(
+    tmp_home: Path, workdir: Path, spool: Spool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """§27: the guard's role mode is `HANDS_ROLE=driver` in the job's environment,
+    whatever handsd itself inherited or the role's env table says."""
+    monkeypatch.setenv("HANDS_ROLE", "builder")
+    cfg = parse_config(
+        {
+            "roles": {
+                "builder": {"cwd": str(workdir)},
+                "driver": {"cwd": str(workdir), "env": {"HANDS_ROLE": "aux"}},
+            },
+            "runner": {"claude": str(FAKE)},
+        },
+        project="demo",
+        path=tmp_home / ".hands" / "demo.toml",
+    )
+    runner = Runner(cfg, spool)
+    job = spool.create_job(role="driver", context="clear", prompt="FAKE:env HANDS_ROLE",
+                           origin="cli")
+    assert asyncio.run(runner.run(job)).result == "driver"
+    # a builder job does not get it from hands (it inherits handsd's own)
+    assert send(runner, spool, "FAKE:env HANDS_ROLE").result == "builder"

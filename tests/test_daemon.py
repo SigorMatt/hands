@@ -260,6 +260,25 @@ def test_send_refuses_an_unknown_role_and_a_keep_with_no_session(project: str) -
     drive(body)
 
 
+def test_send_refuses_the_driver_role_which_only_a_consult_starts(
+    tmp_home: Path, workdir: Path
+) -> None:
+    """§27: the driver is "started by `handsd` only through a `consult` action", so
+    `hands send --role driver` is refused even when `[roles.driver]` is configured."""
+    write_project(
+        tmp_home, config_body(tmp_home, workdir, extra=f'[roles.driver]\ncwd = "{workdir}"')
+    )
+
+    async def body(daemon: Daemon) -> None:
+        assert sorted((await ok("status"))["roles"]) == ["aux", "builder", "driver"]
+        for context in ("clear", "keep"):
+            err = await fails("send", "--role", "driver", "--context", context, "x")
+            assert "consult" in strip_paths(err), err
+        assert not Spool(tmp_home / ".hands").list_jobs()
+
+    drive(body)
+
+
 def test_send_reads_the_prompt_from_stdin(project: str) -> None:
     async def body(daemon: Daemon) -> None:
         out, err = io.StringIO(), io.StringIO()

@@ -47,7 +47,7 @@ from typing import Any
 
 import hands.monitor
 import hands.runner
-from hands.config import BG_WAIT_CEILING_ENV, Config, RoleConfig
+from hands.config import BG_WAIT_CEILING_ENV, DRIVER_ROLE, ROLE_ENV, Config, RoleConfig
 from hands.playbook import PlaybookError, load_playbook, playbook_path
 from hands.runner import build_argv
 from hands.spool import SpoolError, resolve_under_roots
@@ -118,7 +118,8 @@ def run_checks(
     """
     found = [_config_check(config)]
     found += [_claude_check(config)]
-    found += [_role_check(role) for role in config.roles.values()]
+    found += [_role_check(role) for role in config.roles.values() if role.name != DRIVER_ROLE]
+    found += [_driver_check(config)]
     found += [_roots_check(config), _ops_check(config), _isolation_check(config)]
     found += [_playbook_check(config), _notifications_check(config), _phone_check(config)]
     found += [_go_check(config), _kit_check(config), _who_check(config)]
@@ -367,6 +368,65 @@ def _role_check(role: RoleConfig) -> Check:
             "stay empty (§2) and the built-in monitor has no commits to read (§5)",
         )
     return Check(name, OK, detail)
+
+
+def _driver_check(config: Config) -> Check:
+    """§27: the driver role — cwd, its clone, the guard's mode — and no bypass.
+
+    Always one `role driver` row. No `[roles.driver]` is `ok`: nothing consults.
+    A non-empty `permission_flags` does not load (config.py), so the failure a
+    human sees is the `config` row; this row fails the same way for a `Config`
+    built without the loader. The clone is `<cwd>/repo`, where driver/README.md
+    puts it, or `<cwd>` itself when that is the git repository; missing either,
+    or a guard at `<cwd>/.claude/hooks/bash_guard.py` without role mode, warns.
+    """
+    name = f"role {DRIVER_ROLE}"
+    role = config.roles.get(DRIVER_ROLE)
+    if role is None:
+        return Check(
+            name,
+            OK,
+            "no [roles.driver]: no consult can start a driver role (§27); the human's "
+            "driver session is unaffected",
+        )
+    if role.permission_flags:
+        return Check(
+            name,
+            FAIL,
+            f"{role.cwd}  permission_flags {role.permission_flags}\n§27: the driver role "
+            "runs with permission_flags empty, so settings.json and the Bash guard are "
+            "the law; remove it from [roles.driver]",
+        )
+    if not role.cwd.is_dir():
+        return Check(name, FAIL, f"cwd {role.cwd} does not exist; §27 [roles.driver] cwd")
+    problems = []
+    if (role.cwd / "repo" / ".git").exists():
+        clone = f"clone {role.cwd / 'repo'}"
+    elif (role.cwd / ".git").exists():
+        clone = f"clone {role.cwd}"
+    else:
+        clone = f"no clone: neither {role.cwd / 'repo'} nor {role.cwd} is a git repository"
+        problems.append(clone)
+    hook = role.cwd / ".claude" / "hooks" / "bash_guard.py"
+    try:
+        text = hook.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        text = None
+    if text is None:
+        guard = f"no guard at {hook}: nothing narrows the role's Bash calls (driver/README.md)"
+        problems.append(guard)
+    elif ROLE_ENV not in text:
+        guard = f"guard {hook} has no role mode: copy driver/hooks/bash_guard.py again"
+        problems.append(guard)
+    else:
+        guard = f"guard {hook}"
+    detail = (
+        f"{role.cwd}  model {role.model}; permission_flags (none)"
+        f"\n{clone}\n{guard}"
+        f"\nguard mode: role mode ({ROLE_ENV}={role.spawn_env[ROLE_ENV]} in every "
+        "driver-role job's environment; §27)"
+    )
+    return Check(name, WARN if problems else OK, detail)
 
 
 def _roots_check(config: Config) -> Check:

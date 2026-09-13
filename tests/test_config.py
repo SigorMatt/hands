@@ -1015,3 +1015,75 @@ def test_a_new_section_that_checks_no_keys_is_caught_by_the_scan() -> None:
     assert scan.unchecked_sections == {"extra"}
     # …and the section list the loader really has is fully accounted for.
     assert config_keys(SOURCE).unchecked_sections == set()
+
+
+# ------------------------------------------------- [roles.driver] (§27, U4)
+
+
+def test_a_driver_role_loads_beside_builder_and_aux(write_config) -> None:
+    write_config(
+        """
+[roles.builder]
+cwd = "~/g"
+[roles.aux]
+cwd = "~/g"
+[roles.driver]
+cwd = "~/hands-driver/demo"
+model = "opus"
+[roles.driver.env]
+HANDS_EXTRA = "yes"
+"""
+    )
+    cfg = load_config("demo")
+    driver = cfg.role("driver")
+    assert driver.cwd == Path("~/hands-driver/demo").expanduser()
+    assert driver.permission_flags == ""
+    assert driver.queue_depth == 1
+    assert driver.env == {"HANDS_EXTRA": "yes"}
+    # §27: every driver-role job's environment carries HANDS_ROLE=driver
+    assert driver.spawn_env == {
+        "CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS": "0",
+        "HANDS_EXTRA": "yes",
+        "HANDS_ROLE": "driver",
+    }
+    # ... and the other roles' do not
+    assert cfg.role("builder").spawn_env.get("HANDS_ROLE") is None
+    assert cfg.role("aux").spawn_env.get("HANDS_ROLE") is None
+
+
+def test_the_driver_role_is_always_driver_whatever_its_env_says(write_config) -> None:
+    write_config(
+        """
+[roles.builder]
+cwd = "~/g"
+[roles.driver]
+cwd = "~/d"
+env = { HANDS_ROLE = "builder" }
+"""
+    )
+    assert load_config("demo").role("driver").spawn_env["HANDS_ROLE"] == "driver"
+
+
+@pytest.mark.parametrize("flags", ["--dangerously-skip-permissions", "--permission-mode x"])
+def test_a_driver_role_with_permission_flags_does_not_load(write_config, flags: str) -> None:
+    """§27: "no permission bypass: the role runs with `permission_flags` empty"."""
+    write_config(
+        f"""
+[roles.builder]
+cwd = "~/g"
+[roles.driver]
+cwd = "~/d"
+permission_flags = "{flags}"
+"""
+    )
+    with pytest.raises(ConfigError) as caught:
+        load_config("demo")
+    assert "[roles.driver]" in strip_paths(str(caught.value))
+    assert "permission_flags" in strip_paths(str(caught.value))
+
+
+def test_an_unknown_role_names_driver_among_the_known_ones(write_config) -> None:
+    write_config('[roles.builder]\ncwd = "~/g"\n[roles.reviewer]\ncwd = "~/g"\n')
+    with pytest.raises(ConfigError) as caught:
+        load_config("demo")
+    assert "builder, aux, driver" in strip_paths(str(caught.value))
