@@ -130,10 +130,8 @@ rule stops. So: specific verdict rules first, then a catch-all `stop` per
 `task_killed`/`orphan_processes` → `stop`), then `job.held`/`job.denied` →
 `notify`.
 
-`[series]` holds two keys: `name`, the series' name, and `kickoff`, the
-fixed kickoff line that `go` from the phone sends. A top-level
-`series = "<name>"` still loads, but never beside a `[series]` table: TOML
-refuses the key twice. `[limits] auto_runs` lists the runs (or missions) that may start
+`[series] kickoff` names the fixed kickoff line; `go` from the phone sends
+it. `[limits] auto_runs` lists the runs (or missions) that may start
 without a human; anything not listed stops. `max_resumes` bounds automatic
 resumes. Never `quiet_hours` (refused).
 
@@ -191,48 +189,12 @@ Run it before emitting any kit; from a fresh sandbox:
     uv tool install git+https://github.com/SigorMatt/hands
     hands kit check <kit.zip|dir> [--repo <clone>]
 
-It needs no daemon, no config and no network. `--repo` defaults to the top
-level of the git repository you run it in; a directory kit's files are
-taken relative to the directory. It prints one line per check,
-`PASS <name>: <reason>` or `FAIL <name>: <reason>`, in this order:
-
-- `paths`: every entry is a repository path under the repo. That means
-  relative, with no `..`, `.` or empty component, no backslash and no drive
-  letter. Nothing may sit under `.git`, no entry may be a symlink, and
-  nothing may land outside the repo through one of the repo's own symlinks.
-- `playbook`: the playbook in force is the kit's `PLAYBOOK.toml` or
-  `meta/PLAYBOOK.toml`, else the repo's at the same paths. It is parsed by
-  the engine's own loader, which refuses `quiet_hours`. The committed-copy
-  comparison is skipped, because a kit is not committed yet. A kit's
-  playbook must also set `[series] kickoff` to exactly the brief's kickoff
-  line; the repo's kickoff is not compared.
-- `brief`: the kit carries exactly one brief, `meta/BUILDER-<N>-PROMPT.md`
-  (missions) or `WORKPLAN.md` (runs). Its kickoff line is the first
-  indented line after "Kickoff line". Its final-reply vocabulary is every
-  backticked literal in the paragraph after "Your final reply begins with"
-  or "Reply with one of". The paragraph's lines are joined first, so a
-  literal may wrap.
-- `verdicts`: every `verdict` regex on a `builder.done` rule matches at
-  least one literal, and every literal matches some such rule. Matching
-  uses `re.search`, as the engine does, with placeholders such as `<unit>`
-  left as text. A rule that matches no literal of the brief passes only if
-  it matches `VERDICT: kit applied <sha>`, the reply the apply prompt below
-  asks for. Verdict rules on other events (the review's `aux.done`) are
-  counted on the line, not matched. The brief fixes the builder's replies,
-  not the reviewer's (finding H-021).
-- `wording`: the brief contains neither "as before" nor a "Budget
-  guidance" section (a heading or a bold lead).
-- `protocol`: every file a `send` rule's prompt names is in the kit or the
-  repo. A named file is a `.md` or `.toml` path without a `{placeholder}`,
-  such as `meta/REVIEW-PROTOCOL.md`.
-
-When every check passes, it prints three things. First, the §3 apply
-prompt, which names each file the kit replaces (the file exists in the
-repo) and each file it adds. Second, the commit message: `plan: mission <N>
-kit`, or `plan: kit <name>` when the kit has no mission brief. Third,
-`kit check: pass (6 of 6 checks)`. A failing kit gets no apply prompt. The
-exit status is 0 only when all six checks pass, and 1 otherwise. `--json`
-prints the same report as one object.
+It checks: every entry is a repository path; the playbook loads and sets
+no `quiet_hours`; every `verdict` regex in it matches at least one literal
+line in the brief's final-reply vocabulary; the brief's kickoff line
+equals `[series] kickoff`; the brief contains no "as before" and no budget
+guidance; the review protocol is present when a rule sends a review. It
+prints the apply prompt for the kit.
 
 ## 12. Onboarding a project
 

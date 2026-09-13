@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import Any, TextIO
 
 from hands import __version__, doctor
+from hands import kit as kit_mod
 from hands import notify as notify_mod
 from hands import who as who_mod
 from hands.api import MAX_TAIL_ENTRIES, TAIL_WINDOW_BYTES
@@ -340,6 +341,29 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="also run one real `claude -p` turn per role — the only check that spends "
         f"your subscription; refused when ${doctor.FAKE_ENV}=1",
+    )
+    # §4 `kit check`, §26: answered by the client with no daemon, config or
+    # network, so it is not a daemon method and has no `_PARAMS` entry.
+    kit = command(
+        "kit",
+        "check a kit before it is sent: paths, playbook, brief, verdicts, wording, "
+        "protocol (§4, §26)",
+    )
+    kit_sub = kit.add_subparsers(dest="kit_command", metavar="check", required=True)
+    kit_check = kit_sub.add_parser(
+        "check",
+        parents=[common],
+        help="check a kit (zip or directory) against a repository",
+        description="check a kit (a .zip, or a directory of files at their repository "
+        "paths) against a repository; one PASS/FAIL line per check, then the apply "
+        "prompt; exit 0 only when every check passes (docs/ARCHITECT-HANDBOOK.md §11)",
+    )
+    kit_check.add_argument("kit", help="the kit: a .zip or a directory")
+    kit_check.add_argument(
+        "--repo",
+        metavar="PATH",
+        help="the repository the kit lands in (default: the top level of the current "
+        "git repository)",
     )
     return parser
 
@@ -674,6 +698,10 @@ def main(
 
     as_json = getattr(args, "json", False)
     try:
+        # §26: `kit check` runs where hands is only installed (an architect's
+        # sandbox), so it is answered before any config is looked for.
+        if command == "kit":
+            return kit_mod.run(args.kit, args.repo, out=out, as_json=as_json)
         if command == "send":
             args.prompt = _prompt_of(args, sys.stdin if stdin is None else stdin)
         project: str | None = None

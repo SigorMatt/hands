@@ -1,9 +1,7 @@
 version = 1
+series = "<project>-<series>"
 
-# The series' name lives in the table: TOML refuses `series = "…"` beside
-# `[series]` (H-019).
 [series]
-name = "<project>-<series>"
 kickoff = "Execute WORKPLAN.md run 1"
 
 [limits]

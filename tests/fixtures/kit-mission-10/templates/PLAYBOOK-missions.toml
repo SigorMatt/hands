@@ -1,9 +1,7 @@
 version = 1
+series = "<project>-missions"
 
-# The series' name lives in the table: TOML refuses `series = "…"` beside
-# `[series]` (H-019).
 [series]
-name = "<project>-missions"
 kickoff = "Read meta/BUILDER-N-PROMPT.md and execute the mission below its divider."
 
 [limits]

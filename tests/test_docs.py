@@ -408,6 +408,9 @@ SWEEP_EXCLUDED = (
     # §11's History paragraph and the changelogs quote the retired model, and
     # builders do not edit DESIGN.md (CLAUDE.md).
     "DESIGN.md",
+    # The mission 10 kit as committed at 61e1486, byte for byte: a fixture of
+    # `hands kit check` (tests/test_kit.py), history like the kit commit itself.
+    "tests/fixtures/kit-mission-10/",
     # This file: it holds the phrase lists, so every phrase is a hit in it.
     "tests/test_docs.py",
 )
@@ -745,7 +748,8 @@ def test_the_driver_bash_guard_selftest_passes() -> None:
 BOOTSTRAP_DISPATCHER = "dispatch" + ".sh"
 #: DESIGN §15 keeps the bootstrap sequence as history, and `meta/` is the
 #: builder's record of what happened; both are allowed to name the dispatcher.
-HISTORY = ("DESIGN.md", "meta/")
+#: So is the mission 10 kit fixture, whose DESIGN.md is v3.9 byte for byte.
+HISTORY = ("DESIGN.md", "meta/", "tests/fixtures/kit-mission-10/")
 
 
 def tracked_files() -> list[Path]:

@@ -1019,6 +1019,12 @@ table's keys (a different choice there supersedes this one).
 
 Status: open (code U2; templates U5; DESIGN next revision)
 
+Status (mission 10, U5): `templates/PLAYBOOK-missions.toml` and
+`templates/PLAYBOOK-runs.toml` now spell `[series] name` beside `kickoff`, with no
+top-level `series`; both load, and filled in (N=11, `<project>`=hands) they pass
+`hands kit check` (`tests/test_kit.py`). `docs/ARCHITECT-HANDBOOK.md` §6 names the
+table's two keys. DESIGN §10/§26 still to state them.
+
 ## H-020 — no transcript records a pid; §26's "the transcript's first line records" it does not hold
 
 Severity: medium · Component: DESIGN §26 (`hands who` bullet), §4 `who` row,
@@ -1081,3 +1087,35 @@ match (e.g. `~/.claude/sessions/<pid>.json` `sessionId`, reading only `pid` and
 used. U4 is then re-run against it.
 
 Status: open (U4 blocked on DESIGN)
+
+## H-021 — §26's verdict check reads the builder's brief; review verdicts have no literal to match
+
+Severity: low · Component: DESIGN §26 (`kit check`: "every `verdict` regex of the
+playbook in force … matches at least one literal in the brief's final-reply
+vocabulary") against §10; `src/hands/kit.py`; `PLAYBOOK.toml`,
+`templates/PLAYBOOK-*.toml`, `meta/REVIEW-PROTOCOL.md`
+Filed by: mission 10, U5.
+
+The contradiction. This repository's `PLAYBOOK.toml` and both templates carry
+`aux.done` rules whose regexes discriminate on the review's count (`blockers=0`,
+`blockers=[1-9]`, `blockers=`). A brief (`meta/BUILDER-N-PROMPT.md`, `WORKPLAN.md`)
+fixes only the builder's replies. The review's vocabulary is fixed by the
+review protocol (`VERDICT: review mission N blockers=<k> should-fix=<m>`) or by
+the send prompt, and carries `N` and `<k>` as placeholders. Read as written, §26
+fails every such playbook against every brief, including the mission 10 kit
+U5 must pass. Matching the protocol's line instead, with placeholders left as
+text, fails too: `\d+` does not match `N`, and `0` does not match `<k>`.
+
+Chosen (U5, simplest; stated in its commit body and in handbook §11): the
+regex ↔ literal check covers `builder.done` rules, in both directions. A
+`builder.done` rule that matches none of the brief's literals passes only when
+it matches `VERDICT: kit applied <sha>`, the reply `kit check`'s own apply
+prompt asks for. Verdict rules on any other event are counted and named on the
+`verdicts` line ("not matched against the brief"), never shown as matched; they
+do not change the exit status.
+
+Needs: the next DESIGN revision says whether and how review verdict rules are
+checked (for example against the protocol's verdict line, with each named
+placeholder read as its class of values), or confirms the builder-only scope.
+
+Status: open (U5 shipped the builder-only scope)
