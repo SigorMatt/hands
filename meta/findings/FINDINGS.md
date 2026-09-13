@@ -1119,3 +1119,33 @@ checked (for example against the protocol's verdict line, with each named
 placeholder read as its class of values), or confirms the builder-only scope.
 
 Status: open (U5 shipped the builder-only scope)
+
+## Resolutions in DESIGN v3.10 (§27), appended by mission 11 U0
+
+H-018 (2026-09-13). §27: "`phone` and `kit` are job origins (§6); a job of
+either origin un-pauses the pipeline when it starts, as a `cli` one does." Gap 1
+and gap 2 are resolved as U2 of mission 10 chose, extended to `kit` (mission 11
+U3 creates the first `origin: kit` job). §27 also refuses `go` while the builder
+has a **held** job (REVIEW-10 SF1, mission 11 U1). Gap 3 was closed by mission 10
+U1.
+Status: resolved by DESIGN v3.10 (code: `phone` done in m10 U2; `kit` in m11 U3)
+
+H-019 (2026-09-13). §27: "the playbook's `[series]` table is `name` and
+`kickoff`; a bare `series = "…"` string remains accepted as the name." This is
+the form mission 10 U2 shipped and U5 put in the templates.
+Status: resolved by DESIGN v3.10 (no code change needed)
+
+H-020 (2026-09-13). §27: `hands who` matches an interactive `claude` process to
+its transcript through `~/.claude/sessions/<pid>.json`, whose `sessionId` names
+the transcript; the transcript stays the source of the session's state; with no
+sessions file for a pid the line says `transcript: by directory` and is never
+attributed a job's transcript. §27 does not name `entrypoint`; mission 11 U2
+reads only `pid` and `sessionId` and never the `.key` file.
+Status: resolved by DESIGN v3.10 (code: mission 11 U2)
+
+H-021 (2026-09-13). §27: `hands kit check` verifies every `verdict` rule,
+`aux.done` included, against the vocabulary the review protocol specifies (the
+`VERDICT: review …` line), and refuses a kit whose brief or protocol vocabulary
+a rule cannot match; a broken builder rule is never excused by the apply-verdict
+exception (REVIEW-10 SF4). The builder-only scope U5 shipped is superseded.
+Status: resolved by DESIGN v3.10 (code: mission 11 U1)

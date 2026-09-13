@@ -230,6 +230,24 @@ def test_the_integration_doc_names_both_vocabularies_and_the_precedence() -> Non
     assert "whatever else stderr says" not in doc
 
 
+def test_the_integration_doc_states_section_6s_error_subtype_rule() -> None:
+    """Review 10 should-fix 7: the **How a job ends** bullet says §6's rule, that a
+    `result` of subtype `error` (the `error_*` family) fails whatever `is_error`
+    says, and that `done` needs a final `success` result carrying `num_turns`.
+    The runner side is `test_runner.py`'s
+    `test_an_error_subtype_fails_as_an_error_even_when_is_error_is_false`."""
+    design = flattened((ROOT / "DESIGN.md").read_text(encoding="utf-8"))
+    assert "with a `result` of subtype `error` (`error_result`)" in design
+    doc = flattened((ROOT / "docs" / "INTEGRATION.md").read_text(encoding="utf-8"))
+    for said in (
+        "A job is `failed` when the process ends without a final `result` event, "
+        "with a `result` of subtype `error`",
+        "`error_max_turns` included, whatever its `is_error` says",
+        "a final `result` of subtype `success` carrying `num_turns`",
+    ):
+        assert said in doc, f"docs/INTEGRATION.md does not say {said!r}"
+
+
 #: The closed phone loop (§26, M10 U6): one section, phone only, and the
 #: statements that must be in it — each a text the code prints or does.
 LOOP_SECTION = "### The closed loop, from the phone"
