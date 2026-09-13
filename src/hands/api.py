@@ -257,8 +257,8 @@ class Api:
     ) -> dict[str, Any]:
         """Recent job summaries, newest first (§4, §7).
 
-        `origin` is §6's closed vocabulary (`driver|playbook|cli|limit`, and §26's
-        `phone`, H-018), and a spelling outside it is refused rather than
+        `origin` is §6's closed vocabulary (`driver|playbook|cli|limit|phone|kit`,
+        v3.10, H-018), and a spelling outside it is refused rather than
         answered with "no jobs": every
         value is a filter that can legitimately match nothing, so silence would
         not tell a typo from an empty result.

@@ -7,6 +7,14 @@ repository paths) and the repository the kit lands in, and prints one line per
 check, then — only when every check passes — the apply prompt of the handbook's
 §3 naming every file the kit replaces or adds, and the commit message.
 
+The apply prompt is built by one function, `plan_apply`, which `hands kit check`
+and handsd both call (§27): when a kit arrives from the phone, handsd lists the
+zip's entries with `apply_from_zip` — the same path rules, never extracting a
+file and reading only `KIT.md` — and files the prompt as a held builder job, so
+what the architect saw is what runs. The commit message is the first line of a
+`KIT.md` entry at the kit's root, stripped, else `plan: kit <name>`, where the
+name is the kit's file name without `.zip`.
+
 The checks, in order (docs/ARCHITECT-HANDBOOK.md §11 says the same):
 
 * `paths` — every entry is a repository path: relative, no `..`, `.` or empty
@@ -59,7 +67,7 @@ import zipfile
 import zlib
 from collections.abc import Iterable
 from dataclasses import dataclass, field
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, TextIO
 
 from hands.playbook import GIT_ENV_CLEARED, Playbook, PlaybookError, parse_playbook
@@ -67,15 +75,20 @@ from hands.playbook import GIT_ENV_CLEARED, Playbook, PlaybookError, parse_playb
 __all__ = [
     "APPLY_VERDICT",
     "CHECK_NAMES",
+    "KIT_MD",
     "MAX_ENTRY_BYTES",
     "MAX_TOTAL_BYTES",
+    "Apply",
     "Check",
     "KitError",
     "Report",
+    "apply_from_zip",
+    "apply_prompt",
     "check_kit",
     "final_reply_literals",
     "kickoff_line",
     "placeholder_instances",
+    "plan_apply",
     "review_literals",
     "run",
 ]
@@ -86,6 +99,11 @@ PLAYBOOK_PATHS = ("PLAYBOOK.toml", "meta/PLAYBOOK.toml")
 BRIEF_RE = re.compile(r"^(?:meta/BUILDER-(?P<n>\d+)-PROMPT\.md|WORKPLAN\.md)$")
 #: The reply the apply prompt asks for; the only literal seen outside the brief.
 APPLY_VERDICT = "VERDICT: kit applied <sha>"
+#: §27: the entry whose first line is the apply's commit message.
+KIT_MD = "KIT.md"
+#: Where `kit check` says the kit lands: `[files] kit_dir`'s default (§26). It has
+#: no config to read, so a daemon with another `kit_dir` names another path.
+KIT_DIR_SHOWN = "~/Downloads"
 KICKOFF_MARK = "Kickoff line"
 VOCABULARY_OPENERS = ("Your final reply begins with", "Reply with one of")
 #: The event whose verdict is the builder's reply, the one a brief fixes.
@@ -145,6 +163,10 @@ class Report:
     adds: list[str] = field(default_factory=list)
     commit_message: str = ""
     apply_prompt: str | None = None
+    #: The first line of the kit's `KIT.md` when it gives one, else None.
+    kit_md: str | None = None
+    #: One line saying `KIT.md`'s shape and what this kit's gives (§27).
+    kit_md_note: str = ""
 
     @property
     def ok(self) -> bool:
@@ -163,7 +185,22 @@ class Report:
             "adds": self.adds,
             "commit_message": self.commit_message,
             "apply_prompt": self.apply_prompt,
+            "kit_md": self.kit_md,
         }
+
+
+@dataclass(frozen=True)
+class Apply:
+    """The apply of one kit (§27): what `kit check` prints and handsd files, held."""
+
+    #: The kit's file name without `.zip`: `plan: kit <name>`, gate `apply <name>`.
+    name: str
+    replaces: list[str]
+    adds: list[str]
+    commit_message: str
+    #: The first line of the kit's `KIT.md` when it gives one, else None.
+    kit_md: str | None
+    prompt: str
 
 
 @dataclass
@@ -204,54 +241,84 @@ def _shown(name: str) -> str:
     return name.replace("\0", "\\0")
 
 
-def _read_zip(path: Path) -> _Kit:
-    try:
-        archive = zipfile.ZipFile(path)
-    except (zipfile.BadZipFile, OSError) as exc:
-        raise KitError(f"{path} is neither a directory nor a zip: {exc}") from exc
-    files: dict[str, bytes] = {}
-    problems: list[str] = []
-    with archive:
-        infos = archive.infolist()
-        # The sizes the zip's directory declares, before any byte is read; zipfile
-        # stops an entry at its declared size, so what is read cannot exceed them.
-        declared = sum(info.file_size for info in infos)
-        whole = declared <= MAX_TOTAL_BYTES
-        if not whole:
-            problems.append(
-                f"the entries declare {declared} bytes, over the {MAX_TOTAL_BYTES}-byte cap "
-                "on a kit's total"
-            )
-        seen: set[str] = set()
-        for info in infos:
-            name = info.orig_filename  # `filename` is cut at a NUL; this is the name stored
-            shown = _shown(name)
-            if name in seen:  # zipfile would keep only one of them
-                problems.append(f"{shown} (a duplicate entry)")
-                continue
-            seen.add(name)
-            if name.endswith("/"):  # a directory entry: checked, never a file
-                problem = _path_problem(name.rstrip("/"))
-                if problem:
-                    problems.append(f"{shown} ({problem})")
-                continue
-            problem = _path_problem(name)
-            if problem is None and stat.S_ISLNK(info.external_attr >> 16):
-                problem = "a symlink"
-            elif problem is None and info.file_size > MAX_ENTRY_BYTES:
-                problem = (
-                    f"{info.file_size} bytes, over the {MAX_ENTRY_BYTES}-byte cap on one entry"
-                )
+def _zip_entries(
+    archive: zipfile.ZipFile,
+) -> tuple[list[zipfile.ZipInfo], list[tuple[str | None, str]], bool]:
+    """The zip's file entries that are repository paths, the problems, and whether
+    the declared total is under the cap — from its directory alone, no byte read.
+
+    A problem is `(the entry's name, why)`, or `(None, why)` for the kit's total.
+    A directory entry is checked and never a file.
+    """
+    infos = archive.infolist()
+    # The sizes the zip's directory declares, before any byte is read; zipfile
+    # stops an entry at its declared size, so what is read cannot exceed them.
+    declared = sum(info.file_size for info in infos)
+    whole = declared <= MAX_TOTAL_BYTES
+    problems: list[tuple[str | None, str]] = []
+    if not whole:
+        problems.append((
+            None,
+            f"the entries declare {declared} bytes, over the {MAX_TOTAL_BYTES}-byte cap "
+            "on a kit's total",
+        ))  # fmt: skip
+    good: list[zipfile.ZipInfo] = []
+    seen: set[str] = set()
+    for info in infos:
+        name = info.orig_filename  # `filename` is cut at a NUL; this is the name stored
+        if name in seen:  # zipfile would keep only one of them
+            problems.append((name, "a duplicate entry"))
+            continue
+        seen.add(name)
+        if name.endswith("/"):
+            problem = _path_problem(name.rstrip("/"))
             if problem:
-                problems.append(f"{shown} ({problem})")
-                continue
-            if not whole:
-                continue
-            try:
-                files[name] = archive.read(info)
-            except (zipfile.BadZipFile, zlib.error, OSError, EOFError, RuntimeError,
-                    NotImplementedError, ValueError) as exc:  # fmt: skip
-                problems.append(f"{shown} (unreadable: {type(exc).__name__})")
+                problems.append((name, problem))
+            continue
+        problem = _path_problem(name)
+        if problem is None and stat.S_ISLNK(info.external_attr >> 16):
+            problem = "a symlink"
+        elif problem is None and info.file_size > MAX_ENTRY_BYTES:
+            problem = f"{info.file_size} bytes, over the {MAX_ENTRY_BYTES}-byte cap on one entry"
+        if problem:
+            problems.append((name, problem))
+            continue
+        good.append(info)
+    return good, problems, whole
+
+
+def _problem_text(name: str | None, problem: str) -> str:
+    return problem if name is None else f"{_shown(name)} ({problem})"
+
+
+def _read_entry(archive: zipfile.ZipFile, info: zipfile.ZipInfo) -> bytes | str:
+    """The entry's bytes, or why it cannot be read."""
+    try:
+        return archive.read(info)
+    except (zipfile.BadZipFile, zlib.error, OSError, EOFError, RuntimeError,
+            NotImplementedError, ValueError) as exc:  # fmt: skip
+        return f"unreadable: {type(exc).__name__}"
+
+
+def _open_zip(path: Path) -> zipfile.ZipFile:
+    try:
+        return zipfile.ZipFile(path)
+    except (zipfile.BadZipFile, OSError, EOFError, ValueError) as exc:
+        raise KitError(f"{path} is neither a directory nor a zip: {exc}") from exc
+
+
+def _read_zip(path: Path) -> _Kit:
+    archive = _open_zip(path)
+    files: dict[str, bytes] = {}
+    with archive:
+        good, found, whole = _zip_entries(archive)
+        problems = [_problem_text(name, problem) for name, problem in found]
+        for info in good if whole else []:
+            data = _read_entry(archive, info)
+            if isinstance(data, str):
+                problems.append(_problem_text(info.orig_filename, data))
+            else:
+                files[info.orig_filename] = data
     return _Kit(filename=path.name, files=files, problems=problems)
 
 
@@ -388,13 +455,13 @@ def _inside(repo: Path, name: str) -> bool:
     return landed == real_repo or landed.startswith(real_repo + os.sep)
 
 
+#: Why an entry that is a repository path is still refused (`_check_paths`).
+OUTSIDE = "lands outside the repo through a symlink"
+
+
 def _check_paths(kit: _Kit, repo: Path) -> Check:
     problems = list(kit.problems)
-    problems += [
-        f"{name} (lands outside the repo through a symlink)"
-        for name in sorted(kit.files)
-        if not _inside(repo, name)
-    ]
+    problems += [f"{name} ({OUTSIDE})" for name in sorted(kit.files) if not _inside(repo, name)]
     total = len(kit.files) + len(kit.problems)
     if problems:
         return Check(
@@ -662,26 +729,112 @@ def _check_protocol(book: Playbook | None, kit: _Kit, repo: Path) -> Check:
     return Check("protocol", True, "every file a send names is present: " + ", ".join(found))
 
 
-def _commit_message(brief: str | None, filename: str) -> str:
-    match = BRIEF_RE.match(brief or "")
-    if match and match.group("n"):
-        return f"plan: mission {match.group('n')} kit"
-    return f"plan: kit {filename.removesuffix('.zip')}"
+def kit_md_line(data: bytes | None) -> str | None:
+    """§27: the first line of `KIT.md`, stripped; None when there is no KIT.md, or
+    its first line is blank, or it is not UTF-8 — the default message is used then."""
+    if data is None:
+        return None
+    try:
+        text = data.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        return None
+    lines = text.splitlines()
+    first = lines[0].strip() if lines else ""
+    return first or None
 
 
-def apply_prompt(filename: str, replaces: list[str], adds: list[str], message: str) -> str:
-    """The handbook's §3 apply prompt, naming every file the kit touches."""
+def apply_prompt(location: str, replaces: list[str], adds: list[str], message: str) -> str:
+    """The handbook's §3 apply prompt, naming the kit's file and every file it touches."""
     touched = []
     if replaces:
         touched.append("replaces " + _and(replaces))
     if adds:
         touched.append("adds " + _and(adds))
     return (
-        f"Apply ~/Downloads/{filename} to this repository: unzip -o into the repo root "
+        f"Apply {location} to this repository: unzip -o into the repo root "
         f"(it {' and '.join(touched)}), then one plan-only sub-agent makes a single commit "
         f"'{message}' listing those files in its body, and pushes. Change nothing else. "
         f"Reply with one line: {APPLY_VERDICT}."
     )
+
+
+def plan_apply(location: str, names: Iterable[str], kit_md: bytes | None, repo: Path) -> Apply:
+    """The one apply of §27, for `kit check` and for handsd alike.
+
+    `location` is where the builder finds the zip (its last component is the kit's
+    file name), `names` the kit's file entries, `kit_md` the bytes of its `KIT.md`
+    entry (None when it has none), and `repo` the repository the kit lands in: a
+    name that exists there (a dangling symlink included) is replaced, any other
+    is added.
+    """
+    name = PurePosixPath(location).name.removesuffix(".zip")
+    files = sorted(set(names))
+    replaces = [entry for entry in files if os.path.lexists(repo / entry)]
+    adds = [entry for entry in files if entry not in replaces]
+    line = kit_md_line(kit_md)
+    message = line if line is not None else f"plan: kit {name}"
+    return Apply(
+        name=name,
+        replaces=replaces,
+        adds=adds,
+        commit_message=message,
+        kit_md=line,
+        prompt=apply_prompt(location, replaces, adds, message),
+    )
+
+
+def apply_from_zip(path: Path, repo: Path, location: str) -> Apply:
+    """handsd's apply for a kit received from the phone (§27), or `KitError` saying why not.
+
+    The zip's directory is listed, never extracted: the entries are checked by
+    `kit check`'s path rules (`_zip_entries`, `_inside`), and only a `KIT.md`
+    entry is read. The refusal names the kinds of problem and their count, never
+    an entry's name (text the sender chose). Only `KIT.md` is decompressed, so a
+    corrupt other entry is found by the builder's unzip, not here.
+    """
+    try:
+        archive = zipfile.ZipFile(path)
+    except (zipfile.BadZipFile, OSError, EOFError, ValueError) as exc:
+        raise KitError("the kit is not a readable zip") from exc
+    with archive:
+        try:
+            good, found, whole = _zip_entries(archive)
+        except (zipfile.BadZipFile, OSError, EOFError, ValueError) as exc:
+            raise KitError("the kit is not a readable zip") from exc
+        if not whole:
+            raise KitError(next(problem for name, problem in found if name is None))
+        names = [info.orig_filename for info in good]
+        kinds = [problem for name, problem in found if name is not None]
+        kinds += [OUTSIDE for name in names if not _inside(repo, name)]
+        total = len(names) + len(found)
+        if kinds:
+            listed = "; ".join(dict.fromkeys(kinds))
+            raise KitError(
+                f"{len(kinds)} of {total} entries are not repository paths ({listed})"
+            )
+        if not names:
+            raise KitError("the kit holds no files")
+        kit_md = None
+        for info in good:
+            if info.orig_filename == KIT_MD:
+                data = _read_entry(archive, info)
+                if isinstance(data, str):
+                    raise KitError(f"the kit's {KIT_MD} is {data}")
+                kit_md = data
+    return plan_apply(location, names, kit_md, repo)
+
+
+def kit_md_note(plan: Apply, carried: bool) -> str:
+    """`kit check`'s line on `KIT.md`: the shape it expects and what this kit gives."""
+    shape = f"{KIT_MD}: the first line of a {KIT_MD} entry is the commit message; "
+    if plan.kit_md is not None:
+        return shape + f"this kit's {KIT_MD} gives '{plan.kit_md}'"
+    if carried:
+        return shape + (
+            f"this kit's {KIT_MD} has a blank or unreadable first line, so the message is "
+            f"'{plan.commit_message}'"
+        )
+    return shape + f"this kit carries no {KIT_MD}, so the message is '{plan.commit_message}'"
 
 
 def check_kit(path: Path, repo: Path) -> Report:
@@ -699,18 +852,21 @@ def check_kit(path: Path, repo: Path) -> Report:
         _check_wording(brief_name, brief_text),
         _check_protocol(book, kit, repo),
     ]
-    replaces = sorted(name for name in kit.files if os.path.lexists(repo / name))
-    adds = sorted(name for name in kit.files if name not in replaces)
+    plan = plan_apply(
+        f"{KIT_DIR_SHOWN}/{kit.filename}", kit.files, kit.files.get(KIT_MD), repo
+    )
     report = Report(
         kit=path,
         repo=repo,
         checks=checks,
-        replaces=replaces,
-        adds=adds,
-        commit_message=_commit_message(brief_name, kit.filename),
+        replaces=plan.replaces,
+        adds=plan.adds,
+        commit_message=plan.commit_message,
+        kit_md=plan.kit_md,
+        kit_md_note=kit_md_note(plan, KIT_MD in kit.files),
     )
     if report.ok:
-        report.apply_prompt = apply_prompt(kit.filename, replaces, adds, report.commit_message)
+        report.apply_prompt = plan.prompt
     return report
 
 
@@ -752,6 +908,7 @@ def run(kit: str, repo: str | None, *, out: TextIO, as_json: bool) -> int:
         print(check.line(), file=out)
     failed = [check for check in report.checks if not check.ok]
     if failed:
+        print(report.kit_md_note, file=out)
         print(
             f"kit check: FAIL ({len(failed)} of {len(report.checks)} checks failed); "
             "no apply prompt for a failing kit",
@@ -761,5 +918,6 @@ def run(kit: str, repo: str | None, *, out: TextIO, as_json: bool) -> int:
     print("apply prompt:", file=out)
     print(f"    {report.apply_prompt}", file=out)
     print(f"commit message: {report.commit_message}", file=out)
+    print(report.kit_md_note, file=out)
     print(f"kit check: pass ({len(report.checks)} of {len(report.checks)} checks)", file=out)
     return 0

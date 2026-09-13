@@ -1053,15 +1053,17 @@ def test_a_cli_job_un_pauses_the_pipeline_when_it_starts(
     assert resumed.payload["was"] == "because"
 
 
-def test_a_phone_job_un_pauses_the_pipeline_when_it_starts(
-    tmp_home: Path, workdir: Path
+@pytest.mark.parametrize("origin", ["phone", "kit"])
+def test_a_phone_or_kit_job_un_pauses_the_pipeline_when_it_starts(
+    tmp_home: Path, workdir: Path, origin: str
 ) -> None:
-    """H-018 gap 2: a `go` from the phone is the human answering the stop, so a
-    `phone`-origin job clears it under the same "only when it starts" rule."""
+    """H-018 gap 2 and §27: a `go` from the phone, or the apply a kit from the phone
+    filed, is the human answering the stop, so a `phone`- or `kit`-origin job
+    clears it under the same "only when it starts" rule."""
     engine, _recorder = engine_for(tmp_home, workdir)
     run(engine.stop("because", {}))
-    queued = engine.spool.create_job(role="builder", context="clear", prompt="p", origin="phone")
-    assert engine.pipeline()["paused"] is True, "a queued phone job has not started"
+    queued = engine.spool.create_job(role="builder", context="clear", prompt="p", origin=origin)
+    assert engine.pipeline()["paused"] is True, f"a queued {origin} job has not started"
     run(engine.on_job_start(queued))
     assert engine.pipeline()["paused"] is False
     (resumed,) = [e for e in engine.spool.events() if e.kind == "pipeline.resumed"]

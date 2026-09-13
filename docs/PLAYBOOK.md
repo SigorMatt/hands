@@ -82,8 +82,8 @@ below uses it). This is hands' own choice where the design is silent (finding
 H-019). Any other key in `[series]` is refused, naming it. An empty `name` or
 `kickoff` (`""` or blanks only) is refused: leave the key out instead.
 
-A `go` job, like a `cli` send, un-pauses a stopped pipeline when it starts, not
-when it is filed. A stopped pipeline still has its playbook, so `go` is accepted
+A `go` job or a kit's apply (`origin: kit`), like a `cli` send, un-pauses a
+stopped pipeline when it starts, not when it is filed or held (DESIGN §27). A stopped pipeline still has its playbook, so `go` is accepted
 while it is paused.
 
 ## Events (`on`)

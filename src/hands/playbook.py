@@ -107,11 +107,13 @@ ORIGIN = "playbook"
 #: §10's stop → resume cycle: the job origins whose *start* clears a stop. `cli` —
 #: the human answering the stop — and `phone`, a `go` the human typed the secret
 #: for (§26; H-018 gap 2: without it a `go` after a stop would run the builder
-#: while its `builder.done` fired no rule). A job the playbook started
+#: while its `builder.done` fired no rule) — and `kit`, the held apply a kit from
+#: the phone filed, which starts only once the human approved it (§27). A job the
+#: playbook started
 #: (`playbook`) or one §6 filed when a limit reset (`limit`) is the pipeline
 #: itself, and a `driver` job (in §6's vocabulary, filed by nothing today) is not
 #: an origin §10 names, so neither clears one.
-UNPAUSE_ORIGINS = frozenset({"cli", "phone"})
+UNPAUSE_ORIGINS = frozenset({"cli", "phone", "kit"})
 
 #: The `stop` reason `hands pause` files (§11, H-007). A human, not a rule.
 PAUSE_REASON = "paused by human"

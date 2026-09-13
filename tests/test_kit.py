@@ -171,7 +171,12 @@ def test_a_passing_dir_kit_prints_six_passes_and_the_apply_prompt(
         "Apply ~/Downloads/mission-11-kit.zip to this repository: unzip -o into the repo "
         "root (it replaces PLAYBOOK.toml and adds meta/BUILDER-11-PROMPT.md)"
     ) in strip_paths(flat), out
-    assert "'plan: mission 11 kit'" in strip_paths(flat), out
+    # §27: no KIT.md in the kit, so the commit message is `plan: kit <name>`.
+    assert "'plan: kit mission-11-kit'" in strip_paths(flat), out
+    assert (
+        "KIT.md: the first line of a KIT.md entry is the commit message; this kit "
+        "carries no KIT.md, so the message is 'plan: kit mission-11-kit'"
+    ) in strip_paths(flat), out
     assert "Reply with one line: VERDICT: kit applied <sha>." in strip_paths(flat), out
     # The kit carries a playbook, so it is the one in force and its kickoff is compared.
     assert "the kit's PLAYBOOK.toml" in strip_paths(line(out, "playbook"))
@@ -205,8 +210,120 @@ def test_json_carries_every_check_and_the_apply_prompt(tmp_path: Path, repo: Pat
     assert answer["ok"] is True
     assert answer["replaces"] == ["PLAYBOOK.toml"]
     assert answer["adds"] == ["meta/BUILDER-11-PROMPT.md"]
-    assert answer["commit_message"] == "plan: mission 11 kit"
+    assert answer["commit_message"] == "plan: kit k"
+    assert answer["kit_md"] is None
     assert "VERDICT: kit applied <sha>" in strip_paths(answer["apply_prompt"])
+
+
+def test_the_commit_message_is_the_first_line_of_the_kits_kit_md(
+    tmp_path: Path, repo: Path
+) -> None:
+    """§27: "the first line of a `KIT.md` inside the zip, else `plan: kit <name>`";
+    kit check writes the shape and what this kit's KIT.md gives."""
+    kit = write_tree(
+        tmp_path / "mission-11-kit",
+        {**good_kit(), "KIT.md": "  plan: mission 11 kit (DESIGN v3.10)  \n\nThe body.\n"},
+    )
+    code, out, err = run_check(kit, repo)
+    assert code == 0, out + err
+    flat = " ".join(strip_paths(out).split())
+    assert "commit 'plan: mission 11 kit (DESIGN v3.10)' listing" in strip_paths(flat), out
+    assert "commit message: plan: mission 11 kit (DESIGN v3.10)" in strip_paths(flat), out
+    assert (
+        "KIT.md: the first line of a KIT.md entry is the commit message; this kit's "
+        "KIT.md gives 'plan: mission 11 kit (DESIGN v3.10)'"
+    ) in strip_paths(flat), out
+    assert "adds KIT.md and meta/BUILDER-11-PROMPT.md)" in strip_paths(flat), out
+    code, out, _ = run_check(kit, repo, "--json")
+    assert json.loads(out)["kit_md"] == "plan: mission 11 kit (DESIGN v3.10)"
+
+
+@pytest.mark.parametrize(
+    "text", ["", "\n\nplan: second line\n", "   \n"], ids=["empty", "blank-first", "blanks"]
+)
+def test_a_kit_md_with_a_blank_first_line_gives_the_default_message(
+    tmp_path: Path, repo: Path, text: str
+) -> None:
+    kit = write_tree(tmp_path / "mission-11-kit", {**good_kit(), "KIT.md": text})
+    code, out, _ = run_check(kit, repo, "--json")
+    assert code == 0
+    answer = json.loads(out)
+    assert answer["commit_message"] == "plan: kit mission-11-kit"
+    assert answer["kit_md"] is None
+
+
+def test_plan_apply_computes_replaced_and_added_against_the_repo(tmp_path: Path) -> None:
+    """The one function `kit check` and handsd both call (§27): a file that exists
+    in the repo (a dangling symlink included) is replaced, any other is added."""
+    repo = write_tree(tmp_path / "cwd", {"DESIGN.md": "x", "meta/plan.md": "x"})
+    (repo / "gone.md").symlink_to(repo / "nowhere.md")
+    plan = kit_mod.plan_apply(
+        "~/Downloads/m-11.zip",
+        ["meta/plan.md", "DESIGN.md", "gone.md", "meta/NEW.md", "KIT.md"],
+        None,
+        repo,
+    )
+    assert plan.name == "m-11"
+    assert plan.replaces == ["DESIGN.md", "gone.md", "meta/plan.md"]
+    assert plan.adds == ["KIT.md", "meta/NEW.md"]
+    assert plan.commit_message == "plan: kit m-11" and plan.kit_md is None
+    assert plan.prompt == (
+        "Apply ~/Downloads/m-11.zip to this repository: unzip -o into the repo root "
+        "(it replaces DESIGN.md, gone.md and meta/plan.md and adds KIT.md and meta/NEW.md), "
+        "then one plan-only sub-agent makes a single commit 'plan: kit m-11' listing those "
+        "files in its body, and pushes. Change nothing else. "
+        "Reply with one line: VERDICT: kit applied <sha>."
+    )
+    with_md = kit_mod.plan_apply("/x/m-11.zip", ["KIT.md"], b"plan: mission 11\nmore\n", repo)
+    assert with_md.commit_message == "plan: mission 11" == with_md.kit_md
+    assert with_md.prompt.startswith("Apply /x/m-11.zip to this repository")
+
+
+@pytest.mark.parametrize(
+    "entries,said",
+    [
+        ([("../x.md", b"x")], "a .. component"),
+        ([("/etc/x.md", b"x")], "an absolute path"),
+        ([(".GIT/config", b"x")], "a path inside .git"),
+        ([("docs/N.md", b"1"), ("docs/N.md", b"2")], "a duplicate entry"),
+    ],
+    ids=["dotdot", "absolute", "git", "duplicate"],
+)
+def test_apply_from_zip_refuses_by_kit_checks_path_rules_without_naming_entries(
+    tmp_path: Path, repo: Path, entries: list[tuple[str, bytes]], said: str
+) -> None:
+    kit = zipped(tmp_path / "bad.zip", entries)
+    with pytest.raises(kit_mod.KitError) as exc:
+        kit_mod.apply_from_zip(kit, repo, "~/Downloads/bad.zip")
+    assert said in strip_paths(str(exc.value))
+    assert "not repository paths" in strip_paths(str(exc.value))
+    for name, _ in entries:
+        assert name not in strip_paths(str(exc.value))
+
+
+def test_apply_from_zip_refuses_a_file_that_is_not_a_zip_and_an_empty_zip(
+    tmp_path: Path, repo: Path
+) -> None:
+    junk = tmp_path / "junk.zip"
+    junk.write_bytes(b"not a zip at all" * 8)
+    with pytest.raises(kit_mod.KitError, match="not a readable zip"):
+        kit_mod.apply_from_zip(junk, repo, "~/Downloads/junk.zip")
+    empty = tmp_path / "empty.zip"
+    zipfile.ZipFile(empty, "w").close()
+    with pytest.raises(kit_mod.KitError, match="holds no files"):
+        kit_mod.apply_from_zip(empty, repo, "~/Downloads/empty.zip")
+
+
+def test_apply_from_zip_equals_kit_checks_prompt_for_the_same_zip(
+    tmp_path: Path, repo: Path
+) -> None:
+    kit = zipped(tmp_path / "mission-11.zip", [("KIT.md", b"plan: mission 11 kit\n")])
+    code, out, _ = run_check(kit, repo, "--json")
+    assert code == 0, out
+    plan = kit_mod.apply_from_zip(kit, repo, "~/Downloads/mission-11.zip")
+    assert plan.prompt == json.loads(out)["apply_prompt"]
+    assert plan.replaces == ["PLAYBOOK.toml"]
+    assert plan.adds == ["KIT.md", "meta/BUILDER-11-PROMPT.md"]
 
 
 def test_repo_defaults_to_the_top_level_of_the_current_git_repository(

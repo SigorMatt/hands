@@ -129,8 +129,9 @@ Off unless configured in `[notify]`; `docs/INTEGRATION.md` has the setup.
   attached is fetched into `[files] kit_dir` (default `~/Downloads`, which must
   be inside `allowed_roots`), capped at `[files] kit_max_mb` (default 20), never
   unzipped or run; the phone gets `kit received <name> <bytes> <sha256>`.
-  Applying it is still a gated job. `docs/INTEGRATION.md` walks the whole loop
-  from the phone: kit, approve, `go`, the stop.
+  handsd then files the apply prompt `hands kit check` prints as a held builder
+  job (`origin: kit`), so the loop is phone only. `docs/INTEGRATION.md` walks
+  it: kit, approve, `go`, the stop.
 - **The who view**: `hands who` prints one screen of this daemon's jobs and
   every other `claude` session on the machine; `handswho` pushes it to
   `who_topic` when it changes.

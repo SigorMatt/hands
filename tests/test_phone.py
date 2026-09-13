@@ -1234,7 +1234,11 @@ def test_a_kit_is_written_to_kit_dir_inboxed_and_notified_with_its_sha256(
         assert answer["url"] == f"{NTFY}/{EVENTS_TOPIC}"  # on ntfy_topic
         assert answer["message"] == f"kit received mission-11.zip {len(ZIP)} {digest}"
         assert answer.get("actions") is None
-        assert (await ok("jobs"))["jobs"] == []  # a kit starts nothing
+        # ZIP is an empty archive: no apply is filed (§27), the kit stays written
+        assert (await ok("jobs"))["jobs"] == []
+        assert kit_refusals(daemon) == [
+            {"reason": "the apply was not filed: the kit holds no files"}
+        ]
         assert_no_secret_anywhere(daemon, tmp_home)
 
     phone_drive(body)
@@ -1490,5 +1494,234 @@ def test_the_daemon_answers_its_socket_while_a_kit_download_is_in_flight(
 
         await poll(done, "the kit to be written")
         assert (downloads / "slow.zip").read_bytes() == ZIP
+
+    phone_drive(body)
+
+
+# ------------------------------------------------ the apply from the kit (§27)
+
+from hands import kit as kit_mod  # noqa: E402
+from test_kit import BRIEF, PROTOCOL  # noqa: E402
+from test_kit import PLAYBOOK as KIT_PLAYBOOK  # noqa: E402
+
+
+def kit_zip(entries: list[tuple[str, str | bytes]]) -> bytes:
+    """A zip holding `entries` in order (a duplicate name is written twice)."""
+    import io
+    import warnings
+    import zipfile
+
+    buffer = io.BytesIO()
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        with zipfile.ZipFile(buffer, "w") as archive:
+            for name, data in entries:
+                archive.writestr(name, data)
+    return buffer.getvalue()
+
+
+def good_entries(kit_md: str | None) -> list[tuple[str, str | bytes]]:
+    entries: list[tuple[str, str | bytes]] = [
+        ("meta/BUILDER-11-PROMPT.md", BRIEF),
+        ("PLAYBOOK.toml", KIT_PLAYBOOK),
+        ("meta/REVIEW-PROTOCOL.md", PROTOCOL),
+    ]
+    if kit_md is not None:
+        entries.append(("KIT.md", kit_md))
+    return entries
+
+
+async def kit_jobs(daemon: Daemon, fake: FakeNtfy, attachment: dict[str, Any]) -> list[Any]:
+    await say(daemon, fake, f"kit {SECRET}", attachment=attachment)
+    await daemon.notifier.drain()
+    return list((await ok("jobs"))["jobs"])
+
+
+async def kit_check_prompt(kit: Path, repo: Path) -> str:
+    from harness import cli
+
+    code, out, err = await cli("kit", "check", str(kit), "--repo", str(repo), "--json")
+    assert code == 0, out + err
+    prompt = json.loads(out)["apply_prompt"]
+    code, text, _ = await cli("kit", "check", str(kit), "--repo", str(repo))
+    assert code == 0 and f"    {prompt}\n" in text  # the text output prints the same bytes
+    return str(prompt)
+
+
+@pytest.mark.parametrize(
+    "kit_md,message",
+    [("plan: mission 11 kit (DESIGN v3.10)\n\nbody\n", "plan: mission 11 kit (DESIGN v3.10)"),
+     (None, "plan: kit mission-11")],
+    ids=["kit-md", "no-kit-md"],
+)  # fmt: skip
+def test_a_kit_files_a_held_builder_apply_whose_prompt_is_kit_checks_byte_for_byte(
+    kit_project: str,
+    workdir: Path,
+    downloads: Path,
+    kit_server: KitServer,
+    tmp_home: Path,
+    kit_md: str | None,
+    message: str,
+) -> None:
+    """§27: on `kit.received`, handsd files a held builder job, `origin: kit`, gate
+    reason `apply <name>`, whose prompt is `hands kit check`'s for the same zip;
+    the held notification carries the buttons; nothing runs until it is approved."""
+    (workdir / "meta").mkdir()
+    (workdir / "meta" / "REVIEW-PROTOCOL.md").write_text("the old protocol\n")
+    body_zip = kit_zip(good_entries(kit_md))
+
+    async def body(daemon: Daemon, fake: FakeNtfy) -> None:
+        (row,) = await kit_jobs(daemon, fake, kit_server.attach("mission-11.zip", body_zip))
+        record = await ok("show", row["id"])
+        assert (record["state"], record["role"], record["origin"], record["context"]) == (
+            "held", "builder", "kit", "clear",
+        )  # fmt: skip
+        assert record["gate"]["reason"] == "apply mission-11"
+        # the zip is never unzipped by handsd: the builder's cwd is as it was
+        assert sorted(p.relative_to(workdir).as_posix() for p in workdir.rglob("*")) == [
+            "meta", "meta/REVIEW-PROTOCOL.md",
+        ]  # fmt: skip
+        assert (workdir / "meta" / "REVIEW-PROTOCOL.md").read_text() == "the old protocol\n"
+        prompt = await kit_check_prompt(downloads / "mission-11.zip", workdir)
+        assert record["prompt"] == prompt  # byte-equal by construction, and by test
+        assert prompt == (
+            "Apply ~/Downloads/mission-11.zip to this repository: unzip -o into the repo root "
+            "(it replaces meta/REVIEW-PROTOCOL.md and adds "
+            + ("KIT.md, " if kit_md is not None else "")
+            + "PLAYBOOK.toml and meta/BUILDER-11-PROMPT.md), then one plan-only sub-agent "
+            f"makes a single commit '{message}' listing those files in its body, and pushes. "
+            "Change nothing else. Reply with one line: VERDICT: kit applied <sha>."
+        )
+        assert kit_refusals(daemon) == []
+        assert [event["name"] for event in kit_events(daemon)] == ["mission-11.zip"]
+        (held_event,) = [e.payload for e in daemon.spool.events() if e.kind == "job.held"]
+        assert held_event["reason"] == "apply mission-11" and held_event["role"] == "builder"
+        nonce = await nonce_for(daemon, row["id"])
+        (held_note,) = [
+            item for item in daemon.notifier.post.sent
+            if item["title"] == daemon_mod.NOTIFY_KINDS["job.held"]
+        ]  # fmt: skip
+        assert [action["label"] for action in held_note["actions"]] == ["Approve", "Deny"]
+        assert (await ok("jobs", "--origin", "kit"))["jobs"][0]["id"] == row["id"]
+        await asyncio.sleep(0.2)
+        assert (await ok("status"))["roles"]["builder"]["running"] is None
+        assert await state(row["id"]) == "held"  # nothing started before the approve
+        assert_no_secret_anywhere(daemon, tmp_home)
+        await say(daemon, fake, f"approve {row['id']} {nonce}")
+        assert (await ok("wait", row["id"]))["state"] == "done"
+        assert (downloads / "mission-11.zip").read_bytes() == body_zip
+
+    phone_drive(body)
+
+
+@pytest.mark.parametrize(
+    "entries,why",
+    [
+        ([("../escape.md", b"x")], "1 of 4 entries are not repository paths (a .. component)"),
+        ([("/etc/evil.md", b"x")], "1 of 4 entries are not repository paths (an absolute path)"),
+        ([("meta/../../x.md", b"x")], "1 of 4 entries are not repository paths (a .. component)"),
+        ([(".git/hooks/post-checkout", b"x")],
+         "1 of 4 entries are not repository paths (a path inside .git)"),
+        ([("docs/N.md", b"1"), ("docs/N.md", b"2")],
+         "1 of 5 entries are not repository paths (a duplicate entry)"),
+    ],
+    ids=["dotdot", "absolute", "inner-dotdot", "git", "duplicate"],
+)  # fmt: skip
+def test_a_kit_with_an_entry_outside_the_repo_is_refused_with_no_job(
+    kit_project: str,
+    workdir: Path,
+    downloads: Path,
+    kit_server: KitServer,
+    caplog: pytest.LogCaptureFixture,
+    entries: list[tuple[str, bytes]],
+    why: str,
+) -> None:
+    """§27, kit check's path rules: `kit.refused`, no job; the kit stays on disk."""
+    caplog.set_level(logging.DEBUG)
+    body_zip = kit_zip([*good_entries(None), *entries])
+
+    async def body(daemon: Daemon, fake: FakeNtfy) -> None:
+        jobs = await kit_jobs(daemon, fake, kit_server.attach("bad.zip", body_zip))
+        assert jobs == []
+        assert kit_refusals(daemon) == [{"reason": f"the apply was not filed: {why}"}]
+        assert [event["name"] for event in kit_events(daemon)] == ["bad.zip"]
+        assert (downloads / "bad.zip").read_bytes() == body_zip  # kept for `kit check`
+        assert list(workdir.iterdir()) == []
+
+    phone_drive(body)
+    assert_kit_refused(caplog, ": the apply was not filed: ")
+    for name, _ in entries:
+        assert name not in strip_paths(caplog.text)
+
+
+def test_a_kit_entry_that_lands_outside_the_repo_through_a_symlink_is_refused(
+    kit_project: str, workdir: Path, downloads: Path, kit_server: KitServer, tmp_path: Path
+) -> None:
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (workdir / "docs").symlink_to(outside)
+    body_zip = kit_zip([*good_entries(None), ("docs/NOTE.md", b"x")])
+
+    async def body(daemon: Daemon, fake: FakeNtfy) -> None:
+        assert await kit_jobs(daemon, fake, kit_server.attach("link.zip", body_zip)) == []
+        assert kit_refusals(daemon) == [{
+            "reason": "the apply was not filed: 1 of 4 entries are not repository paths "
+            "(lands outside the repo through a symlink)"
+        }]  # fmt: skip
+        assert list(outside.iterdir()) == []
+
+    phone_drive(body)
+
+
+def test_a_kit_that_is_not_a_zip_is_refused_with_no_job_and_stays_on_disk(
+    kit_project: str, downloads: Path, kit_server: KitServer
+) -> None:
+    junk = b"this is not a zip archive" * 20
+
+    async def body(daemon: Daemon, fake: FakeNtfy) -> None:
+        assert await kit_jobs(daemon, fake, kit_server.attach("junk.zip", junk)) == []
+        assert kit_refusals(daemon) == [
+            {"reason": "the apply was not filed: the kit is not a readable zip"}
+        ]
+        assert (downloads / "junk.zip").read_bytes() == junk
+
+    phone_drive(body)
+
+
+def test_a_kit_in_a_kit_dir_outside_home_names_its_absolute_path(
+    tmp_home: Path, workdir: Path, kit_server: KitServer, tmp_path: Path
+) -> None:
+    """The prompt names the file where handsd wrote it: `~/…` under $HOME, else absolute."""
+    elsewhere = tmp_path / "kits"
+    elsewhere.mkdir()
+    roots = f'allowed_roots = ["{workdir}", "{elsewhere}"]\n'
+    kit_config(tmp_home, workdir, f'{roots}kit_dir = "{elsewhere}"\n')
+    body_zip = kit_zip(good_entries(None))
+
+    async def body(daemon: Daemon, fake: FakeNtfy) -> None:
+        (row,) = await kit_jobs(daemon, fake, kit_server.attach("m.zip", body_zip))
+        prompt = (await ok("show", row["id"]))["prompt"]
+        where = (elsewhere / "m.zip").resolve()
+        assert prompt.startswith(f"Apply {where} to this repository: ")
+        assert prompt == kit_mod.apply_from_zip(where, workdir, str(where)).prompt
+
+    phone_drive(body)
+
+
+def test_a_kit_while_the_builder_is_busy_still_files_its_held_apply(
+    kit_project: str, workdir: Path, downloads: Path, kit_server: KitServer
+) -> None:
+    """§27 is silent; hands' choice: the apply is held, so a running builder job
+    does not refuse it — the human decides when to approve it."""
+    body_zip = kit_zip(good_entries(None))
+
+    async def body(daemon: Daemon, fake: FakeNtfy) -> None:
+        running = await ok("send", "--role", "builder", "--context", "clear", "FAKE:block")
+        await running_job()
+        await say(daemon, fake, f"kit {SECRET}", attachment=kit_server.attach("k.zip", body_zip))
+        rows = (await ok("jobs", "--origin", "kit"))["jobs"]
+        assert [row["state"] for row in rows] == ["held"]
+        assert kit_refusals(daemon) == []
+        await ok("cancel", running["id"])
 
     phone_drive(body)

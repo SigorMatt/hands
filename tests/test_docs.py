@@ -248,15 +248,23 @@ def test_the_integration_doc_states_section_6s_error_subtype_rule() -> None:
         assert said in doc, f"docs/INTEGRATION.md does not say {said!r}"
 
 
-#: The closed phone loop (§26, M10 U6): one section, phone only, and the
-#: statements that must be in it — each a text the code prints or does.
+#: The closed phone loop (§26, §27 "the apply from the kit", REVIEW-10 SF2): one
+#: section, phone only — kit, buttons, `go`, buzz — and the statements that must
+#: be in it, each a text the code prints or does.
 LOOP_SECTION = "### The closed loop, from the phone"
 LOOP_STATEMENTS = (
     "`hands kit check",
     "`kit <secret>`",
     "`kit received <name> <bytes> <sha256>`",
     "`Apply ~/Downloads/`",
-    "nothing on the phone can start the apply",
+    "The loop is phone only: kit, buttons, `go`, buzz.",
+    "handsd files the apply itself",
+    "`origin: kit`",
+    "`apply <name>`",
+    "`kit.refused`",
+    "handsd never unzips the kit",
+    "the first line of `KIT.md`",
+    "`plan: kit <name>`",
     "`go <secret>`",
     "`[series] kickoff`",
     "`go: builder job <id> <state>`",
@@ -282,6 +290,40 @@ def test_the_integration_doc_describes_the_closed_phone_loop_once() -> None:
     section = flattened(text.split(LOOP_SECTION, 1)[1].split("\n### ", 1)[0].split("\n## ")[0])
     for said in LOOP_STATEMENTS:
         assert flattened(said) in section, f"the loop section does not say {said!r}"
+    # REVIEW-10 SF2: the apply is no longer sent from the laptop or by the driver.
+    for gone in ("nothing on the phone can start the apply", "sent from the laptop",
+                 "hands send --role builder"):
+        assert gone not in section, f"the loop section still says {gone!r}"
+
+
+def test_the_origin_listings_name_kit() -> None:
+    """§6 (v3.10): `origin (driver|playbook|cli|limit|phone|kit)`; INTEGRATION and
+    PLAYBOOK say a `kit` job exists and un-pauses a stopped pipeline when it starts."""
+    from hands.playbook import UNPAUSE_ORIGINS
+    from hands.spool import ORIGINS
+
+    design = flattened((ROOT / "DESIGN.md").read_text(encoding="utf-8"))
+    assert "origin (driver|playbook|cli|limit|phone|kit)" in design
+    assert ORIGINS == {"driver", "playbook", "cli", "limit", "phone", "kit"}
+    assert UNPAUSE_ORIGINS == {"cli", "phone", "kit"}
+    integration = flattened((ROOT / "docs" / "INTEGRATION.md").read_text(encoding="utf-8"))
+    assert "`hands jobs --origin kit`" in integration
+    playbook = flattened((ROOT / "docs" / "PLAYBOOK.md").read_text(encoding="utf-8"))
+    assert "A `go` job or a kit's apply (`origin: kit`), like a `cli` send, un-pauses" in playbook
+
+
+def test_the_handbook_says_handsd_files_the_apply_from_a_phone_kit() -> None:
+    """§27: the apply prompt of §3 is filed held by handsd for a kit sent from the
+    phone; the commit message is KIT.md's first line, else `plan: kit <name>`."""
+    handbook = flattened((ROOT / "docs" / "ARCHITECT-HANDBOOK.md").read_text(encoding="utf-8"))
+    section_3 = handbook.split("## 3. Kit anatomy", 1)[1].split("## 4.", 1)[0]
+    for said in ("handsd files it as a held builder job", "the first line of `KIT.md`",
+                 "`plan: kit <name>`"):
+        assert said in section_3, f"handbook §3 does not say {said!r}"
+    assert "sent by the human or the driver, gated" not in section_3
+    section_11 = handbook.split("## 11. `hands kit check`", 1)[1].split("## 12.", 1)[0]
+    assert "`plan: mission <N> kit`" not in section_11
+    assert "the first line of `KIT.md`" in section_11
 
 
 def test_the_readme_names_kit_check_go_and_the_kit_transport() -> None:

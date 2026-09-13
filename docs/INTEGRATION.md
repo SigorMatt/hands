@@ -277,7 +277,9 @@ Publish a command to `cmd_topic` from the ntfy app. The last word is the token:
 - `go` is the only way to start work from the phone (DESIGN §26). It sends the
   playbook's `[series] kickoff` line (docs/PLAYBOOK.md) to the builder as a
   `clear` send, the job record says `origin: phone`, and `hands jobs --origin
-  phone` lists those jobs. The send takes the same path as `hands send`, so the
+  phone` lists those jobs. (The apply a kit files is `origin: kit`, and `hands
+  jobs --origin kit` lists those; both origins, like `cli`, un-pause a stopped
+  pipeline when their job starts.) The send takes the same path as `hands send`, so the
   gate patterns still apply. handsd answers on `ntfy_topic` with the job id and
   its state. It is refused, and logged, while the builder has a job running or
   queued, when there is no playbook (or it cannot be loaded), and when the
@@ -310,8 +312,8 @@ Publish a command to `cmd_topic` from the ntfy app. The last word is the token:
   file is never overwritten. It is never unzipped, never run, never made
   executable. handsd files `kit.received` in the inbox (the name written, bytes,
   sha256) and answers on `ntfy_topic` with `kit received <name> <bytes>
-  <sha256>`. Applying the kit is still a job you send, and its gate still holds
-  it for your approval. An ntfy server has its own attachment size limit, which
+  <sha256>`. handsd then files the apply itself, held for your approval (DESIGN
+  §27; the closed loop below says how). An ntfy server has its own attachment size limit, which
   may be lower than `kit_max_mb`.
 - **The buttons.** With the channel on, a held job's notification has Approve
   and Deny buttons. Each publishes `approve <job> <nonce>` or `deny <job>
@@ -339,10 +341,10 @@ Publish a command to `cmd_topic` from the ntfy app. The last word is the token:
 
 ### The closed loop, from the phone
 
-DESIGN §26: one mission, from kit to stop, without the laptop's keyboard, once
-the apply prompt is sent. It needs the command channel, `ntfy_topic`, a
-playbook with `[series] kickoff`, and `[files] kit_dir` inside
-`allowed_roots`. `hands doctor` shows the `go` and `kit transport` rows as on
+DESIGN §26 and §27: one mission, from kit to stop, without the laptop's
+keyboard. The loop is phone only: kit, buttons, `go`, buzz. It needs the
+command channel, `ntfy_topic`, a playbook with `[series] kickoff`, and `[files]
+kit_dir` inside `allowed_roots`. `hands doctor` shows the `go` and `kit transport` rows as on
 when all of that holds, and says what is missing when it does not.
 
 1. **The architect emits a kit** and checks it first, in its own sandbox or at
@@ -353,45 +355,51 @@ when all of that holds, and says what is missing when it does not.
    It prints one PASS/FAIL line per check and, only when every check passes,
    `apply prompt:` followed by the prompt, which begins `Apply
    ~/Downloads/<kit>.zip to this repository:` and asks for the reply `VERDICT:
-   kit applied <sha>`. Keep that prompt: it is step 3.
+   kit applied <sha>`, then the commit message and a `KIT.md:` line. The commit
+   message is the first line of `KIT.md` at the kit's root, else `plan: kit
+   <name>` (`<name>` is the zip's file name without `.zip`). That prompt is the
+   one handsd files in step 2, byte for byte, when the kit is written under the
+   same name in `~/Downloads` (the default `kit_dir`).
 2. **Send the kit to `cmd_topic`** from the ntfy app, the `.zip` attached and
    the message `kit <secret>`. handsd fetches it into `kit_dir`, and the phone
    buzzes with `kit received <name> <bytes> <sha256>` (title `hands: kit
    received`). `<name>` is the name written: if the file already existed it
-   is `<stem>-1.zip`, and the apply prompt must name that file.
-3. **The apply is sent from the laptop or by the driver.** Today, nothing on
-   the phone can start the apply: `go` sends only the kickoff line, and there
-   is no phone command that sends a prompt. At the laptop, or through the
-   driver (its rule 5 announces a gated send first):
-
-       hands send --role builder --context clear "<the apply prompt from step 1>"
-
-   It is a `cli` send. The prompt begins with `Apply ~/Downloads/`, a default
-   gate pattern, so the job is held, not run.
-4. **Approve it from the phone.** The held job's notification (`hands: a job is
-   held for a human`) carries Approve and Deny buttons. Approve publishes
-   `approve <job> <nonce>`; the typed `approve <job> <secret>` does the same.
-   If the playbook has no `job.held` rule, the hold also stopped the pipeline
-   (`hands: the pipeline stopped`); the approved job un-pauses it when it
-   starts. The builder commits the kit and replies `VERDICT: kit applied
-   <sha>`; this repository's `PLAYBOOK.toml` and the missions template notify
-   on it (`hands: Kit applied; the next kickoff is the driver's`), and the
-   kickoff can come from the phone instead, in the next step.
-5. **Send `go <secret>`** to `cmd_topic`. handsd reads the committed playbook,
+   is `<stem>-1.zip`, and the apply names that file. handsd files the apply
+   itself: it lists the zip's entries against the builder's cwd (handsd never
+   unzips the kit; the builder does), builds the prompt of step 1 (it begins
+   `Apply ~/Downloads/` with the default `kit_dir`), and files it as a `clear`
+   builder job with `origin: kit` and gate reason `apply <name>`.
+   The job is held, not run. A zip that cannot be read, holds no files, or has
+   an entry that is not a repository path (absolute, `..`, under `.git`, a
+   duplicate, over the size caps, or landing outside the repo through a
+   symlink) files no job: the inbox gets `kit.refused` ("the apply was not
+   filed: …", the kinds of problem, never an entry's name), and the kit stays
+   in `kit_dir`, so `hands kit check` on it names the entry. A builder that is
+   busy does not refuse the apply; it waits, held, for your decision.
+3. **Approve it from the phone.** The held job's notification (`hands: a job is
+   held for a human`, reason `apply <name>`) carries Approve and Deny buttons.
+   Approve publishes `approve <job> <nonce>`; the typed `approve <job> <secret>`
+   does the same. If the playbook has no `job.held` rule, the hold also stopped
+   the pipeline (`hands: the pipeline stopped`); the approved job un-pauses it
+   when it starts (`origin: kit`, like `cli` and `phone`). The builder unzips
+   the kit, commits it and replies `VERDICT: kit applied <sha>`; this
+   repository's `PLAYBOOK.toml` and the missions template notify on it
+   (`hands: Kit applied; the next kickoff is the driver's`), and the kickoff
+   can come from the phone instead, in the next step.
+4. **Send `go <secret>`** to `cmd_topic`. handsd reads the committed playbook,
    sends its `[series] kickoff` line to the builder (`clear`, `origin:
    phone`), and answers `go: builder job <id> <state>` (title `hands: go`). It
    is refused, and only logged, while a builder job is running, queued or
-   held — the apply of step 4, if you have not approved it yet, is such a job,
+   held — the apply of step 3, if you have not approved it yet, is such a job,
    and the refusal names it.
-6. **Wait for the buzz.** The playbook chains the builder's verdict to the
+5. **Wait for the buzz.** The playbook chains the builder's verdict to the
    review and on to a stop. Every stop reaches the phone as `hands: the
    pipeline stopped` with the reason, which is the rule's message. Paste it to
    the architect, and the loop starts again at step 1.
 
 Throughout, the driver is the inspector: it reads `hands inbox`, `hands show`
 and the fetched branch in its clone when you ask it to `check`, and reports.
-It is never required for the loop. The loop does not depend on it for
-anything but sending step 3, which the laptop can do instead.
+It is never required for the loop.
 
 Not proven, and not built:
 
@@ -401,6 +409,11 @@ Not proven, and not built:
   channel reads no other command.
 - No `go` has been sent from a real phone, and no Approve button has been
   pressed on one; the tests feed a fake ntfy stream.
+- No apply has been filed from a kit sent by a real phone, and none has been
+  applied by a real builder: the tests check the held job, its prompt against
+  `hands kit check`'s, and its approval with `tests/fake_claude.py`, which does
+  not unzip anything. handsd decompresses only `KIT.md`, so a corrupt other
+  entry is found by the builder's unzip.
 - `hands who` matches an interactive session to its transcript through
   `~/.claude/sessions/<pid>.json`, whose `sessionId` names the transcript (§27,
   FINDINGS H-020). That file is Claude Code's and undocumented; its shape was

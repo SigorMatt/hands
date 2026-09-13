@@ -28,8 +28,10 @@ kickoff lines, rule names. Get those exactly right and the rest is prose.
 1. You read the branch (`git ls-remote`, shallow clone) and the review.
 2. You emit a kit: a zip with files at their repository paths.
 3. The human places it (`~/Downloads`) or sends it from the phone.
-4. A gated `hands send` applies it: one plan-only commit, pushed. The
-   human approves by phone button or through the driver.
+4. A held builder job applies it: one plan-only commit, pushed. For a kit
+   sent from the phone, handsd files that job itself; for a kit placed by
+   hand, a gated `hands send` does. The human approves by phone button or
+   through the driver.
 5. The kickoff line starts the builder (`go` from the phone, or the
    driver).
 6. The builder works unit by unit, commits and pushes each, ends with a
@@ -57,12 +59,21 @@ them for you. A kit that changes `PLAYBOOK.toml` takes effect at the next
 job start, and the daemon refuses a playbook that differs from the
 committed copy, so the apply commit must include it.
 
-The apply prompt (sent by the human or the driver, gated):
+The apply prompt:
 
     Apply ~/Downloads/<kit>.zip to this repository: unzip -o into the repo
     root (it replaces A and B and adds C), then one plan-only sub-agent
     makes a single commit '<message>' listing those files in its body, and
     pushes. Change nothing else. Reply with one line: VERDICT: kit applied <sha>.
+
+The commit message is the first line of `KIT.md` at the kit's root, else
+`plan: kit <name>`, the zip's file name without `.zip`; put the message you
+want on `KIT.md`'s first line. When the kit is sent from the phone
+(`kit <secret>`), handsd files it as a held builder job (`origin: kit`, gate
+reason `apply <name>`) with exactly this prompt, built by the same code as
+`hands kit check`'s, and never unzips the kit itself; a kit with an entry that
+is not a repository path is refused (`kit.refused`) and files no job. A kit
+placed by hand is applied by a gated send of the same prompt.
 
 ## 4. The two plan forms
 
@@ -241,9 +252,10 @@ taken relative to the directory. It prints one line per check,
 
 When every check passes, it prints three things. First, the §3 apply
 prompt, which names each file the kit replaces (the file exists in the
-repo) and each file it adds. Second, the commit message: `plan: mission <N>
-kit`, or `plan: kit <name>` when the kit has no mission brief. Third,
-`kit check: pass (6 of 6 checks)`. A failing kit gets no apply prompt. The
+repo) and each file it adds. Second, the commit message: the first line of `KIT.md`
+at the kit's root, or `plan: kit <name>` when it has none (the kit's file
+name without `.zip`), and a `KIT.md:` line saying that shape and what this
+kit's `KIT.md` gives. Third, `kit check: pass (6 of 6 checks)`. A failing kit gets no apply prompt. The
 exit status is 0 only when all six checks pass, and 1 otherwise. `--json`
 prints the same report as one object.
 

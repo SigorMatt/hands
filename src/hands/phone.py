@@ -43,6 +43,21 @@ unzipped, executed, or made executable. A written kit is filed as
 `kit received <name> <bytes> <sha256>`. The channel reads its next command when
 the download has ended.
 
+**The apply from the kit** (§27). Once the kit is written, handsd lists the
+zip's entries — never extracting one, reading only a root `KIT.md` — by
+`hands.kit.apply_from_zip`, the path rules and the prompt builder `hands kit
+check` uses, against the builder's cwd. It then files the §3 apply prompt
+through `Api.send` as a `clear` builder job with `origin: kit` and gate reason
+`apply <name>` (the kit's file name without `.zip`), so the job is born `held`
+and its `job.held` notification carries the Approve/Deny buttons. The prompt
+names the file where it was written: `~/…` when `kit_dir` is under `$HOME`, else
+its absolute path. A zip that cannot be read, holds no files, or has an entry
+that is not a repository path under the builder's cwd is refused as
+`kit.refused` ("the apply was not filed: …", naming the kinds of problem, never
+an entry's name) and no job is filed; the kit stays on disk, so `hands kit
+check` can say which entry. A builder that is busy does not refuse the apply:
+it is held, and the human decides when to approve it. The builder unzips it.
+
 **The token.** A typed command carries `cmd_secret` as its last word. A held
 job's notification carries Approve/Deny buttons that publish `approve <job>
 <nonce>` / `deny <job> <nonce>` to `cmd_topic`, where the nonce is 32 random
@@ -92,6 +107,7 @@ from urllib.parse import quote
 
 from hands import notify as notify_mod
 from hands.api import ApiError
+from hands.kit import KitError, apply_from_zip
 from hands.playbook import PlaybookError, load_playbook, playbook_path
 from hands.spool import PathEscape, SpoolError, resolve_under_roots
 
@@ -404,6 +420,31 @@ class PhoneChannel:
         text = f"kit received {written} {total} {digest}"
         log.info("phone: %s", text)
         await self.daemon.notifier.answer(KIT_TITLE, text)
+        return await self._file_apply(directory / written)
+
+    async def _file_apply(self, path: Path) -> None:
+        """§27: the kit's apply, filed as a held builder job, or `kit.refused`.
+
+        The zip is listed in a thread, never extracted. The job goes through
+        `Api.send` with an explicit gate, so it is born `held` and takes §8's
+        path: `job.held`, the playbook's `job.held` event, the buttons.
+        """
+        cwd = self.daemon.config.role("builder").cwd
+        try:
+            plan = await asyncio.to_thread(apply_from_zip, path, cwd, _home_shown(path))
+        except KitError as exc:
+            return self._refuse_kit(f"the apply was not filed: {exc}")
+        try:
+            job = await self.daemon.api.send(
+                role="builder",
+                context="clear",
+                prompt=plan.prompt,
+                gate=f"apply {plan.name}",
+                origin="kit",
+            )
+        except ApiError as exc:
+            return self._refuse_kit(f"the apply was not filed: the send was refused ({exc})")
+        log.info("phone: kit apply filed as builder job %s (%s)", job["id"], job["state"])
         return None
 
     def _refuse_kit(self, why: str) -> None:
@@ -459,6 +500,17 @@ def status_summary(daemon: Daemon) -> str:
     lines.append(f"pipeline: {'paused' if pipeline.get('paused') else 'running'}")
     lines.append(f"inbox: {status['inbox']['unacked']} unacked")
     return "\n".join(lines)
+
+
+def _home_shown(path: Path) -> str:
+    """`path` as the apply prompt names it: `~/…` under `$HOME`, else absolute."""
+    home = Path.home()
+    for base in dict.fromkeys((home, home.resolve())):
+        try:
+            return f"~/{path.relative_to(base).as_posix()}"
+        except ValueError:
+            continue
+    return str(path)
 
 
 class _KitRefused(Exception):

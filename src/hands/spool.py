@@ -90,8 +90,9 @@ INITIAL_STATES = frozenset({"held", "queued"})
 CONTEXTS = frozenset({"clear", "keep"})  # §2
 #: §6: the three clients that can ask for work, plus `limit` — the origin of a
 #: job hands files for itself when a rate limit resets (H-004).
-#: §26 adds `phone`: the job a `go <secret>` on `cmd_topic` files (H-018 gap 1).
-ORIGINS = frozenset({"driver", "playbook", "cli", "limit", "phone"})  # §6, §26 (H-018)
+#: §26 adds `phone`: the job a `go <secret>` on `cmd_topic` files (H-018 gap 1);
+#: §27 adds `kit`: the held apply handsd files when a kit arrives from the phone.
+ORIGINS = frozenset({"driver", "playbook", "cli", "limit", "phone", "kit"})  # §6 (v3.10)
 
 # §11 event kinds. Closed on purpose: a unit that needs a new kind adds it here,
 # where `hands wait --for <kind>` and the playbook can see it.
