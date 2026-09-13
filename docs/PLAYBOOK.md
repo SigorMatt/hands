@@ -27,7 +27,7 @@ error.
     [limits]
     auto_runs = [2, 3]           # run numbers hands may start on its own
     max_resumes = 3              # consecutive auto-resumes before a stop
-    quiet_hours = "23:00-07:00"  # notifications delayed; actions never are
+    # quiet_hours = "23:00-07:00"  # accepted, never set here: notifications are never delayed (§11)
 
     [[rule]]
     on = "<event>"               # required
@@ -79,8 +79,14 @@ is in force. Work the job left running did not finish with it, so the rule is
     then = "stop"
 
 An event with no matching rule stops anyway; each rule says it on purpose.
-DESIGN §24 puts both in the example playbook, but the copy of §10's example at
-the end of this page is §10's own text byte for byte, which carries neither.
+DESIGN §24 puts both in the example playbook, and this repository's own
+`PLAYBOOK.toml` carries both. The copy of §10's example at the end of this page
+is §10's own text byte for byte, which carries neither yet; finding H-016 asks
+the architect to add them there.
+
+`quiet_hours` in `[limits]` is still read: a window like `"23:00-07:00"` delays
+notifications, never actions. No playbook of this project sets it, so
+notifications are never delayed (§11).
 
 ## Actions (`then`)
 

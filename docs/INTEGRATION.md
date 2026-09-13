@@ -51,9 +51,12 @@ cwd` is optional.
     [notify]                             # the two ntfy keys are also read from
     ntfy_topic = "hands-<something-random>"  # [server], where older configs have
     ntfy_url = "https://ntfy.sh"         # them (default); never in both places
-    # cmd_topic = "hands-cmd-<another-random>"  # optional: the phone channel,
-    # cmd_secret = "<one long random word>"     # see "Optional: approve from the phone"
-    # who_topic, who_cmd_topic: parsed and not used yet
+    # cmd_topic = "hands-cmd-<another-random>"  # optional: the command channel,
+    # cmd_secret = "<one long random word>"     # required with cmd_topic
+    # who_topic = "hands-who-<random>"          # optional: the who view, and
+    # who_cmd_topic = "hands-who-cmd-<random>"  # its commands; see "Optional:
+    #                                           # notifications, the command
+    #                                           # channel and the who view"
 
     [roles.builder]
     cwd = "~/git/<project>"              # required; the only required key
@@ -145,7 +148,9 @@ Notes that are easy to get wrong:
 
 It checks, all for free: the config, the `claude` binary and its `--version`,
 each role's `cwd` (and whether it is a git repository), the allowed roots, the
-ops script's flags, the playbook, and whether handsd is answering. A daemon
+ops script's flags, which per-job isolation is in force, the playbook, whether
+notifications, the command channel and the who view are on, and whether handsd
+is answering. A daemon
 that is not running is a **warning**, not a failure — this step comes before
 you have to have started one. Exit code 1 means a check failed.
 
@@ -188,7 +193,34 @@ the procedure is in doctor's own output. It is the check that matters now that
 the driver arms no wait of its own (§11, §22): ntfy is your doorbell, and your
 message `check` is the driver's.
 
-### Optional: approve from the phone (DESIGN §24)
+## Optional: notifications, the command channel and the who view
+
+Three uses of ntfy, each on its own random topic in `[notify]` (DESIGN §11,
+§24). ntfy is never shipped with hands, only spoken to: hands publishes to
+`ntfy_url` (ntfy.sh by default, or your own server), and handsd and `handswho`
+read their command topics by outbound long polls, so nothing listens on this
+machine. All three are off unless configured, and hands runs without any of
+them:
+
+| what | on when | who reads the topic |
+|---|---|---|
+| notifications | `ntfy_topic` is set | your phone: `stop`, a held job, an exhausted `max_resumes`, daemon start/crash (§11) |
+| the command channel | `cmd_topic` is set (and `cmd_secret`, which it requires) | handsd |
+| the who view | `who_topic` is set | your phone; `handswho` publishes it |
+
+`hands doctor` reports each of the three as on or off, never as a failure: its
+`notifications`, `phone` and `who` rows. It prints no topic and no secret. The
+`config` row also warns when `ntfy_topic` is missing, since you then learn you
+are needed only by looking; and a config that does not load (a `cmd_topic`
+without a `cmd_secret`, below) is the failed `config` row, as always.
+
+### Notifications
+
+Set `ntfy_topic` and subscribe your phone to it. `hands notify --test` proves
+the transport, and the notification check doctor prints proves an event you did
+not ask for arrives (step 4 above).
+
+### The command channel: approve from the phone
 
 With `[notify] cmd_topic` set, handsd subscribes to that topic — an outbound
 long poll to ntfy, nothing listening on this machine — and takes five commands
@@ -205,11 +237,10 @@ beside the events topic, which must be a different topic:
     cmd_topic = "hands-cmd-<the first line>"
     cmd_secret = "<the second line>"
 
-Restart handsd (`systemctl --user restart handsd`). `hands doctor` has a
-`phone` row that says whether the command channel is on or off; it never prints
-the secret. A `cmd_topic` without a `cmd_secret` does not load: doctor fails its
-`config` row, and handsd refuses to start. So does a secret with a blank inside
-it, and a `cmd_topic` equal to `ntfy_topic`.
+Restart handsd (`systemctl --user restart handsd`). A `cmd_topic` without a
+`cmd_secret` does not load: doctor fails its `config` row, and handsd refuses
+to start. So does a secret with a blank inside it, and a `cmd_topic` equal to
+`ntfy_topic`.
 
 Publish a command to `cmd_topic` from the ntfy app. The last word is the token:
 
@@ -240,14 +271,14 @@ Publish a command to `cmd_topic` from the ntfy app. The last word is the token:
   it subscribed, judged by the time ntfy stamps on each message against this
   machine's clock. After a dropped connection it resumes after the last
   message it read, without acting on a message twice.
-- **The secret never goes into a notification**, but a typed command carries
-  it on `cmd_topic`. An ntfy topic is only as private as its name (or the
-  access control of a self-hosted server): anyone who can read `cmd_topic` can
-  read your secret. Anyone who can read `ntfy_topic` sees a held job's buttons,
+- **The long-term secret never goes into a notification**, but a typed
+  command carries it on `cmd_topic`. An ntfy topic is only as private as its
+  name (or the access control of a self-hosted server): anyone who can read
+  `cmd_topic` can read your secret. Anyone who can read `ntfy_topic` sees a held job's buttons,
   and they can use them while that job is held. Keep both names random and to
   yourself.
 
-### Optional: the who view (DESIGN §24)
+### The who view
 
     hands who                             # the picture, printed once
 
@@ -266,10 +297,11 @@ To have it pushed to your phone, add two more random topics:
     who_topic = "hands-who-<something-random>"
     who_cmd_topic = "hands-who-cmd-<something-random>"   # optional
 
-and run `handswho --project <project>` (the same as `hands who --daemon`), or
-install `systemd/handswho.service` the way its header says; it is off unless you
-enable it. It pushes the picture to `who_topic` when what is running, held or
-waiting changes (a session's state must hold for two scans first; your own
+and run `handswho --project <project>` (the same as `hands who --daemon`).
+`systemd/handswho.service` is an optional user unit, off unless you enable it;
+install it the way its header says. `handswho` pushes the picture to
+`who_topic` when what is running, held or waiting changes (a session's state
+must hold for two scans first; your own
 sessions never trigger a push), and whenever `status`, `who`, `check` or `?` is
 published to `who_cmd_topic`. Those words take no secret, because they execute
 nothing: the only answer is the same picture. The picture does carry the first
@@ -519,4 +551,5 @@ of this terminal. The driver does not: it arms nothing, and your message
   Run them once at an install and record the answer.
 - **The phone channel has never read a real ntfy stream.** Its tests feed a
   fake `/json` stream and record the buttons' `Actions` header; no command has
-  been sent from a real phone, and no button has been pressed on one.
+  been sent from a real phone, and no button has been pressed on one. Nor has
+  `handswho` pushed a picture to, or read a command from, a real topic.

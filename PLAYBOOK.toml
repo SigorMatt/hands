@@ -91,3 +91,15 @@ message = "A job is held for your decision"
 on = "job.denied"
 then = "notify"
 message = "A held job was denied"
+
+# The mission 8 detectors (DESIGN §24): work a role job was waiting on, or had
+# started, did not finish with it. Both call the human.
+[[rule]]
+on = "monitor.task_killed"
+then = "stop"
+message = "A task inside a role job was killed"
+
+[[rule]]
+on = "monitor.orphan_processes"
+then = "stop"
+message = "A role job left processes running"

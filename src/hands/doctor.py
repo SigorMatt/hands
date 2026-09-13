@@ -119,7 +119,8 @@ def run_checks(
     found += [_claude_check(config)]
     found += [_role_check(role) for role in config.roles.values()]
     found += [_roots_check(config), _ops_check(config), _isolation_check(config)]
-    found += [_playbook_check(config), _phone_check(config)]
+    found += [_playbook_check(config), _notifications_check(config), _phone_check(config)]
+    found += [_who_check(config)]
     found += [_daemon_check(config, socket_path, daemon)]
     found += [_live_check(config, role, live=live) for role in config.roles.values()]
     return found
@@ -155,6 +156,57 @@ def _config_check(config: Config) -> Check:
             "learn you are needed by looking",
         )
     return Check("config", OK, f"{detail}; ntfy topic set")
+
+
+def _notifications_check(config: Config) -> Check:
+    """§11, §24: notifications on or off — `ok` either way, never a failure.
+
+    Off is already a warning on the `config` row, which says what is lost; this
+    row is the on/off answer §24 asks doctor for. The topic is not printed.
+    """
+    if not config.notify.ntfy_topic:
+        return Check(
+            "notifications",
+            OK,
+            "notifications off: no ntfy_topic ([notify], or [server]), so handsd "
+            "notifies nobody (§11, §24)",
+        )
+    return Check(
+        "notifications",
+        OK,
+        "notifications on: handsd publishes stop, job.held, an exhausted max_resumes "
+        "and daemon start/crash to ntfy_topic (§11); `hands notify --test` proves "
+        "the transport",
+    )
+
+
+def _who_check(config: Config) -> Check:
+    """§24: the who view on or off — `ok` either way, never a failure.
+
+    On means `who_topic` is set, so `handswho` has somewhere to push. Doctor does
+    not see whether `handswho` is running; it says how it is started. Neither
+    topic is printed.
+    """
+    notify = config.notify
+    if not notify.who_topic:
+        return Check(
+            "who",
+            OK,
+            "who view off: no [notify] who_topic, so `handswho` has nowhere to push; "
+            "`hands who` still prints the picture at the terminal (§24)",
+        )
+    asks = (
+        "`status`, `who`, `check` or `?` on who_cmd_topic asks for it"
+        if notify.who_cmd_topic
+        else "no who_cmd_topic, so it pushes on change only"
+    )
+    return Check(
+        "who",
+        OK,
+        f"who view on: `handswho` pushes the picture to who_topic when it changes; {asks}"
+        f"\nnot checked here: whether handswho is running — `handswho --project "
+        f"{config.project}`, or systemd/handswho.service, off unless enabled (§24)",
+    )
 
 
 def _phone_check(config: Config) -> Check:

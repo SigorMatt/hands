@@ -803,3 +803,46 @@ ignored, never answered; `hands doctor` reports the channel on/off and
 refuses a `cmd_topic` without a `cmd_secret`.
 
 Status: decided (DESIGN v3.7 §24); fixing (mission 8 U4)
+
+## H-016 — §10's example playbook lacks the two stop rules §24 says it has
+
+Severity: low · Component: DESIGN §10 (example), §24 ("Mission 8, the
+detectors") against `tests/fixtures/playbook_example.toml` and
+`docs/PLAYBOOK.md`
+Filed by: mission 8, U7, from `meta/BUILDER-8-PROMPT.md` U7 and
+`meta/BACKLOG.md` item 4.
+
+Symptom. DESIGN v3.7 §24 says "The example playbook maps
+`monitor.task_killed` and `monitor.orphan_processes` to `stop`", and U7's
+brief says the §10 example gains both. §10's "Example (spanweave audit-fix
+series)" carries neither: its last rule is `monitor.tripwire` → `stop`. The
+example's two copies, `tests/fixtures/playbook_example.toml` and the verbatim
+block at the end of `docs/PLAYBOOK.md`, are pinned byte for byte to §10 by
+`tests/test_playbook.py::test_the_fixture_is_section_10s_example_verbatim` and
+`tests/test_docs.py::test_the_playbook_doc_carries_the_section_10_example_verbatim`,
+and builders do not edit DESIGN.md, so a builder cannot add the rules to the
+example without breaking the pin or the rule.
+
+What U7 did instead. The repository's own `PLAYBOOK.toml` has both rules
+(`then = "stop"`, each with a message), and a test loads it through the real
+loader and asserts both resolve to `stop`. `docs/PLAYBOOK.md` shows both rules
+in its prose and says the verbatim copy of §10 does not carry them yet, citing
+this finding. The two copies of §10's example are unchanged.
+
+Direction, for the architect. Add to §10's example, after the
+`monitor.tripwire` rule:
+
+    [[rule]]
+    on = "monitor.task_killed"
+    then = "stop"
+
+    [[rule]]
+    on = "monitor.orphan_processes"
+    then = "stop"
+
+The next builder then copies the block into the fixture and the doc (the pins
+will fail until it does), extends
+`test_the_example_parses_into_the_rules_of_section_10`'s rule list, and drops
+the "carries neither yet" sentence from `docs/PLAYBOOK.md`.
+
+Status: open (for the architect)

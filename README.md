@@ -26,7 +26,7 @@ phone.
         ▼
     handsd (user daemon, unix socket ~/.hands/handsd.sock)
         ├─ runner    one `claude -p` per job, one job per role
-        ├─ monitor   liveness, stalls, commit tripwires
+        ├─ monitor   liveness, stalls, commit tripwires, killed tasks, leftovers
         ├─ playbook  event → action, entirely pre-planned
         ├─ spool     job records, role state, inbox — the only state
         └─ notify    ntfy, for the four things that need you
@@ -98,6 +98,28 @@ Three commands are worth knowing before the rest:
 A gated send (decisions files, playbooks, PR opening, cancels, and anything
 matching `gates.patterns`) is *held* until a human decides it. Nothing else
 releases it.
+
+Besides stalls and tripwires, the monitor files `monitor.task_killed` when a
+task inside a role job is killed, and `monitor.orphan_processes` when a job's
+processes outlive its `claude -p` (they are listed, then killed). This
+repository's `PLAYBOOK.toml` stops on both; `docs/PLAYBOOK.md` says what each
+means.
+
+## Optional: the phone and the who view
+
+Off unless configured in `[notify]`; `docs/INTEGRATION.md` has the setup.
+
+- **Notifications**: with `ntfy_topic` set, handsd publishes a `stop`, a held
+  job, an exhausted `max_resumes` and daemon start/crash to ntfy.
+- **The command channel**: with `cmd_topic` and `cmd_secret` set, handsd takes
+  `approve`, `deny`, `pause`, `resume` and `status` from your phone, and a held
+  job's notification carries Approve/Deny buttons. A decision taken that way is
+  recorded `decided_by: phone`.
+- **The who view**: `hands who` prints one screen of this daemon's jobs and
+  every other `claude` session on the machine; `handswho` pushes it to
+  `who_topic` when it changes.
+
+`hands doctor` reports each as on or off.
 
 ## Development
 

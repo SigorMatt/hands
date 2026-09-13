@@ -117,6 +117,55 @@ def test_the_playbook_doc_says_a_review_reads_from_the_last_review_commit() -> N
         assert must in prose, f"docs/PLAYBOOK.md's prose does not say {must!r} (§23)"
 
 
+def test_the_playbook_doc_maps_the_mission_8_detectors_to_stop_and_says_the_group_is_weaker(
+) -> None:
+    """§24: both detectors are `stop` rules, and the process-group fallback is
+    weaker than the scope. The playbook file reference shows `quiet_hours` only as
+    a key this project's playbooks never set (§11, §24 conventions)."""
+    doc = (ROOT / "docs" / "PLAYBOOK.md").read_text(encoding="utf-8")
+    prose = flattened(doc.split("## The example (DESIGN §10, verbatim)")[0])
+    for event in ("monitor.task_killed", "monitor.orphan_processes"):
+        assert f'on = "{event}" then = "stop"' in prose, f"no stop rule shown for {event}"
+    assert "which is weaker" in prose
+    assert "`setsid` has left the group and is not listed or killed" in prose
+    reference = doc.split("## The file")[1].split("## Events")[0]
+    assert not [
+        line for line in reference.splitlines()
+        if "quiet_hours" in line and not line.strip().startswith("#")
+    ], "the file reference shows quiet_hours set (§11: no playbook of this project sets it)"
+
+
+#: The key statements of INTEGRATION.md's optional section (§11, §24), each
+#: true of the code today; pinned so the section cannot drift silently.
+OPTIONAL_SECTION = "## Optional: notifications, the command channel and the who view"
+OPTIONAL_STATEMENTS = (
+    "ntfy is never shipped with hands, only spoken to",
+    "All three are off unless configured",
+    "**The long-term secret never goes into a notification**",
+    "is logged in handsd's journal (`journalctl --user -u handsd`) and ignored",
+    "`systemd/handswho.service` is an optional user unit, off unless you enable it",
+    "`hands doctor` reports each of the three as on or off, never as a failure",
+)
+
+
+def test_the_integration_doc_has_one_optional_section_for_notify_channel_and_who() -> None:
+    text = (ROOT / "docs" / "INTEGRATION.md").read_text(encoding="utf-8")
+    assert text.count(OPTIONAL_SECTION) == 1, f"docs/INTEGRATION.md has no {OPTIONAL_SECTION!r}"
+    section = flattened(text.split(OPTIONAL_SECTION, 1)[1].split("\n## ", 1)[0])
+    for said in OPTIONAL_STATEMENTS:
+        assert flattened(said) in section, f"the optional section does not say {said!r}"
+    # U4's and U6's separate headings were merged into it, not left beside it.
+    for old in ("Optional: approve from the phone", "### Optional: the who view"):
+        assert old not in text, f"docs/INTEGRATION.md still has {old!r}"
+
+
+def test_the_readme_names_who_the_phone_channel_and_the_new_monitor_events() -> None:
+    readme = flattened((ROOT / "README.md").read_text(encoding="utf-8"))
+    for said in ("`hands who`", "`handswho`", "cmd_topic", "monitor.task_killed",
+                 "monitor.orphan_processes"):
+        assert said in readme, f"README.md does not mention {said}"
+
+
 def test_the_playbook_doc_lists_every_event_and_action() -> None:
     doc = (ROOT / "docs" / "PLAYBOOK.md").read_text(encoding="utf-8")
     for name in EVENTS + ACTIONS:

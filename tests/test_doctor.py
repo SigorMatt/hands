@@ -713,6 +713,84 @@ def test_a_cmd_topic_without_a_cmd_secret_fails_doctor(
     assert "cmd_secret" in strip_paths(found["config"]["detail"])
 
 
+# ------------------------- notifications, command channel, who: on/off (§24, U7)
+
+WHO_TOPIC = "hands-who-doctor-Qwv8"
+WHO_CMD_TOPIC = "hands-who-cmd-doctor-Zr3k"
+
+
+def test_without_notify_extras_the_channel_and_who_are_off_and_doctor_exits_0(
+    tmp_home: Path, tmp_path: Path, fake_mode: None
+) -> None:
+    """§24: `hands doctor` reports notifications, the command channel and who as
+    on/off, never as errors. The config has an ntfy_topic and no other [notify] key."""
+    write_config(tmp_home, tmp_path)
+    code, out, err = run()
+    assert code == 0, f"{out}\n{err}"
+    assert "notifications on" in strip_paths(text_row(out, "notifications"))
+    assert "command channel off" in strip_paths(text_row(out, "phone"))
+    assert "who view off" in strip_paths(text_row(out, "who"))
+    code, found = checks()
+    assert code == 0
+    for name in ("notifications", "phone", "who"):
+        assert found[name]["status"] == "ok", (name, found[name])
+    assert "notifications on" in strip_paths(found["notifications"]["detail"])
+    assert "who view off" in strip_paths(found["who"]["detail"])
+
+
+def test_notifications_off_is_reported_off_and_is_not_a_failure(
+    tmp_home: Path, tmp_path: Path, fake_mode: None
+) -> None:
+    path = write_config(tmp_home, tmp_path)
+    path.write_text(path.read_text().replace('ntfy_topic = "hands-test"\n', ""))
+    code, out, err = run()
+    assert code == 0, f"{out}\n{err}"
+    assert "notifications off" in strip_paths(text_row(out, "notifications"))
+    code, found = checks()
+    assert code == 0
+    assert found["notifications"]["status"] != FAIL
+    assert "notifications off" in strip_paths(found["notifications"]["detail"])
+    assert "who view off" in strip_paths(found["who"]["detail"])
+
+
+def test_who_is_reported_on_with_its_command_topic_and_no_topic_is_printed(
+    tmp_home: Path, tmp_path: Path, fake_mode: None
+) -> None:
+    path = write_config(tmp_home, tmp_path)
+    path.write_text(
+        path.read_text()
+        + f'\n[notify]\ncmd_topic = "hands-cmd-doctor"\ncmd_secret = "{PHONE_SECRET}"\n'
+        + f'who_topic = "{WHO_TOPIC}"\nwho_cmd_topic = "{WHO_CMD_TOPIC}"\n'
+    )
+    code, out, err = run()
+    assert code == 0, f"{out}\n{err}"
+    assert "who view on" in strip_paths(text_row(out, "who"))
+    assert "who_cmd_topic" in strip_paths(text_row(out, "who"))
+    assert "command channel on" in strip_paths(text_row(out, "phone"))
+    assert "notifications on" in strip_paths(text_row(out, "notifications"))
+    code, out, err = run("--json")
+    assert code == 0
+    found = {check["name"]: check for check in json.loads(out)["checks"]}
+    assert found["who"]["status"] == "ok"
+    assert "who view on" in strip_paths(found["who"]["detail"])
+    assert "who_cmd_topic" in strip_paths(found["who"]["detail"])
+    for text in (out, err, *run()[1:]):
+        for secret in (PHONE_SECRET, WHO_TOPIC, WHO_CMD_TOPIC, "hands-cmd-doctor"):
+            assert secret not in strip_paths(text)
+
+
+def test_who_without_a_command_topic_says_it_pushes_on_change_only(
+    tmp_home: Path, tmp_path: Path, fake_mode: None
+) -> None:
+    path = write_config(tmp_home, tmp_path)
+    path.write_text(path.read_text() + f'\n[notify]\nwho_topic = "{WHO_TOPIC}"\n')
+    code, found = checks()
+    assert code == 0
+    assert found["who"]["status"] == "ok"
+    assert "who view on" in strip_paths(found["who"]["detail"])
+    assert "no who_cmd_topic" in strip_paths(found["who"]["detail"])
+
+
 def test_the_probe_sends_whatever_flags_the_monitor_sends(
     tmp_home: Path, tmp_path: Path, fake_mode: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:

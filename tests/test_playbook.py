@@ -18,6 +18,7 @@ import asyncio
 import hashlib
 import json
 import subprocess
+import tomllib
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
@@ -225,6 +226,25 @@ def test_the_repositorys_own_playbook_loads_and_its_review_reads_from_the_last_r
     assert "head_at_start" not in strip_paths(prompt)
     assert "every commit after the last review: commit" in strip_paths(prompt)
     assert "meta/REVIEW-PROTOCOL.md" in strip_paths(prompt)
+
+
+def test_the_repositorys_own_playbook_stops_on_the_mission_8_detectors_and_sets_no_quiet_hours(
+) -> None:
+    """§24: `monitor.task_killed` and `monitor.orphan_processes` map to `stop`, and
+    playbooks of this project set no `quiet_hours` (§11, §24 conventions). Read
+    through the real loader, and the raw TOML for the key's absence."""
+    path = Path(__file__).parents[1] / "PLAYBOOK.toml"
+    book = load_playbook(path)
+    assert book is not None, "the repository's PLAYBOOK.toml is missing"
+    for event in ("monitor.task_killed", "monitor.orphan_processes"):
+        rules = [rule for rule in book.rules if rule.on == event]
+        assert rules, f"PLAYBOOK.toml has no rule for {event}"
+        assert [rule.then for rule in rules] == ["stop"], (event, rules)
+        assert rules[0].verdict is None, "a monitor event has no verdict to match"
+    assert book.quiet_hours is None
+    text = path.read_text(encoding="utf-8")
+    assert tomllib.loads(text).get("limits"), "PLAYBOOK.toml has no [limits] to check"
+    assert "quiet_hours" not in strip_paths(text), "the file names quiet_hours at all"
 
 
 def test_the_events_and_actions_are_exactly_section_10s() -> None:
