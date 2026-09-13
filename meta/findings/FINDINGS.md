@@ -926,3 +926,62 @@ a test reads §6's two lists from DESIGN.md and asserts they equal
 `hands.runner.FAILURE_REASONS` and the new `hands.gates.DECIDED_BY` (the available
 §8 deciders; `button` stays an unavailable row that `check_decider` refuses), and
 a test asserts docs/INTEGRATION.md names every value.
+
+**Correction (2026-09-13, mission 10 U0, REVIEW-9 should-fix 4):** the Symptom
+above misquotes DESIGN v3.7. v3.7 §6 (`git show 0ead876^:DESIGN.md`, line 235)
+gave `gate` as `{reason, decided_by: cli|driver|button, decided_at}`, with no
+`quote?`; `quote?` first appears in v3.8. The rest of the entry stands.
+
+## H-018 — the closed phone loop (§26): decisions recorded, and two gaps §26 leaves
+
+Severity: medium · Component: DESIGN §26 against §6 (job record `origin`), §10
+(stop → resume cycle) and `src/hands/runner.py` (`_failure_reason`)
+Filed by: mission 10, U0, from `meta/BUILDER-10-PROMPT.md` and DESIGN v3.9 §26.
+
+Decisions (DESIGN v3.9 §26, recorded here as the ledger's copy):
+- `[series] kickoff` names the series' fixed kickoff line; unknown keys in
+  `[series]` are refused. `go <secret>` on `cmd_topic` sends exactly that line
+  as a `clear` send to the builder with `origin: phone`; it is the only way to
+  start work from the phone, and it is refused while a builder job is running
+  or queued, while no playbook is loaded, or when `[series] kickoff` is absent.
+- Kit transport: `kit <secret>` with an ntfy attachment is fetched into
+  `[files] kit_dir` (default `~/Downloads`, an allowed root) under the
+  attachment's own basename, `.zip` only, capped by `[files] kit_max_mb`
+  (default 20) before download, written atomically, never overwritten (numeric
+  suffix), never unzipped or executed; `kit.received` in the inbox and a
+  notification `kit received <name> <bytes> <sha256>`. The apply stays a gated
+  job.
+- `hands who` matches an interactive session to its transcript by the pid the
+  transcript records, never by directory.
+- `hands kit check <zip|dir> [--repo path]` runs without a daemon and checks
+  what §26 lists.
+- REVIEW-9: the SF3 kill check must fail on the reused-group condition; the
+  playbook HEAD comparison runs git with a scrubbed environment and compares
+  normalized bytes; INTEGRATION's `done` statement follows §6; H-017's quote is
+  corrected (appended above).
+
+Gap 1 — `origin: phone` is outside §6's vocabulary. §6 lists `origin
+(driver|playbook|cli|limit)`; `src/hands/spool.py:93` `ORIGINS` enforces exactly
+that and `src/hands/api.py:273` refuses anything else. Direction (builder's,
+simplest): §26 is the later text, so U2 adds `phone` to `ORIGINS`. §6's list
+should gain `phone` in the next DESIGN revision.
+
+Gap 2 — a `go` after a stop would not chain. §10: a `cli`-origin send un-pauses
+the pipeline when it starts, and a stop is never cleared by a job the playbook
+or the limit manager started (`src/hands/playbook.py:112` `UNPAUSE_ORIGINS =
+{"cli"}`). After a stop the pipeline is paused, so a `phone` job would run the
+builder while its `builder.done` fires no rule, and the review would never be
+sent; §26's loop (send kit, approve, `go`, wait for the buzz) would not close.
+§26 is silent. Direction (builder's, simplest): the human typed the secret, so
+`phone` joins `UNPAUSE_ORIGINS` with the same "only when the job starts" rule;
+`go` is accepted while the pipeline is paused (a paused playbook is still
+loaded). U2 carries both, with tests.
+
+Gap 3 — REVIEW-9 should-fix 2 has a code half. §6 says a `result` of subtype
+`error` is `failed`/`error_result`; `_failure_reason` fails only on `is_error`,
+so `error_max_turns` with `is_error: false`, `num_turns` and exit 0 is `done`.
+U0 makes `docs/INTEGRATION.md` state §6's rule; U1 makes the runner follow it
+(an `error`/`error_*` subtype is `error_result` whatever `is_error` says), with a
+test that is red before.
+
+Status: fixing (mission 10 U1 gap 3, U2 gaps 1 and 2)

@@ -1,41 +1,37 @@
-# plan — mission 9 (close review 8)
+# plan — mission 10 (the closed loop and the architect's tools)
 
-Source: meta/BUILDER-9-PROMPT.md, DESIGN v3.8 §25 (with §6, §10, §11). Units
-run in order; each ends with a commit and a push. `[x]` = done and pushed,
-`[b]` = blocked (two failures).
+Source: meta/BUILDER-10-PROMPT.md, DESIGN v3.9 §26 (with §4, §8, §10, §11,
+§13), meta/reviews/REVIEW-9.md. Units run in order; each ends with a commit and
+a push. `[x]` = done and pushed, `[b]` = blocked (two failures).
 
-Base of the mission: 0ead876 (`plan: mission 9 kit (DESIGN v3.8)`) — RED:
-1 failed, 1423 passed. `tests/test_playbook.py::test_the_fixture_is_section_10s_example_verbatim`
-fails because v3.8 added `monitor.task_killed` and `monitor.orphan_processes`
-→ `stop` to §10's example (H-016 closed by §25) and the fixture copy predates
-it. No unit in the brief copies the block; U0 cannot commit on red, so U0
-carries H-016's own direction (copy into the fixture and the doc, extend the
-rule list, drop the "carries neither yet" sentence). Recorded as a deviation.
+Base of the mission: 61e1486 (`plan: mission 10 kit (DESIGN v3.9, handbook,
+templates)`).
 
-The `meta/prototypes/` ruff exclude is already absent from `pyproject.toml`
-at the base (removed by mission 8 U6, a93e3a7); `grep -n prototypes
-pyproject.toml` returns nothing. U0 records this; there is nothing to remove.
+- [ ] U0 Plan and corrections (`plan:`) — this file, meta/CHECKPOINT.md;
+      REVIEW-9 SF2 (docs/INTEGRATION.md `done` statement follows §6), SF4
+      (H-017 dated correction, appended); H-018 filed (§26 decisions; gaps:
+      `origin: phone` outside §6, `go` after a stop would not chain, SF2's
+      code half)
+- [ ] U1 REVIEW-9 SF1 and SF3 (+ SF2 code half, H-018 gap 3)
+- [ ] U2 `[series] kickoff` and `go` (§10, §11, §26; H-018 gaps 1, 2)
+- [ ] U3 Kit transport (§26, §13)
+- [ ] U4 Who by pid (§26)
+- [ ] U5 `hands kit check`; handbook and templates against the code (§4, §26)
+- [ ] U6 The closed loop in the docs; doctor rows (§26)
+- [ ] U7 Final report — meta/FINAL-REPORT-10.md (drafted under meta/drafts/)
 
-- [x] U0 Plan and corrections (`plan:`) 1c17d84 — this file, meta/CHECKPOINT.md;
-      H-014 and H-016 get the v3.8 resolutions (§25); H-017 filed for
-      review 8 should-fix 2 (`fixed by DESIGN v3.8`); §10 example copied
-      into tests/fixtures/playbook_example.toml and docs/PLAYBOOK.md (base red)
-- [x] U1 Termination precedence and vocabularies (§6, §25; H-014) 4da83f8
-- [x] U2 Review 8 should-fix 1, 3, 4 7992c4d
-- [x] U3 Playbook must match the committed file (§10) fd6ecbe
-- [x] U4 `quiet_hours` retired (§11, §25) edb8e84 — gate grep also hits §10's
-      verbatim example comment (fixture, docs/PLAYBOOK.md:233), the doc sentence
-      stating the refusal, and docs/ARCHITECT-INSTRUCTION.md's convention; none
-      is the feature
-- [x] U5 Phone channel after restart; detector payload (§25) f96c88b
-- [x] U6 Final report (the commit that carries this line) — meta/FINAL-REPORT-9.md (drafted under meta/drafts/)
+Deviation. REVIEW-9 SF2 said "fail on the subtype, or make the doc say what the
+code does"; §26 says the doc matches §6, and §6 fails an `error` result. A
+doc that follows §6 over code that does not would overclaim, so U1 also
+carries the runner change (H-018 gap 3). Between U0 and U1 the doc is ahead of
+the code by that one case.
 
-Review items by unit. REVIEW-8 should-fix 1, 3, 4 → U2. Should-fix 2 →
-DESIGN v3.8 §6 (H-017) and U1. FINAL-REPORT-8 §5 item 1 → U1; item 2
-(H-016) → U0; item 3 → U4; item 4 → U5 (`cause: unknown`; `who_cmd_topic`
-stays secret-less by §25, no code); item 5 → U5.
+Review items by unit. REVIEW-9 SF1, SF3 → U1; SF2 → U0 (doc) + U1 (code);
+SF4 → U0.
 
-Dependencies. U4 touches the playbook loader and notify; after U3 (loader).
-U5 touches the phone channel; after U2 (phone warning). U1 is independent.
+Dependencies. U2 and U3 both touch the phone channel (`cmd_topic`) and U3
+adds `[files]` keys; U3 after U2. U5 reads `[series] kickoff` (after U2). U6
+reports `go` and kit transport in doctor (after U2, U3). U1 and U4 are
+independent.
 
-Findings. H-017 filed by U0. H-001 and H-009 stay open.
+Findings. H-018 filed by U0. H-001 and H-009 stay open.

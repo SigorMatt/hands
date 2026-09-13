@@ -118,11 +118,15 @@ Notes that are easy to get wrong:
   value. With Claude Code's default ceiling (600 s), a `claude -p` whose turn
   ended while a sub-agent it started was still running is terminated and exits 0.
   `hands doctor` prints the effective value on each role's row.
-- **How a job ends** (§6, §23). A job is `done` only when claude exits 0 with a
-  final `result` event of subtype `success` that carries `num_turns`, and stderr
-  never carried the harness's "Background tasks still running after …;
-  terminating. Set CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS=…" line. Otherwise it is
-  `failed`, and the record's `failure_reason` says why, one value each:
+- **How a job ends** (§6, §23). A job is `failed` when the process ends without
+  a final `result` event, with a `result` of subtype `error` (claude's `error_*`
+  family, `error_max_turns` included, whatever its `is_error` says), without
+  `num_turns`, when it exits non-zero without a limit, when it could not be
+  spawned, or when stderr carries the harness's "Background tasks still running
+  after …; terminating. Set CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS=…" line. A job
+  that finished and is none of those is `done`: claude exited 0 with a final
+  `result` of subtype `success` carrying `num_turns`, and the line never
+  appeared. The record's `failure_reason` says why a job failed, one value each:
   `harness_terminated`, `no_final_result`, `error_result`, `nonzero_exit`,
   `no_num_turns`, `spawn_error` — the first that holds, in that order;
   `stderr_tail` has the evidence. `failure_reason` is null for every other
