@@ -228,6 +228,48 @@ def test_the_repositorys_own_playbook_loads_and_its_review_reads_from_the_last_r
     assert "meta/REVIEW-PROTOCOL.md" in strip_paths(prompt)
 
 
+def test_the_repositorys_own_playbook_carries_the_series_kickoff() -> None:
+    """§26 (mission 10 U2): the root playbook names its kickoff line in `[series]`."""
+    path = Path(__file__).parents[1] / "PLAYBOOK.toml"
+    book = load_playbook(path)
+    assert book is not None, "the repository's PLAYBOOK.toml is missing"
+    assert book.series == "hands-missions"
+    assert book.kickoff == (
+        "Read meta/BUILDER-11-PROMPT.md and execute the mission below its divider."
+    )
+
+
+def test_a_series_table_carries_the_name_and_the_kickoff(tmp_path: Path) -> None:
+    """§26: `[series] kickoff`; the name moves into the table as `name` (H-019)."""
+    book = parse_playbook(
+        'version = 1\n[series]\nname = "s"\nkickoff = "Execute WORKPLAN.md run 1"\n',
+        path=tmp_path / "PLAYBOOK.toml",
+    )
+    assert (book.series, book.kickoff) == ("s", "Execute WORKPLAN.md run 1")
+    only_kickoff = parse_playbook(
+        'version = 1\n[series]\nkickoff = "k"\n', path=tmp_path / "PLAYBOOK.toml"
+    )
+    assert (only_kickoff.series, only_kickoff.kickoff) == (None, "k")
+
+
+def test_the_top_level_series_string_still_loads_with_no_kickoff(tmp_path: Path) -> None:
+    """§10's example keeps `series = "…"`: it is the name, and there is no kickoff."""
+    book = parse_playbook('version = 1\nseries = "audit-fixes"\n', path=tmp_path / "PLAYBOOK.toml")
+    assert (book.series, book.kickoff) == ("audit-fixes", None)
+    assert parse_playbook("version = 1\n", path=tmp_path / "PLAYBOOK.toml").kickoff is None
+
+
+def test_a_series_string_and_a_series_table_together_is_not_toml(tmp_path: Path) -> None:
+    """H-019: TOML forbids defining `series` twice, so the string-plus-table form the
+    templates carry is refused by the parser, before any key is read."""
+    with pytest.raises(PlaybookError) as caught:
+        parse_playbook(
+            'version = 1\nseries = "s"\n\n[series]\nkickoff = "k"\n',
+            path=tmp_path / "PLAYBOOK.toml",
+        )
+    assert "is not valid TOML" in strip_paths(str(caught.value))
+
+
 def test_the_repositorys_own_playbook_stops_on_the_mission_8_detectors() -> None:
     """§24: `monitor.task_killed` and `monitor.orphan_processes` map to `stop`.
     Read through the real loader."""
@@ -291,6 +333,8 @@ NEEDS_AUTO_RUNS = (
     'run = "{n+1}" needs [limits] auto_runs to list the runs hands may start on its own'
 )
 NO_SUCH_GROUP = "names no group of this rule's verdict regex"
+#: §20 for the `[series]` table: "" or blanks is neither absent nor a usable value.
+SERIES_EMPTY = "[series] {key} is empty (§20): omit the key or give it a value"
 
 
 BAD_PLAYBOOKS: list[tuple[str, str, str]] = [
@@ -348,6 +392,17 @@ BAD_PLAYBOOKS: list[tuple[str, str, str]] = [
      'then = "stop"\nonly_if_run_in = "auto_runs"', ONLY_IF_RUN_IN_IS_GONE),
     ("auto_runs is not integers", 'version = 1\n[limits]\nauto_runs = ["two"]',
      "[limits] auto_runs must be a list of run numbers, got ['two']"),
+    # §26 (mission 10 U2, H-019): the `[series]` table holds `name` and `kickoff`.
+    ("unknown [series] key", 'version = 1\n[series]\nkickoff = "go"\nkick_off = "go"',
+     "unknown key(s) in [series]: kick_off"),
+    ("empty kickoff", 'version = 1\n[series]\nkickoff = ""', SERIES_EMPTY.format(key="kickoff")),
+    ("blank kickoff", 'version = 1\n[series]\nkickoff = "   "',
+     SERIES_EMPTY.format(key="kickoff")),
+    ("kickoff not a string", 'version = 1\n[series]\nkickoff = 3',
+     "[series] kickoff must be a string, got 3"),
+    ("empty series name", 'version = 1\n[series]\nname = ""', SERIES_EMPTY.format(key="name")),
+    ("series neither a string nor a table", "version = 1\nseries = 3",
+     "series must be a string (the series' name) or a [series] table, got 3"),
 ]
 
 
@@ -996,6 +1051,21 @@ def test_a_cli_job_un_pauses_the_pipeline_when_it_starts(
     (resumed,) = [e for e in engine.spool.events() if e.kind == "pipeline.resumed"]
     assert resumed.payload["by"] == "start"  # §10: how it was un-paused
     assert resumed.payload["was"] == "because"
+
+
+def test_a_phone_job_un_pauses_the_pipeline_when_it_starts(
+    tmp_home: Path, workdir: Path
+) -> None:
+    """H-018 gap 2: a `go` from the phone is the human answering the stop, so a
+    `phone`-origin job clears it under the same "only when it starts" rule."""
+    engine, _recorder = engine_for(tmp_home, workdir)
+    run(engine.stop("because", {}))
+    queued = engine.spool.create_job(role="builder", context="clear", prompt="p", origin="phone")
+    assert engine.pipeline()["paused"] is True, "a queued phone job has not started"
+    run(engine.on_job_start(queued))
+    assert engine.pipeline()["paused"] is False
+    (resumed,) = [e for e in engine.spool.events() if e.kind == "pipeline.resumed"]
+    assert resumed.payload == {"by": "start", "was": "because"}
 
 
 @pytest.mark.parametrize("origin", ["playbook", "limit", "driver"])

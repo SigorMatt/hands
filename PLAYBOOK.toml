@@ -1,5 +1,10 @@
 version = 1
-series = "hands-missions"
+
+# §26: the series' name and the kickoff line `go` sends from the phone. The name
+# lives in the table: TOML cannot hold `series = "…"` beside `[series]` (H-019).
+[series]
+name = "hands-missions"
+kickoff = "Read meta/BUILDER-11-PROMPT.md and execute the mission below its divider."
 
 [limits]
 max_resumes = 2

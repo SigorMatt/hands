@@ -40,7 +40,7 @@ job does — then `hands resume`. `hands doctor`'s playbook row is `ok` with
 ## The file
 
     version = 1                  # required, must be 1
-    series = "<name>"            # optional, free text
+    series = "<name>"            # optional, free text; or the [series] table below
 
     [limits]
     auto_runs = [2, 3]           # run numbers hands may start on its own
@@ -56,7 +56,34 @@ job does — then `hands resume`. `hands doctor`'s playbook row is `ok` with
     message = "<text>"           # a notify needs one; a stop may have one
     run = "{n+1}"                # a send only; see below
 
-Unknown keys are refused, at the top level, in `[limits]` and in a `[[rule]]`.
+Unknown keys are refused, at the top level, in `[series]`, in `[limits]` and in a
+`[[rule]]`.
+
+## The series and its kickoff (`[series]`)
+
+    [series]
+    name = "<name>"              # optional, free text
+    kickoff = "<line>"           # optional; the line `go <secret>` sends
+
+`kickoff` is the series' fixed kickoff line (DESIGN §26). `go <secret>` on the
+phone's `cmd_topic` sends exactly that line to the builder as a `clear` send,
+and the job record says `origin: phone` (docs/INTEGRATION.md, the command
+channel). The send goes through the same path as `hands send`, so the gate
+patterns still apply. `go` is refused while the builder has a job running or
+queued, when there is no playbook (or it cannot be loaded), and when the
+playbook has no `kickoff`.
+
+The series' name goes in the table as `name` when the table is used. TOML does
+not allow `series = "<name>"` and a `[series]` table in the same file: the
+parser refuses the second definition, so the playbook is refused as not valid
+TOML. The top-level string still loads in a file with no table (the example
+below uses it). This is hands' own choice where the design is silent (finding
+H-019). Any other key in `[series]` is refused, naming it. An empty `name` or
+`kickoff` (`""` or blanks only) is refused: leave the key out instead.
+
+A `go` job, like a `cli` send, un-pauses a stopped pipeline when it starts, not
+when it is filed. A stopped pipeline still has its playbook, so `go` is accepted
+while it is paused.
 
 ## Events (`on`)
 

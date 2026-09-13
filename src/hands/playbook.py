@@ -104,18 +104,24 @@ JOB_PLACEHOLDERS: tuple[str, ...] = ("id", "head_at_start", "head_at_end", "sess
 #: §6's origin vocabulary. Every job the engine fires carries this one.
 ORIGIN = "playbook"
 
-#: §10's stop → resume cycle: the job origins whose *start* clears a stop. Only
-#: `cli` — the human answering the stop. A job the playbook started (`playbook`)
-#: or one §6 filed when a limit reset (`limit`) is the pipeline itself, and a
-#: `driver` job (in §6's vocabulary, filed by nothing today) is not the `cli`
-#: origin §10 names, so neither clears one.
-UNPAUSE_ORIGINS = frozenset({"cli"})
+#: §10's stop → resume cycle: the job origins whose *start* clears a stop. `cli` —
+#: the human answering the stop — and `phone`, a `go` the human typed the secret
+#: for (§26; H-018 gap 2: without it a `go` after a stop would run the builder
+#: while its `builder.done` fired no rule). A job the playbook started
+#: (`playbook`) or one §6 filed when a limit reset (`limit`) is the pipeline
+#: itself, and a `driver` job (in §6's vocabulary, filed by nothing today) is not
+#: an origin §10 names, so neither clears one.
+UNPAUSE_ORIGINS = frozenset({"cli", "phone"})
 
 #: The `stop` reason `hands pause` files (§11, H-007). A human, not a rule.
 PAUSE_REASON = "paused by human"
 
 TOP_KEYS: tuple[str, ...] = ("version", "series", "limits", "rule")
 LIMIT_KEYS: tuple[str, ...] = ("auto_runs", "max_resumes")
+#: §26's `[series]` table: `kickoff`, and `name`, which is where the series' name
+#: goes when the table is used — TOML cannot hold `series = "…"` beside a
+#: `[series]` table (H-019).
+SERIES_KEYS: tuple[str, ...] = ("name", "kickoff")
 #: §11 (§25, decision 2026-09-12): the retired `[limits]` key, refused by name.
 RETIRED_LIMIT = "quiet_hours"
 RULE_KEYS: tuple[str, ...] = (
@@ -329,6 +335,8 @@ class Playbook:
     auto_runs: tuple[int, ...]
     max_resumes: int | None
     rules: tuple[Rule, ...]
+    #: §26: the series' fixed kickoff line, `[series] kickoff`; what `go` sends.
+    kickoff: str | None = None
 
     def rules_for(self, event: str) -> list[Rule]:
         """Every rule on `event`, in file order — §10 reads top to bottom."""
@@ -437,9 +445,7 @@ def parse_playbook(text: str, *, path: Path) -> Playbook:
     version = data.get("version")
     if version != VERSION:
         raise PlaybookError(f"{path}: version must be {VERSION} (§10), got {version!r}")
-    series = data.get("series")
-    if series is not None and not isinstance(series, str):
-        raise PlaybookError(f"{path}: series must be a string, got {series!r}")
+    series, kickoff = _series(data.get("series"), path)
 
     limits = data.get("limits", {})
     if not isinstance(limits, dict):
@@ -483,7 +489,36 @@ def parse_playbook(text: str, *, path: Path) -> Playbook:
         auto_runs=tuple(auto_runs),
         max_resumes=max_resumes,
         rules=rules,
+        kickoff=kickoff,
     )
+
+
+def _series(value: Any, path: Path) -> tuple[str | None, str | None]:
+    """The series' name and kickoff line: `series = "<name>"` (§10's example), or a
+    `[series]` table of `name` and `kickoff` (§26; H-019). TOML allows one or the
+    other, never both."""
+    if value is None:
+        return None, None
+    if isinstance(value, str):
+        return value, None
+    if not isinstance(value, dict):
+        raise PlaybookError(
+            f"{path}: series must be a string (the series' name) or a [series] table, "
+            f"got {value!r}"
+        )
+    _check_keys(value, SERIES_KEYS, "[series]", path)
+    found: list[str | None] = []
+    for key in SERIES_KEYS:
+        item = value.get(key)
+        if item is not None:
+            if not isinstance(item, str):
+                raise PlaybookError(f"{path}: [series] {key} must be a string, got {item!r}")
+            if not item.strip():
+                raise PlaybookError(
+                    f"{path}: [series] {key} is empty (§20): omit the key or give it a value"
+                )
+        found.append(item)
+    return found[0], found[1]
 
 
 def _rule(index: int, table: dict[str, Any], path: Path, *, auto_runs: tuple[int, ...]) -> Rule:

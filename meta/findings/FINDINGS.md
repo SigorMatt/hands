@@ -985,3 +985,36 @@ U0 makes `docs/INTEGRATION.md` state §6's rule; U1 makes the runner follow it
 test that is red before.
 
 Status: fixing (mission 10 U1 gap 3, U2 gaps 1 and 2)
+
+## H-019 — `series = "…"` and `[series] kickoff` cannot share one TOML file
+
+Severity: medium · Component: DESIGN §10 (the example's `series = "audit-fixes"`)
+against §26 (`[series] kickoff`); `templates/PLAYBOOK-missions.toml`,
+`templates/PLAYBOOK-runs.toml`; `src/hands/playbook.py`
+Filed by: mission 10, U2.
+
+The contradiction. TOML forbids defining a key twice, and a `[series]` table
+defines `series` a second time after a top-level `series = "<name>"`. Both
+templates carry exactly that (`series = "<project>-…"`, then `[series]` with
+`kickoff`), and `tomllib` refuses them as written: `Cannot overwrite a value (at
+line 4, column 8)`. §10's example keeps the string; §26 adds the table; neither
+says where the series' name goes once the table exists. DESIGN is silent, so the
+templates and the design cannot both hold as written.
+
+Chosen (U2, simplest, stated in its commit body):
+- `[series]` holds two keys, `name` and `kickoff`, both optional strings; any
+  other key is refused at load, naming it; `""` or blanks for either is refused
+  (§20).
+- The top-level `series = "<name>"` string still loads when there is no table,
+  so §10's example and its verbatim fixture are unchanged; the loaded name is
+  the same field either way (`hands pipeline`, doctor).
+- A file with both forms is refused by the TOML parser ("is not valid TOML"),
+  before any key is read; a test pins it.
+- The root `PLAYBOOK.toml` now spells `[series] name = "hands-missions"` and the
+  kickoff.
+
+Needs: U5 reconciles `templates/` (the name moves into the table as `name`, or
+is dropped) so they load; §10/§26 in the next DESIGN revision state the
+table's keys (a different choice there supersedes this one).
+
+Status: open (code U2; templates U5; DESIGN next revision)

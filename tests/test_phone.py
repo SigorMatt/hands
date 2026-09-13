@@ -22,12 +22,13 @@ from typing import Any
 import httpx
 import pytest
 
-from conftest import strip_paths
+from conftest import commit_file, strip_paths
 from hands import daemon as daemon_mod
 from hands.config import ConfigError, load_config
 from hands.daemon import Daemon
 from hands.notify import http_post, http_stream
-from harness import PROJECT, TIMEOUT, config_body, ok, poll
+from hands.phone import GO_TITLE
+from harness import PROJECT, TIMEOUT, config_body, ok, poll, running_job
 
 SECRET = "Xyzzy-PHONE-s3cret-0123456789abcdef"
 EVENTS_TOPIC = "hands-events-test"
@@ -519,6 +520,185 @@ def test_unknown_malformed_and_not_held_commands_are_ignored(
     phone_drive(body)
     assert SECRET not in strip_paths(caplog.text)
     assert "phone" in strip_paths(caplog.text)  # the refusals were logged, not silent
+
+
+# ------------------------------------------------------------- go (§26)
+
+KICKOFF = "FAKE:result VERDICT: go ran"
+
+
+def with_playbook(workdir: Path, series: str = f'[series]\nkickoff = "{KICKOFF}"\n',
+                  rules: str = "") -> None:
+    """A committed playbook in the builder's cwd (§10: only the committed file loads)."""
+    commit_file(workdir, "PLAYBOOK.toml", f"version = 1\n{series}\n{rules}")
+
+
+def go_answers(daemon: Daemon) -> list[dict[str, Any]]:
+    return [item for item in daemon.notifier.post.sent if item["title"] == GO_TITLE]
+
+
+def assert_refused(caplog: pytest.LogCaptureFixture, why: str) -> None:
+    assert f"phone: command ignored (go: {why}" in strip_paths(caplog.text), caplog.text
+    assert SECRET not in strip_paths(caplog.text)
+
+
+def test_go_sends_the_kickoff_to_the_builder_with_origin_phone_and_answers_the_job_id(
+    project: str, workdir: Path, tmp_home: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level(logging.DEBUG)
+    with_playbook(workdir)
+
+    async def body(daemon: Daemon, fake: FakeNtfy) -> None:
+        await say(daemon, fake, f"go {SECRET}")
+        (row,) = (await ok("jobs"))["jobs"]
+        record = await ok("show", row["id"])
+        assert record["prompt"] == KICKOFF
+        assert (record["role"], record["context"], record["origin"]) == (
+            "builder", "clear", "phone",
+        )
+        assert (await ok("wait", row["id"]))["state"] == "done"
+        await daemon.notifier.drain()
+        (answer,) = go_answers(daemon)
+        assert answer["url"] == f"{NTFY}/{EVENTS_TOPIC}"  # answered on ntfy_topic
+        assert row["id"] in answer["message"]
+        assert answer.get("actions") is None
+        for item in daemon.notifier.post.sent:
+            assert SECRET not in strip_paths(json.dumps(item, default=str)), item
+        for path in (tmp_home / ".hands").rglob("*"):
+            if path.is_file() and path.suffix != ".toml":
+                data = path.read_text(encoding="utf-8", errors="replace")
+                assert SECRET not in strip_paths(data), path
+
+    phone_drive(body)
+    assert SECRET not in strip_paths(caplog.text)
+
+
+def test_go_is_refused_with_no_playbook(
+    project: str, workdir: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level(logging.DEBUG)
+
+    async def body(daemon: Daemon, fake: FakeNtfy) -> None:
+        await say(daemon, fake, f"go {SECRET}")
+        await daemon.notifier.drain()
+        assert (await ok("jobs"))["jobs"] == []
+        assert go_answers(daemon) == []
+
+    phone_drive(body)
+    assert_refused(caplog, "no playbook is loaded")
+
+
+def test_go_is_refused_when_the_playbook_has_no_kickoff(
+    project: str, workdir: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level(logging.DEBUG)
+    with_playbook(workdir, series='series = "no-kickoff"\n')
+
+    async def body(daemon: Daemon, fake: FakeNtfy) -> None:
+        await say(daemon, fake, f"go {SECRET}")
+        await daemon.notifier.drain()
+        assert (await ok("jobs"))["jobs"] == []
+        assert go_answers(daemon) == []
+
+    phone_drive(body)
+    assert_refused(caplog, "the playbook has no [series] kickoff")
+
+
+def test_go_is_refused_while_the_builder_runs_a_job(
+    project: str, workdir: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level(logging.DEBUG)
+    with_playbook(workdir)
+
+    async def body(daemon: Daemon, fake: FakeNtfy) -> None:
+        busy = await ok("send", "--role", "builder", "--context", "clear", "FAKE:block")
+        assert (await running_job())["id"] == busy["id"]
+        await say(daemon, fake, f"go {SECRET}")
+        await daemon.notifier.drain()
+        assert [row["id"] for row in (await ok("jobs"))["jobs"]] == [busy["id"]]
+        assert go_answers(daemon) == []
+        await ok("cancel", busy["id"])
+
+    phone_drive(body)
+    assert_refused(caplog, "the builder has a job running")
+
+
+def test_go_is_refused_while_the_builder_has_a_job_queued(
+    project: str, workdir: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Queued and not yet running: the command is handed straight to the channel
+    after the enqueue, with no await between, so the worker has not taken it."""
+    caplog.set_level(logging.DEBUG)
+    with_playbook(workdir)
+
+    async def body(daemon: Daemon, fake: FakeNtfy) -> None:
+        assert daemon.phone is not None
+        queued = daemon.enqueue(
+            role="builder", context="clear", prompt="FAKE:result ok", origin="cli"
+        )
+        assert daemon.running_job_id("builder") is None
+        await daemon.phone.command(f"go {SECRET}")
+        await ok("wait", queued.id)
+        await daemon.notifier.drain()
+        assert [row["id"] for row in (await ok("jobs"))["jobs"]] == [queued.id]
+        assert go_answers(daemon) == []
+
+    phone_drive(body)
+    assert_refused(caplog, "the builder has a job queued")
+
+
+def test_go_with_a_bad_or_missing_secret_or_a_nonce_is_refused(
+    project: str, workdir: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level(logging.DEBUG)
+    with_playbook(workdir)
+
+    async def body(daemon: Daemon, fake: FakeNtfy) -> None:
+        job = await held()
+        nonce = await nonce_for(daemon, job["id"])
+        for text in ("go", "go not-the-secret", f"go {nonce}", f"go now {SECRET}"):
+            await say(daemon, fake, text)
+        await daemon.notifier.drain()
+        assert [row["id"] for row in (await ok("jobs"))["jobs"]] == [job["id"]]
+        assert go_answers(daemon) == []
+
+    phone_drive(body)
+    assert_refused(caplog, "bad secret")
+    assert "phone: command ignored (go takes only the secret)" in strip_paths(caplog.text)
+
+
+def test_go_after_a_stop_un_pauses_when_its_job_starts_and_the_done_fires_a_rule(
+    project: str, workdir: Path
+) -> None:
+    """H-018 gap 2: a paused playbook is still loaded, so `go` is accepted; its job
+    clears the stop when it starts, and its `builder.done` then fires a rule."""
+    with_playbook(
+        workdir,
+        rules='[[rule]]\non = "builder.done"\nverdict = \'^VERDICT: go ran\'\n'
+        'then = "notify"\nmessage = "the go chained"\n',
+    )
+
+    async def body(daemon: Daemon, fake: FakeNtfy) -> None:
+        await ok("pause")
+        assert (await ok("pipeline"))["paused"] is True
+        await say(daemon, fake, f"go {SECRET}")
+        (row,) = (await ok("jobs"))["jobs"]
+        assert row["origin"] == "phone"
+        assert (await ok("wait", row["id"]))["state"] == "done"
+
+        async def fired() -> list[dict[str, Any]] | None:
+            events = (await ok("inbox"))["events"]
+            rules = [event for event in events if event["kind"] == "playbook.rule"]
+            return events if rules else None
+
+        events = await poll(fired, "the builder.done rule to fire")
+        resumed = [event for event in events if event["kind"] == "pipeline.resumed"]
+        assert [event["payload"]["by"] for event in resumed] == ["start"]
+        (rule,) = [event for event in events if event["kind"] == "playbook.rule"]
+        assert rule["payload"]["job"] == row["id"]
+        assert (await ok("pipeline"))["paused"] is False
+
+    phone_drive(body)
 
 
 # ---------------------------------------------------------- the stream itself

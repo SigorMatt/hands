@@ -100,7 +100,8 @@ def test_jobs_refuses_a_since_it_cannot_parse(project: str) -> None:
 
 
 def test_jobs_filters_by_origin(project: str) -> None:
-    """§4's `jobs [--origin o]` over §6's `driver|playbook|cli|limit` (H-004)."""
+    """§4's `jobs [--origin o]` over §6's `driver|playbook|cli|limit` (H-004), with
+    §26's `phone` (H-018 gap 1)."""
 
     async def body(daemon: Daemon) -> None:
         sent = await run("--role", "builder", "--context", "clear", "FAKE:result a\nfrom a human")
@@ -119,6 +120,7 @@ def test_jobs_filters_by_origin(project: str) -> None:
         assert ids(await ok("jobs", "--origin", "limit")) == [limit.id]
         assert ids(await ok("jobs", "--origin", "playbook")) == [book.id]
         assert ids(await ok("jobs", "--origin", "driver")) == []
+        assert ids(await ok("jobs", "--origin", "phone")) == []  # H-018 gap 1
         # Composes with the other filters.
         assert ids(await ok("jobs", "--origin", "limit", "--role", "aux")) == []
         assert ids(await ok("jobs", "--origin", "limit", "--role", "builder")) == [limit.id]
@@ -130,7 +132,7 @@ def test_jobs_refuses_an_origin_outside_section_6s_vocabulary(project: str) -> N
     async def body(daemon: Daemon) -> None:
         err = await fails("jobs", "--origin", "robot")
         assert "robot" in strip_paths(err)
-        for known in ("cli", "driver", "limit", "playbook"):
+        for known in ("cli", "driver", "limit", "phone", "playbook"):
             assert known in strip_paths(err), f"the refusal must name the whole vocabulary: {err}"
 
     drive(body)

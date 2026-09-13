@@ -232,7 +232,7 @@ not ask for arrives (step 4 above).
 ### The command channel: approve from the phone
 
 With `[notify] cmd_topic` set, handsd subscribes to that topic — an outbound
-long poll to ntfy, nothing listening on this machine — and takes five commands
+long poll to ntfy, nothing listening on this machine — and takes six commands
 from it. Set it up once:
 
     python3 -c 'import secrets; print("hands-cmd-" + secrets.token_urlsafe(16))'
@@ -258,12 +258,23 @@ Publish a command to `cmd_topic` from the ntfy app. The last word is the token:
     pause <secret>
     resume <secret>
     status <secret>
+    go <secret>
 
 - `approve` and `deny` decide a **held** job, exactly as `hands approve|deny`
   does, and the job record says `decided_by: phone`. `pause` and `resume` are
   `hands pause` and `hands resume` (`hands pipeline` shows `paused yes
   (phone)`). `status` answers on `ntfy_topic` with a few lines: each role,
   the held job ids, whether the pipeline is paused, the unread inbox count.
+- `go` is the only way to start work from the phone (DESIGN §26). It sends the
+  playbook's `[series] kickoff` line (docs/PLAYBOOK.md) to the builder as a
+  `clear` send, the job record says `origin: phone`, and `hands jobs --origin
+  phone` lists those jobs. The send takes the same path as `hands send`, so the
+  gate patterns still apply. handsd answers on `ntfy_topic` with the job id and
+  its state. It is refused, and logged, while the builder has a job running or
+  queued, when there is no playbook (or it cannot be loaded), and when the
+  playbook has no `[series] kickoff`. A stopped pipeline still has its playbook:
+  `go` is accepted, and its job un-pauses the pipeline when it starts, as a
+  `cli` send's does, so the builder's `done` fires its rule.
 - **The buttons.** With the channel on, a held job's notification has Approve
   and Deny buttons. Each publishes `approve <job> <nonce>` or `deny <job>
   <nonce>` to `cmd_topic`. The nonce is 32 random bytes minted for that one job
@@ -271,9 +282,9 @@ Publish a command to `cmd_topic` from the ntfy app. The last word is the token:
   It is gone as soon as the job is decided by any route (phone, `hands
   approve`, the driver) and when handsd restarts. After a restart the old
   buttons do nothing, but handsd re-sends the notification of every job still
-  held, with new buttons; the command with the secret works too. `pause`, `resume` and
-  `status` take the secret only, never a nonce.
-- **Nothing is answered except `status`.** A wrong secret or nonce, a command
+  held, with new buttons; the command with the secret works too. `pause`, `resume`,
+  `status` and `go` take the secret only, never a nonce.
+- **Nothing is answered except `status` and an accepted `go`.** A wrong secret or nonce, a command
   hands does not know, or a job that is not held is logged in handsd's journal
   (`journalctl --user -u handsd`) and ignored. If a command seems to do
   nothing, look there. The log never contains the token.

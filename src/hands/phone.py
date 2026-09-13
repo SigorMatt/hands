@@ -1,10 +1,10 @@
-"""The phone channel — commands from ntfy to handsd (DESIGN §8, §11, §24; H-015).
+"""The phone channel — commands from ntfy to handsd (DESIGN §8, §11, §24, §26; H-015).
 
     handsd ── GET <ntfy_url>/<cmd_topic>/json?since=… ──▶ ntfy   (outbound only)
        ▲                                                   │
        └──────────── one JSON line per message ────────────┘
 
-The daemon subscribes to `[notify] cmd_topic` with a long-poll and accepts five
+The daemon subscribes to `[notify] cmd_topic` with a long-poll and accepts six
 commands, each ending in its token:
 
     approve <job> <secret|nonce>
@@ -12,6 +12,16 @@ commands, each ending in its token:
     pause <secret>
     resume <secret>
     status <secret>
+    go <secret>
+
+**`go`** (§26) is the one way to start work from the phone: it sends the
+playbook's `[series] kickoff` line to the builder as a `clear` send with
+`origin: phone`, through `Api.send`, so §8's gate patterns still apply. It is
+refused while the builder has a job running or queued, when there is no
+playbook (none in the builder's cwd, or one that cannot be loaded), and when
+the playbook has no `[series] kickoff`. A stopped pipeline's playbook is still a
+playbook: a `go` is accepted, and its job un-pauses the pipeline when it starts
+(`UNPAUSE_ORIGINS`, H-018 gap 2).
 
 **The token.** A typed command carries `cmd_secret` as its last word. A held
 job's notification carries Approve/Deny buttons that publish `approve <job>
@@ -23,12 +33,13 @@ job only. It is spent by the decision it authorizes; a wrong token spends
 nothing. It is dropped when the job is decided by any route (the daemon calls
 `discard` on every `gate.decided`), and with the daemon. A restarted daemon
 mints a fresh nonce for every job still held and re-sends its notification with
-the new buttons (§25; `Daemon._renotify_held`). `pause`, `resume` and
-`status` take the secret only. The secret is compared with
+the new buttons (§25; `Daemon._renotify_held`). `pause`, `resume`,
+`status` and `go` take the secret only. The secret is compared with
 `hmac.compare_digest` and never published: a notification carries only nonces.
 
-**What is answered.** `status` publishes a short summary to `ntfy_topic`.
-Nothing else is answered: a bad token, an unknown or malformed command, a
+**What is answered.** `status` publishes a short summary to `ntfy_topic`, and an
+accepted `go` publishes the id and state of the job it filed there. Nothing else
+is answered: a bad token, an unknown or malformed command, a
 command for a job that is not held — each is logged (without the token, and
 without any word of the message that could be one) and ignored.
 
@@ -55,12 +66,15 @@ from urllib.parse import quote
 
 from hands import notify as notify_mod
 from hands.api import ApiError
+from hands.playbook import PlaybookError, load_playbook, playbook_path
 from hands.spool import SpoolError
 
 if TYPE_CHECKING:  # pragma: no cover
     from hands.daemon import Daemon
 
-__all__ = ["BACKOFF_S", "NONCE_BYTES", "STATUS_TITLE", "PhoneChannel", "status_summary"]
+__all__ = [
+    "BACKOFF_S", "GO_TITLE", "NONCE_BYTES", "STATUS_TITLE", "PhoneChannel", "status_summary",
+]  # fmt: skip
 
 log = logging.getLogger("hands.phone")
 
@@ -72,10 +86,11 @@ BACKOFF_S: tuple[float, ...] = (1.0, 2.0, 5.0, 10.0, 30.0, 60.0)
 #: Message ids remembered against a replay. A reconnect asks for what came after
 #: the last one, so this only has to cover a server that sends a few again.
 SEEN_IDS = 1024
-#: The title of the one answer the channel gives.
+#: The titles of the two answers the channel gives.
 STATUS_TITLE = "hands: status"
+GO_TITLE = "hands: go"
 
-_SECRET_ONLY = ("pause", "resume", "status")
+_SECRET_ONLY = ("pause", "resume", "status", "go")
 _DECISIONS = {"approve": "approved", "deny": "denied"}
 
 
@@ -212,6 +227,8 @@ class PhoneChannel:
                 return self._ignore(f"{verb} takes only the secret")
             if not self._is_secret(token):
                 return self._ignore(f"{verb}: bad secret")
+            if verb == "go":
+                return await self._go()
             if verb == "pause":
                 await self.daemon.playbook.pause(by="phone")
             elif verb == "resume":
@@ -241,6 +258,43 @@ class PhoneChannel:
             log.info("phone: %s %s", verb, job_id)
             return None
         return self._ignore("not a command")
+
+    async def _go(self) -> None:
+        """§26: the series' kickoff line to the builder, `clear`, `origin: phone`.
+
+        The builder's queue is checked first, with nothing awaited before it, so
+        what is refused is the state the command arrived in. The playbook is read
+        from the builder's cwd now, by the same loader the engine uses (only the
+        committed file loads, §10) — not taken from the engine's last load, which
+        happens only when a job starts — and a read never files a stop.
+        """
+        builder = self.daemon.status()["roles"]["builder"]
+        if builder["running"]:
+            running = builder["running"]["id"]
+            return self._ignore(f"go: the builder has a job running ({running})")
+        if builder["queued"]:
+            queued = ", ".join(builder["queued"])
+            return self._ignore(f"go: the builder has a job queued ({queued})")
+        config = self.daemon.config
+        try:
+            book = await asyncio.to_thread(
+                load_playbook, playbook_path(config), cwd=config.role("builder").cwd
+            )
+        except PlaybookError as exc:
+            return self._ignore(f"go: no playbook is loaded: it cannot be loaded ({exc})")
+        if book is None:
+            return self._ignore("go: no playbook is loaded")
+        if book.kickoff is None:
+            return self._ignore("go: the playbook has no [series] kickoff")
+        try:
+            job = await self.daemon.api.send(
+                role="builder", context="clear", prompt=book.kickoff, origin="phone"
+            )
+        except ApiError as exc:
+            return self._ignore(f"go: the send was refused ({exc})")
+        log.info("phone: go filed builder job %s (%s)", job["id"], job["state"])
+        await self.daemon.notifier.answer(GO_TITLE, f"go: builder job {job['id']} {job['state']}")
+        return None
 
     def _is_secret(self, token: str) -> bool:
         secret = self.notify.cmd_secret
