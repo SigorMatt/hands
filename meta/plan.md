@@ -42,7 +42,12 @@ Base of the mission: 0fef436 (`plan: mission 11 kit (DESIGN v3.10)`).
       `consult`; role mode runs only `git` read-only and listed `hands`
       (no cat/ls/grep), send needs explicit `--context keep` and builder|aux;
       clone at `<cwd>/repo` or `<cwd>`, missing clone/guard a warning
-- [ ] U5 `consult` (§10, §27)
+- [x] U5 `consult` (§10, §27) c1d8ed5 — no driver role stops at fire time
+      (not load); driver started through the daemon queue, not `Api.send`,
+      ungated, origin playbook, context clear; `resolved` follow-up uses
+      `notify` (§10 has no no-op); max_consults counts driver jobs after the
+      last builder job whose prompt is the kickoff; consult.done/journal on any
+      end but `limited`; fake_claude gains `exec`
 - [ ] U6 This repository's playbook (BUILDER-12 kickoff, consult rules)
 - [ ] U7 Final report — meta/FINAL-REPORT-11.md (drafted under meta/drafts/)
 
