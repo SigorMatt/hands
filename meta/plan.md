@@ -23,7 +23,10 @@ templates)`).
 - [x] U3 Kit transport (§26, §13) 6852751 — kit_dir outside roots refused on
       arrival (not at load); exclusive os.link to first free name; the phone
       channel reads no other command during a download (up to 300 s), untested
-- [ ] U4 Who by pid (§26)
+- [b] U4 Who by pid (§26) — blocked on DESIGN, H-020 (9f7effd, memo only): no
+      transcript records a pid (470 transcripts, claude 2.1.270); the pid lives
+      in ~/.claude/sessions/<pid>.json, a source §26 does not name. Not retried:
+      a second run under the same rules stops at the same memo. No code changed
 - [ ] U5 `hands kit check`; handbook and templates against the code (§4, §26)
 - [ ] U6 The closed loop in the docs; doctor rows (§26)
 - [ ] U7 Final report — meta/FINAL-REPORT-10.md (drafted under meta/drafts/)
