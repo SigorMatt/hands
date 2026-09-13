@@ -22,8 +22,9 @@ kit already placed `meta/prototypes/claudewho.py` (ruff excludes it).
 - [x] U5 REVIEW-3 deferrals: should-fix 3, 6, 7 (backlog 3) 6fcd7d7
 - [x] U6 `hands who` and `handswho` (§4, §11, §24; backlog 6); prototype
       deleted a93e3a7
-- [ ] U7 Playbook and docs (backlog 4)
-- [ ] U8 Final report — meta/FINAL-REPORT-8.md (drafted under meta/drafts/)
+- [x] U7 Playbook and docs (backlog 4) c41473c; H-016 filed (§10's example
+      lacks the two rules; its copies stay verbatim)
+- [x] U8 Final report (the commit that carries this line) — meta/FINAL-REPORT-8.md (drafted under meta/drafts/)
 
 Review items by unit. REVIEW-7 blocker 1 → U0. Should-fix 1 → DESIGN v3.7
 §24 (the architect moved the rule into §2, §6, §13); no builder unit.
