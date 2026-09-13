@@ -22,7 +22,7 @@ pyproject.toml` returns nothing. U0 records this; there is nothing to remove.
       into tests/fixtures/playbook_example.toml and docs/PLAYBOOK.md (base red)
 - [x] U1 Termination precedence and vocabularies (§6, §25; H-014) 4da83f8
 - [x] U2 Review 8 should-fix 1, 3, 4 7992c4d
-- [ ] U3 Playbook must match the committed file (§10)
+- [x] U3 Playbook must match the committed file (§10) fd6ecbe
 - [ ] U4 `quiet_hours` retired (§11, §25)
 - [ ] U5 Phone channel after restart; detector payload (§25)
 - [ ] U6 Final report — meta/FINAL-REPORT-9.md (drafted under meta/drafts/)
