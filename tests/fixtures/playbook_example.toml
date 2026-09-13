@@ -45,3 +45,11 @@ then = "resume"
 [[rule]]
 on = "monitor.tripwire"
 then = "stop"
+
+[[rule]]
+on = "monitor.task_killed"
+then = "stop"
+
+[[rule]]
+on = "monitor.orphan_processes"
+then = "stop"

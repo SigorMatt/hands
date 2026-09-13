@@ -1,19 +1,19 @@
 # CHECKPOINT
 
-Mission: 8 (meta/BUILDER-8-PROMPT.md, DESIGN v3.7 §24) — FINISHED
-Unit in progress: none. U0..U8 all `[x]` in meta/plan.md.
-Base: da8df27, green (1235 passed).
-Done: U0 9ae7975 (1238 passed); U1 df8c1fd (1285); U2 68e1048 (1300);
-U3 4782a4a (1323); U4 7183478 (1367); U5 6fcd7d7 (1380); U6 a93e3a7 (1416);
-U7 c41473c (1424); U8 is the commit that carries this line (meta only).
-Tip for the gate: c41473c — `./scripts/check` green three consecutive runs
-before U8's commit, 1424 passed.
-Report: meta/FINAL-REPORT-8.md (NOT PROVEN in §3, `## Review items`,
-acceptance in §4, the architect's list in §5).
-Review 7 closed (blocker 1; should-fix 1 by DESIGN v3.7; 2–4); REVIEW-3
-should-fix 3, 6, 7 closed.
-Findings: H-015 filed (decided; closed on disk by U4); H-016 open for the
-architect (§10's example lacks the two stop rules). H-001 and H-009 open.
+Mission: 9 (meta/BUILDER-9-PROMPT.md, DESIGN v3.8 §25)
+Base: 0ead876 — RED (1 failed, 1423 passed): the §10 example fixture pin,
+because v3.8 added the two detector rules to §10's example.
+
+Unit in progress: U0 Plan and corrections (`plan:` commit).
+Intent: plan and checkpoint; H-014 and H-016 get the v3.8 resolutions from
+§25; H-017 filed for REVIEW-8 should-fix 2 with status `fixed by DESIGN
+v3.8`; §10's example (now with the two stop rules) copied verbatim into
+tests/fixtures/playbook_example.toml and the verbatim block of
+docs/PLAYBOOK.md, the example rule-list test extended, the "carries neither
+yet" sentence dropped. The prototypes ruff exclude is already gone (m8 U6).
+Done means: `./scripts/check` green three consecutive runs; one `plan:`
+commit whose body lists every file; pushed.
+
 Standing constraints: one foreground sub-agent per unit, commit and push
 every unit, ./scripts/check green three consecutive runs before each commit,
 explicit paths only in `git add` (never `-A`), reports drafted under

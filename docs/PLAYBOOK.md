@@ -80,9 +80,7 @@ is in force. Work the job left running did not finish with it, so the rule is
 
 An event with no matching rule stops anyway; each rule says it on purpose.
 DESIGN §24 puts both in the example playbook, and this repository's own
-`PLAYBOOK.toml` carries both. The copy of §10's example at the end of this page
-is §10's own text byte for byte, which carries neither yet; finding H-016 asks
-the architect to add them there.
+`PLAYBOOK.toml` carries both.
 
 `quiet_hours` in `[limits]` is still read: a window like `"23:00-07:00"` delays
 notifications, never actions. No playbook of this project sets it, so
@@ -258,8 +256,16 @@ known to load.
     on = "monitor.tripwire"
     then = "stop"
 
+    [[rule]]
+    on = "monitor.task_killed"
+    then = "stop"
+
+    [[rule]]
+    on = "monitor.orphan_processes"
+    then = "stop"
+
 Read it as a sentence: a clean run starts a cold review; a clean review of a
-pre-planned run starts the next run; blockers, memos, questions and tripwires
-stop and call you; failures and orphans resume themselves until `max_resumes`.
+pre-planned run starts the next run; blockers, memos, questions, tripwires,
+killed tasks and orphan processes stop and call you; failures and orphans resume themselves until `max_resumes`.
 A rate limit is not in the playbook at all: §6 owns that resume and schedules
 it for the reset.

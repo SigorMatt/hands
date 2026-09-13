@@ -200,6 +200,8 @@ def test_the_example_parses_into_the_rules_of_section_10(tmp_home: Path, workdir
         ("builder.orphaned", "resume"),
         ("builder.failed", "resume"),
         ("monitor.tripwire", "stop"),
+        ("monitor.task_killed", "stop"),
+        ("monitor.orphan_processes", "stop"),
     ]
     assert book.rules[1].run == "{n+1}"
     assert book.rules[1].role == "builder"

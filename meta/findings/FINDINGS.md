@@ -755,6 +755,19 @@ exact one-line shape, case-sensitive, from the line start through `Set
 CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS=`. For this finding's own case the defence
 is now the ceiling at 0 and the hook (§2), not the runner's classification.
 
+**Status: precedence reversed by DESIGN v3.8 (mission 9 U0, the commit that
+carries this paragraph; DESIGN v3.8 §6, §25).** §25 records "The
+termination-line precedence is reversed back to H-014's reading: it wins over a
+`success` result (FINAL-REPORT-8 §5 item 1)". §6 now says: "Precedence: a
+cancel stays `killed` and a limit stays `limited`; otherwise the termination
+line wins even over a `success` result, because the harness ends the session
+mid-turn and the \"result\" is whatever the model had said last (H-014's own
+case)." So this finding's recorded shape of `0mtygi953-ym63` (success result,
+`num_turns` 59, exit 0, the terminating line) is `failed`/`harness_terminated`
+again under the design. The code does not say so yet: at this commit
+`src/hands/runner.py` still returns `done` for that shape (the v3.7 rule), and
+the change to the runner and its pinning test is mission 9 U1, still to come.
+
 ## H-015 — a held job can be decided from the phone only by a declaration
 
 Severity: medium · Component: DESIGN §8 (human gates), §11 (notifications),
@@ -845,4 +858,49 @@ will fail until it does), extends
 `test_the_example_parses_into_the_rules_of_section_10`'s rule list, and drops
 the "carries neither yet" sentence from `docs/PLAYBOOK.md`.
 
-Status: open (for the architect)
+Status: closed (DESIGN v3.8 §10, §25; copies updated by mission 9 U0)
+
+**Status: closed (mission 9 U0, the commit that carries this paragraph; DESIGN
+v3.8 §10, §25).** §25 records "H-016 closed: §10's events list and example
+carry the two detector rules." §10's events list names `monitor.task_killed`
+and `monitor.orphan_processes`, and its example now ends, after the
+`monitor.tripwire` rule, with `on = "monitor.task_killed"` → `then = "stop"`
+and `on = "monitor.orphan_processes"` → `then = "stop"`, as this finding's
+direction asked. This commit copies §10's example block verbatim into
+`tests/fixtures/playbook_example.toml` and into the verbatim block at the end
+of `docs/PLAYBOOK.md`, extends
+`test_the_example_parses_into_the_rules_of_section_10`'s rule list with the two
+rules, and drops `docs/PLAYBOOK.md`'s sentence saying the verbatim copy carries
+neither yet.
+
+## H-017 — DESIGN v3.7 §6's `failure_reason` and `decided_by` vocabularies disagree with the wire
+
+Severity: medium · Component: DESIGN §6 (job record) against
+`src/hands/runner.py` (`FAILURE_REASONS`, `_failure_reason`) and
+`src/hands/api.py` (`decide_from_phone`)
+Filed by: mission 9, U0, from `meta/reviews/REVIEW-8.md` should-fix 2.
+
+Symptom. DESIGN v3.7 §6's job record listed `failure_reason` as
+`harness_terminated | nonzero_exit | no_result` and `gate` as `{reason,
+decided_by: cli|driver|button, decided_at, quote?}`. The code writes other
+names. `src/hands/runner.py`'s `FAILURE_REASONS` and `_failure_reason` write
+`harness_terminated`, `no_final_result`, `error_result`, `nonzero_exit`,
+`no_num_turns` and `spawn_error` (the last from the spawn failure path); there
+is no `no_result`. `src/hands/api.py`'s `decide_from_phone` records
+`decided_by: phone`, which §24 asks for and v3.7 §6 did not list; `button`
+exists in `src/hands/gates.py`'s `DECIDERS` but is marked not available. H-014's
+mission 7a status paragraph named the code's reasons, but v3.7 §6 was written
+after it, and missions 8 U0 and U1 both claimed §6 without reporting the gap.
+The driver reads these fields verbatim, so a driver written from §6 would not
+recognise four of the six reasons or a phone decision.
+
+Direction. Decided by the architect in DESIGN v3.8 §6 and §25 ("§6 vocabularies
+reconciled with the wire: `failure_reason` and `decided_by` list what the code
+writes (review 8 should-fix 2)"); recorded here as the decision. §6 now lists
+`failure_reason` as `harness_terminated | nonzero_exit | no_final_result |
+error_result | no_num_turns | spawn_error` and `gate` as `{reason, decided_by:
+cli|driver|phone, decided_at, quote?}`. Mission 9 U1 pins the code and
+`docs/INTEGRATION.md` to the §6 lists.
+
+Status: fixed by DESIGN v3.8 (§6 now lists exactly those; U1 pins the code and
+docs/INTEGRATION.md to the §6 lists)

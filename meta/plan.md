@@ -1,39 +1,38 @@
-# plan — mission 8 (detectors, the phone channel, who)
+# plan — mission 9 (close review 8)
 
-Source: meta/BUILDER-8-PROMPT.md, DESIGN v3.7 §24. Units run in order; each
-ends with a commit and a push. `[x]` = done and pushed, `[b]` = blocked (two
-failures).
+Source: meta/BUILDER-9-PROMPT.md, DESIGN v3.8 §25 (with §6, §10, §11). Units
+run in order; each ends with a commit and a push. `[x]` = done and pushed,
+`[b]` = blocked (two failures).
 
-Base of the mission: da8df27 (`plan: mission 8 kit (DESIGN v3.7, claudewho
-prototype)`) — green: ruff clean, 1235 passed, cli smoke, `check: green`. The
-kit already placed `meta/prototypes/claudewho.py` (ruff excludes it).
+Base of the mission: 0ead876 (`plan: mission 9 kit (DESIGN v3.8)`) — RED:
+1 failed, 1423 passed. `tests/test_playbook.py::test_the_fixture_is_section_10s_example_verbatim`
+fails because v3.8 added `monitor.task_killed` and `monitor.orphan_processes`
+→ `stop` to §10's example (H-016 closed by §25) and the fixture copy predates
+it. No unit in the brief copies the block; U0 cannot commit on red, so U0
+carries H-016's own direction (copy into the fixture and the doc, extend the
+rule list, drop the "carries neither yet" sentence). Recorded as a deviation.
 
-- [x] U0 Plan and corrections (`plan:`) 9ae7975 — this file, meta/CHECKPOINT.md;
-      the prototype verified in place; H-015 (phone channel decision, §24);
-      `hands show`'s `failure` line pinned on a failed and a done job
-      (review 7 blocker 1)
-- [x] U1 Review 7 should-fix 2, 3, 4 df8c1fd — anchored terminating-line matcher that
-      never overrides success; the two over-match lines as negatives; the doc
-      sweep reads every tracked non-binary file, `meta/` history excluded by
-      path, live `meta/` instructions included (§6, §24)
-- [x] U2 `monitor.task_killed` (§5, §24; backlog 1) 68e1048
-- [x] U3 Per-job scope and orphan accounting (§5, §24; backlog 2) 4782a4a
-- [x] U4 The phone channel (§8, §11, §24; backlog 5; H-015) 7183478
-- [x] U5 REVIEW-3 deferrals: should-fix 3, 6, 7 (backlog 3) 6fcd7d7
-- [x] U6 `hands who` and `handswho` (§4, §11, §24; backlog 6); prototype
-      deleted a93e3a7
-- [x] U7 Playbook and docs (backlog 4) c41473c; H-016 filed (§10's example
-      lacks the two rules; its copies stay verbatim)
-- [x] U8 Final report (the commit that carries this line) — meta/FINAL-REPORT-8.md (drafted under meta/drafts/)
+The `meta/prototypes/` ruff exclude is already absent from `pyproject.toml`
+at the base (removed by mission 8 U6, a93e3a7); `grep -n prototypes
+pyproject.toml` returns nothing. U0 records this; there is nothing to remove.
 
-Review items by unit. REVIEW-7 blocker 1 → U0. Should-fix 1 → DESIGN v3.7
-§24 (the architect moved the rule into §2, §6, §13); no builder unit.
-Should-fix 2 → U1. Should-fix 3 → U0's `plan:` prefix, and U1 carries the
-convention check if a test is cheap. Should-fix 4 → U1. REVIEW-3 should-fix
-3, 6, 7 → U5.
+- [ ] U0 Plan and corrections (`plan:`) — this file, meta/CHECKPOINT.md;
+      H-014 and H-016 get the v3.8 resolutions (§25); H-017 filed for
+      review 8 should-fix 2 (`fixed by DESIGN v3.8`); §10 example copied
+      into tests/fixtures/playbook_example.toml and docs/PLAYBOOK.md (base red)
+- [ ] U1 Termination precedence and vocabularies (§6, §25; H-014)
+- [ ] U2 Review 8 should-fix 1, 3, 4
+- [ ] U3 Playbook must match the committed file (§10)
+- [ ] U4 `quiet_hours` retired (§11, §25)
+- [ ] U5 Phone channel after restart; detector payload (§25)
+- [ ] U6 Final report — meta/FINAL-REPORT-9.md (drafted under meta/drafts/)
 
-Dependencies. U2 and U3 touch the monitor; U3 after U2. U4 before U6
-(handswho shares the `[notify]` section and the ntfy client). U7 after U2,
-U3, U4, U6. U1, U5 are independent.
+Review items by unit. REVIEW-8 should-fix 1, 3, 4 → U2. Should-fix 2 →
+DESIGN v3.8 §6 (H-017) and U1. FINAL-REPORT-8 §5 item 1 → U1; item 2
+(H-016) → U0; item 3 → U4; item 4 → U5 (`cause: unknown`; `who_cmd_topic`
+stays secret-less by §25, no code); item 5 → U5.
 
-Findings. H-015 filed by U0. H-001 and H-009 stay open.
+Dependencies. U4 touches the playbook loader and notify; after U3 (loader).
+U5 touches the phone channel; after U2 (phone warning). U1 is independent.
+
+Findings. H-017 filed by U0. H-001 and H-009 stay open.
