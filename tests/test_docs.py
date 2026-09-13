@@ -265,7 +265,10 @@ LOOP_STATEMENTS = (
     "never required for the loop",
     "No kit has been fetched from a real ntfy attachment",
     "No `go` has been sent from a real phone",
-    "`hands who` still matches an interactive session to its transcript by directory",
+    "`hands who` matches an interactive session to its transcript through "
+    "`~/.claude/sessions/<pid>.json`",
+    "the line says `transcript: by directory`",
+    "never shown under it",
 )
 
 

@@ -10,7 +10,13 @@ One short picture joined from three sources:
   * /proc           every other `claude` process: headless or a session, its cwd,
                     age, and the commands running under it right now
   * transcripts     for a session: waiting for you, working or thinking, and the
-                    last thing the human typed (`~/.claude/projects/<cwd>/`)
+                    last thing the human typed. §27 (H-020): a process's transcript
+                    is the one `~/.claude/sessions/<pid>.json` names by `sessionId`
+                    (only `pid` and `sessionId` are taken; the `.key` file beside it
+                    is never opened). With no usable sessions file the line says
+                    `transcript: by directory` and the newest transcript of the
+                    cwd's `~/.claude/projects/` folder is used, except one whose
+                    session id a hands job record holds (`JobSessions`)
 
 §24's rules: roles are labelled `role <r>`; your own interactive session in a
 role directory is `(your session)`; a session under `~/hands-driver/<project>/`
@@ -61,6 +67,7 @@ __all__ = [
     "PUSH_TITLE",
     "REQUESTED_TITLE",
     "Debounce",
+    "JobSessions",
     "Sources",
     "Transcripts",
     "WhoError",
@@ -69,6 +76,7 @@ __all__ = [
     "main",
     "print_once",
     "proc_table",
+    "session_id_for",
     "watch",
 ]
 
@@ -86,6 +94,11 @@ DEFAULT_MIN_GAP_S = 60.0
 #: A transcript older than the session's age plus this is not that session's.
 TRANSCRIPT_SLACK_S = 3600.0
 SHELLS = {"bash", "sh", "zsh", "dash"}
+#: A `sessionId` becomes a file name, so it must be a plain basename.
+SESSION_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]*")
+#: §27: how a process's transcript was found.
+BY_SESSION = "session"
+BY_DIRECTORY = "directory"
 NEEDS_YOU = {"stop", "job.held"}
 
 Proc = dict[str, Any]
@@ -275,29 +288,110 @@ def transcript_state(path: Path, *, now: float) -> dict[str, Any]:
     return {"waiting": waiting, "last_prompt": last_prompt, "idle_s": idle}
 
 
+def session_id_for(sessions: Path, pid: int) -> str | None:
+    """The `sessionId` of `<sessions>/<pid>.json` when that file's `pid` is `pid` (§27).
+
+    Only that one file is opened, by its exact name: the directory is never
+    listed, so the `<pid>.<hash>.key` beside it is never read. Of the JSON only
+    `pid` and `sessionId` are used. Unreadable, not a JSON object, another pid, or
+    a `sessionId` that is not a plain basename: None, as if there were no file.
+    """
+    try:
+        data = json.loads((sessions / f"{pid}.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    file_pid, sid = data.get("pid"), data.get("sessionId")
+    if type(file_pid) is not int or file_pid != pid:
+        return None
+    if not isinstance(sid, str) or not SESSION_ID_RE.fullmatch(sid):
+        return None
+    return sid
+
+
+class JobSessions:
+    """Every session id a hands job record holds: `jobs/<id>.json` `session_id`.
+
+    Read-only (the spool's CLI side only reads, §6); the directory is never
+    created. A record that has a session id keeps it, so it is read once; one
+    without is read again on the next call. Unreadable records are skipped.
+    """
+
+    def __init__(self, jobs_dir: Path) -> None:
+        self.jobs_dir = jobs_dir
+        self._known: dict[str, str] = {}
+
+    def __call__(self) -> frozenset[str]:
+        try:
+            names = [p for p in self.jobs_dir.glob("*.json") if not p.name.startswith(".")]
+        except OSError:
+            names = []
+        for path in names:
+            if path.name in self._known:
+                continue
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            sid = data.get("session_id") if isinstance(data, dict) else None
+            if isinstance(sid, str) and sid:
+                self._known[path.name] = sid
+        return frozenset(self._known.values())
+
+
 class Transcripts:
-    """The transcript reader: `(cwd, session age) -> state or None`."""
+    """The transcript reader (§27):
+    `(pid, cwd, session age, job session ids) -> (BY_SESSION | BY_DIRECTORY, state or None)`.
+
+    With a sessions file for the pid, the transcript is `<sessionId>.jsonl`, looked
+    for in the cwd's project folder first and then in any project folder (a
+    session may have changed directory since it started); if it does not exist
+    (yet) the state is None — the directory is not consulted. Without one, the
+    newest transcript of the cwd's folder whose basename is not a job's session
+    id, if recent enough for the session's age.
+    """
 
     def __init__(
-        self, projects: Path | None = None, *, clock: Callable[[], float] = time.time
+        self,
+        projects: Path | None = None,
+        *,
+        sessions: Path | None = None,
+        clock: Callable[[], float] = time.time,
     ) -> None:
         self.projects = projects
+        self.sessions = sessions
         self.clock = clock
 
-    def __call__(self, cwd: str, age_s: float) -> dict[str, Any] | None:
-        root = self.projects or Path.home() / ".claude" / "projects"
+    def __call__(
+        self, pid: int, cwd: str, age_s: float, exclude: frozenset[str] = frozenset()
+    ) -> tuple[str, dict[str, Any] | None]:
+        claude = Path.home() / ".claude"
+        root = self.projects or claude / "projects"
+        sid = session_id_for(self.sessions or claude / "sessions", pid)
+        now = self.clock()
+        if sid is not None:
+            named = root / dashed(cwd) / f"{sid}.jsonl"
+            if not named.is_file():
+                try:
+                    named = next(p for p in root.glob(f"*/{sid}.jsonl") if p.is_file())
+                except (OSError, StopIteration):
+                    return BY_SESSION, None
+            return BY_SESSION, transcript_state(named, now=now)
         folder = root / dashed(cwd)
         try:
-            files = [(p.stat().st_mtime, p) for p in folder.glob("*.jsonl") if p.is_file()]
+            files = [
+                (p.stat().st_mtime, p) for p in folder.glob("*.jsonl")
+                if p.is_file() and p.stem not in exclude
+            ]  # fmt: skip
         except OSError:
-            return None
+            return BY_DIRECTORY, None
         if not files:
-            return None
+            return BY_DIRECTORY, None
         mtime, newest = max(files)
-        now = self.clock()
         if now - mtime > age_s + TRANSCRIPT_SLACK_S:
-            return None
-        return transcript_state(newest, now=now)
+            return BY_DIRECTORY, None
+        return BY_DIRECTORY, transcript_state(newest, now=now)
 
 
 # ------------------------------------------------------------- the picture
@@ -329,10 +423,13 @@ class Sources:
     #: The daemon's `who` answer, or None when it is not answering.
     daemon: Callable[[], dict[str, Any] | None]
     procs: Callable[[], dict[int, Proc]]
-    transcripts: Callable[[str, float], dict[str, Any] | None]
+    #: `(pid, cwd, age_s, job session ids) -> (match, state or None)` (§27).
+    transcripts: Callable[[int, str, float, frozenset[str]], tuple[str, dict[str, Any] | None]]
     clock: Callable[[], float]
     #: `~/hands-driver/<project>/` is a driver directory (§12).
     home: Path
+    #: The session ids hands' job records hold; never attributed by directory (§27).
+    job_sessions: Callable[[], frozenset[str]]
 
 
 def _within(cwd: str, root: str) -> bool:
@@ -348,18 +445,24 @@ def _driver_of(cwd: str, home: Path) -> str | None:
 
 
 def _session_state(
-    p: dict[str, Any], table: dict[int, Proc], src: Sources
+    p: dict[str, Any], table: dict[int, Proc], src: Sources, jobs: frozenset[str]
 ) -> tuple[str, str, dict[str, Any] | None]:
     """(state text, fingerprint value, transcript state or None)."""
-    ts = src.transcripts(p["cwd"], p["age_s"])
-    kids = child_commands(table, p["pid"])
+    match, ts = src.transcripts(p["pid"], p["cwd"], p["age_s"], jobs)
+    text, value = _state_text(ts, bool(child_commands(table, p["pid"])))
+    if match == BY_DIRECTORY:
+        text += " · transcript: by directory"
+    return text, value, ts
+
+
+def _state_text(ts: dict[str, Any] | None, kids: bool) -> tuple[str, str]:
     if ts is None:
-        return ("working", "work", None) if kids else ("state unknown", "?", None)
+        return ("working", "work") if kids else ("state unknown", "?")
     if ts["waiting"]:
-        return (f"waiting for you · {age(ts['idle_s'])} idle", "wait", ts)
+        return f"waiting for you · {age(ts['idle_s'])} idle", "wait"
     if kids:
-        return ("working", "work", ts)
-    return (f"thinking · {age(ts['idle_s'])} since last write", "think", ts)
+        return "working", "work"
+    return f"thinking · {age(ts['idle_s'])} since last write", "think"
 
 
 def _inbox_kinds(events: list[dict[str, Any]]) -> str:
@@ -445,6 +548,7 @@ def build_summary(src: Sources) -> tuple[str, list[tuple[str, str]]]:
     role_cwds = list(src.role_cwds.values())
     driver_shown = False
     others = [p for p in procs if p["pid"] not in hands_pids]
+    jobs = src.job_sessions() if others else frozenset()
     others.sort(key=lambda x: (_driver_of(x["cwd"], src.home) is None, x["cwd"], x["pid"]))
     for p in others:
         driver = _driver_of(p["cwd"], src.home)
@@ -458,7 +562,7 @@ def build_summary(src: Sources) -> tuple[str, list[tuple[str, str]]]:
         meta = ["headless" if p["headless"] else "session", age(p["age_s"])]
         if p["skip_perms"]:
             meta.append("skip-perms")
-        text, value, ts = _session_state(p, table, src)
+        text, value, ts = _session_state(p, table, src, jobs)
         lines = [f"{label} ({', '.join(meta)}) — {text}"]
         if ts and ts["last_prompt"] and value != "work":
             lines.append(f"    last: {short(ts['last_prompt'], PROMPT_CHARS)}")
@@ -546,6 +650,7 @@ def sources_for(config: Config, socket_path: Path) -> Sources:
         transcripts=Transcripts(),
         clock=time.time,
         home=Path.home(),
+        job_sessions=JobSessions(config.path.parent / "jobs"),
     )
 
 

@@ -17,6 +17,7 @@ import json
 import os
 import time
 from collections.abc import AsyncIterator, Iterator
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -25,6 +26,7 @@ import pytest
 from conftest import strip_paths
 from hands import who
 from hands.cli import main as hands_main
+from hands.spool import Spool
 from harness import PROJECT, cli, config_body, drive, ok, write_project
 
 HOME = Path("/home/u")
@@ -164,19 +166,273 @@ def test_transcripts_read_the_newest_file_of_the_cwd_directory(tmp_path: Path) -
     new.write_text(_line({"type": "user", "message": {"content": "new"}}))
     os.utime(old, (1000, 1000))
     os.utime(new, (2000, 2000))
-    reader = who.Transcripts(projects, clock=lambda: 2030.0)
-    state = reader("/home/u/git/demo.x", 60.0)
+    sessions = tmp_path / "sessions"  # empty: no pid has a sessions file
+    reader = who.Transcripts(projects, sessions=sessions, clock=lambda: 2030.0)
+    match, state = reader(7, "/home/u/git/demo.x", 60.0, frozenset())
+    assert match == "directory"
     assert state is not None
     assert state["last_prompt"] == "new"
     assert state["idle_s"] == pytest.approx(30.0)
     # Older than the session's age plus the hour of slack: not this session's.
-    assert who.Transcripts(projects, clock=lambda: 9000.0)("/home/u/git/demo.x", 60.0) is None
-    assert reader("/home/u/git/nowhere", 60.0) is None
+    late = who.Transcripts(projects, sessions=sessions, clock=lambda: 9000.0)
+    assert late(7, "/home/u/git/demo.x", 60.0, frozenset()) == ("directory", None)
+    assert reader(7, "/home/u/git/nowhere", 60.0, frozenset()) == ("directory", None)
 
 
 def test_dashed_is_every_non_alphanumeric_character() -> None:
     assert who.dashed("/home/u/git/hands") == "-home-u-git-hands"
     assert who.dashed("/home/u/.hands/a_b") == "-home-u--hands-a-b"
+
+
+# ------------------------------------ transcripts by the sessions file (§27, H-020)
+
+
+JOB_SID = "0b0b0b0b-0000-4000-8000-000000000a0b"
+HUMAN_SID = "1c1c1c1c-0000-4000-8000-000000000001"
+OTHER_SID = "2d2d2d2d-0000-4000-8000-000000000002"
+
+
+def _claude_dir(tmp_path: Path) -> tuple[Path, Path]:
+    projects, sessions = tmp_path / ".claude" / "projects", tmp_path / ".claude" / "sessions"
+    projects.mkdir(parents=True)
+    sessions.mkdir(parents=True)
+    return projects, sessions
+
+
+def _transcript(projects: Path, cwd: str, sid: str, prompt: str, mtime: float) -> Path:
+    folder = projects / who.dashed(cwd)
+    folder.mkdir(parents=True, exist_ok=True)
+    path = folder / f"{sid}.jsonl"
+    path.write_text(
+        _line({"type": "queue-operation", "operation": "enqueue", "sessionId": sid})
+        + _line({"type": "user", "sessionId": sid, "message": {"content": prompt}})
+        + _line({"type": "assistant", "message": {"content": [{"type": "text", "text": "ok"}]}})
+    )
+    os.utime(path, (mtime, mtime))
+    return path
+
+
+def _sessions_file(sessions: Path, pid: int, sid: str, cwd: str, **extra: Any) -> Path:
+    """The shape H-020 recorded; only `pid` and `sessionId` are meant to be read."""
+    body = {"pid": pid, "sessionId": sid, "cwd": cwd, "kind": "interactive",
+            "entrypoint": "cli", "startedAt": 1, "status": "idle", **extra}  # fmt: skip
+    path = sessions / f"{pid}.json"
+    path.write_text(json.dumps(body))
+    (sessions / f"{pid}.deadbeef.key").write_text("peer-token-not-to-be-read")
+    return path
+
+
+def test_two_transcripts_in_one_directory_are_attributed_each_to_its_own_pid(
+    tmp_path: Path,
+) -> None:
+    """§27 gate (a): two sessions in one cwd, two sessions files — each pid gets the
+    transcript its `sessionId` names, not the newest file of the directory."""
+    projects, sessions = _claude_dir(tmp_path)
+    _transcript(projects, REPO, HUMAN_SID, "first session's prompt", 2000)
+    _transcript(projects, REPO, OTHER_SID, "second session's prompt", 2010)
+    _sessions_file(sessions, 200, HUMAN_SID, REPO)
+    _sessions_file(sessions, 201, OTHER_SID, REPO)
+    reader = who.Transcripts(projects, sessions=sessions, clock=lambda: 2030.0)
+    first = reader(200, REPO, 60.0, frozenset())
+    second = reader(201, REPO, 60.0, frozenset())
+    assert first[0] == second[0] == "session"
+    assert first[1] is not None and first[1]["last_prompt"] == "first session's prompt"
+    assert second[1] is not None and second[1]["last_prompt"] == "second session's prompt"
+    assert first[1]["idle_s"] == pytest.approx(30.0)
+
+    table = {
+        1: _proc(0, ["init"], "/", 9e6, "init"),
+        200: _proc(1, ["claude"], REPO, 600, "claude"),
+        201: _proc(1, ["claude"], REPO, 60, "claude"),
+    }
+    src = replace_sources(sources(daemon=lambda: None, table=lambda: table), reader)
+    text, _items = who.build_summary(src)
+    [older] = [b for b in text.split("\n\n") if "(session, 10m)" in b]
+    [newer] = [b for b in text.split("\n\n") if "(session, 60s)" in b]
+    assert "last: first session's prompt" in strip_paths(older)
+    assert "second" not in strip_paths(older)
+    assert "last: second session's prompt" in strip_paths(newer)
+    assert "first" not in strip_paths(newer)
+    assert "transcript: by directory" not in strip_paths(text)
+
+
+def replace_sources(src: who.Sources, reader: Any, jobs: Any = frozenset) -> who.Sources:
+    return replace(src, transcripts=reader, job_sessions=jobs)
+
+
+def _job_and_human(tmp_path: Path, *, human_file: bool, human_transcript: bool = True) -> str:
+    """A hands builder job (pid 100, session JOB_SID, recorded in the spool) and a
+    human session (pid 200) in the same cwd; the job's transcript is the newest."""
+    projects, sessions = _claude_dir(tmp_path)
+    if human_transcript:
+        _transcript(projects, REPO, HUMAN_SID, "the human asked this", 2000)
+    _transcript(projects, REPO, JOB_SID, "JOB-PROMPT-TEXT from the builder", 2020)
+    _sessions_file(sessions, 100, JOB_SID, REPO, entrypoint="sdk-cli")
+    if human_file:
+        _sessions_file(sessions, 200, HUMAN_SID, REPO)
+    spool = Spool(tmp_path / "hands")
+    spool.create_job(role="builder", context="clear", prompt="Execute WORKPLAN.md run 2",
+                     origin="cli", session_id=JOB_SID, pid=100)  # fmt: skip
+    spool.create_job(role="aux", context="clear", prompt="q", origin="cli")  # no session yet
+    table = {
+        1: _proc(0, ["init"], "/", 9e6, "init"),
+        100: _proc(1, ["claude", "-p", "--output-format", "stream-json"], REPO, 300, "claude"),
+        200: _proc(1, ["claude"], REPO, 7200, "claude"),
+    }
+    reader = who.Transcripts(projects, sessions=sessions, clock=lambda: 2030.0)
+    src = replace_sources(
+        sources(table=lambda: table), reader, who.JobSessions(spool.jobs_dir)
+    )
+    text, _items = who.build_summary(src)
+    return text
+
+
+def _human_block(text: str) -> str:
+    [block] = [b for b in text.split("\n\n") if b.startswith("demo (your session)")]
+    return block
+
+
+@pytest.mark.parametrize("human_file", [True, False], ids=["sessions-file", "no-sessions-file"])
+def test_a_hands_job_in_the_same_cwd_is_never_shown_under_the_human_session(
+    tmp_path: Path, utc: None, human_file: bool
+) -> None:
+    """§27 gate (b): with the human's sessions file present, and with it absent
+    (`transcript: by directory`), nothing of the job's transcript is shown under the
+    human's session, although the job's transcript is the newest in the directory."""
+    text = _job_and_human(tmp_path, human_file=human_file)
+    block = _human_block(text)
+    assert "JOB-PROMPT-TEXT" not in strip_paths(text)
+    assert "    last: the human asked this" in strip_paths(block)
+    head = block.splitlines()[0]
+    assert ("transcript: by directory" in strip_paths(head)) is (not human_file)
+    assert "transcript: by directory" not in strip_paths(text.replace(head, ""))
+
+
+def test_with_no_sessions_file_and_only_the_job_transcript_nothing_is_attributed(
+    tmp_path: Path, utc: None
+) -> None:
+    """§27 gate (b), the directory holding only the job's transcript: the human's
+    line says `transcript: by directory` and shows no state from it."""
+    text = _job_and_human(tmp_path, human_file=False, human_transcript=False)
+    block = _human_block(text)
+    assert block == "demo (your session) (session, 2h00) — state unknown · transcript: by directory"
+    assert "JOB-PROMPT-TEXT" not in strip_paths(text)
+
+
+def test_the_key_file_beside_the_sessions_file_is_never_opened_or_listed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, utc: None
+) -> None:
+    """§27 gate (c): a `<pid>.<hash>.key` sits beside each `<pid>.json`; the reader
+    opens only `<pid>.json` by name and never lists the sessions directory."""
+    import builtins
+
+    projects, sessions = _claude_dir(tmp_path)
+    _transcript(projects, REPO, HUMAN_SID, "the human asked this", 2000)
+    _sessions_file(sessions, 200, HUMAN_SID, REPO)
+    for key in sessions.glob("*.key"):
+        key.chmod(0)
+    opened: list[str] = []
+    listed: list[str] = []
+    real_io_open, real_os_open = io.open, os.open
+    real_scandir, real_listdir = os.scandir, os.listdir
+
+    def rec_open(file: Any, *args: Any, **kwargs: Any) -> Any:
+        opened.append(os.fspath(file) if not isinstance(file, int) else str(file))
+        return real_io_open(file, *args, **kwargs)
+
+    def rec_os_open(path: Any, *args: Any, **kwargs: Any) -> Any:
+        opened.append(os.fspath(path))
+        return real_os_open(path, *args, **kwargs)
+
+    def rec_scandir(path: Any = ".") -> Any:
+        listed.append(os.fspath(path))
+        return real_scandir(path)
+
+    def rec_listdir(path: Any = ".") -> Any:
+        listed.append(os.fspath(path))
+        return real_listdir(path)
+
+    monkeypatch.setattr(io, "open", rec_open)
+    monkeypatch.setattr(builtins, "open", rec_open)
+    monkeypatch.setattr(os, "open", rec_os_open)
+    monkeypatch.setattr(os, "scandir", rec_scandir)
+    monkeypatch.setattr(os, "listdir", rec_listdir)
+    reader = who.Transcripts(projects, sessions=sessions, clock=lambda: 2030.0)
+    table = {
+        1: _proc(0, ["init"], "/", 9e6, "init"),
+        200: _proc(1, ["claude"], REPO, 600, "claude"),
+        300: _proc(1, ["claude"], "/home/u/git/other", 60, "claude"),
+    }
+    text, _ = who.build_summary(replace_sources(sources(table=lambda: table), reader))
+    monkeypatch.undo()
+    assert "last: the human asked this" in strip_paths(text)
+    assert str(sessions / "200.json") in opened
+    assert not [p for p in opened if p.endswith(".key")]
+    assert not [p for p in opened if p.startswith(str(sessions)) and p not in (
+        str(sessions / "200.json"), str(sessions / "300.json"))]  # fmt: skip
+    assert not [p for p in listed if p.rstrip("/") == str(sessions)]
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "not json",
+        json.dumps([200, HUMAN_SID]),
+        json.dumps({"pid": 999, "sessionId": HUMAN_SID}),
+        json.dumps({"pid": "200", "sessionId": HUMAN_SID}),
+        json.dumps({"pid": 200}),
+        json.dumps({"pid": 200, "sessionId": ""}),
+        json.dumps({"pid": 200, "sessionId": "../-home-u-git-demo/x"}),
+        json.dumps({"pid": 200, "sessionId": ".hidden"}),
+    ],
+    ids=["not-json", "not-object", "other-pid", "pid-string", "no-session", "empty",
+         "path", "dotfile"],  # fmt: skip
+)
+def test_a_sessions_file_that_does_not_name_this_pid_session_is_no_sessions_file(
+    tmp_path: Path, body: str
+) -> None:
+    projects, sessions = _claude_dir(tmp_path)
+    _transcript(projects, REPO, OTHER_SID, "newest in the directory", 2000)
+    (sessions / "200.json").write_text(body)
+    assert who.session_id_for(sessions, 200) is None
+    reader = who.Transcripts(projects, sessions=sessions, clock=lambda: 2030.0)
+    match, state = reader(200, REPO, 60.0, frozenset())
+    assert match == "directory"
+    assert state is not None and state["last_prompt"] == "newest in the directory"
+
+
+def test_the_sessions_file_transcript_is_found_by_basename_and_never_by_directory(
+    tmp_path: Path,
+) -> None:
+    """The cwd's project directory first, then any project directory (the process
+    may have changed directory since it started); a named transcript that does not
+    exist yet is no state, never the directory's newest file."""
+    projects, sessions = _claude_dir(tmp_path)
+    _transcript(projects, "/home/u/git/started-here", HUMAN_SID, "started elsewhere", 2000)
+    _transcript(projects, REPO, OTHER_SID, "someone else's", 2020)
+    _sessions_file(sessions, 200, HUMAN_SID, "/home/u/git/started-here")
+    assert who.session_id_for(sessions, 200) == HUMAN_SID
+    reader = who.Transcripts(projects, sessions=sessions, clock=lambda: 2030.0)
+    match, state = reader(200, REPO, 60.0, frozenset())
+    assert match == "session"
+    assert state is not None and state["last_prompt"] == "started elsewhere"
+    _sessions_file(sessions, 201, JOB_SID, REPO)  # names a transcript not written yet
+    assert reader(201, REPO, 60.0, frozenset()) == ("session", None)
+
+
+def test_job_sessions_are_every_session_id_the_spool_records(tmp_path: Path) -> None:
+    spool = Spool(tmp_path / "hands")
+    spool.create_job(role="builder", context="clear", prompt="a", origin="cli",
+                     session_id=JOB_SID)  # fmt: skip
+    queued = spool.create_job(role="aux", context="clear", prompt="b", origin="cli")
+    (spool.jobs_dir / "broken.json").write_text("{not json")
+    jobs = who.JobSessions(spool.jobs_dir)
+    assert jobs() == frozenset({JOB_SID})
+    spool.transition(queued, "running", session_id=OTHER_SID, pid=5)
+    assert jobs() == frozenset({JOB_SID, OTHER_SID})
+    missing = tmp_path / "nowhere" / "jobs"
+    assert who.JobSessions(missing)() == frozenset()
+    assert not missing.exists()
 
 
 # ------------------------------------------------------------- the picture (§24)
@@ -252,9 +508,10 @@ def sources(
         role_cwds={"builder": REPO, "aux": REPO},
         daemon=daemon,
         procs=table,
-        transcripts=lambda cwd, _limit: seen.get(cwd),
+        transcripts=lambda _pid, cwd, _limit, _exclude: ("session", seen.get(cwd)),
         clock=lambda: 3600.0 * 9 + 60 * 5,
         home=HOME,
+        job_sessions=frozenset,
     )
 
 

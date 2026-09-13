@@ -401,9 +401,12 @@ Not proven, and not built:
   channel reads no other command.
 - No `go` has been sent from a real phone, and no Approve button has been
   pressed on one; the tests feed a fake ntfy stream.
-- `hands who` still matches an interactive session to its transcript by
-  directory, not by pid (§26 asks for pid; FINDINGS H-020), so a builder job in
-  the same directory as your session can be shown under it.
+- `hands who` matches an interactive session to its transcript through
+  `~/.claude/sessions/<pid>.json`, whose `sessionId` names the transcript (§27,
+  FINDINGS H-020). That file is Claude Code's and undocumented; its shape was
+  read on one machine and one Claude Code version. With no such file for a pid
+  the line says `transcript: by directory`, and a transcript whose session id a
+  hands job record holds is never shown under it.
 - `hands kit check` checks the builder's verdict rules only; review verdicts
   have no literal in the brief to match (FINDINGS H-021).
 
@@ -415,7 +418,11 @@ One screen: this daemon's roles, jobs, held gates, pipeline and unread inbox
 (asked of handsd over its socket), every other `claude` process on the machine
 (from /proc, with the commands running under it), and whether each interactive
 session is waiting for you or working (from its transcript under
-`~/.claude/projects/`). Your own session in a role directory is labelled
+`~/.claude/projects/`, the one `~/.claude/sessions/<pid>.json` names by
+`sessionId`; only `pid` and `sessionId` are read, and the `.key` file beside it
+never is). A session with no sessions file says `transcript: by directory`: its
+state is then read from the newest transcript of its directory that is not a
+hands job's. Your own session in a role directory is labelled
 `(your session)`; a session under `~/hands-driver/<project>/` is
 `driver:<project>`. With handsd down it still prints the rest, says the daemon
 is not answering, and exits 0.
@@ -690,6 +697,7 @@ of this terminal. The driver does not: it arms nothing, and your message
   been fetched from a real ntfy attachment: the tests serve the attachment from a
   local HTTP server, so the curl line above and the ntfy app's attach are
   unproven. No `go` has been sent from a real phone, so the closed loop above
-  has never run end to end. `hands who` matches sessions by directory, not by
-  pid (H-020). Nor has
+  has never run end to end. `hands who` matches sessions through
+  `~/.claude/sessions/<pid>.json` (§27, H-020), a file read only as the tests
+  write it. Nor has
   `handswho` pushed a picture to, or read a command from, a real topic.
