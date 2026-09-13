@@ -1,5 +1,12 @@
 # ROADMAP
 
+Standing reminder for the architect, at every milestone gate below: if
+`docs/ARCHITECT-INSTRUCTION.md` changed since the last paste, hand the human
+the complete new instruction text to paste into the claude.ai Project (the
+human cannot see the installed copy; a stale one is invisible from inside a
+chat). Missions 10 and 11 change it (kit check, the closed loop, the driver
+role), and each Project onboarded in M5/M6 needs its own pasted copy.
+
 Milestones are gated by a clean cold review of the mission that closes them,
 then an install (`uv tool install --force`) and a driver-kit refresh.
 
@@ -18,7 +25,15 @@ then an install (`uv tool install --force`) and a driver-kit refresh.
   orphan accounting; ntfy command channel with authenticated approvals
   (`decided_by: phone`); REVIEW-3's deferred items. Gate: clean review,
   install, and the doctor wake check redone over the phone channel.
-- **M5 spanweave integration** — hands drives spanweave's *development*
+- **M4b The closed loop** — INSTRUCTION RE-PASTE DUE at this gate.
+  The closed loop — missions 10 and 11: `go` and kit transport from
+  the phone; the driver as a headless role with bounded authority via
+  `consult`. Gate: one mission of hands run end to end with no Code tab
+  opened, and one builder question resolved by the driver role and graded
+  by the cold review.
+- **M5 spanweave integration** — INSTRUCTION PASTE DUE: the spanweave
+  Project gets its own copy, parameters filled in.
+  spanweave integration — hands drives spanweave's *development*
   (its builders and reviewers run as hands jobs); nothing of hands enters
   what spanweave ships. First external project, run as a shakeout.
   Shape agreed 2026-09-12: **PR per run, auto-merge on a clean review.**
@@ -47,7 +62,9 @@ then an install (`uv tool install --force`) and a driver-kit refresh.
      it short, and treat the first auto-merge as the milestone.
   Gate: one series of at least two runs merged with no human action
   between kickoff and the series-close stop.
-- **M6 agile-skills integration** — hands drives agile-skills' development;
+- **M6 agile-skills integration** — INSTRUCTION PASTE DUE: the agile-skills
+  Project gets its own copy.
+  agile-skills integration — hands drives agile-skills' development;
   agile-skills stays machinery-agnostic and owns the mission-form contract
   (kickoff line, checkpoint resume, `VERDICT:` first line) as its own spec,
   of which hands is one consumer and never a dependency. Same steps with

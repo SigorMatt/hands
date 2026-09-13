@@ -1,0 +1,105 @@
+version = 1
+series = "<project>-<series>"
+
+[series]
+kickoff = "Execute WORKPLAN.md run 1"
+
+[limits]
+auto_runs = [2, 3]        # runs already grouped in WORKPLAN.md §2; anything else stops
+max_resumes = 3
+
+# Run finished → cold review on the branch.
+[[rule]]
+on = "builder.done"
+verdict = '^VERDICT: run (?P<n>\d+) finished'
+then = "send"
+role = "aux"
+context = "clear"
+prompt = "Review WORKPLAN.md commits since the last review: commit on this branch, per WORKPLAN.md §0.2. Begin your reply with: VERDICT: review run {n} blockers=<k> should-fix=<m>"
+
+# Review clean and the next run is pre-planned → merge and go (PR shape, §9).
+[[rule]]
+on = "aux.done"
+verdict = '^VERDICT: review run (?P<n>\d+) blockers=0'
+then = "send"
+role = "builder"
+context = "clear"
+run = "{n+1}"
+prompt = "The review of run {n} has no blockers. Confirm the PR's checks are green, merge it with gh pr merge --squash, then Execute WORKPLAN.md run {n+1} on a new branch from main. Begin your reply with: VERDICT: run {n+1} finished, or VERDICT: run {n+1} blocked <reason>, or VERDICT: question <one line>"
+
+[[rule]]
+on = "aux.done"
+verdict = '^VERDICT: review run (?P<n>\d+) blockers=[1-9]'
+then = "stop"
+message = "Run {n} review has blockers"
+
+[[rule]]
+on = "builder.done"
+verdict = '^VERDICT: run (?P<n>\d+) blocked'
+then = "stop"
+message = "Run {n} blocked"
+
+[[rule]]
+on = "builder.done"
+verdict = '^VERDICT: (awaiting decision|question)'
+then = "stop"
+message = "The builder needs a decision"
+
+[[rule]]
+on = "builder.done"
+verdict = '^VERDICT: kit applied'
+then = "notify"
+message = "Kit applied"
+
+[[rule]]
+on = "builder.done"
+then = "stop"
+message = "Builder finished without a recognised verdict"
+
+[[rule]]
+on = "aux.done"
+then = "stop"
+message = "Aux finished without a recognised verdict"
+
+[[rule]]
+on = "builder.orphaned"
+then = "resume"
+
+[[rule]]
+on = "builder.failed"
+then = "resume"
+
+[[rule]]
+on = "aux.failed"
+then = "stop"
+message = "Aux job failed"
+
+[[rule]]
+on = "monitor.stall"
+then = "notify"
+message = "Builder looks stalled"
+
+[[rule]]
+on = "monitor.tripwire"
+then = "stop"
+message = "Tripwire fired"
+
+[[rule]]
+on = "monitor.task_killed"
+then = "stop"
+message = "The harness killed a task inside a role session"
+
+[[rule]]
+on = "monitor.orphan_processes"
+then = "stop"
+message = "Processes outlived their job"
+
+[[rule]]
+on = "job.held"
+then = "notify"
+message = "A job is held for your decision"
+
+[[rule]]
+on = "job.denied"
+then = "notify"
+message = "A held job was denied"

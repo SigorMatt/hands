@@ -1,12 +1,13 @@
-# hands — DESIGN v3.8
+# hands — DESIGN v3.9
 
 Machinery that replaces the human relay between the planning brain and the two
 Claude Code roles (builder, aux) on the Ubuntu laptop, and that keeps a series
 moving without a human while everything goes by plan. Working name: `hands`.
 The method it serves is described in WORKING-MODEL.md (agile-skills) and
 OPERATING-MODEL.md (spanweave); hands changes the topology, not the method.
-v3.8 (2026-09-13) folds in the mission 8 review and its open decisions;
-changes are in §25; earlier changes in §24–§17.
+v3.9 (2026-09-13) specifies mission 10, the closed phone loop and the
+architect's tooling, and folds in the mission 9 review; changes are in §26;
+earlier changes in §25–§17.
 
 Status: proposal, 2026-09-10. Items marked DECIDED were settled in discussion.
 
@@ -176,6 +177,7 @@ JSON with `--json` (the driver uses that) or a readable form for you.
 | `pause` / `resume` | — | pause/unpause the playbook engine |
 | `status` | — | daemon, roles, running jobs, monitor state (`queue_depth` is capacity; `queued` is contents) |
 | `notify` | `--test "<message>"` | sends one ntfy message to the configured topic; the first real proof of delivery |
+| `kit check` | `<zip\|dir> [--repo path]` | validates a kit before it is sent (§26): paths, playbook loads, verdict regexes match the brief's vocabulary, kickoff equals `[series] kickoff`, no `quiet_hours`, no "as before"; prints the apply prompt |
 | `who` | `[--daemon]` | the one-screen picture: this daemon's jobs and pipeline, every other `claude` process from /proc, interactive sessions' waiting/working state from their transcripts; `--daemon` (also the `handswho` entry point) pushes it on change and on request (§11) |
 | `doctor` | — | claude binary, ops script flags, allowed roots, one-turn `claude -p` per role, background-wake check (§11) |
 
@@ -946,3 +948,48 @@ architect reads the branch on ntfy and writes the next kit from disk.
   route; `_last_resort` checks group membership before `killpg`; the
   reconnect warning never carries the topic URL.
 - Stale `meta/prototypes/` ruff exclude removed.
+
+---
+
+## 26. Changes from v3.8 (mission 9 review; mission 10 specification)
+
+Review 9 items: the REVIEW-8 should-fix 3 check is made to fail on the
+condition it guards; `docs/INTEGRATION.md`'s statement of when a job is
+`done` matches §6; the HEAD comparison of the playbook runs git with a
+clean environment (`-c core.autocrlf=false`, no `GIT_DIR`/`GIT_WORK_TREE`
+inherited) and compares normalized bytes; H-017 quotes v3.7 correctly.
+
+Mission 10, the closed phone loop:
+- `[series] kickoff` in the playbook names the series' fixed kickoff line.
+  `go <secret>` on `cmd_topic` sends exactly that line as a `clear` send to
+  the builder, `origin: phone`; there is no other way to start work from
+  the phone, and `go` is refused while a job is running or queued for the
+  builder, or while a playbook is not loaded.
+- Kit transport: a message on `cmd_topic` whose body is `kit <secret>` and
+  which carries an ntfy attachment is fetched by handsd into
+  `[files] kit_dir` (default `~/Downloads`) under the attachment's own
+  name (sanitized to a basename; `.zip` only), size-capped by `[files]
+  kit_max_mb` (default 20), never unzipped, never executed; an inbox event
+  and a notification say `kit received <name> <bytes> <sha256>`. The
+  apply remains a gated job with buttons.
+- `hands who` matches an interactive session to its transcript by pid,
+  which the transcript's first line records, never by directory; a job in
+  the same directory as the human's session is never shown under it.
+- `docs/INTEGRATION.md` describes the loop end to end, phone only.
+
+Mission 10, the architect's tooling:
+- `docs/ARCHITECT-HANDBOOK.md` and `templates/` (a mission brief, a
+  missions playbook, a runs playbook, a review protocol) are the
+  architect's onboarding; the instruction gains rule 13 (clone, read,
+  `kit check` before emitting).
+- `hands kit check <zip|dir> [--repo path]`: every entry is a repository
+  path under the given repo (or the current one); if the kit carries a
+  playbook it loads under the current engine, sets no `quiet_hours`, and
+  its `[series] kickoff` equals the kickoff line the brief fixes; every
+  `verdict` regex of the playbook in force (the kit's, else the repo's)
+  matches at least one literal in the brief's final-reply vocabulary, and
+  every verdict literal in the brief matches some rule; the brief contains
+  neither "as before" nor a "Budget guidance" section; when a rule sends a
+  review, the protocol file it names exists. Output: one line per check,
+  the apply prompt for the kit, exit 0 only when everything passes. It
+  runs anywhere hands installs, including an architect's sandbox.

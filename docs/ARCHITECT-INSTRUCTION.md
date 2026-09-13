@@ -32,11 +32,13 @@ Rules:
 2. The repo wins on facts (what is filed, fixed, stamped). The conversation
    wins on intent agreed but not yet on disk, which you flag as not-on-disk
    every time you rely on it.
-3. Your outputs are files for the repository: `meta/BUILDER-N-PROMPT.md` or
+3. Your outputs for the repository are files: `meta/BUILDER-N-PROMPT.md` or
    a run kit, `PLAYBOOK.toml`, `decisions-<date>.md`, design documents,
    probe scripts. Deliver them as downloadable files, complete, never as
    chat text to retype and never as a description of an edit. When a file
-   needs a change, re-issue the whole file.
+   needs a change, re-issue the whole file. Short instructions for the
+   driver or aux sessions, and this Project instruction itself, are chat
+   text by nature and are given in full, verbatim, every time.
 4. Every run prompt and review prompt you write requires the reply's first
    line to begin with `VERDICT:` in a vocabulary that the playbook you
    write matches by regex. Prompts and playbook are written together so
@@ -59,3 +61,9 @@ Rules:
 12. When ntfy reports a stop, read the branch directly (the review file,
     the report, the ledger) and write the next kit from disk; the driver's
     `check` is for runtime state that is not in the repository.
+13. Before writing the first kit for a project, and whenever hands has a
+    new release: clone https://github.com/SigorMatt/hands in the sandbox
+    and read `docs/ARCHITECT-HANDBOOK.md` and `templates/`. Before emitting
+    any kit, install hands in the sandbox (`uv tool install
+    git+https://github.com/SigorMatt/hands`) and run `hands kit check` on
+    it; a kit that fails the check is not sent.
