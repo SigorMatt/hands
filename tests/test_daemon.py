@@ -338,9 +338,9 @@ async def _ended(job_id: str) -> Any:
 @pytest.mark.parametrize(
     ("prompt", "reason"),
     [
-        # No num_turns: §6 keeps a success result with turns and exit 0 `done`
-        # whatever stderr says, so the failed shape lacks one of the three.
-        (f"FAKE:stderr {TERMINATING}\nFAKE:result a progress note\nFAKE:no-turns\nFAKE:exit 0",
+        # H-014's shape: §6 lets the line win even over a success result with
+        # turns and exit 0.
+        (f"FAKE:stderr {TERMINATING}\nFAKE:result a progress note\nFAKE:turns 59\nFAKE:exit 0",
          "harness_terminated"),
         ("FAKE:result partial\nFAKE:exit 3", "nonzero_exit"),
     ],

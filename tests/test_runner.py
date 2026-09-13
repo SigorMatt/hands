@@ -325,14 +325,14 @@ MID_MISSION_NOTE = (
 )
 
 
-def test_the_exact_shape_of_job_0mtygi953_is_done_under_the_section_6_precedence(
+def test_the_exact_shape_of_job_0mtygi953_is_failed_harness_terminated(
     runner: Runner, spool: Spool
 ) -> None:
     """H-014's record: a final success result, num_turns 59, exit 0 — and the
-    terminating line. DESIGN v3.7 §6: "a job with a `success` result, turns and
-    exit 0 is `done` whatever else stderr says" (review 7 should-fix 2). Mission
-    7a pinned this shape as `failed`; §6 now decides it the other way, and the
-    line stays in `stderr_tail` for a human to read.
+    terminating line. DESIGN v3.8 §6: "a cancel stays `killed` and a limit stays
+    `limited`; otherwise the termination line wins even over a `success` result"
+    (FINAL-REPORT-8 §5 item 1). Mission 8 pinned this shape `done`; v3.8 reverses
+    that back to mission 7a's reading.
     """
     job = send(
         runner,
@@ -342,11 +342,11 @@ def test_the_exact_shape_of_job_0mtygi953_is_done_under_the_section_6_precedence
     assert job.exit_code == 0
     assert job.num_turns == 59
     assert job.result == MID_MISSION_NOTE
-    assert job.state == "done"
-    assert job.failure_reason is None
+    assert job.state == "failed"
+    assert job.failure_reason == "harness_terminated"
     assert job.stderr_tail is not None and TERMINATING in strip_paths(job.stderr_tail)
-    assert spool.load_job(job.id).failure_reason is None
-    assert [event.kind for event in spool.events()] == ["job.done"]
+    assert spool.load_job(job.id).failure_reason == "harness_terminated"
+    assert [event.kind for event in spool.events()] == ["job.failed"]
 
 
 @pytest.mark.parametrize(
@@ -363,8 +363,9 @@ def test_the_exact_shape_of_job_0mtygi953_is_done_under_the_section_6_precedence
 def test_the_terminating_line_fails_a_job_missing_any_of_success_turns_and_exit_0(
     runner: Runner, spool: Spool, missing: str
 ) -> None:
-    """§6: only the full `success` + turns + exit 0 shape overrides the line; take
-    away any one of the three and the recorded reason is `harness_terminated`."""
+    """§6: the line wins over every other failure too; with any one of success,
+    turns or exit 0 taken away the recorded reason is still `harness_terminated`
+    (the full shape is the test above)."""
     job = send(runner, spool, f"FAKE:stderr {TERMINATING}\nFAKE:result a note\n{missing}")
     assert job.state == "failed"
     assert job.failure_reason == "harness_terminated"
@@ -386,6 +387,17 @@ def test_review_7s_over_match_lines_do_not_set_the_failure_reason(
     job = send(runner, spool, f"FAKE:stderr {line}\nFAKE:no-result")
     assert job.state == "failed"
     assert job.failure_reason == "no_final_result"
+
+
+@pytest.mark.parametrize("line", REVIEW_7_OVER_MATCHES)
+def test_review_7s_over_match_lines_leave_a_successful_job_done(
+    runner: Runner, spool: Spool, line: str
+) -> None:
+    """The line beats a `success` result only in its exact shape (§6): a success
+    result with turns and exit 0 whose stderr carries a look-alike stays `done`."""
+    job = send(runner, spool, f"FAKE:stderr {line}\nFAKE:result fin\nFAKE:turns 59\nFAKE:exit 0")
+    assert job.state == "done"
+    assert job.failure_reason is None
 
 
 def test_a_mid_turn_exit_with_no_result_event_is_failed(runner: Runner, spool: Spool) -> None:

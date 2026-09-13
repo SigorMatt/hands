@@ -32,9 +32,10 @@ sent SIGTERM and, after `ORPHAN_GRACE_S`, SIGKILL. The group is weaker: a proces
 that calls setsid leaves it and is neither seen nor killed.
 
 A job is `done` only when the process ends cleanly with a final `result` event
-of subtype `success` (or the `error_*` family) that carries `num_turns`, and
-stderr never said the harness terminated it (§2, §6, §23; H-014). Anything else
-is `failed`, and `failure_reason` names which — see `FAILURE_REASONS`.
+of subtype `success` that carries `num_turns`, and stderr never carried the
+harness's termination line (§2, §6, §23; H-014). A cancel stays `killed` and a
+limit stays `limited`; anything else is `failed`, and `failure_reason` names
+which — see `FAILURE_REASONS`.
 """
 
 from __future__ import annotations
@@ -188,8 +189,8 @@ MAX_UNIT_PROJECT = 64
 #:   spawn_error         the process could not be started at all
 #: The first that holds is the one recorded. A cancel (`killed`) and a detected
 #: limit (`limited`) are decided before any of these, and their reason is null.
-#: The terminating line never overrides a `success` result with `num_turns` and
-#: exit 0: that job is `done` whatever else stderr says (DESIGN v3.7 §6).
+#: Otherwise the terminating line wins even over a `success` result with
+#: `num_turns` and exit 0: the harness ended the session mid-turn (DESIGN v3.8 §6).
 FAILURE_REASONS: tuple[str, ...] = (
     "harness_terminated",
     "no_final_result",
@@ -887,15 +888,8 @@ def _final_state(
 
 def _failure_reason(parsed: _Parsed, exit_code: int | None) -> str | None:
     """The first of `FAILURE_REASONS` that holds for a finished run, or None."""
-    succeeded = (
-        parsed.saw_result
-        and parsed.subtype == "success"
-        and not parsed.is_error
-        and parsed.num_turns is not None
-        and exit_code == 0
-    )
-    if parsed.harness_terminated and not succeeded:
-        return "harness_terminated"
+    if parsed.harness_terminated:
+        return "harness_terminated"  # §6: wins even over a `success` result (H-014)
     if not parsed.saw_result or not _is_final_subtype(parsed.subtype):
         return "no_final_result"
     if parsed.is_error:

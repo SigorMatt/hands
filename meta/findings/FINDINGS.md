@@ -768,6 +768,22 @@ again under the design. The code does not say so yet: at this commit
 `src/hands/runner.py` still returns `done` for that shape (the v3.7 rule), and
 the change to the runner and its pinning test is mission 9 U1, still to come.
 
+**Status: closed on disk (mission 9 U1, the commit that carries this
+paragraph; DESIGN v3.8 §6, §25).** `src/hands/runner.py`'s `_failure_reason`
+returns `harness_terminated` whenever stderr carried the terminating line, with
+no exception for a `success` result; `_final_state` still decides a cancel
+(`killed`) and a detected limit (`limited`) first. The matcher is unchanged:
+anchored at the line start, case-sensitive, through `Set
+CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS=`. Tests prove, with `tests/fake_claude.py`:
+the recorded shape of `0mtygi953-ym63` (success result, `num_turns` 59, exit 0,
+the terminating line) is `failed`/`harness_terminated` in the runner, in `hands
+show` against a real daemon, and in the §10 example's `builder.failed → resume`
+over a real daemon; the line still wins with any one of success, turns or exit 0
+taken away; a limit and a cancel still win over it; both REVIEW-7 over-match
+lines leave a success job `done` and do not set the reason on a failed one. Not
+proven: no real harness termination has been observed under this code, nor that
+a real claude binary with the ceiling at 0 waits instead of terminating.
+
 ## H-015 — a held job can be decided from the phone only by a declaration
 
 Severity: medium · Component: DESIGN §8 (human gates), §11 (notifications),
@@ -904,3 +920,9 @@ cli|driver|phone, decided_at, quote?}`. Mission 9 U1 pins the code and
 
 Status: fixed by DESIGN v3.8 (§6 now lists exactly those; U1 pins the code and
 docs/INTEGRATION.md to the §6 lists)
+
+**Status: closed on disk (mission 9 U1, the commit that carries this paragraph):**
+a test reads §6's two lists from DESIGN.md and asserts they equal
+`hands.runner.FAILURE_REASONS` and the new `hands.gates.DECIDED_BY` (the available
+§8 deciders; `button` stays an unavailable row that `check_decider` refuses), and
+a test asserts docs/INTEGRATION.md names every value.

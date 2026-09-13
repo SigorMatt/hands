@@ -159,6 +159,54 @@ def test_the_integration_doc_has_one_optional_section_for_notify_channel_and_who
         assert old not in text, f"docs/INTEGRATION.md still has {old!r}"
 
 
+def section_6_vocabulary(field: str) -> list[str]:
+    """The `|`-separated values DESIGN §6's job-record block lists for `field`.
+
+    `failure_reason`'s list is a comment that wraps onto a second `#` line;
+    `decided_by`'s sits inside the `gate` braces up to the next comma.
+    """
+    design = (ROOT / "DESIGN.md").read_text(encoding="utf-8")
+    section = design.split("## 6. Job lifecycle and limits")[1].split("\nRules:")[0]
+    record = flattened(section.replace("#", " "))
+    if field == "decided_by":
+        listing = record.split("decided_by:", 1)[1].split(",", 1)[0]
+    else:
+        listing = record.split("failure_reason when failed:", 1)[1].split(" gate ", 1)[0]
+    values = [value.strip() for value in listing.split("|")]
+    assert values and all(re.fullmatch(r"[a-z_]+", value) for value in values), values
+    return values
+
+
+def test_the_code_vocabularies_are_section_6s_lists() -> None:
+    """Review 8 should-fix 2, H-017: `failure_reason` and `gate.decided_by` hold
+    exactly the values DESIGN §6's job record lists."""
+    from hands.gates import DECIDED_BY
+    from hands.runner import FAILURE_REASONS
+
+    reasons = section_6_vocabulary("failure_reason")
+    assert reasons == [
+        "harness_terminated", "nonzero_exit", "no_final_result",
+        "error_result", "no_num_turns", "spawn_error",
+    ]
+    assert set(FAILURE_REASONS) == set(reasons) and len(FAILURE_REASONS) == len(reasons)
+    deciders = section_6_vocabulary("decided_by")
+    assert deciders == ["cli", "driver", "phone"]
+    assert set(DECIDED_BY) == set(deciders) and len(DECIDED_BY) == len(deciders)
+
+
+def test_the_integration_doc_names_both_vocabularies_and_the_precedence() -> None:
+    """docs/INTEGRATION.md carries every §6 value and the v3.8 precedence rule."""
+    doc = flattened((ROOT / "docs" / "INTEGRATION.md").read_text(encoding="utf-8"))
+    for value in (*section_6_vocabulary("failure_reason"), *section_6_vocabulary("decided_by")):
+        assert f"`{value}`" in doc, f"docs/INTEGRATION.md does not name `{value}`"
+    for said in (
+        "a cancel stays `killed` and a detected limit stays `limited`",
+        "the terminating line wins even over a `success` result",
+    ):
+        assert said in doc, f"docs/INTEGRATION.md does not say {said!r}"
+    assert "whatever else stderr says" not in doc
+
+
 def test_the_readme_names_who_the_phone_channel_and_the_new_monitor_events() -> None:
     readme = flattened((ROOT / "README.md").read_text(encoding="utf-8"))
     for said in ("`hands who`", "`handswho`", "cmd_topic", "monitor.task_killed",

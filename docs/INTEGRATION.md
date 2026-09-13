@@ -119,15 +119,22 @@ Notes that are easy to get wrong:
   ended while a sub-agent it started was still running is terminated and exits 0.
   `hands doctor` prints the effective value on each role's row.
 - **How a job ends** (§6, §23). A job is `done` only when claude exits 0 with a
-  final `result` event of subtype `success` (or an `error_*` subtype) that
-  carries `num_turns`, and stderr never carried the harness's "Background tasks
-  still running after …; terminating." line. Otherwise it is `failed`, and the
-  record's `failure_reason` says why, one value each: `harness_terminated`,
-  `no_final_result`, `error_result`, `nonzero_exit`, `no_num_turns`,
-  `spawn_error` — the first that holds, in that order; `stderr_tail` has the
-  evidence. `failure_reason` is null for every other state. A cancel is still
-  `killed` and a detected limit still `limited`, terminating line or not: §6's
-  limit resume waits out the reset, and a `builder.failed → resume` would not.
+  final `result` event of subtype `success` that carries `num_turns`, and stderr
+  never carried the harness's "Background tasks still running after …;
+  terminating. Set CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS=…" line. Otherwise it is
+  `failed`, and the record's `failure_reason` says why, one value each:
+  `harness_terminated`, `no_final_result`, `error_result`, `nonzero_exit`,
+  `no_num_turns`, `spawn_error` — the first that holds, in that order;
+  `stderr_tail` has the evidence. `failure_reason` is null for every other
+  state. Precedence: a cancel stays `killed` and a detected limit stays
+  `limited`, terminating line or not (§6's limit resume waits out the reset, and
+  a `builder.failed → resume` would not); otherwise the terminating line wins
+  even over a `success` result, because the harness ended the session mid-turn
+  and the result is whatever the model had said last (H-014). Only the line's
+  exact shape counts: from the line start, case-sensitive.
+- **Who decided a gate** (§6, §8). A decided job's `gate.decided_by` is one of
+  `cli` (`hands approve|deny` at the laptop), `driver` (`--human-confirmed`
+  with the human's quote) or `phone` (the ntfy command channel, below).
 - **An empty string is refused at load, for every optional key** (§20): `""` or
   blanks only is neither the key's absent meaning nor a usable value — an empty
   `ops.monitor_cmd` would have made the *ops directory* the monitor script. The

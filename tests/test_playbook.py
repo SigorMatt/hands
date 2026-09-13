@@ -1424,11 +1424,10 @@ def test_a_harness_terminated_builder_job_is_failed_and_the_example_resumes_it(
 ) -> None:
     """§23, H-014: `builder.failed → resume`, over the §10 example in a real daemon.
 
-    The first builder job ends like job 0mtygi953-ym63 — a final result with no
-    verdict, exit 0, and the terminating line on stderr — but without
-    `num_turns`: DESIGN v3.7 §6 keeps a success result with turns and exit 0
-    `done` whatever stderr says, so a harness termination is `failed` only when
-    one of the three is missing. That job is `failed`, the example's
+    The first builder job ends like job 0mtygi953-ym63 — a final success result
+    with no verdict, `num_turns`, exit 0, and the terminating line on stderr:
+    DESIGN v3.8 §6 lets the line win even over a `success` result. That job is
+    `failed`, the example's
     `builder.failed` rule resumes it, and the resumed job's own
     `VERDICT: question` is what stops the pipeline.
     """
@@ -1442,7 +1441,6 @@ def test_a_harness_terminated_builder_job_is_failed_and_the_example_resumes_it(
                 {
                     "result": "U0–U5 are committed; I'll continue with U6 when it reports back.",
                     "stderr": TERMINATING,
-                    "no_turns": True,
                 },
                 "VERDICT: question resumed after the termination",
             ]
@@ -1467,7 +1465,7 @@ def test_a_harness_terminated_builder_job_is_failed_and_the_example_resumes_it(
         assert failed["failure_reason"] == "harness_terminated"
         assert failed["exit_code"] == 0
         assert failed["result"].startswith("U0–U5")  # a final result event was there
-        assert failed["num_turns"] is None
+        assert failed["num_turns"] is not None  # H-014's shape carries turns
         assert TERMINATING in strip_paths(failed["stderr_tail"])
 
         assert resumed["resumed_from"] == failed["id"]

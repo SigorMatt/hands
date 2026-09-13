@@ -33,6 +33,7 @@ from typing import Any
 from hands.spool import now_iso
 
 __all__ = [
+    "DECIDED_BY",
     "DECIDERS",
     "DECISIONS",
     "GATE_KINDS",
@@ -64,8 +65,9 @@ class Decider:
 #:   - `hands approve <job> --human-confirmed` run by the driver: the record stores
 #:     `decided_by: driver` plus the quoted instruction. This is the phone path.
 #:   - ntfy Approve/Deny buttons (`decided_by: button`) come with the optional
-#:     remote face of §9, which is deferred. The name is kept so the vocabulary of
-#:     the record never has to change; nothing can produce it yet.
+#:     remote face of §9, which is deferred. §8 still names it, so the row is
+#:     kept, unavailable: `check_decider` refuses it, so no record carries it, and
+#:     it is not in §6's record vocabulary (`DECIDED_BY`).
 DECIDERS: dict[str, Decider] = {
     "cli": Decider(
         name="cli",
@@ -96,6 +98,10 @@ DECIDERS: dict[str, Decider] = {
         note="the ntfy command channel: cmd_secret or the held job's nonce (§24)",
     ),
 }
+
+#: Every `gate.decided_by` a record can carry: the available rows above, exactly
+#: DESIGN §6's `decided_by: cli|driver|phone` (review 8 should-fix 2, H-017).
+DECIDED_BY: tuple[str, ...] = tuple(name for name, row in DECIDERS.items() if row.available)
 
 DECISIONS = ("approved", "denied")
 
