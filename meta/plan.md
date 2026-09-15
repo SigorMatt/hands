@@ -7,7 +7,7 @@ failures).
 
 Base of the mission: bb9aab5 (`plan: mission 12 kit (DESIGN v3.11)`).
 
-- [ ] U0 Plan and bookkeeping (`plan:`) — this file, meta/CHECKPOINT.md;
+- [x] U0 Plan and bookkeeping (`plan:`) 5ea7b9d — this file, meta/CHECKPOINT.md;
       FINDINGS: H-018..H-021 resolutions moved into their own sections, status
       lines in place (SF5); H-022 §28 resolution, resolved; H-023 filed
       (blocker 3); SF4 `done` statement pinned per `failure_reason` value
