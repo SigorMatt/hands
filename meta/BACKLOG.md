@@ -14,14 +14,16 @@ item names the mission it is scheduled for; unscheduled items say so.
 
 ## Mission 12 — DONE 2026-09-15 (review 12: blockers=3; the guard's comment hole).
 
-## Mission 13 (scheduled 2026-09-15) — closer: review 12, the sweep (H-025 b), two projects on one laptop (moved here from 13's architect item 7)
+## Mission 13 — DONE 2026-09-15 (review 13: blockers=4; the guard's heredoc hole).
+
+## Mission 14 (scheduled 2026-09-16) — closer: the guard's one-line language (H-026), review 13, notification spacing. Spec: DESIGN v3.13 §30.
 
 - Review 11 blockers 1–5 and should-fix 1–9; the guard rewritten on shlex
   tokens; consult stops in the engine; H-022 resolved. Spec: DESIGN v3.11
   §28. After it: enable `[roles.driver]`, refresh the driver kit, first
   real consultation, then M5.
 
-## Mission 14 — the architect role (decided 2026-09-15; ROADMAP M4c)
+## Mission 15 — the architect role (decided 2026-09-15; ROADMAP M4c)
 
 1. `[roles.architect]`: cwd `~/hands-architect/<project>/` with a fetch-only
    clone; CLAUDE.md = `docs/ARCHITECT-INSTRUCTION.md` (role variant: reads
@@ -45,7 +47,7 @@ item names the mission it is scheduled for; unscheduled items say so.
    the architect's last session id.
 6. `hands doctor` reports the architect role like the driver role.
 
-## Mission 15 — talking to the architect (decided 2026-09-15; ROADMAP M4c)
+## Mission 16 — talking to the architect (decided 2026-09-15; ROADMAP M4c)
 
 1. `reply <secret> <text>` on `cmd_topic`: delivered as `hands send --role
    architect --context keep` to the architect's last session; its reply's

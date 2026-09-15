@@ -96,10 +96,6 @@ on = "monitor.orphan_processes"
 then = "stop"
 message = "Processes outlived their job"
 
-[[rule]]
-on = "job.held"
-then = "notify"
-message = "A job is held for your decision"
 
 [[rule]]
 on = "job.denied"

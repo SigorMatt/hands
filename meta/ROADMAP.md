@@ -33,8 +33,9 @@ then an install (`uv tool install --force`) and a driver-kit refresh.
   `consult`. Gate: one mission of hands run end to end with no Code tab
   opened, and one builder question resolved by the driver role and graded
   by the cold review.
-- **M4c The architect role** — missions 14 and 15 (decided 2026-09-15;
-  renumbered when mission 13 became review 12's closer).
+- **M4c The architect role** — missions 15 and 16 (decided 2026-09-15;
+  renumbered twice: 13 closed review 12, 14 closes review 13 and ends the
+  guard's parser).
   A fourth headless role, `architect`, consulted by the playbook on each
   review outcome: reads the branch, writes the next kit from this roadmap,
   files it with `hands kit file` (the local twin of the phone's `kit`), and
@@ -52,17 +53,19 @@ then an install (`uv tool install --force`) and a driver-kit refresh.
   "pause, continue from the branch"; one architect at a time.
   Mission 13 (closer): review 12, the sweep after the reap, the
   per-project spool and templated units so two projects can run on one
-  laptop (M5 starts on that layout). Mission 14: the role, its guard,
-  `hands kit file`, the playbook mode and auto-approval, escalation
-  conditions. Mission 15: `reply <secret> <text>`
+  laptop (M5 starts on that layout). Mission 14 (closer): the guard's
+  one-line language, review 13. Mission 15: the role, its guard, `hands
+  kit file`, the playbook mode and auto-approval, escalation conditions.
+  Mission 16: `reply <secret> <text>`
   on the command topic delivered as a `keep` to the architect's last
   session with its answer on the events topic, and self-hosted ntfy behind
   the Tailscale tunnel (free text about a project no longer crosses a
   public broker). Gate: one hands mission planned on the phone, handed to
   the role at the switch point, and run to a reviewed-clean stop with no
   human action; one escalation answered over `reply`.
-  Requires: a review that finds no guard hole (mission 13's), the driver
-  role enabled after it, and one real consultation graded by a review.
+  Requires: a review that finds no hole in the one-line guard (mission
+  14's), the driver role enabled after it, and one real consultation graded
+  by a review.
 - **M5 spanweave integration** — INSTRUCTION PASTE DUE: the spanweave
   Project gets its own copy, parameters filled in.
   spanweave integration — hands drives spanweave's *development*

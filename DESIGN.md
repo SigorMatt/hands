@@ -1,13 +1,13 @@
-# hands — DESIGN v3.12
+# hands — DESIGN v3.13
 
 Machinery that replaces the human relay between the planning brain and the two
 Claude Code roles (builder, aux) on the Ubuntu laptop, and that keeps a series
 moving without a human while everything goes by plan. Working name: `hands`.
 The method it serves is described in WORKING-MODEL.md (agile-skills) and
 OPERATING-MODEL.md (spanweave); hands changes the topology, not the method.
-v3.12 (2026-09-15) folds in the mission 12 review (the guard's comment
-hole, the IDNA check, the sweep after the reap) and the two-project layout;
-changes are in §29; earlier changes in §28–§17.
+v3.13 (2026-09-16) folds in the mission 13 review and ends the guard's
+parser by shrinking its language to one line; changes are in §30; earlier
+changes in §29–§17.
 
 Status: proposal, 2026-09-10. Items marked DECIDED were settled in discussion.
 
@@ -1206,3 +1206,60 @@ Roadmap renumbering: mission 13 is this closer (review 12, the sweep, the
 two-project layout); the architect role is mission 14; `reply` and the
 self-hosted ntfy are mission 15. The driver role is enabled only after a
 review finds no guard hole.
+
+---
+
+## 30. Changes from v3.12 (mission 13 review; the guard's language)
+
+The guard (review 13 blocker 1, and the pattern of reviews 11–13):
+- The driver's shell is a line, not a script. The guard refuses, before any
+  tokenizing, a command containing a newline or carriage return, `<` or
+  `>` in any position, `#`, a backtick, `$(`, `\`, `$'`, or any control
+  character; the refusal names the first offending character and position.
+  What remains is one line of words and `'…'`/`"…"` quotes, which `shlex`
+  tokenizes without ambiguity; segments split on `;`, `&&`, `||`, `|`,
+  `&`. Heredocs, comments, escapes, substitutions and redirections do not
+  exist in that language, so no quote can be desynchronised by them. The
+  driver never needed any of them (`--prompt-file` replaced `--stdin <`;
+  `2>&1` is not needed because the guard's commands do not redirect).
+- Inside double quotes only `$` and `!` remain to refuse; `$` in a
+  double-quoted word is refused in both modes (there is no legitimate
+  `$VAR` in a driver command; `HANDS_*` values are given to `hands` by the
+  daemon, not typed).
+- The two self-test tables and `tests/test_bash_guard.py` keep every probe
+  of reviews 11, 12 and 13 blocked and add the reviewer's heredoc shape.
+  `docs/INTEGRATION.md` states the language in one paragraph so a reviewer
+  can attack the definition rather than the parser.
+- Role mode's `git -C` pin compares resolved paths (`realpath`) against the
+  resolved `HANDS_CLONE` (should-fix 1).
+
+Review 13 blockers 2–4 and should-fix 2–8:
+- `kit check` judges bare relative names and names in any punctuation the
+  handbook's prompts use; a fixture enumerates the shapes (blocker 2).
+- `hands who` with several configs and none named: each config is loaded in
+  its own try; a broken one becomes a root line `<project>: config error
+  <reason>` and the others render (blocker 3).
+- `[who] grace_s` must be a finite non-negative number; `nan`/`inf` are
+  refused at load (blocker 4).
+- A process in the job's session without the mark is still the job's
+  (session-and-start-time is the proof; the mark corroborates only), and a
+  test pins it (should-fix 2). The pipe-timeout test binds job end to the
+  configured value (should-fix 3). Doctor's driver row verifies the hook
+  command in the settings names the guard file and that the file's
+  self-test passes (should-fix 4). `max_consults` persists its anchor in
+  the spool so a daemon restart mid-mission keeps the count (should-fix 5).
+  Project names match `[A-Za-z0-9][A-Za-z0-9._-]{0,63}` (should-fix 6).
+  References to the retired un-templated units are removed everywhere but
+  the changelog (should-fix 7). Cancel-versus-limit precedence is pinned:
+  `killed` wins over `limited` when both apply in one job (should-fix 8).
+
+Notifications (decision 2026-09-15): when the daemon publishes two
+notifications for one cause (a kit receipt and its held apply; a limit and
+its resume), it waits 1.1 s between them so ntfy's per-second timestamps
+order them. The `job.held → notify` rule is removed from this repository's
+playbook and from both templates; the daemon's held notification with
+buttons is the one message.
+
+Roadmap: mission 14 is this closer; the architect role is mission 15;
+`reply` and self-hosted ntfy are mission 16. The driver role is enabled
+after a review finds no guard hole in the one-line language.

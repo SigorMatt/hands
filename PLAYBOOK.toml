@@ -118,10 +118,6 @@ on = "monitor.tripwire"
 then = "stop"
 message = "Tripwire fired"
 
-[[rule]]
-on = "job.held"
-then = "notify"
-message = "A job is held for your decision"
 
 [[rule]]
 on = "job.denied"
