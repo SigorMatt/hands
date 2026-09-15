@@ -4,15 +4,19 @@ Mission: 13 (meta/BUILDER-13-PROMPT.md, DESIGN v3.12 §29 with §5, §12, §13,
 §26, §28) — close review 12, the sweep (H-025 b), two projects on one laptop.
 Base: 723dbeb (`plan: mission 13 kit (DESIGN v3.12)`).
 
-Unit in progress: U1 The guard: comments, the reading, the clone pin (§29;
-REVIEW-12 blocker 1, should-fix 2; H-024).
-Intent: refuse any `#` outside quotes in both modes naming the position;
-H-024's expansion-position reading exactly as §29 states it; role-mode
-`git -C` must equal `HANDS_CLONE`; every review 12 blocker-1 probe and every
-review 11 probe asserted blocked in both modes; allowed tables stay allowed.
-Done means: tests green, ./scripts/check 3/3, commit body lists the probes
-blocked only after this change (checked against the parent hook), pushed.
-Done: U0 `plan:` commit (1994 passed, 3/3).
+Unit in progress: U2 The sweep after the reap (§29; H-025 option b; H-023;
+REVIEW-12 blocker 3, REVIEW-11 blocker 3).
+Intent: descent = session id equals the job's pid and start time precedes the
+last observation of the job's pid alive, or cgroup scope membership; the
+`HANDS_JOB` mark alone never qualifies; `runner.pipe_timeout_s` (default 10)
+bounds the pipe read at job end; leftovers reported as
+`monitor.orphan_processes` with `killed: false`; residual in
+docs/INTEGRATION.md.
+Done means: the three §24 orphan tests pass (detached, holding pipes,
+cancelled job); a leaderless marked group with a foreign session is left
+alone; job end completes within the timeout with an orphan holding the pipes;
+./scripts/check 3/3; pushed.
+Done: U0 b79d908 (1994); U1 eccc3a1 (2092).
 
 Standing constraints: one foreground sub-agent per product unit, commit and
 push every unit, ./scripts/check green three consecutive runs before each

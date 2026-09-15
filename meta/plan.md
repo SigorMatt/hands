@@ -11,8 +11,14 @@ Base of the mission: 723dbeb (`plan: mission 13 kit (DESIGN v3.12)`).
       H-024 v3.12 reading, resolved; H-025 option (b) with §29 text; H-023
       closes with U2; SF8 table-driven `done` order and precedence test;
       FINAL-REPORT-12 §3 item 2 and REVIEW-11 blocker 1 row corrected
-- [ ] U1 The guard: comments, the reading, the clone pin (§29; blocker 1,
-      SF2; H-024)
+- [x] U1 The guard: comments, the reading, the clone pin (§29; blocker 1,
+      SF2; H-024) eccc3a1 — `#` outside quotes refused in both modes with its
+      offset (incl. `a#b`, `$#`, inside `$(…)`); braces count only with `,`
+      or `..` (`HEAD@{1}` now allowed); in double quotes any `\` counts;
+      role-mode `git -C` equals HANDS_CLONE after abspath (unset refuses);
+      handsd sets HANDS_CLONE on the driver job (<cwd>/repo, else cwd if a
+      repo); doctor self-test uses ./repo; REVIEW-12 probes blocked both
+      modes; REVIEW-11 normal-mode allowed rows kept
 - [ ] U2 The sweep after the reap (§29; H-025 b; H-023; blocker 3)
 - [ ] U3 Kit transport and kit check (§29; blocker 2; SF1, SF6, SF7)
 - [ ] U4 Consult edges (§29; SF3, SF4, SF5)
