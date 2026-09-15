@@ -7,7 +7,7 @@ blocked (two failures).
 
 Base of the mission: 723dbeb (`plan: mission 13 kit (DESIGN v3.12)`).
 
-- [x] U0 Plan and bookkeeping (`plan:`) (this commit) — this file, meta/CHECKPOINT.md;
+- [x] U0 Plan and bookkeeping (`plan:`) b79d908 — this file, meta/CHECKPOINT.md;
       H-024 v3.12 reading, resolved; H-025 option (b) with §29 text; H-023
       closes with U2; SF8 table-driven `done` order and precedence test;
       FINAL-REPORT-12 §3 item 2 and REVIEW-11 blocker 1 row corrected
@@ -62,8 +62,11 @@ Base of the mission: 723dbeb (`plan: mission 13 kit (DESIGN v3.12)`).
       `%h/.config/hands/%i.env`; `hands who` over every `~/.hands/*.toml`
       project, one root each; INTEGRATION two daemons, subscription metered
       by `auto_runs`
-- [ ] U7 This repository's playbook (kickoff BUILDER-14)
-- [ ] U8 Final report (meta/FINAL-REPORT-13.md)
+- [x] U7 This repository's playbook (kickoff BUILDER-14) 0a14085 — one
+      line; kickoff test red on the value; BUILDER-13 kit `--repo .` 6/6
+      exit 0; BUILDER-14 not yet written
+- [x] U8 Final report (meta/FINAL-REPORT-13.md) (the commit that carries
+      this line) — drafted under meta/drafts/; mission 13 finished
 
 Review items by unit. REVIEW-12 blocker 1 → U1; blocker 2 → U3; blocker 3 →
 U2; SF1, SF6, SF7 → U3; SF2 → U1; SF3, SF4, SF5 → U4; SF8 → U0; SF9 → U5.
@@ -82,5 +85,6 @@ after U1–U5. U5 (who grace) and U6 (`hands who` over every spool) both touch
 who.py; U5 first. U7 needs U3 (kit check's named-path rules) since its gate
 is a kit check. U1, U2, U3, U4 are independent of each other.
 
-Findings. H-023 closes with U2. H-024 resolved by v3.12 (U0). H-025 option
-(b) chosen by v3.12 (U0), code U2. H-001 and H-009 stay open.
+Findings. H-023 resolved (U2 ea7f1bc). H-024 resolved by v3.12 (U0, code U1
+eccc3a1). H-025 option (b) chosen by v3.12 (U0), code U2 ea7f1bc. H-001 and
+H-009 stay open.
