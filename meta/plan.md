@@ -27,7 +27,15 @@ Base of the mission: 723dbeb (`plan: mission 13 kit (DESIGN v3.12)`).
       `killed`; `runner.pipe_timeout_s` default 10; residual in INTEGRATION;
       two monitor orphan fakes linger 0.5 s and the cancel test waits for an
       observation after the fork (else the fork is in the residual interval)
-- [ ] U3 Kit transport and kit check (§29; blocker 2; SF1, SF6, SF7)
+- [x] U3 Kit transport and kit check (§29; blocker 2; SF1, SF6, SF7) 126d4ff
+      — IP literals by ipaddress, names by idna.encode (reviewer's five
+      refused pre-fetch; `a_b.com` now refused); kit file name shlex-quoted
+      after `~/Downloads/`; kit.NAMED_PATH_RULE (exists, extension with a
+      letter, or `/` with bad syntax or a known leading dir; 42-row table;
+      missing bare `Makefile`, `newdir/NOTES` not caught; `e.g.`,
+      `github.com` flagged); apply exception = first rule matching the
+      literal and no vocabulary literal (vocabulary-matching rules judged
+      as vocabulary, catch-all `^VERDICT:` kept); BUILDER-13 kit 6/6 exit 0
 - [ ] U4 Consult edges (§29; SF3, SF4, SF5)
 - [ ] U5 Who grace (§29; SF9)
 - [ ] U6 Two projects on one laptop (§29)
