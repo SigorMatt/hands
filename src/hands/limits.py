@@ -42,6 +42,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from hands.config import DRIVER_ROLE, Config
+from hands.notify import PAIR_SPACING_S
 from hands.spool import Job, Spool
 
 __all__ = [
@@ -293,10 +294,18 @@ def resume_delay_s(job: Job, *, backoff_minutes: float, now: datetime | None = N
     The parsed reset time plus `RESUME_GRACE_S`, or `backoff_minutes` when the
     notice gave none. A reset already behind us (a daemon restart, say) is not a
     reason to wait out the backoff: the grace is enough.
+
+    Never sooner than `PAIR_SPACING_S` (§30, decision 2026-09-15). A limit and
+    its resume are two notifications of one cause, and ntfy stamps whole seconds:
+    published inside one second they would sort arbitrarily on the phone. Every
+    schedule goes through here — `on_limited` and the restart's
+    `reschedule_pending` both — so the floor is stated once. It binds only where
+    the wait was going to be under a second anyway (`backoff_minutes = 0`); the
+    grace and a real backoff are orders of magnitude above it.
     """
     reset = from_iso((job.limit or {}).get("reset_at"))
     if reset is None:
-        return float(backoff_minutes) * 60.0
+        return max(PAIR_SPACING_S, float(backoff_minutes) * 60.0)
     reference = local_now() if now is None else now
     return max(0.0, (reset - reference).total_seconds()) + RESUME_GRACE_S
 

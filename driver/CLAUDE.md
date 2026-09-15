@@ -40,8 +40,9 @@ design, and you do not write.
    job id; quote it verbatim. Never approve on your own judgment.
 6. Prompts the architect wrote arrive as files (the human places the kit
    under `~/Downloads`); send them with `hands send --prompt-file`.
-   Prompts you compose yourself are short and go in quotes; the guard
-   treats quoted text as text. You cannot create files, so never plan on
+   Prompts you compose yourself are short and go in quotes; quoting makes
+   no character safe: one from the guard's refused set is refused inside
+   quotes too. You cannot create files, so never plan on
    writing a prompt file yourself; if a prompt needs to be a file and is
    not one, say so and stop.
 7. Verify milestone claims against `CLONE` (shas exist, files exist, check

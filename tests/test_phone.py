@@ -31,7 +31,7 @@ from hands import daemon as daemon_mod
 from hands import phone as phone_mod
 from hands.config import ConfigError, load_config
 from hands.daemon import Daemon
-from hands.notify import http_post, http_stream
+from hands.notify import PAIR_SPACING_S, http_post, http_stream
 from hands.phone import GO_TITLE, KIT_TITLE
 from harness import PROJECT, TIMEOUT, config_body, ok, poll, running_job
 
@@ -1864,3 +1864,47 @@ def test_the_apply_prompt_is_kit_checks_byte_for_byte_for_the_same_path_and_name
             ]
 
     phone_drive(body)
+
+
+# --------------------------------- §30: the receipt and the hold, one second apart
+
+
+def test_a_kit_receipt_and_its_held_apply_are_spaced_for_ntfys_timestamps(
+    kit_project: str, workdir: Path, downloads: Path, kit_server: KitServer
+) -> None:
+    """§30 (decision 2026-09-15): the receipt and the apply's hold are two
+    notifications of one cause, and ntfy stamps whole seconds, so the daemon
+    waits `PAIR_SPACING_S` between the two publishes — and publishes them in
+    that order. The wait is the channel's injected sleep, so no test sleeps."""
+    (workdir / "meta").mkdir()
+    (workdir / "meta" / "REVIEW-PROTOCOL.md").write_text("the old protocol\n")
+    held_title = daemon_mod.NOTIFY_KINDS["job.held"]
+    order: list[str] = []
+
+    class Timed(Recorder):
+        async def __call__(self, url: str, **kwargs: Any) -> int:
+            order.append(f"publish {kwargs['title']}")
+            return await super().__call__(url, **kwargs)
+
+    async def body(daemon: Daemon, fake: FakeNtfy) -> None:
+        assert daemon.phone is not None
+
+        async def sleep(seconds: float) -> None:
+            order.append(f"sleep {seconds}")
+            await asyncio.sleep(0)
+
+        daemon.phone.sleep = sleep
+        # With a KIT.md the apply has no default to explain, so the receipt is
+        # the only `kit received` answer and the pair is the whole sequence.
+        zipped = kit_zip(good_entries("plan: mission 11 kit\n\nbody\n"))
+        (row,) = await kit_jobs(daemon, fake, kit_server.attach("mission-11.zip", zipped))
+        assert await state(row["id"]) == "held"
+        pair = (f"publish {KIT_TITLE}", f"publish {held_title}")
+        kept = [item for item in order if item.startswith("sleep ") or item in pair]
+        assert kept == [
+            f"publish {KIT_TITLE}",
+            f"sleep {PAIR_SPACING_S}",
+            f"publish {held_title}",
+        ], order
+
+    phone_drive(body, Timed())

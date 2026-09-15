@@ -364,6 +364,13 @@ Set `ntfy_topic` and subscribe your phone to it. `hands notify --test` proves
 the transport, and the notification check doctor prints proves an event you did
 not ask for arrives (step 4 above).
 
+Two notifications of one cause are published 1.1 s apart: a kit receipt and the
+held apply it files, and a limit and the resume it schedules. ntfy stamps a
+message with per-second timestamps, so two published inside the same second
+would sort arbitrarily on the phone, and the second one reads as the answer to
+the first. Nothing else waits: an unrelated notification is never delayed (§11),
+and no notification queues behind another.
+
 ### The command channel: approve from the phone
 
 With `[notify] cmd_topic` set, handsd subscribes to that topic — an outbound
@@ -381,7 +388,7 @@ beside the events topic, which must be a different topic:
     cmd_topic = "hands-cmd-<the first line>"
     cmd_secret = "<the second line>"
 
-Restart handsd (`systemctl --user restart handsd`). A `cmd_topic` without a
+Restart handsd (`systemctl --user restart handsd@<project>`). A `cmd_topic` without a
 `cmd_secret` does not load: doctor fails its `config` row, and handsd refuses
 to start. So does a secret with a blank inside it, and a `cmd_topic` equal to
 `ntfy_topic`.
@@ -453,7 +460,7 @@ Publish a command to `cmd_topic` from the ntfy app. The last word is the token:
   `status` and `go` take the secret only, never a nonce.
 - **Nothing is answered except `status`, an accepted `go` and a written kit.** A wrong secret or nonce, a command
   hands does not know, or a job that is not held is logged in handsd's journal
-  (`journalctl --user -u handsd`) and ignored. If a command seems to do
+  (`journalctl --user -u handsd@<project>`) and ignored. If a command seems to do
   nothing, look there. The log never contains the token.
 - **Old messages are not replayed.** handsd acts only on messages sent after
   it subscribed, judged by the time ntfy stamps on each message against this

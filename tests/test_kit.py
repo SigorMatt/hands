@@ -23,6 +23,7 @@ import pytest
 from conftest import strip_paths
 from hands import kit as kit_mod
 from hands.cli import main
+from hands.playbook import parse_playbook
 
 ROOT = Path(__file__).parents[1]
 MISSION_10_KIT = ROOT / "tests" / "fixtures" / "kit-mission-10"
@@ -1317,3 +1318,42 @@ def test_the_apply_prompts_commit_message_is_shell_quoted(
     said = plan.prompt.split(" makes a single commit ", 1)[1].split(" listing those files", 1)[0]
     assert said == shlex.quote(message)
     assert shlex.split(said) == [message]
+
+
+# ------------------------- §30: the `job.held` rule is not shipped, not forbidden
+
+
+#: §30 removed this rule from the playbooks hands ships; it stays a rule a
+#: playbook may carry, so another project's file is not made unloadable by it.
+HELD_RULE = '\n[[rule]]\non = "job.held"\nthen = "notify"\nmessage = "A job is held"\n'
+
+
+def test_a_playbook_that_keeps_the_job_held_rule_still_loads_and_passes(
+    tmp_path: Path, repo: Path
+) -> None:
+    """§30: hands stopped shipping the rule; it never forbade it. A kit whose
+    playbook still notifies on `job.held` loads through the engine's own parser
+    and passes every `kit check`."""
+    book = PLAYBOOK + HELD_RULE
+    parsed = parse_playbook(book, path=tmp_path / "PLAYBOOK.toml")
+    assert [rule.on for rule in parsed.rules if rule.on == "job.held"] == ["job.held"]
+    kit = write_tree(tmp_path / "k", {**good_kit(), "PLAYBOOK.toml": book})
+    code, out, err = run_check(kit, repo)
+    assert code == 0, out + err
+
+
+def test_the_missions_template_with_the_held_rule_added_back_still_passes(
+    tmp_path: Path,
+) -> None:
+    """The same for the shipped template a project may edit: adding the rule
+    back to it keeps the kit passing."""
+    kit = write_tree(
+        tmp_path / "k",
+        {
+            "meta/BUILDER-11-PROMPT.md": template("BUILDER-N-PROMPT.md"),
+            "PLAYBOOK.toml": template("PLAYBOOK-missions.toml") + HELD_RULE,
+            "meta/REVIEW-PROTOCOL.md": template("REVIEW-PROTOCOL.md"),
+        },
+    )
+    code, out, err = run_check(kit, write_tree(tmp_path / "repo", {"README.md": "x"}))
+    assert code == 0, out + err

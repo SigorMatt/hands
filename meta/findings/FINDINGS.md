@@ -1363,3 +1363,63 @@ and expansion-position handling is removed as unreachable. Mission 14 U1
 carries the code.
 
 Status: resolved by DESIGN v3.13 (code: mission 14 U1)
+
+## H-027 — two DESIGN lines name things missions 13 and 14 retired
+
+Severity: medium · Component: DESIGN §12 rule 6 ("the guard treats quoted text
+as text", DESIGN.md:541) and DESIGN §14's repository layout
+(`systemd/handsd.service`, DESIGN.md:644, with `handswho.service` at
+DESIGN.md:921); `driver/CLAUDE.md` rule 6, `driver/hooks/bash_guard.py`,
+`tests/test_docs.py`
+Filed by: mission 14 U5, from REVIEW-13 should-fix 7 and §30.
+
+Symptom, two lines, both of which a builder may not edit (CLAUDE.md: "DESIGN.md
+is not edited by builders; file a finding").
+
+1. **§12 rule 6 says quoting makes text.** §30 replaced the guard's parser with
+   a language: mission 14 U1 refuses `<`, `>`, `#`, a backtick, `$(`, `\`, `$'`,
+   a newline and any control character *in any position, quoted or not*, and `$`
+   and `!` inside double quotes. So the rule the driver reads is false for
+   exactly the characters it would reach for:
+
+       $ cd driver/hooks
+       $ printf '%s' '{"tool_name":"Bash","tool_input":{"command":"hands send
+         --role builder --context clear \"see #3\""}}' | python3 bash_guard.py
+       bash_guard blocked this command (refused before tokenizing: a `#` at
+       position 47 (§30: the driver's shell is one line of words and quotes):
+       'hands send --role builder --context clear "see #3"'). …
+       exit 2
+
+   (the JSON is one line here; wrapped for the ledger). The same command with
+   `HANDS_ROLE=driver` and `HANDS_CLONE` set is refused identically, and so is
+   a quoted backtick (`"run `date`"`, a backtick at position 47).
+
+   `driver/CLAUDE.md` rule 6 carried the same sentence, and
+   `tests/test_docs.py::test_driver_rule_6_is_the_design_section_12_rule_6` pins
+   the kit's rule 6 to DESIGN's word for word.
+
+2. **§14's layout ships `systemd/handsd.service`.** Mission 13 U6 (§29, "the
+   un-templated units are retired") replaced it with `systemd/handsd@.service`
+   and `systemd/handswho@.service`; neither un-templated unit exists in the
+   repository. DESIGN.md:921 still calls `handswho.service` the optional unit.
+   REVIEW-13 should-fix 7 named both lines and recorded that no finding was
+   filed for them.
+
+Direction — what the architect should change.
+
+- §12 rule 6: replace "the guard treats quoted text as text" with §30's
+  language, e.g. "quoting makes no character safe: one from the guard's refused
+  set is refused inside quotes too". The shipped `driver/CLAUDE.md` rule 6 and
+  the guard's own docstring now say that (mission 14 U5), so this closes a
+  divergence rather than opening one.
+- §14's layout line: `systemd/handsd@.service  systemd/handswho@.service  # user
+  units, per project`. §24's sentence at DESIGN.md:921 wants `handswho@.service`
+  for the same reason.
+
+Until §12 rule 6 lands, `tests/test_docs.py` pins the kit's rule 6 to DESIGN's
+rule with that one clause corrected (`STALE_QUOTED_CLAUSE` →
+`GUARD_REFUSAL_CLAUSE`), so every other word of the rule stays pinned and the
+test keeps passing unchanged once DESIGN says the same thing — the replacement
+is then a no-op. Nothing else in the repository depends on either line.
+
+Status: open

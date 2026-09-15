@@ -31,8 +31,9 @@ For `hands` and `git` in both modes, a word in argument position is refused
 when it carries `$`, `{`, `}`, `~`, `*`, `?`, `[` or `!` where the shell would
 still expand it (§28), because the expansion happens after the guard read the
 word. In this language that means outside quotes. Inside quotes none of these
-is expanded, since `$` and `!` inside double quotes are already refused (§12
-rule 6: quoted text is text). Two narrow rules follow §29 (H-024):
+is expanded, since `$` and `!` inside double quotes are already refused (§30:
+quoting makes no character safe; one from the refused set is refused inside
+quotes too). Two narrow rules follow §29 (H-024):
 - `{` and `}` count only in a brace word with a comma or `..` (an unquoted
   `{` with a later unquoted `}`). `x{a,b}` and `x{1..3}` count; git's
   `HEAD^{commit}` and `HEAD@{1}` do not.

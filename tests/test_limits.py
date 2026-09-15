@@ -25,6 +25,7 @@ from hands.limits import (
     resume_delay_s,
     to_iso,
 )
+from hands.notify import PAIR_SPACING_S
 from hands.spool import Job, Spool
 
 EAST = ZoneInfo("America/New_York")
@@ -463,3 +464,49 @@ def test_the_daemon_resumes_a_limited_builder(tmp_home: Path, tmp_path: Path) ->
             await daemon.stop()
 
     asyncio.run(scenario())
+
+
+# ------------------------------------------- §30: a limit and its resume, spaced
+
+
+def test_a_resume_is_never_scheduled_inside_ntfys_one_second_stamp(tmp_home: Path) -> None:
+    """§30 (decision 2026-09-15): a limit and its resume are two notifications of
+    one cause. ntfy stamps whole seconds, so two publishes inside one second have
+    no order on the phone; the scheduled resume therefore never comes sooner than
+    `PAIR_SPACING_S` after the limit, whatever `backoff_minutes` says."""
+    spool = Spool(tmp_home / ".hands")
+    job = _limited(spool, reset_at=None)
+    assert resume_delay_s(job, now=NOW, backoff_minutes=0.0) == PAIR_SPACING_S
+    assert resume_delay_s(job, now=NOW, backoff_minutes=0.01) == PAIR_SPACING_S
+    # The floor is a floor and nothing else: a real backoff is untouched.
+    assert resume_delay_s(job, now=NOW, backoff_minutes=30.0) == 30 * 60
+
+
+def test_the_manager_sleeps_the_spacing_before_a_resume_with_no_backoff(
+    tmp_home: Path, tmp_path: Path
+) -> None:
+    """The same floor through the manager: what it waits, and what the `limit`
+    event advertises as `resume_at`, are both the spaced delay."""
+    work = tmp_path / "work"
+    work.mkdir(exist_ok=True)
+    cfg = parse_config(
+        {
+            "roles": {"builder": {"cwd": str(work)}, "aux": {"cwd": str(work)}},
+            "limits": {"backoff_minutes": 0, "max_resumes": 3},
+        },
+        project="demo",
+        path=tmp_home / ".hands" / "demo.toml",
+    )
+    harness = Harness(cfg, Spool(tmp_home / ".hands"))
+
+    async def scenario() -> None:
+        await harness.limit(notice="usage limit reached")  # no reset time in it
+        assert harness.delays == [PAIR_SPACING_S]
+        assert harness.kinds() == ["limit", "resume"]
+        limit_event = harness.spool.events()[0]
+        assert limit_event.payload["reset_at"] is None
+        assert limit_event.payload["resume_at"] == to_iso(
+            NOW + timedelta(seconds=PAIR_SPACING_S)
+        )
+
+    run(scenario)

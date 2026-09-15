@@ -168,7 +168,7 @@ OPTIONAL_STATEMENTS = (
     "ntfy is never shipped with hands, only spoken to",
     "All three are off unless configured",
     "**The long-term secret never goes into a notification**",
-    "is logged in handsd's journal (`journalctl --user -u handsd`) and ignored",
+    "is logged in handsd's journal (`journalctl --user -u handsd@<project>`) and ignored",
     "`systemd/handswho@.service` is an optional user unit, off unless you enable it",
     "`hands doctor` reports each of the three as on or off, never as a failure",
 )
@@ -609,11 +609,44 @@ def test_the_driver_kit_says_how_a_paged_log_and_a_cut_tail_read() -> None:
     assert "truncated" in kit, "and that `tail` marks an answer its bounds cut (§4)"
 
 
+#: §30 (mission 14 U1): quoting stopped making a character safe — a character of
+#: the guard's refused set is refused inside quotes too. DESIGN §12 rule 6 still
+#: carries the old clause and builders may not edit DESIGN.md, so H-027 asks the
+#: architect for that line. Until it lands the kit's rule 6 is DESIGN's rule with
+#: this one clause corrected: every other word stays pinned, and this test keeps
+#: passing unchanged once DESIGN says the same thing (the replace is then a no-op).
+STALE_QUOTED_CLAUSE = "the guard treats quoted text as text"
+GUARD_REFUSAL_CLAUSE = (
+    "quoting makes no character safe: one from the guard's refused set is "
+    "refused inside quotes too"
+)
+
+
 def test_driver_rule_6_is_the_design_section_12_rule_6() -> None:
     """§20 (review 3 should-fix 10): v3.3 rewrote rule 6 "to match what the
-    driver can do", so the kit carries that text and not a paraphrase of it."""
+    driver can do", so the kit carries that text and not a paraphrase of it —
+    corrected for §30's language, and for nothing else (H-027)."""
     assert design_rule(6), "DESIGN §12 has no rule 6 to pin the kit to"
-    assert kit_rule(6) == design_rule(6)
+    assert kit_rule(6) == design_rule(6).replace(STALE_QUOTED_CLAUSE, GUARD_REFUSAL_CLAUSE)
+
+
+def test_no_driver_kit_file_still_promises_that_quoting_makes_text() -> None:
+    r"""§30: the guard refuses a newline, `<`, `>`, `#`, a backtick, `$(`, `\`,
+    `$'` or a control character wherever it stands, and `$`/`!` inside double
+    quotes. A kit file that still says quoted text is text would send the driver
+    to write a command the guard blocks (REVIEW-13 blocker 1's language)."""
+    promise = re.compile(r"quoted text (?:as|is) text")
+    offenders = [
+        f"{path.relative_to(ROOT).as_posix()}:{n}: {line.strip()}"
+        for path in tracked_files()
+        if path.is_file() and path.relative_to(ROOT).as_posix().startswith("driver/")
+        for n, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1)
+        if promise.search(line)
+    ]
+    assert not offenders, "a driver-kit file still says quoting makes text:\n" + "\n".join(
+        offenders
+    )
+    assert GUARD_REFUSAL_CLAUSE in kit_rule(6), "rule 6 does not state §30's refusal"
 
 
 def test_driver_rule_8_is_the_design_section_12_rule_8() -> None:
@@ -1090,3 +1123,45 @@ def test_the_driver_kit_does_not_mention_bootstrap_mode() -> None:
     for path in (ROOT / "driver" / "CLAUDE.md", ROOT / "driver" / "README.md"):
         text = path.read_text(encoding="utf-8").lower()
         assert "bootstrap" not in text, f"{path.relative_to(ROOT)} still describes bootstrap mode"
+
+
+# ------------------------------- §30 / REVIEW-13 should-fix 7: the retired units
+
+
+#: §29 retired `handsd.service` and `handswho.service` for the templated
+#: `handsd@<project>`. A command naming the un-templated unit does not work on a
+#: machine set up by today's docs, so no shipped file may still tell a human to
+#: run one. DESIGN.md's changelog and meta/'s history keep their own record, and
+#: tests/fixtures/ holds captured kits that must stay as they were captured.
+RETIRED_UNIT_COMMANDS = (
+    re.compile(r"systemctl --user (?:start|stop|restart) handsd(?!@)"),
+    re.compile(r"systemctl --user (?:start|stop|restart) handswho(?!@)"),
+    re.compile(r"journalctl --user -u handsd(?!@)"),
+    re.compile(r"journalctl --user -u handswho(?!@)"),
+)
+#: Where the retired names are history rather than instruction.
+RETIRED_UNIT_EXEMPT = ("DESIGN.md", "meta/", "tests/fixtures/", "tests/test_docs.py")
+
+
+def test_no_shipped_file_tells_a_human_to_run_an_un_templated_unit() -> None:
+    """REVIEW-13 should-fix 7, §30: "References to the retired un-templated units
+    are removed everywhere but the changelog"."""
+    offenders = [
+        f"{where}:{n}: {line.strip()}"
+        for path in tracked_files()
+        if path.is_file()
+        and not (where := path.relative_to(ROOT).as_posix()).startswith(RETIRED_UNIT_EXEMPT)
+        for n, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1)
+        for pattern in RETIRED_UNIT_COMMANDS
+        if pattern.search(line)
+    ]
+    assert not offenders, "a retired unit is still named as a command:\n" + "\n".join(offenders)
+
+
+def test_the_integration_doc_says_paired_notifications_are_spaced() -> None:
+    """§30 (decision 2026-09-15): the human reading the doc has to know why two
+    messages of one cause arrive a second apart, and which pairs those are."""
+    text = flattened((ROOT / "docs" / "INTEGRATION.md").read_text(encoding="utf-8"))
+    assert "1.1 s" in text, "docs/INTEGRATION.md never states the spacing (§30)"
+    for said in ("per-second", "kit receipt", "resume"):
+        assert said in text, f"docs/INTEGRATION.md does not say {said!r} about the spacing (§30)"

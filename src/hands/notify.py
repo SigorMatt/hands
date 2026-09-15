@@ -35,6 +35,7 @@ __all__ = [
     "Notification",
     "Notifier",
     "NotifyError",
+    "PAIR_SPACING_S",
     "accepted",
     "actions_header",
     "http_post",
@@ -46,6 +47,13 @@ log = logging.getLogger("hands.notify")
 
 #: ntfy is a phone notification, not a transfer: a slow one is a failed one.
 POST_TIMEOUT_S = 10.0
+#: §30 (decision 2026-09-15): ntfy stamps a message with whole seconds, so two
+#: publishes made inside one second arrive in no defined order on the phone. When
+#: the daemon publishes two notifications for *one cause* — a kit receipt and its
+#: held apply, a limit and its resume — it waits this long between them, which is
+#: one stamp plus enough margin for the clock. It is not a rate limit: unrelated
+#: notifications are never delayed (§11), and nothing queues behind this.
+PAIR_SPACING_S = 1.1
 #: The command stream is a long poll: ntfy sends a keepalive about every 45 s,
 #: so a connection silent for this long is dead and is reconnected (§24).
 STREAM_READ_TIMEOUT_S = 120.0

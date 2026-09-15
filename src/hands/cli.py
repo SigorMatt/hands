@@ -905,7 +905,8 @@ def _migrate_spool(*, out: TextIO, err: TextIO, as_json: bool) -> int:
     if live:
         print(
             f"hands: a daemon is running on {', '.join(live)}; stop it "
-            "(`systemctl --user stop handsd`, or the terminal it runs in), then run "
+            "(`systemctl --user stop handsd@<project>`, or the terminal it runs in), "
+            "then run "
             "`hands migrate-spool` again",
             file=err,
         )

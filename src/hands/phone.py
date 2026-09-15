@@ -115,6 +115,7 @@ from urllib.parse import quote
 from hands import notify as notify_mod
 from hands.api import ApiError
 from hands.kit import KitError, apply_from_zip
+from hands.notify import PAIR_SPACING_S
 from hands.playbook import PlaybookError, load_playbook, playbook_path
 from hands.spool import PathEscape, SpoolError, resolve_under_roots
 
@@ -428,6 +429,15 @@ class PhoneChannel:
         text = f"kit received {written} {total} {digest}"
         log.info("phone: %s", text)
         await self.daemon.notifier.answer(KIT_TITLE, text)
+        # §30 (decision 2026-09-15): the receipt and the `job.held` of the apply
+        # it is about to file are two notifications of one cause, and ntfy stamps
+        # whole seconds. Published inside one second they sort arbitrarily on the
+        # phone, and the receipt is what explains the hold. So: this one wait,
+        # between the two publishes, on the channel's own injected sleep. It
+        # delays nothing but the next command on this channel (a kit download has
+        # just held it far longer), and no job waits on it — the apply is filed
+        # after it, held, and a held job runs nothing until a human decides.
+        await self.sleep(PAIR_SPACING_S)
         return await self._file_apply(directory / written)
 
     async def _file_apply(self, path: Path) -> None:

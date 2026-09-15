@@ -19,6 +19,7 @@ import hashlib
 import json
 import subprocess
 import time
+import tomllib
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
@@ -2876,3 +2877,34 @@ def test_end_to_end_the_driver_job_carries_the_consultations_role(
         assert driver["result"] == "builder"
 
     drive(body)
+
+
+# ---------------------------------- §30: the playbooks ship no `job.held` rule
+
+
+#: The three playbooks this repository ships (DESIGN §10, §30).
+SHIPPED_PLAYBOOKS = (
+    Path(__file__).parents[1] / "PLAYBOOK.toml",
+    Path(__file__).parents[1] / "templates" / "PLAYBOOK-missions.toml",
+    Path(__file__).parents[1] / "templates" / "PLAYBOOK-runs.toml",
+)
+
+
+def test_no_shipped_playbook_notifies_on_job_held() -> None:
+    """§30: "The `job.held` rule is removed from this repository's playbook and
+    from both templates; the daemon's held notification with buttons is the one
+    message." A rule here would publish a second message for the same hold."""
+    offenders = []
+    for path in SHIPPED_PLAYBOOKS:
+        data = tomllib.loads(path.read_text(encoding="utf-8"))
+        for index, rule in enumerate(data.get("rule", []), 1):
+            if rule.get("on") == "job.held":
+                offenders.append(f"{path.name}: rule {index} is on job.held")
+    assert not offenders, "a shipped playbook still doubles the held message:\n" + "\n".join(
+        offenders
+    )
+    # Not a blanket ban: `job.held` stays an event a playbook may use — a kit
+    # whose playbook keeps the rule still passes `kit check` (tests/test_kit.py)
+    # — and the hold's own notification, with buttons, is still published.
+    root = tomllib.loads(SHIPPED_PLAYBOOKS[0].read_text(encoding="utf-8"))
+    assert [r["on"] for r in root["rule"] if r["on"] == "job.denied"] == ["job.denied"]
