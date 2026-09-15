@@ -377,6 +377,13 @@ PRECEDENCE = (
      + [({"harness_terminated": True, "limit_category": "rate_limit"}, 1, False)],
      ("limited", None)),
     ("terminating line or not", [], None),
+    # REVIEW-13 should-fix 8, DESIGN §30: both a cancel and a limit hold.
+    ("a job both cancelled and over a limit is `killed`: `killed` wins over `limited`",
+     [({**DONE_RUN, "harness_terminated": line, "limit_category": "rate_limit"}, 0, True)
+      for line in (True, False)]
+     + [({"harness_terminated": True, "limit_category": "rate_limit"}, 1, True),
+        ({"limit_category": "rate_limit"}, None, True)],
+     ("killed", None)),
     ("otherwise the terminating line wins even over a `success` result",
      [({**DONE_RUN, "harness_terminated": True}, 0, False)],
      ("failed", "harness_terminated")),
@@ -384,7 +391,8 @@ PRECEDENCE = (
 
 
 @pytest.mark.parametrize(("clause", "runs", "expected"), PRECEDENCE,
-                         ids=["killed", "limited", "line-or-not", "line-wins"])
+                         ids=["killed", "limited", "line-or-not", "killed-over-limited",
+                              "line-wins"])
 def test_the_doc_states_each_precedence_clause_and_the_runner_applies_it(
     clause: str,
     runs: list[tuple[dict[str, object], int, bool]],

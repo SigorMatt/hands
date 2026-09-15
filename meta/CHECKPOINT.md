@@ -1,20 +1,19 @@
 # CHECKPOINT
 
-Mission: 13 (meta/BUILDER-13-PROMPT.md, DESIGN v3.12 §29 with §5, §12, §13,
-§26, §28) — FINISHED.
-Base: 723dbeb (`plan: mission 13 kit (DESIGN v3.12)`).
-Unit in progress: none. U0–U8 `[x]` in meta/plan.md.
-Done: U0 b79d908 (1994); U1 eccc3a1 (2092); U2 ea7f1bc (2098); U3 126d4ff
-(2196); U4 38022f2 (2235); U5 9ca89cf (2272); U6 8f79f98 (2283); U7 0a14085
-(2283); U8 is the commit that carries this line (meta only).
-Report: meta/FINAL-REPORT-13.md (what changed, what tests prove, NOT PROVEN,
-`## Review items`, acceptance, for the architect).
-Review 12 closed: blockers 1 (U1), 2 (U3), 3 (U0, U2); should-fix 1, 6, 7
-(U3), 2 (U1), 3, 4, 5 (U4), 8 (U0), 9 (U5). Review 11 blockers 1 (U1) and 3
-(U2) closed.
-Findings: H-023 resolved (U2); H-024 resolved by v3.12 (U0, code U1); H-025
-resolved by v3.12 option (b) (U0, code U2); H-001 and H-009 open.
-Next: PLAYBOOK.toml names meta/BUILDER-14-PROMPT.md, which the architect ships.
+Mission: 14 (meta/BUILDER-14-PROMPT.md, DESIGN v3.13 §30 with §11, §12, §28,
+§29) — the guard's language, review 13.
+Base: c958a62 (`plan: mission 14 kit (DESIGN v3.13)`).
+Unit in progress: none (U0 done in this commit; U1 next).
+Intent: meta/plan.md and this file; H-026 filed (the guard's parser replaced
+by the §30 language, review 11–13 history); FINAL-REPORT-13's REVIEW-11
+blocker 1 row corrected by an appended dated line; REVIEW-13 should-fix 8:
+`killed` wins over `limited` when both apply in one job, pinned in
+docs/INTEGRATION.md and by a test that goes red when the runner's cancel and
+limit checks are swapped.
+Done means: those files changed; a sub-agent writes the should-fix 8 test
+(and any doc/runner change) without committing; ./scripts/check green 3/3;
+one `plan:` commit listing every file; pushed.
+Done so far: U0 (this commit; 2284 tests). Next: U1 The guard's language.
 Standing constraints: one foreground sub-agent per product unit, commit and
 push every unit, ./scripts/check green three consecutive runs before each
 commit, explicit paths only in `git add` (never `-A`), reports drafted under

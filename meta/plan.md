@@ -1,90 +1,59 @@
-# plan — mission 13 (close review 12, the sweep, two projects)
+# plan — mission 14 (the guard's language, close review 13)
 
-Source: meta/BUILDER-13-PROMPT.md, DESIGN v3.12 §29 (with §5, §12, §13, §26,
-§28), meta/reviews/REVIEW-12.md, findings H-023, H-024, H-025. Units run in
-order; each ends with a commit and a push. `[x]` = done and pushed, `[b]` =
-blocked (two failures).
+Source: meta/BUILDER-14-PROMPT.md, DESIGN v3.13 §30 (with §11, §12, §28,
+§29), meta/reviews/REVIEW-13.md, finding H-026. Units run in order; each ends
+with a commit and a push. `[x]` = done and pushed, `[b]` = blocked (two
+failures).
 
-Base of the mission: 723dbeb (`plan: mission 13 kit (DESIGN v3.12)`).
+Base of the mission: c958a62 (`plan: mission 14 kit (DESIGN v3.13)`).
 
-- [x] U0 Plan and bookkeeping (`plan:`) b79d908 — this file, meta/CHECKPOINT.md;
-      H-024 v3.12 reading, resolved; H-025 option (b) with §29 text; H-023
-      closes with U2; SF8 table-driven `done` order and precedence test;
-      FINAL-REPORT-12 §3 item 2 and REVIEW-11 blocker 1 row corrected
-- [x] U1 The guard: comments, the reading, the clone pin (§29; blocker 1,
-      SF2; H-024) eccc3a1 — `#` outside quotes refused in both modes with its
-      offset (incl. `a#b`, `$#`, inside `$(…)`); braces count only with `,`
-      or `..` (`HEAD@{1}` now allowed); in double quotes any `\` counts;
-      role-mode `git -C` equals HANDS_CLONE after abspath (unset refuses);
-      handsd sets HANDS_CLONE on the driver job (<cwd>/repo, else cwd if a
-      repo); doctor self-test uses ./repo; REVIEW-12 probes blocked both
-      modes; REVIEW-11 normal-mode allowed rows kept
-- [x] U2 The sweep after the reap (§29; H-025 b; H-023; blocker 3) ea7f1bc —
-      descent by sid == job pid and start ticks < last-seen-alive ticks
-      (recorded at spawn, each 50 ms poll, sweep start) or cgroup scope;
-      HANDS_JOB mark neither required nor sufficient (mark rule removed,
-      H-023 resolved); per-process signal, every orphan entry carries
-      `killed`; `runner.pipe_timeout_s` default 10; residual in INTEGRATION;
-      two monitor orphan fakes linger 0.5 s and the cancel test waits for an
-      observation after the fork (else the fork is in the residual interval)
-- [x] U3 Kit transport and kit check (§29; blocker 2; SF1, SF6, SF7) 126d4ff
-      — IP literals by ipaddress, names by idna.encode (reviewer's five
-      refused pre-fetch; `a_b.com` now refused); kit file name shlex-quoted
-      after `~/Downloads/`; kit.NAMED_PATH_RULE (exists, extension with a
-      letter, or `/` with bad syntax or a known leading dir; 42-row table;
-      missing bare `Makefile`, `newdir/NOTES` not caught; `e.g.`,
-      `github.com` flagged); apply exception = first rule matching the
-      literal and no vocabulary literal (vocabulary-matching rules judged
-      as vocabulary, catch-all `^VERDICT:` kept); BUILDER-13 kit 6/6 exit 0
-- [x] U4 Consult edges (§29; SF3, SF4, SF5) 38022f2 — engine's consult stop
-      decided before the paused check: over a pause, one
-      `pipeline.stop_suppressed` with the engine's reason and one
-      notification (7 kinds × 4 playbook shapes, e2e escalate); no playbook
-      rule fires while paused; doctor self-tests the first shlex word naming
-      `.claude/hooks/bash_guard.py` ($CLAUDE_PROJECT_DIR / relative resolved
-      against the driver dir, other `$` fails); max_consults anchor = latest
-      of kickoff, kit apply, daemon start (restart mid-mission resets)
-- [x] U5 Who grace (§29; SF9) 9ca89cf — `[who] grace_s` (default 60,
-      number ≥ 0, unknown keys refused); from the spool's job records
-      (works with handsd down): a job with no `session_id` that ended within
-      the grace (inclusive) excludes each transcript in its role's cwd folder
-      whose first `timestamp` (first 20 lines) lies in [started, ended];
-      boundary tested with an injected clock; a human session begun in that
-      folder during the job is hidden until the grace passes (documented)
-- [x] U6 Two projects on one laptop (§29) 8f79f98 — `config.spool_root`:
-      jobs/, roles/, inbox.jsonl, inbox.acks.jsonl, pipeline.json and the
-      default socket under `~/.hands/<project>/` (config stays
-      `~/.hands/<project>.toml`; nonces in memory only); flat layout = any of
-      those five directly in `~/.hands/`, handsd exits 1 naming
-      `hands migrate-spool`; migrate-spool moves them to `~/.hands/hands/`,
-      files `spool.migrated`, no-op when nothing flat, refuses on an existing
-      target or a live socket; `systemd/` only handsd@/handswho@ with
-      `%h/.config/hands/%i.env`; `hands who` over every `~/.hands/*.toml`
-      project, one root each; INTEGRATION two daemons, subscription metered
-      by `auto_runs`
-- [x] U7 This repository's playbook (kickoff BUILDER-14) 0a14085 — one
-      line; kickoff test red on the value; BUILDER-13 kit `--repo .` 6/6
-      exit 0; BUILDER-14 not yet written
-- [x] U8 Final report (meta/FINAL-REPORT-13.md) (the commit that carries
-      this line) — drafted under meta/drafts/; mission 13 finished
+- [x] U0 Plan and bookkeeping (`plan:`) (this commit) — this file, meta/CHECKPOINT.md;
+      H-026 filed; FINAL-REPORT-13 REVIEW-11 blocker 1 row corrected by a
+      dated line; SF8 `killed` over `limited`: INTEGRATION clause and a
+      PRECEDENCE row (runner unchanged; red on the limit-before-cancel swap)
+- [ ] U1 The guard's language (§30; blocker 1; SF1) — pre-tokenize refusal
+      of newline, CR, `<`, `>`, `#`, backtick, `$(`, `\`, `$'`, control
+      characters (first offender + position); `$`/`!` in double quotes
+      refused; comment/heredoc/redirection/expansion-position code and its
+      tests removed; `git -C` pin by realpath; every review 11–13 probe
+      blocked both modes; INTEGRATION one-paragraph language
+- [ ] U2 Kit check names and who's configs (§30; blockers 2, 3) — bare
+      relative names and handbook punctuation shapes in a fixture; `hands
+      who` loads each config in its own try, broken one as a root line
+- [ ] U3 Config edges (§30; blocker 4; SF6) — `[who] grace_s` finite and
+      ≥ 0; project names `[A-Za-z0-9][A-Za-z0-9._-]{0,63}` (file name and
+      `--project`)
+- [ ] U4 Sweep, doctor, consult (§30; SF2, SF3, SF4, SF5) — unmarked
+      session member is the job's; pipe-timeout test bound to the config;
+      doctor checks the hook command names and runs the guard; max_consults
+      anchor persisted in the spool
+- [ ] U5 Notifications and the playbooks (§30; SF7) — 1.1 s between paired
+      publishes; no `job.held → notify` rule in PLAYBOOK.toml or templates,
+      a template with it still loads; retired unit references removed
+      outside the changelog
+- [ ] U6 This repository's playbook — `[series] kickoff` BUILDER-15; kit of
+      BUILDER-14 `--repo .` exits 0
+- [ ] U7 Final report (meta/FINAL-REPORT-14.md) — drafted under meta/drafts/
 
-Review items by unit. REVIEW-12 blocker 1 → U1; blocker 2 → U3; blocker 3 →
-U2; SF1, SF6, SF7 → U3; SF2 → U1; SF3, SF4, SF5 → U4; SF8 → U0; SF9 → U5.
-REVIEW-11 blocker 1 → U1 (the comment hole reopened it); blocker 3 → U2.
+Review items by unit. REVIEW-13 blocker 1 → U1; blocker 2 → U2; blocker 3 →
+U2; blocker 4 → U3; SF1 → U1; SF2, SF3, SF4, SF5 → U4; SF6 → U3; SF7 → U5;
+SF8 → U0.
 
 Scope choices (orchestrator's):
-- U0's SF8 test is product-tree work (tests/test_docs.py), so a sub-agent
-  writes it without committing; the orchestrator commits it with the meta
-  files as the one `plan:` commit (as mission 12 U0 did).
-- REVIEW-12 Notes (`http://a.com:+80/`, empty alternative `(question|)`, a
-  started-but-failed kit apply counting, queued-cancel driver untested) are
-  outside §29 and not taken unless a unit's sub-agent finds them in its path.
+- U0's SF8 test is product-tree work, so a sub-agent writes it without
+  committing; the orchestrator commits it with the meta files as the one
+  `plan:` commit (as missions 12 and 13 U0 did).
+- SF7's `DESIGN.md:644` (§14 layout, `systemd/handsd.service`) is outside a
+  changelog section and builders may not edit DESIGN.md: U5 files a finding
+  for it. `DESIGN.md:921` is in §24, a changelog section, and stays.
+- REVIEW-13 Notes (numeric IPv4 spellings, confusables, the paused branch
+  outside the engine try, who loading configs twice, a kickoff naming a
+  missing brief, `ended` set at restart) are outside §30 and not taken
+  unless a unit's sub-agent finds them in its path; U7 lists them.
 
-Dependencies. U6 touches the spool paths every other unit reads, so it runs
-after U1–U5. U5 (who grace) and U6 (`hands who` over every spool) both touch
-who.py; U5 first. U7 needs U3 (kit check's named-path rules) since its gate
-is a kit check. U1, U2, U3, U4 are independent of each other.
+Dependencies. U2 and U3 both touch config loading used by `hands who`; U2
+first. U6's gate is a kit check, so it runs after U2. U1, U4, U5 are
+independent of the others.
 
-Findings. H-023 resolved (U2 ea7f1bc). H-024 resolved by v3.12 (U0, code U1
-eccc3a1). H-025 option (b) chosen by v3.12 (U0), code U2 ea7f1bc. H-001 and
+Findings. H-026 filed by U0 (resolved by DESIGN v3.13; code U1). H-001 and
 H-009 stay open.

@@ -1337,3 +1337,29 @@ cannot stall it; what remains after the sweep is reported as
 code; H-023 closes with it.
 
 Status: resolved by DESIGN v3.12 (code: mission 13 U2)
+
+## H-026 — the guard's parser is replaced by a language (§30)
+
+Severity: high · Component: DESIGN §12 rule 6, §28, §29 (the guard) against
+§30 (the driver's shell is one line); `driver/hooks/bash_guard.py`,
+`.claude/hooks/bash_guard.py`, `tests/test_bash_guard.py`
+Filed by: mission 14 U0, orchestrator, from REVIEW-13 blocker 1.
+
+History, reviews 11–13:
+- Review 11 blocker 1: the guard's bash reading missed shapes that hide a
+  command; mission 12 patched the scanner.
+- Review 12 blocker 1: an apostrophe inside a `#` comment opened a quote bash
+  never sees; mission 13 refused `#` outside quotes.
+- Review 13 blocker 1: a `'` inside a heredoc body desynchronised the quote
+  state the same way, in both modes; each patch left the next bash corner.
+
+Resolution (DESIGN v3.13 §30, 2026-09-16): the parser is not extended again.
+The guard refuses, before any tokenizing, a newline, carriage return, `<`,
+`>`, `#`, a backtick, `$(`, `\`, `$'` or any control character (naming the
+first offender and its position), and `$` or `!` inside double quotes; what
+remains is one line of words and quotes that `shlex` tokenizes without
+ambiguity, split on `;`, `&&`, `||`, `|`, `&`. Heredoc, comment, redirection
+and expansion-position handling is removed as unreachable. Mission 14 U1
+carries the code.
+
+Status: resolved by DESIGN v3.13 (code: mission 14 U1)

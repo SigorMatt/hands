@@ -194,3 +194,13 @@ H-025. Base: 723dbeb (`plan: mission 13 kit (DESIGN v3.12)`).
      `~/.hands/*.toml`.
 2. **BUILDER-14.** `PLAYBOOK.toml` names `meta/BUILDER-14-PROMPT.md`, which
    the architect's next kit must ship.
+
+## Corrections (appended)
+
+2026-09-16 (mission 14 U0, from REVIEW-13 blocker 1). The Review items row
+"REVIEW-11 blocker 1 — guard bypass … closed (the comment hole)" is wrong:
+REVIEW-11 blocker 1 was not closed by mission 13. REVIEW-13 reproduced a
+heredoc shape at eccc3a1 that hides a command in both modes (a `'` inside the
+heredoc body opens a quote bash never sees), and §3.1's "Heredoc … parsing
+[is] not modelled" understated it as unmodelled parsing rather than a working
+bypass. It stays open until mission 14 U1 (DESIGN v3.13 §30, H-026).

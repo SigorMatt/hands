@@ -244,7 +244,8 @@ Notes that are easy to get wrong:
   `stderr_tail` has the evidence. `failure_reason` is null for every other
   state. Precedence: a cancel stays `killed` and a detected limit stays
   `limited`, terminating line or not (§6's limit resume waits out the reset, and
-  a `builder.failed → resume` would not); otherwise the terminating line wins
+  a `builder.failed → resume` would not); a job both cancelled and over a limit
+  is `killed`: `killed` wins over `limited`; otherwise the terminating line wins
   even over a `success` result, because the harness ended the session mid-turn
   and the result is whatever the model had said last (H-014). Only the line's
   exact shape counts: from the line start, case-sensitive.
