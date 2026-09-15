@@ -29,9 +29,11 @@ playbook: a `go` is accepted, and its job un-pauses the pipeline when it starts
 else with it. The message's ntfy `attachment` (`name`, `size`, `url`) is checked
 before anything is fetched: the name must be a `.zip` basename (printable, no
 `/` or `\\`, no leading dot, a non-empty stem, ending in lowercase `.zip`), the
-reported `size` an integer no larger than `[files] kit_max_mb` MiB, the `url` a
-well-formed http(s) URL with a host (httpx parses it), and `[files] kit_dir`
-inside `[files] allowed_roots`. Once the secret is accepted, every refusal —
+reported `size` an integer no larger than `[files] kit_max_mb` MiB, the `url`
+one that passes `url_problem` — every step inside one try (§28): a string with no
+whitespace that httpx parses, scheme `http` or `https`, a non-empty host that
+decodes as IDNA, a port (when given) in 1-65535 — and `[files] kit_dir` inside
+`[files] allowed_roots`. Once the secret is accepted, every refusal —
 before the fetch or during it — is logged and filed as `kit.refused` with the
 check that refused it, never the attachment's name or URL (§27). The download is
 streamed by httpx on the event loop into a temp file in `kit_dir`, capped while
@@ -57,6 +59,9 @@ that is not a repository path under the builder's cwd is refused as
 an entry's name) and no job is filed; the kit stays on disk, so `hands kit
 check` can say which entry. A builder that is busy does not refuse the apply:
 it is held, and the human decides when to approve it. The builder unzips it.
+When the commit message is the default `plan: kit <name>` — no `KIT.md`, or a
+first line §28's rules refuse — the phone is told why on `ntfy_topic`: `apply
+<name>: <why>; the commit message is the default '<message>'`.
 
 **The token.** A typed command carries `cmd_secret` as its last word. A held
 job's notification carries Approve/Deny buttons that publish `approve <job>
@@ -97,6 +102,7 @@ import json
 import logging
 import os
 import secrets
+import shlex
 import tempfile
 import time
 from collections import deque
@@ -399,8 +405,9 @@ class PhoneChannel:
                 f"{files.kit_max_mb} ({cap} bytes)"
             )
         url = attachment.get("url")
-        if not _is_http_url(url):
-            return self._refuse_kit("the attachment has no valid http(s) url")
+        problem = url_problem(url)
+        if problem is not None:
+            return self._refuse_kit(f"the attachment has no valid http(s) url: {problem}")
         assert isinstance(url, str)
         try:
             directory = resolve_under_roots(files.kit_dir, files.allowed_roots)
@@ -445,6 +452,13 @@ class PhoneChannel:
         except ApiError as exc:
             return self._refuse_kit(f"the apply was not filed: the send was refused ({exc})")
         log.info("phone: kit apply filed as builder job %s (%s)", job["id"], job["state"])
+        if plan.default_why is not None:  # §28: the notification says so
+            text = (
+                f"apply {plan.name}: {plan.default_why}; the commit message is the default "
+                f"{shlex.quote(plan.commit_message)}"
+            )
+            log.info("phone: %s", text)
+            await self.daemon.notifier.answer(KIT_TITLE, text)
         return None
 
     def _refuse_kit(self, why: str) -> None:
@@ -517,21 +531,42 @@ class _KitRefused(Exception):
     """A kit download that is not written; the text is the logged reason."""
 
 
-def _is_http_url(url: object) -> bool:
-    """An http(s) URL httpx can parse, with a host (review 10 should-fix 6).
+def url_problem(url: object) -> str | None:
+    """Why `url` is not an attachment URL handsd fetches, or None (§28).
 
-    `httpx.InvalidURL` is not an `httpx.HTTPError`: raised from the fetch it
-    escaped the refusal path, so it is caught here, before any request.
+    Every step runs inside the one try: reading `httpx.URL.host` decodes the host
+    as IDNA and raises idna's error for a label such as `xn--` (review 11 blocker
+    2), and `httpx.InvalidURL` is not an `httpx.HTTPError` (review 10 should-fix
+    6). Whatever else parsing raises is a refusal too, never a traceback. The
+    reason names the check, never the URL's text.
     """
     import httpx
 
-    if not isinstance(url, str) or not url.startswith(("https://", "http://")):
-        return False
     try:
-        parsed = httpx.URL(url)
-    except (httpx.InvalidURL, ValueError, TypeError):
-        return False
-    return parsed.scheme in ("http", "https") and bool(parsed.host)
+        if not isinstance(url, str):
+            return "it is not a string"
+        if any(char.isspace() for char in url):
+            return "it contains whitespace"  # httpx would percent-encode it into the host
+        try:
+            parsed = httpx.URL(url)
+        except (httpx.InvalidURL, ValueError, TypeError):
+            return "it does not parse"
+        if parsed.scheme not in ("http", "https"):
+            return "its scheme is not http or https"
+        if not parsed.raw_host:
+            return "it has no host"
+        try:
+            host = parsed.host
+        except (UnicodeError, ValueError):  # idna.IDNAError is a UnicodeError
+            return "its host is not a valid IDNA name"
+        if not host:
+            return "it has no host"
+        port = parsed.port
+        if port is not None and not 1 <= port <= 65535:
+            return "its port is not in 1-65535"
+    except Exception as exc:  # §28: any failure is a refusal, filed as kit.refused
+        return f"it could not be checked ({type(exc).__name__})"
+    return None
 
 
 def _is_kit_name(name: object) -> bool:

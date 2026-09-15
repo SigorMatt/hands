@@ -1373,8 +1373,9 @@ def test_a_kit_with_a_missing_or_wrong_secret_is_refused_before_the_fetch(
         ({"size": 12.5}, ": the attachment reports no size in bytes"),
         ({"size": True}, ": the attachment reports no size in bytes"),
         ({"size": -1}, ": the attachment reports no size in bytes"),
-        ({"url": ...}, ": the attachment has no valid http(s) url"),
-        ({"url": "file:///etc/passwd"}, ": the attachment has no valid http(s) url"),
+        ({"url": ...}, ": the attachment has no valid http(s) url: it is not a string"),
+        ({"url": "file:///etc/passwd"},
+         ": the attachment has no valid http(s) url: its scheme is not http or https"),
     ],
     ids=["no-attachment", "no-size", "str-size", "float-size", "bool-size", "negative-size",
          "no-url", "file-url"],
@@ -1404,9 +1405,31 @@ def test_a_kit_without_an_attachment_a_size_or_an_http_url_is_refused_before_the
 
 
 @pytest.mark.parametrize(
-    "url", ["http://[::1", "https://[::1/Xyzzy-url-marker.zip", "http://"],
-    ids=["unclosed-bracket", "unclosed-bracket-with-path", "no-host"],
-)
+    "url,why",
+    [
+        # review 11 blocker 2: the reviewer's three URLs
+        ("http://xn--/k.zip", "its host is not a valid IDNA name"),
+        ("http://exa mple.com/k.zip", "it contains whitespace"),
+        ("https://[::1]:99999/x", "its port is not in 1-65535"),
+        # §28's four checks, each on its own
+        ("ftp://example.com/k.zip", "its scheme is not http or https"),
+        ("file:///etc/passwd", "its scheme is not http or https"),
+        ("http://:80/k.zip", "it has no host"),
+        ("http:///k.zip", "it has no host"),
+        ("http://", "it has no host"),
+        ("http://xn--bcher-.de/k.zip", "its host is not a valid IDNA name"),
+        ("http://example.com:0/k.zip", "its port is not in 1-65535"),
+        ("http://example.com:65536/k.zip", "its port is not in 1-65535"),
+        ("http://example.com/k\t.zip", "it contains whitespace"),
+        ("http://example.com/k.zip\n", "it contains whitespace"),
+        # what httpx cannot parse at all (review 10 should-fix 6)
+        ("http://[::1", "it does not parse"),
+        ("https://[::1/Xyzzy-url-marker.zip", "it does not parse"),
+    ],
+    ids=["idna-xn", "space-in-host", "port-99999", "ftp", "file", "empty-host-port",
+         "empty-host-path", "no-host", "idna-trailing-hyphen", "port-0", "port-65536", "tab",
+         "newline", "unclosed-bracket", "unclosed-bracket-with-path"],
+)  # fmt: skip
 def test_a_kit_with_a_malformed_url_is_refused_before_any_fetch_and_inboxed(
     kit_project: str,
     downloads: Path,
@@ -1415,9 +1438,12 @@ def test_a_kit_with_a_malformed_url_is_refused_before_any_fetch_and_inboxed(
     caplog: pytest.LogCaptureFixture,
     monkeypatch: pytest.MonkeyPatch,
     url: str,
+    why: str,
 ) -> None:
-    """Review 10 should-fix 6: httpx's `InvalidURL` is not an `HTTPError`; the URL
-    is refused by the pre-fetch checks, with no traceback and without its text."""
+    """§28 (review 11 blocker 2): the URL is validated entirely inside the try —
+    scheme http(s), a non-empty IDNA-valid host, a port in range, no whitespace —
+    and any failure files `kit.refused` with the reason, touches no network, and
+    leaves no traceback and no text of the URL."""
     caplog.set_level(logging.DEBUG)
     fetched: list[object] = []
 
@@ -1426,6 +1452,7 @@ def test_a_kit_with_a_malformed_url_is_refused_before_any_fetch_and_inboxed(
         raise AssertionError("fetch_kit was called")
 
     monkeypatch.setattr(phone_mod, "fetch_kit", no_fetch)
+    reason = f"the attachment has no valid http(s) url: {why}"
 
     async def body(daemon: Daemon, fake: FakeNtfy) -> None:
         attachment = kit_server.attach("kit.zip", ZIP, url=url)
@@ -1434,7 +1461,7 @@ def test_a_kit_with_a_malformed_url_is_refused_before_any_fetch_and_inboxed(
         assert fetched == [] and kit_server.hits == []
         assert list(downloads.iterdir()) == []
         assert kit_events(daemon) == [] and kit_answers(daemon) == []
-        assert kit_refusals(daemon) == [{"reason": "the attachment has no valid http(s) url"}]
+        assert kit_refusals(daemon) == [{"reason": reason}]
         for item in daemon.notifier.post.sent:
             assert url not in strip_paths(json.dumps(item, default=str)), item
         for path in (tmp_home / ".hands").rglob("*"):
@@ -1443,8 +1470,8 @@ def test_a_kit_with_a_malformed_url_is_refused_before_any_fetch_and_inboxed(
                 assert url not in strip_paths(data), path
 
     phone_drive(body)
-    assert_kit_refused(caplog, ": the attachment has no valid http(s) url")
-    for said in ("a command raised", "Traceback", "Xyzzy-url-marker", "[::1"):
+    assert_kit_refused(caplog, f": {reason}")
+    for said in ("a command raised", "Traceback", "Xyzzy-url-marker", "[::1", "xn--", "mple"):
         assert said not in strip_paths(caplog.text), said
 
 
@@ -1704,6 +1731,12 @@ def test_a_kit_in_a_kit_dir_outside_home_names_its_absolute_path(
         where = (elsewhere / "m.zip").resolve()
         assert prompt.startswith(f"Apply {where} to this repository: ")
         assert prompt == kit_mod.apply_from_zip(where, workdir, str(where)).prompt
+        # §28 with REVIEW-11 SF9, the case that remains unequal: kit check has no
+        # config, so it names the kit in the default kit_dir; with another kit_dir
+        # the two prompts differ in that location, and only there.
+        checked = await kit_check_prompt(where, workdir)
+        assert checked != prompt
+        assert checked == prompt.replace(f"Apply {where} ", "Apply ~/Downloads/m.zip ", 1)
 
     phone_drive(body)
 
@@ -1723,5 +1756,65 @@ def test_a_kit_while_the_builder_is_busy_still_files_its_held_apply(
         assert [row["state"] for row in rows] == ["held"]
         assert kit_refusals(daemon) == []
         await ok("cancel", running["id"])
+
+    phone_drive(body)
+
+
+@pytest.mark.parametrize(
+    "name,kit_md,why",
+    [
+        ("mission-12.zip", "plan: mission 12 kit (DESIGN v3.11)\n", None),
+        ("it's-12.zip", "plan: it's a kit\n",
+         "KIT.md's first line is not used (it contains a quote character)"),
+        ("m12.zip", "x" * 73 + "\n",
+         "KIT.md's first line is not used (it is 73 characters, over 72)"),
+        ("m12.zip", "\nplan: second\n", "KIT.md's first line is not used (it is empty)"),
+        ("m 12.zip", None, "the kit carries no KIT.md"),
+    ],
+    ids=["kit-md", "quote", "73-chars", "blank", "no-kit-md"],
+)  # fmt: skip
+def test_the_apply_prompt_is_kit_checks_byte_for_byte_for_the_same_path_and_name(
+    kit_project: str,
+    workdir: Path,
+    downloads: Path,
+    kit_server: KitServer,
+    tmp_path: Path,
+    name: str,
+    kit_md: str | None,
+    why: str | None,
+) -> None:
+    """§28, REVIEW-11 SF9: for a kit handsd writes at ~/Downloads/<name> (the default
+    kit_dir), `hands kit check` on that file and on a copy of the same name elsewhere
+    (an architect's sandbox) prints the prompt handsd files, byte for byte; the
+    message is shell-quoted; when KIT.md's line is not the message, the phone is told."""
+    import shlex
+
+    body_zip = kit_zip(good_entries(kit_md))
+    copy = tmp_path / "sandbox" / name
+    copy.parent.mkdir()
+    copy.write_bytes(body_zip)
+
+    async def body(daemon: Daemon, fake: FakeNtfy) -> None:
+        (row,) = await kit_jobs(daemon, fake, kit_server.attach(name, body_zip))
+        record = await ok("show", row["id"])
+        assert record["state"] == "held"
+        written = await kit_check_prompt(downloads / name, workdir)
+        elsewhere = await kit_check_prompt(copy, workdir)
+        assert record["prompt"] == written == elsewhere
+        assert record["prompt"].startswith(f"Apply ~/Downloads/{name} to this repository: ")
+        stem = name.removesuffix(".zip")
+        message = (kit_md or "").splitlines()[0] if why is None else f"plan: kit {stem}"
+        said = record["prompt"].split(" makes a single commit ", 1)[1].split(" listing ", 1)[0]
+        assert said == shlex.quote(message) and shlex.split(said) == [message]
+        notices = [
+            answer["message"] for answer in kit_answers(daemon)
+            if not answer["message"].startswith("kit received ")
+        ]  # fmt: skip
+        if why is None:
+            assert notices == []
+        else:
+            assert notices == [
+                f"apply {stem}: {why}; the commit message is the default {shlex.quote(message)}"
+            ]
 
     phone_drive(body)

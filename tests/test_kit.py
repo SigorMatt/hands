@@ -174,7 +174,8 @@ def test_a_passing_dir_kit_prints_six_passes_and_the_apply_prompt(
     # §27: no KIT.md in the kit, so the commit message is `plan: kit <name>`.
     assert "'plan: kit mission-11-kit'" in strip_paths(flat), out
     assert (
-        "KIT.md: the first line of a KIT.md entry is the commit message; this kit "
+        "KIT.md: the first line of a KIT.md entry is the commit message when it is not "
+        "empty, at most 72 characters, and has no quote character or line break; this kit "
         "carries no KIT.md, so the message is 'plan: kit mission-11-kit'"
     ) in strip_paths(flat), out
     assert "Reply with one line: VERDICT: kit applied <sha>." in strip_paths(flat), out
@@ -230,7 +231,8 @@ def test_the_commit_message_is_the_first_line_of_the_kits_kit_md(
     assert "commit 'plan: mission 11 kit (DESIGN v3.10)' listing" in strip_paths(flat), out
     assert "commit message: plan: mission 11 kit (DESIGN v3.10)" in strip_paths(flat), out
     assert (
-        "KIT.md: the first line of a KIT.md entry is the commit message; this kit's "
+        "KIT.md: the first line of a KIT.md entry is the commit message when it is not "
+        "empty, at most 72 characters, and has no quote character or line break; this kit's "
         "KIT.md gives 'plan: mission 11 kit (DESIGN v3.10)'"
     ) in strip_paths(flat), out
     assert "adds KIT.md and meta/BUILDER-11-PROMPT.md)" in strip_paths(flat), out
@@ -759,7 +761,7 @@ def test_the_filled_runs_playbook_passes_with_a_workplan(tmp_path: Path) -> None
     workplan = (
         "# WORKPLAN — hands audit\n\nKickoff line:\n\n    Execute WORKPLAN.md run 1\n\n"
         "Reply with one of: `VERDICT: run 1 finished` | `VERDICT: run 1 blocked <reason>`"
-        " | `VERDICT: question <one line>`\n"
+        " | `VERDICT: awaiting decision <memo>` | `VERDICT: question <one line>`\n"
     )
     kit = write_tree(
         tmp_path / "k",
@@ -824,3 +826,247 @@ def test_a_driver_rule_that_matches_neither_driver_verdict_fails(
     failed = assert_failed_only(code, out, "verdicts")
     assert "settled" in strip_paths(failed)
     assert "VERDICT: resolved <what was sent, and the section cited>" in strip_paths(failed)
+
+
+# ------------------------------------ §28: named paths (review 11 should-fix 6)
+
+
+def _send_naming(text: str) -> str:
+    """PLAYBOOK whose aux send prompt also names `text`."""
+    book = PLAYBOOK.replace(
+        "Read meta/REVIEW-PROTOCOL.md,", f"Read meta/REVIEW-PROTOCOL.md and {text},"
+    )
+    assert book != PLAYBOOK
+    return book
+
+
+@pytest.mark.parametrize(
+    "said,named",
+    [
+        ("meta/MISSING.txt", "meta/MISSING.txt"),
+        ("(meta/MISSING.txt)", "meta/MISSING.txt"),
+        ('\\"meta/MISSING.txt\\"', "meta/MISSING.txt"),
+        ("'meta/MISSING.txt'", "meta/MISSING.txt"),
+        ("`meta/MISSING.txt`", "meta/MISSING.txt"),
+        ("<meta/MISSING.txt>", "meta/MISSING.txt"),
+        ("[meta/MISSING.txt]", "meta/MISSING.txt"),
+        ("meta/MISSING.txt:", "meta/MISSING.txt"),
+        ("meta/MISSING.txt;", "meta/MISSING.txt"),
+        ("meta/MISSING.json.", "meta/MISSING.json"),
+        ("MISSING.py", "MISSING.py"),
+    ],
+    ids=["bare", "parens", "double-quotes", "single-quotes", "backticks", "angles",
+         "brackets", "colon", "semicolon", "json-full-stop", "py-root"],
+)  # fmt: skip
+def test_a_named_file_neither_the_kit_nor_the_repo_has_fails_whatever_surrounds_it(
+    tmp_path: Path, repo: Path, said: str, named: str
+) -> None:
+    """§28: every file path a send names is resolved against the kit, then the
+    repo; a name neither has fails, not only a `.md`/`.toml` one."""
+    kit = write_tree(tmp_path / "k", {**good_kit(), "PLAYBOOK.toml": _send_naming(said)})
+    code, out, _ = run_check(kit, repo)
+    failed = assert_failed_only(code, out, "protocol")
+    assert f"names {named}, which is in neither the kit nor the repo" in strip_paths(failed)
+
+
+@pytest.mark.parametrize("named", ["../{n}.md", "../REVIEW-{n}.txt", "/tmp/{n}.md", "~/{n}.md",
+                                   "meta/../{n}.md", "{n}/../../x.md"])  # fmt: skip
+def test_a_placeholder_path_that_is_not_a_repository_path_fails(
+    tmp_path: Path, repo: Path, named: str
+) -> None:
+    """Review 11 should-fix 6: a name with `{` was skipped, so `../{n}.md` passed."""
+    kit = write_tree(tmp_path / "k", {**good_kit(), "PLAYBOOK.toml": _send_naming(named)})
+    code, out, _ = run_check(kit, repo)
+    failed = assert_failed_only(code, out, "protocol")
+    assert named in strip_paths(failed) and "not a repository path" in strip_paths(failed)
+
+
+def test_a_placeholder_repository_path_is_judged_by_its_syntax_and_reported(
+    tmp_path: Path, repo: Path
+) -> None:
+    """A path with a `{placeholder}` names a different file per job (the review a
+    job writes), so its existence is not required; it is listed as not read."""
+    kit = write_tree(tmp_path / "k", good_kit())
+    code, out, err = run_check(kit, repo)
+    assert code == 0, out + err
+    assert "meta/reviews/REVIEW-{n}.md (a placeholder path, not read)" in strip_paths(
+        line(out, "protocol")
+    )
+
+
+def test_a_named_txt_file_the_repo_has_passes(tmp_path: Path, repo: Path) -> None:
+    (repo / "meta" / "NOTES.txt").write_text("notes\n", encoding="utf-8")
+    kit = write_tree(
+        tmp_path / "k", {**good_kit(), "PLAYBOOK.toml": _send_naming("`meta/NOTES.txt`")}
+    )
+    code, out, err = run_check(kit, repo)
+    assert code == 0, out + err
+    assert "meta/NOTES.txt (repo)" in strip_paths(line(out, "protocol"))
+
+
+# --------------------------- §28: the apply exception, alternatives (should-fix 7)
+
+
+@pytest.mark.parametrize(
+    "pattern", ["^VERDICT: kit", "^VERDICT: kit appl", "kit applied", "^VERDICT: kit applied <sha>",
+                "^VERDICT: kit applied$", "^VERDICT: kit applied \\w+"],
+)  # fmt: skip
+def test_a_builder_rule_that_is_not_the_apply_literals_text_is_not_excused(
+    tmp_path: Path, repo: Path, pattern: str
+) -> None:
+    """§28: the exception is for a rule whose regex is `VERDICT: kit applied <sha>`'s
+    own text; `^VERDICT: kit` matches that literal too, and is not excused."""
+    book = PLAYBOOK.replace("'^VERDICT: kit applied'", f"'{pattern}'")
+    kit = write_tree(tmp_path / "k", {**good_kit(), "PLAYBOOK.toml": book})
+    code, out, _ = run_check(kit, repo)
+    failed = assert_failed_only(code, out, "verdicts")
+    assert f"verdict '{pattern}'" in strip_paths(failed)
+
+
+@pytest.mark.parametrize("pattern", ["^VERDICT: kit applied", "VERDICT: kit applied",
+                                     "^VERDICT: kit applied "])  # fmt: skip
+def test_the_apply_rule_is_the_text_of_the_apply_literal(
+    tmp_path: Path, repo: Path, pattern: str
+) -> None:
+    book = PLAYBOOK.replace("'^VERDICT: kit applied'", f"'{pattern}'")
+    kit = write_tree(tmp_path / "k", {**good_kit(), "PLAYBOOK.toml": book})
+    code, out, err = run_check(kit, repo)
+    assert code == 0, out + err
+    assert "rule 1 matches the apply prompt's" in strip_paths(line(out, "verdicts"))
+
+
+def test_only_one_rule_is_excused_by_the_apply_literal(tmp_path: Path, repo: Path) -> None:
+    second = (
+        "\n[[rule]]\non = \"builder.done\"\nverdict = '^VERDICT: kit applied'\n"
+        "then = \"notify\"\nmessage = \"again\"\n"
+    )
+    kit = write_tree(tmp_path / "k", {**good_kit(), "PLAYBOOK.toml": PLAYBOOK + second})
+    code, out, _ = run_check(kit, repo)
+    failed = assert_failed_only(code, out, "verdicts")
+    assert "rule 6 verdict '^VERDICT: kit applied'" in strip_paths(failed)
+    assert "only one rule is excused by the apply prompt's literal, and rule 1 is" in (
+        strip_paths(failed)
+    )
+
+
+def test_a_review_rule_with_a_typod_alternative_fails(tmp_path: Path, repo: Path) -> None:
+    """Review 11 should-fix 7: `(blockers=0|blokers=0)` passed because one branch
+    matched. Hands' reading of §28 "must match a vocabulary literal": every
+    alternative of the regex must."""
+    book = PLAYBOOK.replace("blockers=0'", "(blockers=0|blokers=0)'")
+    kit = write_tree(tmp_path / "k", {**good_kit(), "PLAYBOOK.toml": book})
+    code, out, _ = run_check(kit, repo)
+    failed = assert_failed_only(code, out, "verdicts")
+    assert "its alternative 'blokers=0' matches none of the review protocol's" in strip_paths(
+        failed
+    )
+    good = PLAYBOOK.replace("blockers=0'", "(blockers=0|blockers=[1-9])'")
+    kit = write_tree(tmp_path / "k2", {**good_kit(), "PLAYBOOK.toml": good})
+    code, out, err = run_check(kit, repo)
+    assert code == 0, out + err
+
+
+def test_a_builder_rule_with_a_typod_alternative_fails(tmp_path: Path, repo: Path) -> None:
+    book = PLAYBOOK.replace("(?P<n>\\d+) blocked'", "(?P<n>\\d+) (?:blocked|blokced)'")
+    kit = write_tree(tmp_path / "k", {**good_kit(), "PLAYBOOK.toml": book})
+    code, out, _ = run_check(kit, repo)
+    failed = assert_failed_only(code, out, "verdicts")
+    assert "its alternative 'blokced' matches none of:" in strip_paths(failed)
+
+
+def test_a_driver_rule_with_a_typod_alternative_fails(tmp_path: Path, repo: Path) -> None:
+    book = _consult_book("'^VERDICT: (resolved|reslved) (?P<what>.+)'")
+    kit = write_tree(tmp_path / "k", {**good_kit(), "PLAYBOOK.toml": book})
+    code, out, _ = run_check(kit, repo)
+    failed = assert_failed_only(code, out, "verdicts")
+    assert "its alternative 'reslved' matches none of the driver's" in strip_paths(failed)
+
+
+def test_pattern_alternatives_skips_classes_and_escapes_and_keeps_groups() -> None:
+    alternatives = kit_mod.pattern_alternatives
+    assert alternatives(r"^V: [|a] b\| c") == []
+    assert alternatives("a|b") == [("a", "a"), ("b", "b")]
+    assert alternatives(r"^V: (?P<n>x|y) (?:p|q)") == [
+        ("x", r"^V: (?P<n>x) (?:p|q)"),
+        ("y", r"^V: (?P<n>y) (?:p|q)"),
+        ("p", r"^V: (?P<n>x|y) (?:p)"),
+        ("q", r"^V: (?P<n>x|y) (?:q)"),
+    ]
+    assert alternatives("(a|(b|c))") == [
+        ("b", "(a|(b))"), ("c", "(a|(c))"), ("a", "(a)"), ("(b|c)", "((b|c))"),
+    ]  # fmt: skip
+    assert alternatives(r"[]|](x|y)") == [("x", "[]|](x)"), ("y", "[]|](y)")]
+
+
+# ------------------------------------- §28: KIT.md's line and the quoting (SF9)
+
+
+@pytest.mark.parametrize(
+    "text,why",
+    [
+        ("x" * 73 + "\n", "it is 73 characters, over 72"),
+        ("plan: it's done\n", "it contains a quote character"),
+        ('plan: "done"\n', "it contains a quote character"),
+        ("plan: `done`\n", "it contains a quote character"),
+        ("plan: one\rtwo\n", "it contains a line break"),
+        ("plan: one\u2028two\n", "it contains a line break"),
+        ("\n\nplan: second line\n", "it is empty"),
+        ("", "it is empty"),
+        (b"\xff\xfe plan\n", "it is not UTF-8"),
+    ],
+    ids=["73-chars", "single-quote", "double-quote", "backtick", "carriage-return",
+         "line-separator", "blank-first", "empty", "not-utf8"],
+)  # fmt: skip
+def test_a_kit_md_line_that_breaks_a_rule_gives_the_default_and_says_why(
+    tmp_path: Path, repo: Path, text: str | bytes, why: str
+) -> None:
+    """§28: the first line is the message only when ≤ 72 characters, with no quote
+    character or newline, and not empty; else `plan: kit <name>`, and it says so."""
+    kit = write_tree(tmp_path / "mission-11-kit", good_kit())
+    (kit / "KIT.md").write_bytes(text if isinstance(text, bytes) else text.encode("utf-8"))
+    code, out, err = run_check(kit, repo, "--json")
+    assert code == 0, out + err
+    answer = json.loads(out)
+    assert answer["commit_message"] == "plan: kit mission-11-kit"
+    assert answer["kit_md"] is None
+    code, out, _ = run_check(kit, repo)
+    assert code == 0
+    flat = " ".join(strip_paths(out).split())
+    assert (
+        f"this kit's KIT.md first line is not used ({why}), so the message is the default "
+        "'plan: kit mission-11-kit'"
+    ) in strip_paths(flat), out
+    assert "commit 'plan: kit mission-11-kit' listing" in strip_paths(flat)
+
+
+def test_a_kit_md_line_of_72_characters_is_the_message(tmp_path: Path, repo: Path) -> None:
+    message = "plan: " + "x" * 66
+    assert len(message) == 72
+    kit = write_tree(tmp_path / "k", {**good_kit(), "KIT.md": f"{message}\nbody\n"})
+    code, out, _ = run_check(kit, repo, "--json")
+    assert code == 0 and json.loads(out)["commit_message"] == message
+
+
+@pytest.mark.parametrize(
+    "location,kit_md,message",
+    [
+        ("~/Downloads/it's.zip", None, "plan: kit it's"),
+        ("~/Downloads/a$b`c.zip", None, "plan: kit a$b`c"),
+        ("/x/m-12.zip", b"plan: mission 12 kit (DESIGN v3.11) $HOME\n",
+         "plan: mission 12 kit (DESIGN v3.11) $HOME"),
+        ("/x/m-12.zip", b"fix\n", "fix"),
+    ],
+    ids=["quote-in-name", "dollar-backtick-in-name", "kit-md", "one-word"],
+)  # fmt: skip
+def test_the_apply_prompts_commit_message_is_shell_quoted(
+    tmp_path: Path, location: str, kit_md: bytes | None, message: str
+) -> None:
+    """§28: the message is shell-quoted, so the shell hands `git commit -m` the
+    message as one word whatever the kit's name holds."""
+    import shlex
+
+    plan = kit_mod.plan_apply(location, ["KIT.md"], kit_md, tmp_path)
+    assert plan.commit_message == message
+    said = plan.prompt.split(" makes a single commit ", 1)[1].split(" listing those files", 1)[0]
+    assert said == shlex.quote(message)
+    assert shlex.split(said) == [message]

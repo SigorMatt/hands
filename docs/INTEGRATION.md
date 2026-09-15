@@ -397,8 +397,10 @@ when all of that holds, and says what is missing when it does not.
    `apply prompt:` followed by the prompt, which begins `Apply
    ~/Downloads/<kit>.zip to this repository:` and asks for the reply `VERDICT:
    kit applied <sha>`, then the commit message and a `KIT.md:` line. The commit
-   message is the first line of `KIT.md` at the kit's root, else `plan: kit
-   <name>` (`<name>` is the zip's file name without `.zip`). That prompt is the
+   message is the first line of `KIT.md` at the kit's root when it is
+   not empty, at most 72 characters, and has no quote character or line break,
+   else `plan: kit <name>` (`<name>` is the zip's file name without `.zip`);
+   the prompt shell-quotes it. That prompt is the
    one handsd files in step 2, byte for byte, when the kit is written under the
    same name in `~/Downloads` (the default `kit_dir`).
 2. **Send the kit to `cmd_topic`** from the ntfy app, the `.zip` attached and
@@ -409,7 +411,12 @@ when all of that holds, and says what is missing when it does not.
    itself: it lists the zip's entries against the builder's cwd (handsd never
    unzips the kit; the builder does), builds the prompt of step 1 (it begins
    `Apply ~/Downloads/` with the default `kit_dir`), and files it as a `clear`
-   builder job with `origin: kit` and gate reason `apply <name>`.
+   builder job with `origin: kit` and gate reason `apply <name>`. When the
+   message is the default, the phone also gets `apply <name>: <why>; the
+   commit message is the default '<message>'`. An attachment URL that is not
+   http(s), has no host or one that is not valid IDNA, has a port outside
+   1-65535, or holds whitespace is refused before any fetch, as `kit.refused`
+   naming the check.
    The job is held, not run. A zip that cannot be read, holds no files, or has
    an entry that is not a repository path (absolute, `..`, under `.git`, a
    duplicate, over the size caps, or landing outside the repo through a

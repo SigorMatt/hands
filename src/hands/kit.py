@@ -12,8 +12,13 @@ and handsd both call (§27): when a kit arrives from the phone, handsd lists the
 zip's entries with `apply_from_zip` — the same path rules, never extracting a
 file and reading only `KIT.md` — and files the prompt as a held builder job, so
 what the architect saw is what runs. The commit message is the first line of a
-`KIT.md` entry at the kit's root, stripped, else `plan: kit <name>`, where the
-name is the kit's file name without `.zip`.
+`KIT.md` entry at the kit's root, stripped, when it is not empty, at most 72
+characters, and holds no quote character (`'`, `"`, a backtick) or line break
+(§28); else `plan: kit <name>`, where the name is the kit's file name without
+`.zip`, and handsd tells the phone why. The prompt shell-quotes the message.
+`kit check` has no config, so it names the kit `~/Downloads/<name>` (`kit_dir`'s
+default): its prompt equals handsd's byte for byte for a kit handsd writes there
+under that name, and differs in that location for any other `kit_dir`.
 
 The checks, in order (docs/ARCHITECT-HANDBOOK.md §11 says the same):
 
@@ -39,10 +44,14 @@ The checks, in order (docs/ARCHITECT-HANDBOOK.md §11 says the same):
   One on `builder.done` matches (by `re.search`, as the engine does) at least
   one literal of the brief, placeholders such as `<unit>` left as text, and
   every literal matches some such rule. A builder rule that matches no literal
-  of the brief passes only when it exists for the apply: its pattern is plain
-  text (an optional `^`, no other regex syntax) that the apply prompt's
-  `VERDICT: kit applied <sha>` contains, so no branch of it goes unchecked
-  (review 10 should-fix 4). One on `aux.done` matches at least one of the
+  of the brief passes only when it exists for the apply, and only one such rule
+  does (§28): its pattern is `VERDICT: kit applied`, the apply prompt's
+  `VERDICT: kit applied <sha>` up to its placeholder, with an optional `^` and an
+  optional trailing space; `^VERDICT: kit` is not it (review 11 should-fix 7).
+  Every other rule must match a vocabulary literal, and so must each alternative
+  of its alternations (`a|b`, in a group or not), tried as the pattern with that
+  alternation's other branches removed; an alternative whose pattern does not
+  compile alone is not judged. One on `aux.done` matches at least one of the
   review protocol's `VERDICT: review …` lines — found in the send prompts and in
   the files they name — with each placeholder (`N`, `<k>`, `{n}`) read as a
   count, tried as each of `PLACEHOLDER_VALUES`. One on `driver.done` matches at
@@ -51,9 +60,14 @@ The checks, in order (docs/ARCHITECT-HANDBOOK.md §11 says the same):
   other event has no vocabulary here to match, and fails.
 * `wording` — the brief says neither "as before" nor has a "Budget guidance"
   section (a heading or a bold lead).
-* `protocol` — every file a `send` rule's prompt names (a `.md` or `.toml` path
-  without a `{placeholder}`) is a repository path, and is in the kit or inside
-  the repo. A named path the check cannot resolve (`../X.md`, `~/X.md`, `/X.md`)
+* `protocol` — every file path a `send` rule's prompt names, whatever punctuation
+  surrounds it (§28), is a repository path by the rules handsd applies to a kit's
+  entries (`_path_problem`, `_inside`), and is in the kit or else inside the repo.
+  A file path is a word of path characters (letters, digits, `_ . / ~ { } -`)
+  whose last component ends in an extension of two or more letters or digits,
+  the first a letter. A path with a `{placeholder}` names a different file per
+  job, so it is judged by its syntax only (placeholders read as `0`) and not
+  read. A named path the check cannot resolve (`../X.md`, `~/X.md`, `../{n}.md`)
   fails rather than being skipped (§27).
 """
 
@@ -63,6 +77,7 @@ import itertools
 import json
 import os
 import re
+import shlex
 import stat
 import subprocess
 import zipfile
@@ -81,9 +96,11 @@ from hands.playbook import (
 )
 
 __all__ = [
+    "APPLY_TEXT",
     "APPLY_VERDICT",
     "CHECK_NAMES",
     "KIT_MD",
+    "KIT_MD_MAX",
     "MAX_ENTRY_BYTES",
     "MAX_TOTAL_BYTES",
     "Apply",
@@ -95,6 +112,8 @@ __all__ = [
     "check_kit",
     "final_reply_literals",
     "kickoff_line",
+    "kit_md_message",
+    "pattern_alternatives",
     "placeholder_instances",
     "plan_apply",
     "review_literals",
@@ -107,10 +126,18 @@ PLAYBOOK_PATHS = ("PLAYBOOK.toml", "meta/PLAYBOOK.toml")
 BRIEF_RE = re.compile(r"^(?:meta/BUILDER-(?P<n>\d+)-PROMPT\.md|WORKPLAN\.md)$")
 #: The reply the apply prompt asks for; the only literal seen outside the brief.
 APPLY_VERDICT = "VERDICT: kit applied <sha>"
+#: §28: the one pattern the apply excuses is this text (`APPLY_VERDICT` before its
+#: placeholder), with an optional `^` and an optional trailing space.
+APPLY_TEXT = "VERDICT: kit applied"
 #: §27: the entry whose first line is the apply's commit message.
 KIT_MD = "KIT.md"
+#: §28: the longest `KIT.md` first line that becomes the commit message.
+KIT_MD_MAX = 72
+#: §28: "no quote characters" — the three the shell quotes with.
+KIT_MD_QUOTES = "'\"`"
 #: Where `kit check` says the kit lands: `[files] kit_dir`'s default (§26). It has
-#: no config to read, so a daemon with another `kit_dir` names another path.
+#: no config to read, so a daemon with another `kit_dir` names another path, and
+#: its prompt differs from this one in that location only (review 11 SF9).
 KIT_DIR_SHOWN = "~/Downloads"
 KICKOFF_MARK = "Kickoff line"
 VOCABULARY_OPENERS = ("Your final reply begins with", "Reply with one of")
@@ -132,18 +159,25 @@ MAX_PLACEHOLDERS = 6
 CHECK_NAMES = ("paths", "playbook", "brief", "verdicts", "wording", "protocol")
 GIT_TIMEOUT_S = 10.0
 
-#: A file a prompt names: a token ending in `.md`/`.toml`, however it begins, so a
-#: path the check cannot resolve (`../X.md`, `~/X.md`, `/X.md`) is seen, not skipped.
+#: A file path a prompt names (§28): a word of path characters, placeholders
+#: included, whose last component has an extension of two or more characters (a
+#: letter first), whatever punctuation surrounds it. How it begins is not limited,
+#: so a path the check cannot resolve (`../X.md`, `~/X.md`, `/X.md`) is seen.
 _NAMED_FILE_RE = re.compile(
-    r"[^\s\"'`()\[\]<>,;*]*[^\s\"'`()\[\]<>,;*./]\.(?:md|toml)(?![\w/-])"
+    r"(?<![\w./~{}-])[\w./~{}-]*[\w}]\.[A-Za-z][A-Za-z0-9]+(?![\w/{}-])"
 )
+#: A playbook placeholder inside a named path (`{n}`, `{n+1}`).
+_PATH_PLACEHOLDER_RE = re.compile(r"\{[^{}]*\}")
+#: Why a named path with a placeholder is not read (`_named_file`).
+PLACEHOLDER_PATH = "a placeholder path, not read"
+#: What follows `(` or `(?` before a group's content: a name, a lookaround, flags,
+#: a conditional's reference.
+_GROUP_PREFIX_RE = re.compile(r"\?(?:P<[^>]*>|P=[^)]*|<[=!]|[:=!>]|[aiLmsux-]+:|\([^)]*\))?")
 #: The review's verdict line: at a line's start (a code or list line) or after a
 #: colon ("Begin your reply with: VERDICT: review …"); not a backticked mention.
 _REVIEW_LINE_RE = re.compile(r"(?:^[ \t>*+-]*|:[ \t]+)(VERDICT: review\b[^`\n]*)", re.MULTILINE)
 #: A placeholder in that line: `<k>`, `{n}`, or the bare `N` of the templates.
 _PLACEHOLDER_RE = re.compile(r"<[^<>\n]+>|\{[^{}\n]+\}|\bN\b")
-#: A pattern that is plain text: an optional `^`, then no regex syntax at all.
-_PLAIN_RE = re.compile(r"\^?[^\\.^$*+?{}\[\]|()]+")
 _LITERAL_RE = re.compile(r"`([^`]+)`")
 _BUDGET_RE = re.compile(r"^\s*(?:#+\s*|\*\*)budget guidance", re.IGNORECASE | re.MULTILINE)
 _AS_BEFORE_RE = re.compile(r"\bas\s+before\b", re.IGNORECASE)
@@ -208,9 +242,13 @@ class Apply:
     replaces: list[str]
     adds: list[str]
     commit_message: str
-    #: The first line of the kit's `KIT.md` when it gives one, else None.
+    #: The first line of the kit's `KIT.md` when it is the message, else None.
     kit_md: str | None
     prompt: str
+    #: The rule of §28 the kit's `KIT.md` first line breaks, when it has one that does.
+    kit_md_rule: str | None = None
+    #: Why the message is the default `plan: kit <name>`, None when it is not.
+    default_why: str | None = None
 
 
 @dataclass
@@ -576,13 +614,83 @@ def _find_brief(kit: _Kit) -> tuple[Check, str | None, str | None]:
 
 
 def _is_the_apply_rule(verdict: re.Pattern[str]) -> bool:
-    """A builder rule that exists for the apply (review 10 should-fix 4).
+    """A builder rule that exists for the apply (§28, review 11 should-fix 7).
 
-    Its pattern is plain text — an optional `^` and no other regex syntax — and the
-    apply prompt's literal contains it, so it has no branch, class or repeat that
-    could hold a typo `VERDICT: kit applied <sha>` never exercises.
+    Its pattern is `APPLY_TEXT` — the literal `VERDICT: kit applied <sha>` up to its
+    placeholder — with an optional `^` and trailing space: no branch, class or
+    repeat that could hold a typo, and not a prefix such as `^VERDICT: kit` that
+    matches the literal while matching other replies too.
     """
-    return bool(_PLAIN_RE.fullmatch(verdict.pattern)) and verdict.search(APPLY_VERDICT) is not None
+    return verdict.pattern.removeprefix("^") in (APPLY_TEXT, APPLY_TEXT + " ")
+
+
+def pattern_alternatives(pattern: str) -> list[tuple[str, str]]:
+    """Each alternative of `pattern`, with the pattern that keeps only it (§28).
+
+    An alternation is the `|`s of one group, or of the whole pattern. For each
+    alternative, in the order its group closes, the answer is its text and
+    `pattern` with that alternation's other branches removed, the group kept so
+    names and numbers still resolve. A `|` escaped or in a character class is text.
+    """
+    found: list[tuple[str, str]] = []
+    frames: list[tuple[int, list[int]]] = [(0, [])]  # (content start, `|` positions)
+    index, size, in_class = 0, len(pattern), False
+    while index < size:
+        char = pattern[index]
+        if char == "\\":
+            index += 2
+            continue
+        if in_class:
+            in_class = char != "]"
+            index += 1
+            continue
+        if char == "[":
+            in_class = True
+            index += 1
+            if pattern.startswith("^", index):
+                index += 1
+            if pattern.startswith("]", index):  # a `]` first in a class is text
+                index += 1
+            continue
+        if char == "(":
+            start = index + 1
+            if pattern.startswith("?", start):
+                prefix = _GROUP_PREFIX_RE.match(pattern, start)
+                start = prefix.end() if prefix else start
+            frames.append((start, []))
+            index = start
+            continue
+        if char == "|":
+            frames[-1][1].append(index)
+        elif char == ")" and len(frames) > 1:
+            start, bars = frames.pop()
+            found += _branches(pattern, start, bars, index)
+        index += 1
+    found += _branches(pattern, frames[0][0], frames[0][1], size)
+    return found
+
+
+def _branches(pattern: str, start: int, bars: list[int], end: int) -> list[tuple[str, str]]:
+    if not bars:
+        return []
+    edges = [start - 1, *bars, end]
+    return [
+        (pattern[left + 1 : right], pattern[:start] + pattern[left + 1 : right] + pattern[end:])
+        for left, right in zip(edges, edges[1:], strict=False)
+    ]
+
+
+def _unmatched_alternatives(verdict: re.Pattern[str], texts: list[str]) -> list[str]:
+    """The alternatives of `verdict` whose pattern alone matches none of `texts`."""
+    unmatched = []
+    for alternative, alone in pattern_alternatives(verdict.pattern):
+        try:
+            compiled = re.compile(alone, verdict.flags)
+        except re.error:
+            continue  # it cannot be judged alone (a backreference into a removed branch)
+        if not any(compiled.search(text) for text in texts):
+            unmatched.append(alternative)
+    return unmatched
 
 
 def _check_verdicts(
@@ -601,22 +709,37 @@ def _check_verdicts(
     ]
     problems: list[str] = []
     via_apply: list[str] = []
+    shown_literals = " | ".join(literals)
+
+    def alternatives(index: int, verdict: re.Pattern[str], texts: list[str], against: str) -> None:
+        for alternative in _unmatched_alternatives(verdict, texts):
+            problems.append(
+                f"rule {index} verdict '{verdict.pattern}': its alternative "
+                f"'{alternative}' matches none of{against}"
+            )
+
     for rule in rules:
         assert rule.verdict is not None
         if any(rule.verdict.search(literal) for literal in literals):
+            alternatives(rule.index, rule.verdict, literals, f": {shown_literals}")
             continue
-        if _is_the_apply_rule(rule.verdict):
+        if _is_the_apply_rule(rule.verdict) and not via_apply:
             via_apply.append(f"rule {rule.index}")
             continue
         why = ""
-        if rule.verdict.search(APPLY_VERDICT):
+        if via_apply and _is_the_apply_rule(rule.verdict):
             why = (
-                f" (it matches the apply prompt's {APPLY_VERDICT!r}, but only a plain-text "
-                "pattern of that literal is excused by it)"
+                " (only one rule is excused by the apply prompt's literal, and "
+                f"{via_apply[0]} is)"
+            )
+        elif rule.verdict.search(APPLY_VERDICT):
+            why = (
+                f" (it matches the apply prompt's {APPLY_VERDICT!r}, but only a rule whose "
+                f"pattern is {APPLY_TEXT!r} itself is excused by it)"
             )
         problems.append(
             f"rule {rule.index} verdict '{rule.verdict.pattern}' matches none of: "
-            + " | ".join(literals)
+            + shown_literals
             + why
         )
     for literal in literals:
@@ -634,19 +757,23 @@ def _check_verdicts(
         instances = [text for literal in review for text in placeholder_instances(literal)]
         for rule in reviews:
             assert rule.verdict is not None
+            against = f" the review protocol's {shown_review} (placeholders read as counts)"
             if not any(rule.verdict.search(text) for text in instances):
                 problems.append(
-                    f"rule {rule.index} verdict '{rule.verdict.pattern}' matches none of the "
-                    f"review protocol's {shown_review} (placeholders read as counts)"
+                    f"rule {rule.index} verdict '{rule.verdict.pattern}' matches none of{against}"
                 )
+            else:
+                alternatives(rule.index, rule.verdict, instances, against)
     shown_driver = " | ".join(repr(literal) for literal in DRIVER_VERDICTS)
     for rule in drivers:
         assert rule.verdict is not None
+        against = f" the driver's {shown_driver} (§27)"
         if not any(rule.verdict.search(literal) for literal in DRIVER_VERDICTS):
             problems.append(
-                f"rule {rule.index} verdict '{rule.verdict.pattern}' matches none of the "
-                f"driver's {shown_driver} (§27)"
+                f"rule {rule.index} verdict '{rule.verdict.pattern}' matches none of{against}"
             )
+        else:
+            alternatives(rule.index, rule.verdict, list(DRIVER_VERDICTS), against)
     for rule in others:
         assert rule.verdict is not None
         problems.append(
@@ -696,17 +823,24 @@ def _named_files(book: Playbook) -> dict[str, list[int]]:
         if rule.then != "send" or not rule.prompt:
             continue
         for name in _NAMED_FILE_RE.findall(rule.prompt):
-            if "{" in name or "}" in name:
-                continue  # a placeholder: a different file per job, not one to check
             named.setdefault(name, []).append(rule.index)
     return named
 
 
 def _named_file(name: str, kit: _Kit, repo: Path) -> tuple[bytes | None, str]:
-    """A named file's bytes and where they are (`kit`, `repo`), or None and why not."""
-    problem = _path_problem(name)
+    """A named file's bytes and where they are (`kit`, `repo`), or None and why not.
+
+    A path with a placeholder is judged by its syntax, each placeholder read as
+    `0`, and answers None and `PLACEHOLDER_PATH`: which file it names is the job's.
+    """
+    filled = _PATH_PLACEHOLDER_RE.sub("0", name)
+    problem = _path_problem(filled)
     if problem:
         return None, f"not a repository path ({problem})"
+    if filled != name:
+        if not _inside(repo, filled):
+            return None, "outside the repo (through a symlink)"
+        return None, PLACEHOLDER_PATH
     if name in kit.files:
         return kit.files[name], "kit"
     if not _inside(repo, name):
@@ -745,27 +879,38 @@ def _check_protocol(book: Playbook | None, kit: _Kit, repo: Path) -> Check:
     for name, indexes in sorted(named.items()):
         rules = _and([f"rule {index}" for index in sorted(set(indexes))])
         data, where = _named_file(name, kit, repo)
-        if data is None:
+        if data is None and where != PLACEHOLDER_PATH:
             missing.append(f"{rules} names {_shown(name)}, which is {where}")
         else:
             found.append(f"{name} ({where})")
     if missing:
         return Check("protocol", False, "; ".join(missing))
-    return Check("protocol", True, "every file a send names is present: " + ", ".join(found))
+    reason = "every file a send names is present or a placeholder path: " + ", ".join(found)
+    return Check("protocol", True, reason)
 
 
-def kit_md_line(data: bytes | None) -> str | None:
-    """§27: the first line of `KIT.md`, stripped; None when there is no KIT.md, or
-    its first line is blank, or it is not UTF-8 — the default message is used then."""
+def kit_md_message(data: bytes | None) -> tuple[str | None, str | None]:
+    """§28: `KIT.md`'s first line (to the first newline, stripped) and None when it
+    is the commit message; else None and the rule it breaks. `(None, None)` when
+    there is no `KIT.md`. The rules: UTF-8, not empty, no line break (by
+    `str.splitlines`, so a lone carriage return or U+2028 counts), no quote
+    character, at most `KIT_MD_MAX` characters."""
     if data is None:
-        return None
+        return None, None
     try:
         text = data.decode("utf-8-sig")
     except UnicodeDecodeError:
-        return None
-    lines = text.splitlines()
-    first = lines[0].strip() if lines else ""
-    return first or None
+        return None, "it is not UTF-8"
+    first = text.split("\n", 1)[0].strip()
+    if not first:
+        return None, "it is empty"
+    if len(first.splitlines()) > 1:
+        return None, "it contains a line break"
+    if any(quote in first for quote in KIT_MD_QUOTES):
+        return None, "it contains a quote character"
+    if len(first) > KIT_MD_MAX:
+        return None, f"it is {len(first)} characters, over {KIT_MD_MAX}"
+    return first, None
 
 
 def apply_prompt(location: str, replaces: list[str], adds: list[str], message: str) -> str:
@@ -778,7 +923,8 @@ def apply_prompt(location: str, replaces: list[str], adds: list[str], message: s
     return (
         f"Apply {location} to this repository: unzip -o into the repo root "
         f"(it {' and '.join(touched)}), then one plan-only sub-agent makes a single commit "
-        f"'{message}' listing those files in its body, and pushes. Change nothing else. "
+        f"{shlex.quote(message)} listing those files in its body, and pushes. "
+        "Change nothing else. "
         f"Reply with one line: {APPLY_VERDICT}."
     )
 
@@ -796,8 +942,13 @@ def plan_apply(location: str, names: Iterable[str], kit_md: bytes | None, repo: 
     files = sorted(set(names))
     replaces = [entry for entry in files if os.path.lexists(repo / entry)]
     adds = [entry for entry in files if entry not in replaces]
-    line = kit_md_line(kit_md)
+    line, rule = kit_md_message(kit_md)
     message = line if line is not None else f"plan: kit {name}"
+    default_why = None
+    if line is None and kit_md is None:
+        default_why = f"the kit carries no {KIT_MD}"
+    elif line is None:
+        default_why = f"{KIT_MD}'s first line is not used ({rule})"
     return Apply(
         name=name,
         replaces=replaces,
@@ -805,6 +956,8 @@ def plan_apply(location: str, names: Iterable[str], kit_md: bytes | None, repo: 
         commit_message=message,
         kit_md=line,
         prompt=apply_prompt(location, replaces, adds, message),
+        kit_md_rule=rule,
+        default_why=default_why,
     )
 
 
@@ -849,15 +1002,18 @@ def apply_from_zip(path: Path, repo: Path, location: str) -> Apply:
     return plan_apply(location, names, kit_md, repo)
 
 
-def kit_md_note(plan: Apply, carried: bool) -> str:
+def kit_md_note(plan: Apply) -> str:
     """`kit check`'s line on `KIT.md`: the shape it expects and what this kit gives."""
-    shape = f"{KIT_MD}: the first line of a {KIT_MD} entry is the commit message; "
+    shape = (
+        f"{KIT_MD}: the first line of a {KIT_MD} entry is the commit message when it is not "
+        f"empty, at most {KIT_MD_MAX} characters, and has no quote character or line break; "
+    )
     if plan.kit_md is not None:
         return shape + f"this kit's {KIT_MD} gives '{plan.kit_md}'"
-    if carried:
+    if plan.kit_md_rule is not None:
         return shape + (
-            f"this kit's {KIT_MD} has a blank or unreadable first line, so the message is "
-            f"'{plan.commit_message}'"
+            f"this kit's {KIT_MD} first line is not used ({plan.kit_md_rule}), so the message "
+            f"is the default '{plan.commit_message}'"
         )
     return shape + f"this kit carries no {KIT_MD}, so the message is '{plan.commit_message}'"
 
@@ -888,7 +1044,7 @@ def check_kit(path: Path, repo: Path) -> Report:
         adds=plan.adds,
         commit_message=plan.commit_message,
         kit_md=plan.kit_md,
-        kit_md_note=kit_md_note(plan, KIT_MD in kit.files),
+        kit_md_note=kit_md_note(plan),
     )
     if report.ok:
         report.apply_prompt = plan.prompt

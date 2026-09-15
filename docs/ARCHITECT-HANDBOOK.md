@@ -68,7 +68,9 @@ The apply prompt:
 
 The commit message is the first line of `KIT.md` at the kit's root, else
 `plan: kit <name>`, the zip's file name without `.zip`; put the message you
-want on `KIT.md`'s first line. When the kit is sent from the phone
+want on `KIT.md`'s first line, in at most 72 characters with no quote
+character. A line that breaks those rules, or is empty, gives the default, and
+handsd tells the phone why. When the kit is sent from the phone
 (`kit <secret>`), handsd files it as a held builder job (`origin: kit`, gate
 reason `apply <name>`) with exactly this prompt, built by the same code as
 `hands kit check`'s, and never unzips the kit itself; a kit with an entry that
@@ -229,38 +231,49 @@ taken relative to the directory. It prints one line per check,
   literal may wrap.
 - `verdicts`: every `verdict` regex of the playbook is checked (DESIGN §27,
   finding H-021). Matching uses `re.search`, as the engine does. A rule on
-  `builder.done` matches at least one literal of the brief, with
-  placeholders such as `<unit>` left as text, and every literal matches some
-  such rule. A builder rule that matches no literal of the brief passes only
-  if it exists for the apply: its pattern is plain text (an optional `^`, no
-  other regex syntax) found in `VERDICT: kit applied <sha>`, the reply the
-  apply prompt below asks for, such as `^VERDICT: kit applied`. A pattern
-  like `VERDICT: (kit applied|mission \d+ finished)` is not excused, because
-  its other branch is never checked. A rule on `aux.done` matches at least
-  one `VERDICT: review …` line of the review protocol, which is found in the
-  send prompts and in the files they name. Each placeholder of that line
-  (`N`, `<k>`, `<m>`, `{n}`) is read as a count and tried as 0, 1 and 12, so
-  `blockers=0` and `blockers=[1-9]` both match, and `blockers=none` does not.
-  A rule on `driver.done` matches at least one of the driver's two lines,
+  `builder.done` matches at least one literal of the brief, with placeholders
+  such as `<unit>` left as text, and every literal matches some such rule. A
+  builder rule that matches no literal of the brief passes only if it exists
+  for the apply, and only one rule does (DESIGN §28): its pattern is `VERDICT:
+  kit applied`, the reply the apply prompt below asks for (`VERDICT: kit
+  applied <sha>`) up to its placeholder, with an optional `^` and trailing
+  space, such as `^VERDICT: kit applied`. `^VERDICT: kit` matches that reply
+  too and is not excused, nor is `VERDICT: (kit applied|mission \d+
+  finished)`. Every other rule must match a vocabulary literal, and so must
+  each alternative of its alternations: `(blockers=0|blokers=0)` fails on
+  `blokers=0`, although its other branch matches. A rule on `aux.done` matches
+  at least one `VERDICT: review …` line of the review protocol, which is found
+  in the send prompts and in the files they name. Each placeholder of that
+  line (`N`, `<k>`, `<m>`, `{n}`) is read as a count and tried as 0, 1 and 12,
+  so `blockers=0` and `blockers=[1-9]` both match, and `blockers=none` does
+  not. A rule on `driver.done` matches at least one of the driver's two lines,
   `VERDICT: resolved <what was sent, and the section cited>` and `VERDICT:
   escalate <reason>`, placeholders left as text. A verdict rule on any other
   event fails: kit check has no vocabulary for it.
 - `wording`: the brief contains neither "as before" nor a "Budget
   guidance" section (a heading or a bold lead).
-- `protocol`: every file a `send` rule's prompt names is in the kit or inside
-  the repo. A named file is a `.md` or `.toml` path without a
-  `{placeholder}`, such as `meta/REVIEW-PROTOCOL.md`. A named path that is
-  not a repository path (`../X.md`, `~/X.md`, `/X.md`) fails; it is not
-  skipped.
+- `protocol`: every file path a `send` rule's prompt names is in the kit, or
+  else inside the repo, whatever punctuation surrounds it (DESIGN §28). A file
+  path is a word whose last component has an extension of two or more
+  characters, a letter first: `meta/REVIEW-PROTOCOL.md`, `meta/NOTES.txt`,
+  `WORKPLAN.md`. A named path that is not a repository path by the rules
+  handsd applies to a kit's entries (`../X.md`, `~/X.md`, `/X.md`,
+  `../{n}.md`) fails; it is not skipped. A path with a `{placeholder}`, such
+  as `meta/reviews/REVIEW-{n}.md`, names a different file per job, so only its
+  syntax is checked.
 
-When every check passes, it prints three things. First, the §3 apply
-prompt, which names each file the kit replaces (the file exists in the
-repo) and each file it adds. Second, the commit message: the first line of `KIT.md`
-at the kit's root, or `plan: kit <name>` when it has none (the kit's file
-name without `.zip`), and a `KIT.md:` line saying that shape and what this
-kit's `KIT.md` gives. Third, `kit check: pass (6 of 6 checks)`. A failing kit gets no apply prompt. The
-exit status is 0 only when all six checks pass, and 1 otherwise. `--json`
-prints the same report as one object.
+When every check passes, it prints three things. First, the §3 apply prompt,
+which names each file the kit replaces (the file exists in the repo) and each
+file it adds. Second, the commit message: the first line of `KIT.md` at the
+kit's root when that line is not empty, at most 72 characters, and has no
+quote character or line break, else `plan: kit <name>` (the kit's file name
+without `.zip`), and a `KIT.md:` line saying that shape and what this kit's
+`KIT.md` gives, or why its line is not used. The prompt shell-quotes the
+message. The prompt names the kit `~/Downloads/<kit>.zip`, where handsd writes
+it with the default `kit_dir`; with another `kit_dir` handsd's prompt differs
+in that location. Third, `kit check: pass (6 of 6 checks)`. A failing kit gets
+no apply prompt. The exit status is 0 only when all six checks pass, and 1
+otherwise. `--json` prints the same report as one object.
 
 ## 12. Onboarding a project
 
