@@ -1425,10 +1425,17 @@ def test_a_kit_without_an_attachment_a_size_or_an_http_url_is_refused_before_the
         # what httpx cannot parse at all (review 10 should-fix 6)
         ("http://[::1", "it does not parse"),
         ("https://[::1/Xyzzy-url-marker.zip", "it does not parse"),
+        # review 12 blocker 2: hosts httpx accepts and `idna.encode` refuses (§29)
+        ("http://%zz/k.zip", "its host is not a valid IDNA name"),
+        ("http://-a.com/k.zip", "its host is not a valid IDNA name"),
+        ("http://a..b/k.zip", "its host is not a valid IDNA name"),
+        ("http://.com/k.zip", "its host is not a valid IDNA name"),
+        ("http://" + "a" * 300 + ".com/k.zip", "its host is not a valid IDNA name"),
     ],
     ids=["idna-xn", "space-in-host", "port-99999", "ftp", "file", "empty-host-port",
          "empty-host-path", "no-host", "idna-trailing-hyphen", "port-0", "port-65536", "tab",
-         "newline", "unclosed-bracket", "unclosed-bracket-with-path"],
+         "newline", "unclosed-bracket", "unclosed-bracket-with-path", "percent-host",
+         "leading-hyphen", "empty-label", "leading-dot", "300-char-label"],
 )  # fmt: skip
 def test_a_kit_with_a_malformed_url_is_refused_before_any_fetch_and_inboxed(
     kit_project: str,
@@ -1473,6 +1480,40 @@ def test_a_kit_with_a_malformed_url_is_refused_before_any_fetch_and_inboxed(
     assert_kit_refused(caplog, f": {reason}")
     for said in ("a command raised", "Traceback", "Xyzzy-url-marker", "[::1", "xn--", "mple"):
         assert said not in strip_paths(caplog.text), said
+
+
+@pytest.mark.parametrize(
+    "url",
+    ["http://127.0.0.1:8080/k.zip", "HTTP://EXAMPLE.com/k.zip", "http://exämple.com/k.zip",
+     "http://[::1]:8080/k.zip", "https://ntfy.sh/file/abc.zip", "http://localhost/k.zip",
+     "http://example.com./k.zip", "http://xn--bcher-kva.de/k.zip"],
+)  # fmt: skip
+def test_url_problem_accepts_ip_literals_and_idna_valid_names(url: str) -> None:
+    """§29: a host is an IP literal (judged by `ipaddress`) or a name `idna.encode`
+    accepts; uppercase schemes and hosts and a Unicode name stay accepted."""
+    assert phone_mod.url_problem(url) is None
+
+
+@pytest.mark.parametrize(
+    "host",
+    ["example.com", "exämple.com", "a_b.com", "%zz", "-a.com", "a-.com", "a..b", ".com",
+     "a" * 63 + ".com", "a" * 64 + ".com", "a" * 300 + ".com", "xn--", "xn--bcher-.de",
+     "1.2.3.4.5", "localhost", "example.com."],
+)  # fmt: skip
+def test_a_name_host_is_refused_exactly_when_idna_encode_refuses_it(host: str) -> None:
+    """§29: "IDNA-valid" means `idna.encode(host)` succeeds, for a host that is not
+    an IP literal."""
+    import idna
+
+    try:
+        idna.encode(host)
+        valid = True
+    except (idna.IDNAError, UnicodeError, ValueError):
+        valid = False
+    problem = phone_mod.url_problem(f"http://{host}/k.zip")
+    assert (problem is None) == valid, (host, problem)
+    if not valid:
+        assert problem == "its host is not a valid IDNA name", (host, problem)
 
 
 def test_a_kit_is_refused_when_kit_dir_is_outside_the_allowed_roots(
@@ -1770,8 +1811,9 @@ def test_a_kit_while_the_builder_is_busy_still_files_its_held_apply(
          "KIT.md's first line is not used (it is 73 characters, over 72)"),
         ("m12.zip", "\nplan: second\n", "KIT.md's first line is not used (it is empty)"),
         ("m 12.zip", None, "the kit carries no KIT.md"),
+        ("a$(x)`y`;'z.zip", None, "the kit carries no KIT.md"),
     ],
-    ids=["kit-md", "quote", "73-chars", "blank", "no-kit-md"],
+    ids=["kit-md", "quote", "73-chars", "blank", "no-kit-md", "shell-name"],
 )  # fmt: skip
 def test_the_apply_prompt_is_kit_checks_byte_for_byte_for_the_same_path_and_name(
     kit_project: str,
@@ -1801,7 +1843,10 @@ def test_the_apply_prompt_is_kit_checks_byte_for_byte_for_the_same_path_and_name
         written = await kit_check_prompt(downloads / name, workdir)
         elsewhere = await kit_check_prompt(copy, workdir)
         assert record["prompt"] == written == elsewhere
-        assert record["prompt"].startswith(f"Apply ~/Downloads/{name} to this repository: ")
+        # §29: the kit's name is shell-quoted like the message
+        shown = f"~/Downloads/{shlex.quote(name)}"
+        assert record["prompt"].startswith(f"Apply {shown} to this repository: ")
+        assert shlex.split(shown) == [f"~/Downloads/{name}"]
         stem = name.removesuffix(".zip")
         message = (kit_md or "").splitlines()[0] if why is None else f"plan: kit {stem}"
         said = record["prompt"].split(" makes a single commit ", 1)[1].split(" listing ", 1)[0]

@@ -854,9 +854,18 @@ def _send_naming(text: str) -> str:
         ("meta/MISSING.txt;", "meta/MISSING.txt"),
         ("meta/MISSING.json.", "meta/MISSING.json"),
         ("MISSING.py", "MISSING.py"),
+        # review 12 should-fix 1: names the daemon's path syntax accepts (§29)
+        ("meta/MISSING", "meta/MISSING"),
+        ("meta/X.c", "meta/X.c"),
+        ("meta/MISSING.1st", "meta/MISSING.1st"),
+        ("(meta/MISSING)", "meta/MISSING"),
+        ("X.c", "X.c"),
+        ("meta/A.md,meta/MISSING.txt", "meta/MISSING.txt"),
     ],
     ids=["bare", "parens", "double-quotes", "single-quotes", "backticks", "angles",
-         "brackets", "colon", "semicolon", "json-full-stop", "py-root"],
+         "brackets", "colon", "semicolon", "json-full-stop", "py-root", "no-extension",
+         "one-letter-extension", "digit-first-extension", "parens-no-extension",
+         "root-one-letter-extension", "comma-joined"],
 )  # fmt: skip
 def test_a_named_file_neither_the_kit_nor_the_repo_has_fails_whatever_surrounds_it(
     tmp_path: Path, repo: Path, said: str, named: str
@@ -904,35 +913,182 @@ def test_a_named_txt_file_the_repo_has_passes(tmp_path: Path, repo: Path) -> Non
     assert "meta/NOTES.txt (repo)" in strip_paths(line(out, "protocol"))
 
 
+def _path_repo(root: Path) -> Path:
+    """A repo with a `meta/` and a `src/hands/` directory and a root `Makefile`."""
+    repo = write_tree(root, {"Makefile": "all:\n", "meta/A.md": "a\n", ".gitignore": "x\n"})
+    (repo / "src" / "hands").mkdir(parents=True)
+    return repo
+
+
+@pytest.mark.parametrize(
+    "said,named",
+    [
+        # a word with an extension: its last component has a `.` inside it and the
+        # text after its last `.` holds a letter
+        ("meta/X.c", ["meta/X.c"]),
+        ("X.c", ["X.c"]),
+        ("MISSING.1st", ["MISSING.1st"]),
+        ("(meta/MISSING.txt)", ["meta/MISSING.txt"]),
+        ("meta/MISSING.json.", ["meta/MISSING.json"]),
+        ("**NOTES.md**", ["NOTES.md"]),
+        ("REVIEW-{n}.md", ["REVIEW-{n}.md"]),
+        ("newdir/NOTES.md", ["newdir/NOTES.md"]),
+        ("e.g.", ["e.g"]),  # prose the rule cannot tell from a file; it fails closed
+        ("github.com", ["github.com"]),  # likewise
+        ("v3.12", []),
+        ("0.2", []),
+        ("§0.2", []),
+        (".md", []),
+        # a word with a `/`: its first component is a directory of the kit or the repo
+        ("meta/MISSING", ["meta/MISSING"]),
+        ("(meta/MISSING)", ["meta/MISSING"]),
+        ("meta/reviews/REVIEW-{n}", ["meta/reviews/REVIEW-{n}"]),
+        ("origin/main", []),
+        ("and/or", []),
+        ("newdir/NOTES", []),  # no such directory: indistinguishable from `origin/main`
+        ("src/hands", []),  # a directory, not a file
+        ("src/hands/", []),
+        # ... or it is not a repository path by the daemon's syntax: it fails closed
+        ("./scripts/check", ["./scripts/check"]),
+        ("/etc/passwd", ["/etc/passwd"]),
+        ("~/notes", ["~/notes"]),
+        ("../notes", ["../notes"]),
+        ("meta//A", ["meta//A"]),
+        ("/", []),
+        # a bare word: only a file the kit or the repo has
+        ("Makefile", ["Makefile"]),
+        ("`Makefile`", ["Makefile"]),
+        ("GNUmakefile", []),  # absent: indistinguishable from prose
+        (".gitignore", [".gitignore"]),
+        (".dockerignore", []),
+        ("review", []),
+        ("{n}", []),
+        ("{n+1}", []),
+        ("blockers=<k>", []),
+        ("--squash", []),
+        ("https://example.com/x.md", []),
+        ("meta/X.md:12", []),
+        ("meta/A.md,meta/B.md", ["meta/A.md", "meta/B.md"]),
+        ("Read meta/A.md, then Makefile (and origin/main).", ["meta/A.md", "Makefile"]),
+    ],
+)  # fmt: skip
+def test_the_named_path_rule_table(tmp_path: Path, said: str, named: list[str]) -> None:
+    """§29 (review 12 should-fix 1): which words of a send prompt are file paths.
+    §29 is silent on telling a path from an English word; `kit.NAMED_PATH_RULE`
+    states the rule this table enumerates."""
+    repo = _path_repo(tmp_path / "repo")
+    assert kit_mod.named_paths(said, ["kitdir/X.md"], repo) == named
+
+
+def test_a_word_under_a_directory_only_the_kit_has_is_a_path(tmp_path: Path) -> None:
+    repo = _path_repo(tmp_path / "repo")
+    assert kit_mod.named_paths("kitdir/NOTES", ["kitdir/X.md"], repo) == ["kitdir/NOTES"]
+    assert kit_mod.named_paths("kitdir", ["kitdir/X.md"], repo) == []
+
+
+def test_a_named_bare_file_the_repo_has_is_judged_and_listed(tmp_path: Path, repo: Path) -> None:
+    (repo / "Makefile").write_text("all:\n", encoding="utf-8")
+    kit = write_tree(tmp_path / "k", {**good_kit(), "PLAYBOOK.toml": _send_naming("Makefile")})
+    code, out, err = run_check(kit, repo)
+    assert code == 0, out + err
+    assert "Makefile (repo)" in strip_paths(line(out, "protocol"))
+
+
+def test_this_repositorys_brief_checked_against_this_repository_passes(tmp_path: Path) -> None:
+    """§28 H-022's acceptance, kept under §29's wider path rule: a kit of
+    meta/BUILDER-13-PROMPT.md checked with `--repo` this repository exits 0
+    (its playbook's send names `origin/main`, which is not a file)."""
+    brief = (ROOT / "meta" / "BUILDER-13-PROMPT.md").read_text(encoding="utf-8")
+    kit = write_tree(tmp_path / "k", {"meta/BUILDER-13-PROMPT.md": brief})
+    code, out, err = run_check(kit, ROOT)
+    assert code == 0, out + err
+
+
 # --------------------------- §28: the apply exception, alternatives (should-fix 7)
 
 
 @pytest.mark.parametrize(
-    "pattern", ["^VERDICT: kit", "^VERDICT: kit appl", "kit applied", "^VERDICT: kit applied <sha>",
-                "^VERDICT: kit applied$", "^VERDICT: kit applied \\w+"],
+    "pattern,outcome",
+    [
+        # match the apply literal and nothing in the vocabulary: the one exception
+        ("^VERDICT: kit applied", "excused"),
+        ("VERDICT: kit applied", "excused"),
+        ("^VERDICT: kit applied ", "excused"),
+        ("VERDICT: kit applied .*", "excused"),
+        ("^VERDICT: kit applied\\b", "excused"),
+        ("(?i)^verdict: kit applied", "excused"),
+        ("^VERDICT: kit applied <sha>", "excused"),
+        ("^VERDICT: kit", "excused"),
+        ("kit applied", "excused"),
+        # match the literal and a vocabulary literal: judged by the vocabulary, not excused
+        ("^VERDICT: ", "vocabulary"),
+        ("VERDICT", "vocabulary"),
+        ("^VERDICT: (kit applied|mission \\d+ finished)", "fails"),  # `kit applied` branch
+        # match the literal, but an alternative does not
+        ("^VERDICT: (kit applied|misison \\d+ finished)", "fails"),
+        # match neither the literal nor the vocabulary
+        ("^VERDICT: kit applied$", "fails"),
+        ("^VERDICT: kit applied \\w+", "fails"),
+        ("^VERDICT: kit applied [0-9a-f]+", "fails"),
+    ],
 )  # fmt: skip
-def test_a_builder_rule_that_is_not_the_apply_literals_text_is_not_excused(
-    tmp_path: Path, repo: Path, pattern: str
+def test_the_apply_verdict_exception_enumerated(
+    tmp_path: Path, repo: Path, pattern: str, outcome: str
 ) -> None:
-    """§28: the exception is for a rule whose regex is `VERDICT: kit applied <sha>`'s
-    own text; `^VERDICT: kit` matches that literal too, and is not excused."""
+    """§29 (review 12 should-fix 7): exactly one `builder.done` rule may match the
+    literal `VERDICT: kit applied <sha>` and nothing in the vocabulary
+    (`kit.APPLY_EXCEPTION`). Rule 1 of PLAYBOOK is replaced by `pattern`."""
     book = PLAYBOOK.replace("'^VERDICT: kit applied'", f"'{pattern}'")
     kit = write_tree(tmp_path / "k", {**good_kit(), "PLAYBOOK.toml": book})
-    code, out, _ = run_check(kit, repo)
-    failed = assert_failed_only(code, out, "verdicts")
-    assert f"verdict '{pattern}'" in strip_paths(failed)
+    code, out, err = run_check(kit, repo)
+    if outcome != "fails":
+        assert code == 0, out + err
+        noted = "rule 1 matches the apply prompt's" in strip_paths(line(out, "verdicts"))
+        assert noted == (outcome == "excused"), out
+    else:
+        failed = assert_failed_only(code, out, "verdicts")
+        assert f"verdict '{pattern}'" in strip_paths(failed)
 
 
-@pytest.mark.parametrize("pattern", ["^VERDICT: kit applied", "VERDICT: kit applied",
-                                     "^VERDICT: kit applied "])  # fmt: skip
-def test_the_apply_rule_is_the_text_of_the_apply_literal(
-    tmp_path: Path, repo: Path, pattern: str
+def _extra_builder_rule(pattern: str) -> str:
+    return (
+        f"\n[[rule]]\non = \"builder.done\"\nverdict = '{pattern}'\n"
+        "then = \"notify\"\nmessage = \"extra\"\n"
+    )
+
+
+def test_a_catch_all_beside_the_apply_rule_is_judged_by_the_vocabulary(
+    tmp_path: Path, repo: Path
 ) -> None:
-    book = PLAYBOOK.replace("'^VERDICT: kit applied'", f"'{pattern}'")
+    """§29: `^VERDICT:` matches the apply literal and the vocabulary; it is judged by
+    the vocabulary and is not a second excused rule (this repository's playbook
+    has one after its apply rule)."""
+    book = PLAYBOOK + _extra_builder_rule("^VERDICT:")
     kit = write_tree(tmp_path / "k", {**good_kit(), "PLAYBOOK.toml": book})
     code, out, err = run_check(kit, repo)
     assert code == 0, out + err
     assert "rule 1 matches the apply prompt's" in strip_paths(line(out, "verdicts"))
+
+
+def test_a_vocabulary_rule_with_an_apply_branch_fails_by_its_alternative(
+    tmp_path: Path, repo: Path
+) -> None:
+    book = PLAYBOOK + _extra_builder_rule("^VERDICT: (?:kit applied|question)")
+    kit = write_tree(tmp_path / "k", {**good_kit(), "PLAYBOOK.toml": book})
+    code, out, _ = run_check(kit, repo)
+    failed = assert_failed_only(code, out, "verdicts")
+    assert "rule 6 verdict '^VERDICT: (?:kit applied|question)': its alternative 'kit applied'" in (
+        strip_paths(failed)
+    )
+
+
+def test_the_apply_exception_is_stated_once_in_the_code_and_the_handbook() -> None:
+    assert kit_mod.APPLY_EXCEPTION == (
+        "exactly one builder.done rule may match the literal 'VERDICT: kit applied <sha>' "
+        "and nothing in the vocabulary"
+    )
+    handbook = (ROOT / "docs" / "ARCHITECT-HANDBOOK.md").read_text(encoding="utf-8")
+    assert kit_mod.APPLY_EXCEPTION in " ".join(handbook.split())
 
 
 def test_only_one_rule_is_excused_by_the_apply_literal(tmp_path: Path, repo: Path) -> None:
@@ -1045,6 +1201,21 @@ def test_a_kit_md_line_of_72_characters_is_the_message(tmp_path: Path, repo: Pat
     kit = write_tree(tmp_path / "k", {**good_kit(), "KIT.md": f"{message}\nbody\n"})
     code, out, _ = run_check(kit, repo, "--json")
     assert code == 0 and json.loads(out)["commit_message"] == message
+
+
+@pytest.mark.parametrize(
+    "name", ["k.zip", "a$(x).zip", "a`x`.zip", "a;b.zip", "a'b.zip", "a b.zip", "m-12.zip"]
+)
+def test_the_apply_prompts_kit_name_is_shell_quoted(tmp_path: Path, name: str) -> None:
+    """§29 (review 12 should-fix 6): the kit's name is shell-quoted like the
+    message; the directory before it stays as handsd shows it (`~` expands)."""
+    import shlex
+
+    plan = kit_mod.plan_apply(f"~/Downloads/{name}", ["KIT.md"], None, tmp_path)
+    said = plan.prompt.removeprefix("Apply ").split(" to this repository: ", 1)[0]
+    assert said == f"~/Downloads/{shlex.quote(name)}"
+    assert shlex.split(said) == [f"~/Downloads/{name}"]
+    assert plan.prompt.startswith("Apply ~/Downloads/")  # the default gate pattern
 
 
 @pytest.mark.parametrize(

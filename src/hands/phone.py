@@ -31,8 +31,9 @@ before anything is fetched: the name must be a `.zip` basename (printable, no
 `/` or `\\`, no leading dot, a non-empty stem, ending in lowercase `.zip`), the
 reported `size` an integer no larger than `[files] kit_max_mb` MiB, the `url`
 one that passes `url_problem` — every step inside one try (§28): a string with no
-whitespace that httpx parses, scheme `http` or `https`, a non-empty host that
-decodes as IDNA, a port (when given) in 1-65535 — and `[files] kit_dir` inside
+whitespace that httpx parses, scheme `http` or `https`, a non-empty host that is
+an IP literal or a name `idna.encode` accepts (§29), a port (when given) in
+1-65535 — and `[files] kit_dir` inside
 `[files] allowed_roots`. Once the secret is accepted, every refusal —
 before the fetch or during it — is logged and filed as `kit.refused` with the
 check that refused it, never the attachment's name or URL (§27). The download is
@@ -539,8 +540,16 @@ def url_problem(url: object) -> str | None:
     2), and `httpx.InvalidURL` is not an `httpx.HTTPError` (review 10 should-fix
     6). Whatever else parsing raises is a refusal too, never a traceback. The
     reason names the check, never the URL's text.
+
+    "IDNA-valid" means `idna.encode(host)` succeeds (§29, review 12 blocker 2). An
+    IP literal (`127.0.0.1`, `[::1]`) is not a name, and `idna.encode` refuses an
+    IPv6 one, so a host that `ipaddress.ip_address` parses is judged by that and
+    every other host by `idna.encode` (§29 is silent on IP literals).
     """
+    import ipaddress
+
     import httpx
+    import idna
 
     try:
         if not isinstance(url, str):
@@ -557,6 +566,10 @@ def url_problem(url: object) -> str | None:
             return "it has no host"
         try:
             host = parsed.host
+            try:
+                ipaddress.ip_address(host)
+            except ValueError:
+                idna.encode(host)  # §29: a name is IDNA-valid when this succeeds
         except (UnicodeError, ValueError):  # idna.IDNAError is a UnicodeError
             return "its host is not a valid IDNA name"
         if not host:

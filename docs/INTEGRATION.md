@@ -404,7 +404,8 @@ when all of that holds, and says what is missing when it does not.
    message is the first line of `KIT.md` at the kit's root when it is
    not empty, at most 72 characters, and has no quote character or line break,
    else `plan: kit <name>` (`<name>` is the zip's file name without `.zip`);
-   the prompt shell-quotes it. That prompt is the
+   the prompt shell-quotes it, and the kit's file name (DESIGN §29; `a b.zip`
+   is written `~/Downloads/'a b.zip'`). That prompt is the
    one handsd files in step 2, byte for byte, when the kit is written under the
    same name in `~/Downloads` (the default `kit_dir`).
 2. **Send the kit to `cmd_topic`** from the ntfy app, the `.zip` attached and
@@ -418,7 +419,8 @@ when all of that holds, and says what is missing when it does not.
    builder job with `origin: kit` and gate reason `apply <name>`. When the
    message is the default, the phone also gets `apply <name>: <why>; the
    commit message is the default '<message>'`. An attachment URL that is not
-   http(s), has no host or one that is not valid IDNA, has a port outside
+   http(s), has no host, has a host that is neither an IP literal nor a name
+   `idna.encode` accepts (DESIGN §29), has a port outside
    1-65535, or holds whitespace is refused before any fetch, as `kit.refused`
    naming the check.
    The job is held, not run. A zip that cannot be read, holds no files, or has

@@ -66,6 +66,9 @@ The apply prompt:
     makes a single commit '<message>' listing those files in its body, and
     pushes. Change nothing else. Reply with one line: VERDICT: kit applied <sha>.
 
+The kit's file name and the message are shell-quoted (`shlex.quote`): a name
+such as `a b.zip` is written `~/Downloads/'a b.zip'`; `m-12.zip` is unchanged.
+
 The commit message is the first line of `KIT.md` at the kit's root, else
 `plan: kit <name>`, the zip's file name without `.zip`; put the message you
 want on `KIT.md`'s first line, in at most 72 characters with no quote
@@ -232,14 +235,18 @@ taken relative to the directory. It prints one line per check,
 - `verdicts`: every `verdict` regex of the playbook is checked (DESIGN §27,
   finding H-021). Matching uses `re.search`, as the engine does. A rule on
   `builder.done` matches at least one literal of the brief, with placeholders
-  such as `<unit>` left as text, and every literal matches some such rule. A
-  builder rule that matches no literal of the brief passes only if it exists
-  for the apply, and only one rule does (DESIGN §28): its pattern is `VERDICT:
-  kit applied`, the reply the apply prompt below asks for (`VERDICT: kit
-  applied <sha>`) up to its placeholder, with an optional `^` and trailing
-  space, such as `^VERDICT: kit applied`. `^VERDICT: kit` matches that reply
-  too and is not excused, nor is `VERDICT: (kit applied|mission \d+
-  finished)`. Every other rule must match a vocabulary literal, and so must
+  such as `<unit>` left as text, and every literal matches some such rule. The
+  apply-verdict exception (DESIGN §29): exactly one builder.done rule may match
+  the literal 'VERDICT: kit applied <sha>' and nothing in the vocabulary. That
+  literal is the reply the apply prompt below asks for. So `^VERDICT: kit
+  applied`, `VERDICT: kit applied .*`, `(?i)^verdict: kit applied` and
+  `^VERDICT: kit` each pass as that one rule when no brief literal matches
+  them. A second rule matching the literal and no brief literal fails, and so
+  does `VERDICT: (kit applied|misison \d+ finished)`, whose `misison` branch
+  does not match the literal. A rule that matches a brief literal, such as a
+  catch-all `^VERDICT:` after the apply rule, is judged by the vocabulary even
+  though it matches the literal too, and is not that one rule. Every other
+  rule must match a vocabulary literal, and so must
   each alternative of its alternations: `(blockers=0|blokers=0)` fails on
   `blokers=0`, although its other branch matches. A rule on `aux.done` matches
   at least one `VERDICT: review …` line of the review protocol, which is found
@@ -253,13 +260,22 @@ taken relative to the directory. It prints one line per check,
 - `wording`: the brief contains neither "as before" nor a "Budget
   guidance" section (a heading or a bold lead).
 - `protocol`: every file path a `send` rule's prompt names is in the kit, or
-  else inside the repo, whatever punctuation surrounds it (DESIGN §28). A file
-  path is a word whose last component has an extension of two or more
-  characters, a letter first: `meta/REVIEW-PROTOCOL.md`, `meta/NOTES.txt`,
-  `WORKPLAN.md`. A named path that is not a repository path by the rules
-  handsd applies to a kit's entries (`../X.md`, `~/X.md`, `/X.md`,
-  `../{n}.md`) fails; it is not skipped. A path with a `{placeholder}`, such
-  as `meta/reviews/REVIEW-{n}.md`, names a different file per job, so only its
+  else inside the repo, whatever punctuation surrounds it (DESIGN §28, §29).
+  DESIGN is silent on telling a path from an English word, so kit check reads
+  a word (split at whitespace and quotes, brackets, `,` `;` `!` `?` `*`, with a
+  trailing `.`, `:` or `/` dropped) as a file path when it is a file the kit
+  or the repo has (`Makefile`), or, not being a directory there, when its last
+  component has an extension holding a letter (`meta/X.c`,
+  `meta/MISSING.1st`, `WORKPLAN.md`), or when it holds a `/` and its first
+  component is a directory of the kit or the repo (`meta/MISSING`) or it is
+  not a repository path by the rules handsd applies to a kit's entries
+  (`../X.md`, `~/X.md`, `/etc/passwd`, `./scripts/check`, `../{n}.md`); those
+  fail, they are not skipped. What it cannot see: a missing bare name with no
+  extension (`Makefile` when the repo has none) and a missing name under a
+  directory neither has (`newdir/NOTES`) read as prose, like `origin/main`;
+  and a word like `e.g.` or `github.com` is read as a path and fails, so
+  rephrase it. A path with a `{placeholder}`, such as
+  `meta/reviews/REVIEW-{n}.md`, names a different file per job, so only its
   syntax is checked.
 
 When every check passes, it prints three things. First, the §3 apply prompt,

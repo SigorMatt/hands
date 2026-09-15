@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "A daemon and CLI that dispatch prompts to headless Claude Code roles and chain them by a playbook."
 readme = "README.md"
 requires-python = ">=3.11"
-dependencies = ["httpx>=0.27"]
+dependencies = ["httpx>=0.27", "idna>=3"]
 
 [project.scripts]
 hands = "hands.cli:main"

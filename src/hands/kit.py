@@ -16,6 +16,8 @@ what the architect saw is what runs. The commit message is the first line of a
 characters, and holds no quote character (`'`, `"`, a backtick) or line break
 (§28); else `plan: kit <name>`, where the name is the kit's file name without
 `.zip`, and handsd tells the phone why. The prompt shell-quotes the message.
+The prompt shell-quotes the kit's file name too (§29), not the directory before
+it, so `~` still expands and the gate pattern `Apply ~/Downloads/` still matches.
 `kit check` has no config, so it names the kit `~/Downloads/<name>` (`kit_dir`'s
 default): its prompt equals handsd's byte for byte for a kit handsd writes there
 under that name, and differs in that location for any other `kit_dir`.
@@ -43,12 +45,15 @@ The checks, in order (docs/ARCHITECT-HANDBOOK.md §11 says the same):
 * `verdicts` — every `verdict` regex of the playbook is checked (§27, H-021).
   One on `builder.done` matches (by `re.search`, as the engine does) at least
   one literal of the brief, placeholders such as `<unit>` left as text, and
-  every literal matches some such rule. A builder rule that matches no literal
-  of the brief passes only when it exists for the apply, and only one such rule
-  does (§28): its pattern is `VERDICT: kit applied`, the apply prompt's
-  `VERDICT: kit applied <sha>` up to its placeholder, with an optional `^` and an
-  optional trailing space; `^VERDICT: kit` is not it (review 11 should-fix 7).
-  Every other rule must match a vocabulary literal, and so must each alternative
+  every literal matches some such rule. The apply-verdict exception is §29's,
+  `APPLY_EXCEPTION`: exactly one `builder.done` rule may match the literal
+  `VERDICT: kit applied <sha>` (the reply the apply prompt asks for) and nothing
+  in the vocabulary. A rule that matches a vocabulary literal is judged by the
+  vocabulary (so a catch-all `^VERDICT:` after the apply rule passes) and is not
+  that rule; a second rule matching the literal and no vocabulary literal is
+  refused, and each alternative of the excused rule must match the literal
+  (review 12 should-fix 7). Every other rule must match a vocabulary
+  literal, and so must each alternative
   of its alternations (`a|b`, in a group or not), tried as the pattern with that
   alternation's other branches removed; an alternative whose pattern does not
   compile alone is not judged. One on `aux.done` matches at least one of the
@@ -61,14 +66,13 @@ The checks, in order (docs/ARCHITECT-HANDBOOK.md §11 says the same):
 * `wording` — the brief says neither "as before" nor has a "Budget guidance"
   section (a heading or a bold lead).
 * `protocol` — every file path a `send` rule's prompt names, whatever punctuation
-  surrounds it (§28), is a repository path by the rules handsd applies to a kit's
-  entries (`_path_problem`, `_inside`), and is in the kit or else inside the repo.
-  A file path is a word of path characters (letters, digits, `_ . / ~ { } -`)
-  whose last component ends in an extension of two or more letters or digits,
-  the first a letter. A path with a `{placeholder}` names a different file per
-  job, so it is judged by its syntax only (placeholders read as `0`) and not
-  read. A named path the check cannot resolve (`../X.md`, `~/X.md`, `../{n}.md`)
-  fails rather than being skipped (§27).
+  surrounds it (§28, §29), is a repository path by the rules handsd applies to a
+  kit's entries (`_path_problem`, `_inside`), and is in the kit or else inside the
+  repo. Which words are file paths is `NAMED_PATH_RULE` (§29 is silent on telling
+  a path from an English word). A path with a `{placeholder}` names a different
+  file per job, so it is judged by its syntax only (placeholders read as `0`) and
+  not read. A named path the check cannot resolve (`../X.md`, `~/X.md`,
+  `../{n}.md`, `./scripts/check`) fails rather than being skipped (§27).
 """
 
 from __future__ import annotations
@@ -96,13 +100,14 @@ from hands.playbook import (
 )
 
 __all__ = [
-    "APPLY_TEXT",
+    "APPLY_EXCEPTION",
     "APPLY_VERDICT",
     "CHECK_NAMES",
     "KIT_MD",
     "KIT_MD_MAX",
     "MAX_ENTRY_BYTES",
     "MAX_TOTAL_BYTES",
+    "NAMED_PATH_RULE",
     "Apply",
     "Check",
     "KitError",
@@ -113,6 +118,7 @@ __all__ = [
     "final_reply_literals",
     "kickoff_line",
     "kit_md_message",
+    "named_paths",
     "pattern_alternatives",
     "placeholder_instances",
     "plan_apply",
@@ -126,9 +132,6 @@ PLAYBOOK_PATHS = ("PLAYBOOK.toml", "meta/PLAYBOOK.toml")
 BRIEF_RE = re.compile(r"^(?:meta/BUILDER-(?P<n>\d+)-PROMPT\.md|WORKPLAN\.md)$")
 #: The reply the apply prompt asks for; the only literal seen outside the brief.
 APPLY_VERDICT = "VERDICT: kit applied <sha>"
-#: §28: the one pattern the apply excuses is this text (`APPLY_VERDICT` before its
-#: placeholder), with an optional `^` and an optional trailing space.
-APPLY_TEXT = "VERDICT: kit applied"
 #: §27: the entry whose first line is the apply's commit message.
 KIT_MD = "KIT.md"
 #: §28: the longest `KIT.md` first line that becomes the commit message.
@@ -147,6 +150,16 @@ BUILDER_DONE = "builder.done"
 REVIEW_DONE = "aux.done"
 #: The event whose verdict is the driver's, the one the consult prompt fixes (§27).
 DRIVER_DONE = "driver.done"
+#: §29 (review 12 should-fix 7): the apply-verdict exception in the code's terms.
+#: `_check_verdicts` enforces it: a builder rule that matches a vocabulary literal
+#: is judged by the vocabulary, whether or not it also matches `APPLY_VERDICT`, and
+#: is not the excused rule; the first rule that matches `APPLY_VERDICT` and no
+#: vocabulary literal is excused, when each of its alternatives matches
+#: `APPLY_VERDICT` too; any later such rule is refused.
+APPLY_EXCEPTION = (
+    f"exactly one {BUILDER_DONE} rule may match the literal '{APPLY_VERDICT}' "
+    "and nothing in the vocabulary"
+)
 #: What `kit check` reads into memory (review 10 should-fix 5; hands' own numbers,
 #: the design names none). A kit is text: a DESIGN.md is some 100 KiB.
 MAX_ENTRY_BYTES = 16 * 1024 * 1024
@@ -159,13 +172,26 @@ MAX_PLACEHOLDERS = 6
 CHECK_NAMES = ("paths", "playbook", "brief", "verdicts", "wording", "protocol")
 GIT_TIMEOUT_S = 10.0
 
-#: A file path a prompt names (§28): a word of path characters, placeholders
-#: included, whose last component has an extension of two or more characters (a
-#: letter first), whatever punctuation surrounds it. How it begins is not limited,
-#: so a path the check cannot resolve (`../X.md`, `~/X.md`, `/X.md`) is seen.
-_NAMED_FILE_RE = re.compile(
-    r"(?<![\w./~{}-])[\w./~{}-]*[\w}]\.[A-Za-z][A-Za-z0-9]+(?![\w/{}-])"
-)
+#: §29: which words of a send prompt are file paths. §29 is silent on telling a
+#: path from an English word, so this is hands' rule (`named_paths` applies it).
+NAMED_PATH_RULE = """\
+A send prompt's words are its text split at whitespace and at the characters
+" ' ` ( ) [ ] < > , ; ! ? *, each with trailing . : / removed. A word of path
+characters only (letters, digits, _ . / ~ { } + -) holding a letter or a digit
+names a file path when:
+1. it is a file of the kit, or (without a placeholder) a file in the repo; or
+2. it is not a directory of the kit or the repo, and its last component has a .
+   after its first character with a letter after the last .; or
+3. it is not a directory of the kit or the repo, holds a /, and either is not a
+   repository path by the daemon's syntax (_path_problem) or its first component
+   is a directory of the kit or the repo.
+Any other word is prose. So a missing bare name with no . (Makefile) and a
+missing name under a directory neither has (newdir/NOTES) are not seen, and a
+word such as e.g. or github.com is judged as a path and fails."""
+#: Where a prompt's words split (`NAMED_PATH_RULE`).
+_WORD_SPLIT_RE = re.compile(r"[\s\"'`()\[\]<>,;!?*]+")
+#: A word of path characters only.
+_PATH_WORD_RE = re.compile(r"[\w./~{}+-]+")
 #: A playbook placeholder inside a named path (`{n}`, `{n+1}`).
 _PATH_PLACEHOLDER_RE = re.compile(r"\{[^{}]*\}")
 #: Why a named path with a placeholder is not read (`_named_file`).
@@ -613,17 +639,6 @@ def _find_brief(kit: _Kit) -> tuple[Check, str | None, str | None]:
     return Check("brief", True, reason), name, text
 
 
-def _is_the_apply_rule(verdict: re.Pattern[str]) -> bool:
-    """A builder rule that exists for the apply (§28, review 11 should-fix 7).
-
-    Its pattern is `APPLY_TEXT` — the literal `VERDICT: kit applied <sha>` up to its
-    placeholder — with an optional `^` and trailing space: no branch, class or
-    repeat that could hold a typo, and not a prefix such as `^VERDICT: kit` that
-    matches the literal while matching other replies too.
-    """
-    return verdict.pattern.removeprefix("^") in (APPLY_TEXT, APPLY_TEXT + " ")
-
-
 def pattern_alternatives(pattern: str) -> list[tuple[str, str]]:
     """Each alternative of `pattern`, with the pattern that keeps only it (§28).
 
@@ -718,30 +733,27 @@ def _check_verdicts(
                 f"'{alternative}' matches none of{against}"
             )
 
-    for rule in rules:
+    for rule in rules:  # §29: APPLY_EXCEPTION
         assert rule.verdict is not None
-        if any(rule.verdict.search(literal) for literal in literals):
-            alternatives(rule.index, rule.verdict, literals, f": {shown_literals}")
-            continue
-        if _is_the_apply_rule(rule.verdict) and not via_apply:
+        verdict, shown = rule.verdict, f"rule {rule.index} verdict '{rule.verdict.pattern}'"
+        matched = [literal for literal in literals if verdict.search(literal)]
+        applies = verdict.search(APPLY_VERDICT) is not None
+        if matched:  # judged by the vocabulary, whether or not it matches APPLY_VERDICT
+            alternatives(rule.index, verdict, literals, f": {shown_literals}")
+        elif applies and not via_apply:
             via_apply.append(f"rule {rule.index}")
-            continue
-        why = ""
-        if via_apply and _is_the_apply_rule(rule.verdict):
-            why = (
-                " (only one rule is excused by the apply prompt's literal, and "
-                f"{via_apply[0]} is)"
+            alternatives(rule.index, verdict, [APPLY_VERDICT], f" {APPLY_VERDICT!r}")
+        elif applies:
+            problems.append(
+                f"{shown} matches the apply prompt's {APPLY_VERDICT!r}, but only one rule is "
+                f"excused by the apply prompt's literal, and {via_apply[0]} is "
+                f"(§29: {APPLY_EXCEPTION})"
             )
-        elif rule.verdict.search(APPLY_VERDICT):
-            why = (
-                f" (it matches the apply prompt's {APPLY_VERDICT!r}, but only a rule whose "
-                f"pattern is {APPLY_TEXT!r} itself is excused by it)"
+        else:
+            problems.append(
+                f"{shown} matches none of: {shown_literals}, nor the apply prompt's "
+                f"{APPLY_VERDICT!r}"
             )
-        problems.append(
-            f"rule {rule.index} verdict '{rule.verdict.pattern}' matches none of: "
-            + shown_literals
-            + why
-        )
     for literal in literals:
         if not any(rule.verdict and rule.verdict.search(literal) for rule in rules):
             problems.append(f"the brief's {literal!r} matches no {BUILDER_DONE} verdict rule")
@@ -816,13 +828,51 @@ def _check_wording(name: str | None, text: str | None) -> Check:
     return Check("wording", True, f'{name} has no "as before" and no "Budget guidance" section')
 
 
-def _named_files(book: Playbook) -> dict[str, list[int]]:
+def named_paths(text: str, files: Iterable[str], repo: Path) -> list[str]:
+    """The file paths `text` names, in order, by `NAMED_PATH_RULE` (§29).
+
+    `files` are the kit's file entries and `repo` the repository the kit lands in.
+    """
+    kit_files = set(files)
+    kit_dirs = {
+        parent.as_posix()
+        for name in kit_files
+        for parent in PurePosixPath(name).parents
+        if parent.as_posix() != "."
+    }
+
+    def is_dir(name: str) -> bool:
+        return name in kit_dirs or (repo / name).is_dir()
+
+    found = []
+    for piece in _WORD_SPLIT_RE.split(text):
+        word = piece.rstrip(".:/")
+        if not _PATH_WORD_RE.fullmatch(word) or not any(char.isalnum() for char in word):
+            continue
+        filled = _PATH_PLACEHOLDER_RE.sub("0", word)
+        problem = _path_problem(filled)
+        if problem is None:
+            if word in kit_files or (filled == word and (repo / word).is_file()):
+                found.append(word)
+                continue
+            if is_dir(filled):
+                continue
+        last = word.rsplit("/", 1)[-1]
+        dot = last.rfind(".")
+        if dot > 0 and any(char.isalpha() for char in last[dot + 1 :]):
+            found.append(word)
+        elif "/" in word and (problem is not None or is_dir(filled.split("/", 1)[0])):
+            found.append(word)
+    return found
+
+
+def _named_files(book: Playbook, kit: _Kit, repo: Path) -> dict[str, list[int]]:
     """Every file a `send` rule's prompt names, with the rules naming it."""
     named: dict[str, list[int]] = {}
     for rule in book.rules:
         if rule.then != "send" or not rule.prompt:
             continue
-        for name in _NAMED_FILE_RE.findall(rule.prompt):
+        for name in named_paths(rule.prompt, kit.files, repo):
             named.setdefault(name, []).append(rule.index)
     return named
 
@@ -861,7 +911,7 @@ def _review_vocabulary(book: Playbook | None, kit: _Kit, repo: Path) -> list[str
     if book is None:
         return []
     texts = [rule.prompt for rule in book.rules if rule.then == "send" and rule.prompt]
-    for name in sorted(_named_files(book)):
+    for name in sorted(_named_files(book, kit, repo)):
         data, _ = _named_file(name, kit, repo)
         if data is not None:
             texts.append(data.decode("utf-8", errors="replace"))
@@ -871,7 +921,7 @@ def _review_vocabulary(book: Playbook | None, kit: _Kit, repo: Path) -> list[str
 def _check_protocol(book: Playbook | None, kit: _Kit, repo: Path) -> Check:
     if book is None:
         return Check("protocol", False, "no playbook in force to read (see playbook)")
-    named = _named_files(book)
+    named = _named_files(book, kit, repo)
     if not named:
         return Check("protocol", True, "no send rule names a file")
     missing = []
@@ -914,14 +964,19 @@ def kit_md_message(data: bytes | None) -> tuple[str | None, str | None]:
 
 
 def apply_prompt(location: str, replaces: list[str], adds: list[str], message: str) -> str:
-    """The handbook's §3 apply prompt, naming the kit's file and every file it touches."""
+    """The handbook's §3 apply prompt, naming the kit's file and every file it touches.
+
+    The kit's file name (`location`'s last component) and the message are
+    shell-quoted (§28, §29); the directory before the name is written as given.
+    """
+    head, slash, name = location.rpartition("/")
     touched = []
     if replaces:
         touched.append("replaces " + _and(replaces))
     if adds:
         touched.append("adds " + _and(adds))
     return (
-        f"Apply {location} to this repository: unzip -o into the repo root "
+        f"Apply {head}{slash}{shlex.quote(name)} to this repository: unzip -o into the repo root "
         f"(it {' and '.join(touched)}), then one plan-only sub-agent makes a single commit "
         f"{shlex.quote(message)} listing those files in its body, and pushes. "
         "Change nothing else. "
