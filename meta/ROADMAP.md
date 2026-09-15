@@ -26,8 +26,8 @@ then an install (`uv tool install --force`) and a driver-kit refresh.
   (`decided_by: phone`); REVIEW-3's deferred items. Gate: clean review,
   install, and the doctor wake check redone over the phone channel.
 - **M4b The closed loop** — mission 10 DONE 2026-09-13 (go, kit transport,
-  kit check, handbook); mission 11 IN PROGRESS (apply from kit, driver
-  role, consult). Instruction re-pasted 2026-09-13 with rule 13.
+  kit check, handbook); mission 11 DONE (apply from kit, driver role, consult);
+  mission 12 closes review 11 (the guard) before the driver role is enabled. Instruction re-pasted 2026-09-13 with rule 13.
   The closed loop — missions 10 and 11: `go` and kit transport from
   the phone; the driver as a headless role with bounded authority via
   `consult`. Gate: one mission of hands run end to end with no Code tab

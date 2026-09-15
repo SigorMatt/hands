@@ -9,11 +9,15 @@ item names the mission it is scheduled for; unscheduled items say so.
 
 ## Mission 10 — DONE 2026-09-13 except who-by-pid (H-020; moved to 11).
 
-## Mission 11 (scheduled 2026-09-13)
+## Mission 11 — DONE 2026-09-13 (review 11: blockers=5, the driver guard
+   bypassable; driver role not enabled until mission 12).
 
-- Review 10 blocker 1 and should-fix 1–7; the apply from the kit; the
-  driver role and `consult`; this repository's playbook with consult rules
-  and the BUILDER-12 kickoff. Spec: DESIGN v3.10 §27.
+## Mission 12 (scheduled 2026-09-15)
+
+- Review 11 blockers 1–5 and should-fix 1–9; the guard rewritten on shlex
+  tokens; consult stops in the engine; H-022 resolved. Spec: DESIGN v3.11
+  §28. After it: enable `[roles.driver]`, refresh the driver kit, first
+  real consultation, then M5.
 
 ## Unscheduled
 

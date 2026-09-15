@@ -1,13 +1,13 @@
-# hands — DESIGN v3.10
+# hands — DESIGN v3.11
 
 Machinery that replaces the human relay between the planning brain and the two
 Claude Code roles (builder, aux) on the Ubuntu laptop, and that keeps a series
 moving without a human while everything goes by plan. Working name: `hands`.
 The method it serves is described in WORKING-MODEL.md (agile-skills) and
 OPERATING-MODEL.md (spanweave); hands changes the topology, not the method.
-v3.10 (2026-09-13) folds in the mission 10 review and specifies mission
-11: the apply-from-kit, the driver role and `consult`; changes are in §27;
-earlier changes in §26–§17.
+v3.11 (2026-09-15) folds in the mission 11 review, which found the driver
+guard's role mode bypassable; changes are in §28; earlier changes in
+§27–§17.
 
 Status: proposal, 2026-09-10. Items marked DECIDED were settled in discussion.
 
@@ -1064,3 +1064,80 @@ Mission 11, the driver role and `consult` (§8, §10, §11):
 Conventions: this repository's `PLAYBOOK.toml` sets `[series] kickoff` to
 the next mission's line; each kit that ships a new mission also ships the
 playbook line.
+
+---
+
+## 28. Changes from v3.10 (mission 11 review)
+
+The guard, rewritten around what the shell delivers (review 11 blocker 1):
+- The guard no longer inspects a quote-stripped string. It tokenizes the
+  command with `shlex` (POSIX mode), splits segments on `;`, `&&`, `||`,
+  `|`, a lone `&`, newlines, `$(`, backticks and subshell parentheses, and
+  judges each segment's words as the literal tokens `hands`, `git` and the
+  rest would receive. A command `shlex` cannot parse (unbalanced quotes)
+  is refused.
+- For `hands` and `git` in both modes: option values are read from the
+  tokens (`--context keep`, `--context=keep`), and a token in argument
+  position that still contains `$`, a backtick, `{`, `}`, `\`, `~` (not
+  leading), `*`, `?`, `[` or `!` after `shlex` processing is refused,
+  because the shell would expand it after the guard saw it. Leading
+  assignments (`x=… cmd`) are refused. `$'…'` words are refused.
+- Role mode (`HANDS_ROLE=driver`) additionally requires every `hands send`
+  to carry exactly one `--context` whose literal value is `keep`, and a
+  `--role` naming the role the consultation named (passed to the driver in
+  its environment as `HANDS_CONSULT_ROLE`); every other `hands` subcommand
+  not in §27's list is refused by name; `git` may only be `-C <clone>` plus
+  the read-only allowlist.
+- The self-test and `tests/test_bash_guard.py` carry every probe review 11
+  executed (`&`-joined commands, quoted and escaped option words, `$'…'`,
+  brace words, assignments), each asserted blocked in both modes where
+  applicable. The interactive driver's guard is the same file and gets the
+  same fix.
+
+Consult and the driver role (should-fix 1–3, 8):
+- The stops §27 promises for `escalate`, an unrecognised driver verdict and
+  `driver.failed` are enforced by the engine, not by rules the playbook may
+  omit; a playbook may add rules on `driver.done` for its own messages, but
+  cannot remove those stops.
+- `driver.killed`, `driver.orphaned` and `driver.limited` are events; a
+  consultation that ends in any of them stops and notifies, and `consult.done`
+  carries the terminal state.
+- `max_consults` counts from the most recent job whose prompt equals *any*
+  `[series] kickoff` value seen in the pipeline's history, or the last
+  `plan:` kit apply, whichever is later, so renaming the next kickoff does
+  not freeze the count.
+- Doctor's driver row proves the wiring: the driver directory's
+  `.claude/settings.json` names the hook, the hook file self-tests green in
+  role mode, and the role's `permission_flags` is empty; otherwise `fail`.
+
+Kit transport and the apply (blocker 2, should-fix 6, 7, 9):
+- Attachment URL validation happens entirely inside the try; scheme must be
+  `http(s)`, host non-empty and IDNA-valid, port in range, no whitespace; any
+  failure files `kit.refused` with the reason and touches no network.
+- `kit check` resolves every file path a `send` prompt names against the
+  kit and then the repo, with the same path syntax the daemon uses; a name
+  neither has is a failure, whatever punctuation surrounds it.
+- The apply-verdict exception applies to exactly one rule: a `builder.done`
+  rule whose regex matches the literal `VERDICT: kit applied <sha>`; every
+  other rule must match a vocabulary literal.
+- `KIT.md`'s first line becomes the commit message only when it is ≤ 72
+  characters, contains no quote characters or newlines, and is not empty;
+  otherwise the default `plan: kit <name>` is used and the notification says
+  so. The apply prompt built by the daemon and by `kit check` shell-quotes
+  the message.
+
+Process accounting (blocker 3) and who (blocker 4):
+- The post-exit sweep signals a group only when its leader is alive and is
+  the job's pid, or when every live member is a descendant by pid chain (or
+  a member of the job's cgroup scope); the `HANDS_JOB` mark alone never
+  qualifies. H-023 records the departure U1 made.
+- `hands who`'s directory fallback excludes the `sessionId` of every hands
+  pid's `~/.claude/sessions/<pid>.json` as well as the spool's session ids.
+
+Bookkeeping (blocker 5, should-fix 4, 5):
+- H-022 resolved: the acceptance meant a kit of the mission's brief checked
+  against the repository passes; `kit check` stays a kit checker.
+- Findings' status lines are updated in place; a resolution appends to the
+  finding's own section, never to a separate one.
+- The `docs/INTEGRATION.md` `done` statement is pinned against each
+  `failure_reason` value, not only against the text.
