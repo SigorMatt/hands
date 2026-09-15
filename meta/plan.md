@@ -36,7 +36,14 @@ Base of the mission: 723dbeb (`plan: mission 13 kit (DESIGN v3.12)`).
       `github.com` flagged); apply exception = first rule matching the
       literal and no vocabulary literal (vocabulary-matching rules judged
       as vocabulary, catch-all `^VERDICT:` kept); BUILDER-13 kit 6/6 exit 0
-- [ ] U4 Consult edges (§29; SF3, SF4, SF5)
+- [x] U4 Consult edges (§29; SF3, SF4, SF5) 38022f2 — engine's consult stop
+      decided before the paused check: over a pause, one
+      `pipeline.stop_suppressed` with the engine's reason and one
+      notification (7 kinds × 4 playbook shapes, e2e escalate); no playbook
+      rule fires while paused; doctor self-tests the first shlex word naming
+      `.claude/hooks/bash_guard.py` ($CLAUDE_PROJECT_DIR / relative resolved
+      against the driver dir, other `$` fails); max_consults anchor = latest
+      of kickoff, kit apply, daemon start (restart mid-mission resets)
 - [ ] U5 Who grace (§29; SF9)
 - [ ] U6 Two projects on one laptop (§29)
 - [ ] U7 This repository's playbook (kickoff BUILDER-14)
