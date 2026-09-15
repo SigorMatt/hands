@@ -34,7 +34,14 @@ Base of the mission: bb9aab5 (`plan: mission 12 kit (DESIGN v3.11)`).
       KIT.md line rules with default and notice; message shell-quoted;
       prompts byte-equal for the same `~/Downloads/<name>`, unequal for
       another kit_dir or a `-1` rename; BUILDER-12 kit `--repo .` 6/6 exit 0
-- [ ] U4 Sweep and who (§28; blockers 3, 4; H-023)
+- [b] U4 Sweep and who (§28; blockers 3, 4; H-023) 7f86406 — who half done:
+      the directory fallback excludes every running hands job pid's
+      sessions-file `sessionId` (reviewer's probe, two variants). Sweep half
+      BLOCKED on design (H-025): the sweep runs after claude is reaped, so a
+      live leader never exists and no pid chain reaches the job's pid; §28
+      read literally kills nothing and three §24 orphan tests fail (one
+      hangs on pipes). U1-of-m11's `HANDS_JOB` rule stays. Not retried: a
+      design stop, the same rules reach the same memo
 - [ ] U5 This repository's playbook — kickoff BUILDER-13; kit of
       meta/BUILDER-12-PROMPT.md with `--repo .` exits 0 (blocker 5 per H-022)
 - [ ] U6 Final report — meta/FINAL-REPORT-12.md
