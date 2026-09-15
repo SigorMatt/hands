@@ -17,10 +17,14 @@ Base of the mission: bb9aab5 (`plan: mission 12 kit (DESIGN v3.11)`).
       self-test 154/154; residual characters counted in expansion position
       only (H-024); unset HANDS_CONSULT_ROLE refuses every role send; `-C`
       not pinned to the clone; `--gate` on a role send allowed
-- [ ] U2 Consult and the driver role, engine-side (§28; SF1, SF2, SF3, SF8) —
-      engine stops, driver.killed/orphaned/limited events, max_consults
-      counter, doctor driver row, HANDS_CONSULT_ROLE in the driver job's
-      environment; docs/PLAYBOOK.md, docs/INTEGRATION.md
+- [x] U2 Consult and the driver role, engine-side (§28; SF1, SF2, SF3, SF8)
+      e642552 — escalate/unrecognised/failed/killed/orphaned/limited stop and
+      notify in the engine whatever the driver rules; spawn failure = killed
+      with consult.done; HANDS_CONSULT_ROLE set on the driver job; kickoff
+      values seen kept in pipeline.json (recorded at playbook load on job
+      start); "`plan:` kit apply" read as a started `origin: kit` builder
+      job (prefix not read); limited driver job not resumed; doctor fails on
+      settings/hook wiring, role-mode self-test red, permission_flags
 - [ ] U3 Kit transport and the apply (§28; blocker 2, SF6, SF7, SF9) — URL
       checks in the try, kit check named paths, apply-verdict exception to
       one rule, KIT.md line rules and shell-quoting

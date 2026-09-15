@@ -3,25 +3,24 @@
 Mission: 12 (meta/BUILDER-12-PROMPT.md, DESIGN v3.11 §28 with §8, §10, §12,
 §27) — close review 11 (blockers 1–5, should-fix 1–9).
 Base: bb9aab5 (`plan: mission 12 kit (DESIGN v3.11)`).
-Unit in progress: U2 Consult and the driver role, engine-side (§28; REVIEW-11
-should-fix 1, 2, 3, 8).
-Intent: the engine enforces the stops for `escalate`, an unrecognised driver
-verdict and `driver.failed` whatever the playbook's rules (a playbook may add
-`driver.done` rules, not remove the stops); `driver.killed`,
-`driver.orphaned`, `driver.limited` are events that stop and notify, with
-`consult.done` carrying the terminal state (and a driver job that fails to
-spawn still gets consult.done/journal); `max_consults` counts from the later
-of the last job whose prompt equals any `[series] kickoff` value seen and the
-last `plan:` kit apply; doctor's driver row fails unless the driver
-directory's `.claude/settings.json` names the hook, the hook self-tests green
-in role mode, and `permission_flags` is empty; the driver job's environment
-carries `HANDS_CONSULT_ROLE` (the role the consultation names; U1's guard
-refuses every role send without it); docs/PLAYBOOK.md and docs/INTEGRATION.md
-updated.
-Done means: an end-to-end test per stop with a playbook that has no driver
-rules; a counter test across a renamed kickoff; a doctor test for each
-failure; ./scripts/check green 3/3; one commit listing every file; pushed.
-Done: U0 5ea7b9d (1733 passed); U1 3966f9b (1882).
+Unit in progress: U3 Kit transport and the apply (§28; REVIEW-11 blocker 2,
+should-fix 6, 7, 9).
+Intent: attachment URL validation entirely inside the try — scheme http(s),
+host non-empty and IDNA-valid, port in range, no whitespace — any failure
+files `kit.refused` with the reason and touches no network (the reviewer's
+`http://xn--/k.zip`, `http://exa mple.com/k.zip`, `https://[::1]:99999/x`);
+`kit check` resolves every file path a `send` prompt names against kit then
+repo with the daemon's path syntax, whatever punctuation surrounds it (no
+`.md`/`.toml`-only, no `{` skip); the apply-verdict exception applies to
+exactly one `builder.done` rule whose regex matches `VERDICT: kit applied
+<sha>`, every other rule must match a vocabulary literal (typo'd alternatives
+and plain `^VERDICT: kit` fail); `KIT.md` first line is the commit message
+only when ≤ 72 chars, no quote characters, no newline, non-empty, else the
+default `plan: kit <name>` and the notification says so; the message is
+shell-quoted in both the daemon's and `kit check`'s apply prompt.
+Done means: tests for each, including byte-equality of the two prompts;
+./scripts/check green 3/3; one commit listing every file; pushed.
+Done: U0 5ea7b9d (1733 passed); U1 3966f9b (1882); U2 e642552 (1916).
 Findings: H-022 resolved by v3.11 (U0); H-023 open (code U4); H-024 open (U1's
 residual-character reading); H-001 and H-009 open.
 Standing constraints: one foreground sub-agent per product unit, commit and
