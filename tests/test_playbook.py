@@ -250,13 +250,14 @@ def test_the_repositorys_own_playbook_loads_and_its_review_reads_from_the_last_r
 
 def test_the_repositorys_own_playbook_carries_the_series_kickoff() -> None:
     """§26 (mission 10 U2): the root playbook names its kickoff line in `[series]`.
-    §27 Conventions, §28 (mission 12 U5): it is the next mission's line, BUILDER-13."""
+    §27 Conventions, §29 (mission 13 U7): it is the next mission's line, BUILDER-14
+    (mission 14, the architect role)."""
     path = Path(__file__).parents[1] / "PLAYBOOK.toml"
     book = load_playbook(path)
     assert book is not None, "the repository's PLAYBOOK.toml is missing"
     assert book.series == "hands-missions"
     assert book.kickoff == (
-        "Read meta/BUILDER-13-PROMPT.md and execute the mission below its divider."
+        "Read meta/BUILDER-14-PROMPT.md and execute the mission below its divider."
     )
 
 
