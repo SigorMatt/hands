@@ -23,7 +23,6 @@ from hands.config import Config, parse_config
 from hands.limits import from_iso
 from hands.monitor import group_pids
 from hands.runner import (
-    DRAIN_S,
     GROUP,
     JOB_ENV,
     MAX_LAST_ARGV,
@@ -1131,12 +1130,17 @@ def test_the_last_resort_kills_the_group_while_its_leader_is_the_one_spawned(
         leader.wait()
 
 
-def _vacated_group(job: Job | None) -> subprocess.Popen[bytes]:
+def _vacated_group(job: Job | None, *, marked: bool = True) -> subprocess.Popen[bytes]:
     """A group whose leader was reaped and whose background sleep lives on. With
-    `job`, the group was started in that job's environment (its descendants);
+    `job`, the group was started in that job's environment (its descendants), with
+    its `HANDS_JOB` mark unless `marked` is False (a descendant that cleared it);
     without, it is a stranger's — review 10 should-fix 3's reused-then-vacated
     leader, which no process holds either."""
-    env = {**os.environ, JOB_ENV: job.id} if job is not None else None
+    unmarked = {name: value for name, value in os.environ.items() if name != JOB_ENV}
+    if job is None:
+        env = None
+    else:
+        env = {**unmarked, JOB_ENV: job.id} if marked else unmarked
     leader = subprocess.Popen(
         ["sh", "-c", "sleep 30 & exit 0"], start_new_session=True, env=env
     )
@@ -1275,14 +1279,51 @@ def test_a_session_member_is_the_jobs_only_if_it_started_before_the_last_observa
         kill_quietly(member)
 
 
+@pytest.mark.parametrize(("after", "killed"), [(0, False), (1, True)],
+                         ids=["started-at-the-last-observation", "started-before-it"])
+def test_a_session_member_without_the_mark_is_judged_by_session_and_start_time_alone(
+    runner: Runner, spool: Spool, after: int, killed: bool
+) -> None:
+    """§30 (REVIEW-13 should-fix 2): session-and-start-time is the proof and the mark
+    corroborates only. The member is in the job's session and has cleared
+    `HANDS_JOB`. Started before the last observation, it is the job's: killed and
+    reported like a marked one. Started in the same tick (the residual), nothing
+    proves it, and what the sweep leaves alive is still reported, `killed: false`."""
+    job = spool.create_job(role="builder", context="clear", prompt="x", origin="cli")
+    leader = _vacated_group(job, marked=False)
+    members = group_pids(leader.pid)
+    assert len(members) == 1, "the background sleep should still be in the group"
+    member = members[0]
+    environ = Path(f"/proc/{member}/environ").read_bytes().split(b"\0")
+    assert not any(entry.startswith(JOB_ENV.encode() + b"=") for entry in environ)
+    assert os.getsid(member) == leader.pid
+    seen: list[object] = []
+    runner.on_orphans = lambda job, processes, isolation: seen.append(processes)
+    try:
+        job.pid = leader.pid
+        runner._leader_start = {job.id: 1}
+        runner._last_seen = {job.id: _start_ticks(member) + after}
+        reported = [{"pid": member, "cmdline": "sleep 30", "killed": killed}]
+        assert asyncio.run(runner._sweep(job, GROUP)) == reported
+        assert seen == [reported]
+        time.sleep(0.3)
+        assert process_live(member) is not killed
+    finally:
+        kill_quietly(member)
+
+
+@pytest.mark.parametrize("timeout", [0.2, 1.5])
 def test_job_end_is_bounded_by_pipe_timeout_s_when_an_unproven_orphan_holds_the_pipes(
-    tmp_home: Path, workdir: Path, spool: Spool, tmp_path: Path
+    tmp_home: Path, workdir: Path, spool: Spool, tmp_path: Path, timeout: float
 ) -> None:
     """§29: the orphan called setsid, so the sweep cannot prove it is the job's and
     does not kill it; it still holds claude's stdout and stderr. Job end reads
     them for `runner.pipe_timeout_s` after the sweep and then ends the job anyway,
-    and the orphan is reported `killed: false`."""
-    timeout = 0.3
+    and the orphan is reported `killed: false`.
+
+    §30 (REVIEW-13 should-fix 3): the time from the sweep's report to job end is
+    bound to the configured value from both sides, for two values 1.3 s apart
+    with 1 s of slack, so no single hardcoded timeout passes both rows."""
     cfg = parse_config(
         {
             "roles": {"builder": {"cwd": str(workdir), "model": "opus"}},
@@ -1294,7 +1335,13 @@ def test_job_end_is_bounded_by_pipe_timeout_s_when_an_unproven_orphan_holds_the_
     runner = Runner(cfg, spool)
     pidfile = tmp_path / "orphan.pid"
     seen: list[tuple[str, list[dict[str, object]]]] = []
-    runner.on_orphans = lambda job, processes, isolation: seen.append((job.id, processes))
+    reported_at: list[float] = []
+
+    def on_orphans(job: Job, processes: list[dict[str, object]], isolation: str) -> None:
+        reported_at.append(time.monotonic())
+        seen.append((job.id, processes))
+
+    runner.on_orphans = on_orphans
 
     async def body() -> tuple[Job, float]:
         job = spool.create_job(
@@ -1303,17 +1350,18 @@ def test_job_end_is_bounded_by_pipe_timeout_s_when_an_unproven_orphan_holds_the_
             prompt=f"FAKE:orphan {pidfile} keep-stdio setsid",
             origin="cli",
         )
-        began = time.monotonic()
         finished = await runner.run(job)
-        return finished, time.monotonic() - began
+        return finished, time.monotonic()
 
     try:
-        job, elapsed = asyncio.run(asyncio.wait_for(body(), 30))
+        job, ended = asyncio.run(asyncio.wait_for(body(), 30))
         pid = int(pidfile.read_text())
         assert job.state == "done"
-        # claude's own start and exit, the drain before the sweep, and the timeout;
-        # far under the orphan's 300 s and the 10 s default.
-        assert elapsed < DRAIN_S + timeout + 5.0, elapsed
+        [swept] = reported_at
+        # The sweep reports, then job end reads the held pipes for the configured
+        # timeout and no longer: far under the orphan's 300 s and the 10 s default.
+        drained = ended - swept
+        assert timeout - 0.05 <= drained < timeout + 1.0, drained
         assert seen == [(job.id, [{"pid": pid, "cmdline": "sleep 300", "killed": False}])]
         assert process_live(pid), "an orphan the sweep could not prove was killed"
     finally:

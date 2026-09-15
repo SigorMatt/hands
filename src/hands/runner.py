@@ -33,10 +33,11 @@ each process proven the job's is sent SIGTERM and, after `ORPHAN_GRACE_S`,
 SIGKILL. Group mode's proof is §29's session proof (`_job_processes`): a live
 process descends from the job when its session id is the job's pid and it started
 before the last moment the job's pid was observed held by claude (`_last_seen`,
-refreshed on every poll of `_until_exit`). `HANDS_JOB` never proves anything; a
-process carrying it that the proof misses (it called setsid, or forked inside
-claude's last poll interval) is reported `killed: false` and left alive, and job
-end reads the pipes it may hold for at most `runner.pipe_timeout_s`.
+refreshed on every poll of `_until_exit`). `HANDS_JOB` never proves anything and
+is not needed (§30); what the proof misses and is still the job's (a fork inside
+claude's last poll interval, marked or not, or a marked process that called
+setsid) is reported `killed: false` and left alive, and job end reads the pipes
+it may hold for at most `runner.pipe_timeout_s`.
 
 A job is `done` only when the process ends cleanly with a final `result` event
 of subtype `success` that carries `num_turns`, and stderr never carried the
@@ -699,9 +700,10 @@ class Runner:
         Called once claude has exited. Nothing found, nothing reported and
         nothing signalled. Otherwise `on_orphans` is handed every process with its
         command line and `killed`, and then the scope is stopped, or in group mode
-        every process proven the job's is killed (`_kill_group`). A process that
-        carries the job's `HANDS_JOB` but is not proven is reported `killed:
-        false` and left alive.
+        every process proven the job's is killed (`_kill_group`), with or without
+        its `HANDS_JOB` mark (§30). What is still the job's but not proven (the
+        residual in claude's session, marked or not, or a marked process outside
+        it) is reported `killed: false` and left alive.
         """
         if job.pid is None:  # pragma: no cover - a spawned job always has one
             return []
@@ -1079,16 +1081,25 @@ def _job_processes(
     * was read before claude was seen holding the pid now (its start time equals
       `leader_start`, read after the scan: the leader is still alive or a zombie).
 
-    Nothing else proves anything. With `job_id`, a process that carries
-    `HANDS_JOB=<job_id>` and is not proven is listed with `proven` False: a
-    process that called setsid, one in a group whose id is the job's pid but whose
-    session is not, or one that forked inside claude's last poll interval (the
-    residual; its start is not before `last_seen`). A process that is neither is a
-    stranger and not listed. A start time that could not be read at spawn (None)
-    proves nothing; the mark is never read without `job_id`.
+    Nothing else proves anything, and the mark is not read for the proof: a
+    proven process is the job's with or without it (§30). With `job_id`, what is
+    left is listed with `proven` False when it is still the job's to report (§29,
+    §30): a process in claude's session that forked inside claude's last poll
+    interval (the residual; its start is not before `last_seen`), marked or not,
+    unless the pid is now held by a process that is not claude (a new session
+    leader took it, so its session is a stranger's) or claude was never observed
+    holding it; and a process that carries `HANDS_JOB=<job_id>` (one that called
+    setsid, or one in a group whose id is the job's pid but whose session is not).
+    A process that is neither is a stranger and not listed. A start time that
+    could not be read at spawn (None) proves nothing; nothing unproven is listed
+    without `job_id`.
     """
     stats = proc_stats()
-    leader_holds = leader_start is not None and start_time(pgid) == leader_start
+    holder = start_time(pgid)
+    leader_holds = leader_start is not None and holder == leader_start
+    # A live process holding the pid that is not claude took it after claude was
+    # reaped, when no process had it as a session id: every member is its own.
+    reused = holder is not None and not leader_holds
     found: list[tuple[int, int, bool]] = []
     for pid, sid, start in stats:
         in_session = sid == pgid
@@ -1097,7 +1108,11 @@ def _job_processes(
         )
         if proven:
             found.append((pid, start, True))
-        elif job_id is not None and environ_has(pid, JOB_ENV, job_id):
+        elif job_id is None:
+            continue
+        elif (in_session and last_seen is not None and not reused) or environ_has(
+            pid, JOB_ENV, job_id
+        ):
             found.append((pid, start, False))
     return found
 

@@ -211,9 +211,11 @@ resume of it, and the last kit apply that ran (a builder job of `origin: kit`
 that started). Every kickoff value a loaded playbook carried is kept in the
 spool's `pipeline.json`, so renaming the next kickoff does not freeze the count.
 Every driver job after that start counts, except a §6 resume of one. A driver
-job created before the running daemon started does not count either (§29): the
-start is the latest of the kickoff, the kit apply and the daemon's start. With
-none of them, every driver job in the spool counts.
+job created before the daemon start `pipeline.json` keeps does not count either
+(§29): the start is the latest of the kickoff, the kit apply and that daemon
+start. The first daemon start that finds none recorded is kept as
+`consults_since`, and a restart does not move it, so a restart mid-mission keeps
+the count (§30). With none of them, every driver job in the spool counts.
 
 The driver job's environment carries `HANDS_CONSULT_ROLE`, the role named on
 the prompt's first line; the guard in role mode allows a send to that role only.

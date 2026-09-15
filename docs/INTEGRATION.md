@@ -202,9 +202,13 @@ Notes that are easy to get wrong:
   not name the hook (a `PreToolUse` command hook for `Bash` that runs
   `.claude/hooks/bash_guard.py`), and when that hook's `--selftest` is not green
   run with the role's environment (`HANDS_ROLE=driver`). The hook self-tested
-  is the file the settings' command names (§29): the first word ending in
+  is the file the settings' command names (§29). The command must run it as
+  the guard (§30): exactly `python3` and a path ending in
   `.claude/hooks/bash_guard.py`, with `$CLAUDE_PROJECT_DIR` and a relative path
-  read against the driver directory; a named file that does not exist fails. A missing clone warns.
+  read against the driver directory, and nothing else: no further argument
+  (`--selftest`), no other interpreter, no `;`, `&`, `|`, redirection, `$`
+  other than `$CLAUDE_PROJECT_DIR`, glob, escape or newline. `"disableAllHooks"`
+  in that file fails the row. A named file that does not exist fails. A missing clone warns.
 - **The consult flow** (§27, docs/PLAYBOOK.md "Consult"). A rule `then =
   "consult"` fires on an event, say a builder `VERDICT: question`. handsd starts
   a driver-role job in the driver's cwd, `context: clear`, `origin: playbook`,
@@ -231,7 +235,9 @@ Notes that are easy to get wrong:
   (default 2), stops and starts no driver job. The count starts at the later
   of the last builder job whose prompt equals any `[series] kickoff` value the
   pipeline has loaded (kept in `pipeline.json`), the last kit apply that ran,
-  and the running daemon's start (§29).
+  and a daemon start (§29): the first daemon start that finds none recorded is
+  kept in `pipeline.json` as `consults_since`, and a later restart does not
+  move it, so a restart mid-mission keeps the count (§30).
   `hands pipeline` shows `consults <used> of max_consults <n>`.
 - **`[roles.<role>] env`** (§23, H-014) is a table of environment variables for
   that role's `claude -p` jobs, on top of handsd's own environment. Names are
@@ -681,10 +687,11 @@ session (§29): a process descends from the job when its session id is the
 job's pid and it started before the last moment claude was observed holding
 that pid; the runner observes that every 50 ms while claude runs. The
 `HANDS_JOB=<job>` mark each job carries is corroboration and never sufficient
-alone. A process that carries the mark but is not proven is listed with
-`killed: false` and left alive: one that called `setsid` (a process that also
-clears its environment is not listed at all), and one forked inside claude's
-last poll interval. That residual is not a bug to report: a fork in the job's
+alone, nor necessary: a proven process that cleared it is killed all the same
+(§30). A process that is still the job's but not proven is listed with
+`killed: false` and left alive: one forked inside claude's last poll interval,
+with or without the mark, and one that carries the mark but called `setsid` (a
+process that also clears its environment is not listed at all). That residual is not a bug to report: a fork in the job's
 last 50 ms before exit cannot be proven the job's, so it is left alive and
 reported `killed: false`; stop or kill it yourself. Job end then reads
 claude's pipes for at most `runner.pipe_timeout_s` (default 10 s), so such a

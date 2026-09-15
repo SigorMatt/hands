@@ -83,6 +83,12 @@ OK, WARN, SKIP, FAIL = "ok", "warn", "skip", "fail"
 PROBE_S = 10.0
 #: §28: the hook the driver directory's settings.json must run before every Bash call.
 GUARD_HOOK = ".claude/hooks/bash_guard.py"
+#: §30: the one interpreter a driver hook command may name before the guard's
+#: path; the command driver/settings.json ships is `python3 <guard>`.
+GUARD_INTERPRETER = "python3"
+#: §30: a hook command containing any of these (outside the two
+#: `$CLAUDE_PROJECT_DIR` spellings) is more than `python3 <guard>` to a shell.
+_HOOK_SHELL_CHARS = frozenset(";&|<>`()\\*?[]{}!~#$\n\r")
 #: Seconds for one real `claude -p` turn. A one-line answer, not a task.
 LIVE_S = 180.0
 #: The live turn's prompt: one turn, no tools, and it exercises §10's VERDICT
@@ -394,9 +400,9 @@ def _driver_check(config: Config) -> Check:
 
     §28: the row proves the wiring, and fails otherwise: `<cwd>/.claude/settings.json`
     names the hook (a `PreToolUse` entry whose matcher selects `Bash` and whose
-    command runs `.claude/hooks/bash_guard.py`), and that hook file self-tests
-    green (`--selftest`, exit 0) run with the role's own environment, so with
-    `HANDS_ROLE=driver`.
+    command is exactly `python3 <.claude/hooks/bash_guard.py>`, §30, with hooks
+    not disabled), and that hook file self-tests green (`--selftest`, exit 0) run
+    with the role's own environment, so with `HANDS_ROLE=driver`.
     """
     name = f"role {DRIVER_ROLE}"
     role = config.roles.get(DRIVER_ROLE)
@@ -476,25 +482,31 @@ def _driver_check(config: Config) -> Check:
 
 def _settings_name_the_guard(path: Path, cwd: Path) -> tuple[Path | None, str | None]:
     """The hook file `path` wires as a `PreToolUse` command hook for `Bash` (§28,
-    §29), and None; or None and why not, in a few words.
+    §29, §30), and None; or None and why not, in a few words.
 
-    The file is read from the command itself: `shlex` splits it, and the first word
-    that is `.claude/hooks/bash_guard.py` or ends in `/.claude/hooks/bash_guard.py` is
-    the file, with `$CLAUDE_PROJECT_DIR` (or `${CLAUDE_PROJECT_DIR}`) standing for
-    `cwd` and a relative path read against `cwd`, where Claude Code runs the hook.
-    A word with any other `$` is not a path doctor can resolve. With several such
-    hooks, the first is the one checked."""
+    §30: the command must run the file *as the guard*. `shlex` splits it into
+    exactly two words, `python3` (the interpreter driver/settings.json ships) and
+    a path that is `.claude/hooks/bash_guard.py` or ends in
+    `/.claude/hooks/bash_guard.py`, with `$CLAUDE_PROJECT_DIR` (or
+    `${CLAUDE_PROJECT_DIR}`) standing for `cwd` and a relative path read against
+    `cwd`, where Claude Code runs the hook. Any other `$`, a shell operator,
+    redirection, glob, escape or newline anywhere in the command, a further
+    argument (`--selftest`), or another interpreter does not run the guard, and
+    `"disableAllHooks"` set to anything but false runs no hook at all. With
+    several hooks that do run a guard file, the first is the one checked."""
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except FileNotFoundError:
         return None, "no such file"
     except (OSError, ValueError) as exc:
         return None, f"not readable JSON: {type(exc).__name__}"
+    if isinstance(data, dict) and data.get("disableAllHooks") not in (None, False):
+        return None, '"disableAllHooks" is set, so no hook runs'
     hooks = data.get("hooks") if isinstance(data, dict) else None
     entries = hooks.get("PreToolUse") if isinstance(hooks, dict) else None
     if not isinstance(entries, list):
         return None, "no hooks.PreToolUse"
-    unresolved: str | None = None
+    malformed: str | None = None
     for entry in entries:
         if not isinstance(entry, dict) or not _matches_bash(entry.get("matcher")):
             continue
@@ -505,22 +517,36 @@ def _settings_name_the_guard(path: Path, cwd: Path) -> tuple[Path | None, str | 
                 and isinstance(hook.get("command"), str)
             ):
                 continue
-            try:
-                words = shlex.split(hook["command"])
-            except ValueError:
-                continue
-            for word in words:
-                word = word.replace("${CLAUDE_PROJECT_DIR}", str(cwd))
-                word = word.replace("$CLAUDE_PROJECT_DIR", str(cwd))
-                if not (word == GUARD_HOOK or word.endswith("/" + GUARD_HOOK)):
-                    continue
-                if "$" in word:
-                    unresolved = unresolved or word
-                    continue
-                return cwd / word, None  # an absolute word replaces cwd
-    if unresolved is not None:
-        return None, f"the hook path {unresolved!r} names a variable doctor cannot resolve"
+            command: str = hook["command"]
+            named = _guard_command_path(command, cwd)
+            if named is not None:
+                return named, None
+            if GUARD_HOOK in command:
+                malformed = malformed or command
+    if malformed is not None:
+        return None, (
+            f"the hook command {malformed!r} does not run the guard: it must be exactly "
+            f"`{GUARD_INTERPRETER} <path to {GUARD_HOOK}>` (§30)"
+        )
     return None, f"no PreToolUse command hook for Bash runs {GUARD_HOOK}"
+
+
+def _guard_command_path(command: str, cwd: Path) -> Path | None:
+    """The guard file `command` runs as `python3 <guard>` and nothing else (§30), or None."""
+    plain = command.replace("${CLAUDE_PROJECT_DIR}", "").replace("$CLAUDE_PROJECT_DIR", "")
+    if any(char in _HOOK_SHELL_CHARS for char in plain):
+        return None
+    try:
+        words = shlex.split(command)
+    except ValueError:
+        return None
+    if len(words) != 2 or words[0] != GUARD_INTERPRETER:
+        return None
+    word = words[1].replace("${CLAUDE_PROJECT_DIR}", str(cwd))
+    word = word.replace("$CLAUDE_PROJECT_DIR", str(cwd))
+    if not (word == GUARD_HOOK or word.endswith("/" + GUARD_HOOK)):
+        return None
+    return cwd / word  # an absolute word replaces cwd
 
 
 def _matches_bash(matcher: Any) -> bool:

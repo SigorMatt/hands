@@ -754,6 +754,10 @@ class PipelineState:
     #: §28: every `[series] kickoff` value a loaded playbook has carried, in the
     #: order first seen; `max_consults` counts from a job whose prompt is any.
     kickoffs: list[str] = field(default_factory=list)
+    #: §29, §30: the daemon start `max_consults` also counts from, persisted so a
+    #: restart mid-mission keeps the count; set by the first daemon start that finds
+    #: none (`PlaybookEngine.daemon_start`) and never moved by a later one.
+    consults_since: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -765,6 +769,7 @@ class PipelineState:
             "last_rule_sha256": self.last_rule_sha256,
             "auto_runs_used": list(self.auto_runs_used),
             "kickoffs": list(self.kickoffs),
+            "consults_since": self.consults_since,
         }
 
     @classmethod
@@ -785,6 +790,7 @@ class PipelineState:
             last_rule_sha256=sha if isinstance(sha, str) else None,
             auto_runs_used=list(data.get("auto_runs_used") or []),
             kickoffs=[item for item in data.get("kickoffs") or [] if isinstance(item, str)],
+            consults_since=since if isinstance(since := data.get("consults_since"), str) else None,
         )
 
 
@@ -822,14 +828,27 @@ class PlaybookEngine:
         #: U8's ntfy seam (§11): called for a stop and for a `notify` rule.
         self.notify = notify
         self.state_path = spool.root / "pipeline.json"
+        #: True when `pipeline.json` exists and could not be read: `daemon_start`
+        #: then keeps its anchor in memory rather than overwrite the file.
+        self._state_unreadable = False
         self.state = self._read_state()
         self.playbook: Playbook | None = None
         self.load_error: str | None = None
         self._loaded = False
         self._tasks: set[asyncio.Task[None]] = set()
-        #: §29: when the daemon that owns this engine started (`Daemon.start` sets
-        #: it); `max_consults` also counts from it. None for an engine no daemon owns.
-        self.daemon_started: str | None = None
+
+    def daemon_start(self, started: str) -> None:
+        """§29, §30: the daemon that owns this engine started at `started`.
+
+        That start is `max_consults`' daemon-start anchor only when `pipeline.json`
+        persists none; a persisted anchor wins, so a restart mid-mission does not
+        reset the count (REVIEW-13 should-fix 5). The first start is persisted.
+        """
+        if self.state.consults_since is not None:
+            return
+        self.state.consults_since = started
+        if not self._state_unreadable:
+            self._save()
 
     # ------------------------------------------------------------- loading
 
@@ -1195,8 +1214,9 @@ class PlaybookEngine:
         one is not another) after the later of the last builder job whose prompt is
         *any* `[series] kickoff` value seen (`PipelineState.kickoffs`, plus the
         loaded file's) and the last kit apply that ran (a builder job of origin
-        `kit` that started), neither a resume. §29: nor before the daemon started
-        (`daemon_started`), whichever of the three is latest. With none of them, every
+        `kit` that started), neither a resume. §29, §30: nor before the persisted
+        daemon-start anchor (`PipelineState.consults_since`, the first daemon start
+        that found none), whichever of the three is latest. With none of them, every
         driver job in the spool counts: the safe direction is to stop sooner."""
         jobs = self.spool.list_jobs()
         kickoffs = set(self.state.kickoffs)
@@ -1210,7 +1230,7 @@ class PlaybookEngine:
                 record.origin == KIT_ORIGIN and record.started is not None
             ):
                 start = index + 1
-        since = self.daemon_started
+        since = self.state.consults_since
         return sum(
             1
             for record in jobs[start:]
@@ -1502,6 +1522,7 @@ class PlaybookEngine:
             # never a running one.
             log.error("playbook: %s is not readable (%s); the pipeline stays paused",
                       self.state_path, exc)
+            self._state_unreadable = True
             return PipelineState(
                 paused=True,
                 paused_by="stop",

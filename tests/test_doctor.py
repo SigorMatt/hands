@@ -1198,6 +1198,52 @@ def test_doctor_passes_when_the_settings_name_a_real_hook(
     assert "self-test green in role mode" in strip_paths(row["detail"])
 
 
+@pytest.mark.parametrize(
+    "command",
+    [
+        "python3 .claude/hooks/bash_guard.py --selftest",
+        "python3 .claude/hooks/bash_guard.py || true",
+        "echo .claude/hooks/bash_guard.py",
+        "python3 -c 'pass' .claude/hooks/bash_guard.py",
+        "node .claude/hooks/bash_guard.py",
+        "cd /elsewhere && python3 .claude/hooks/bash_guard.py",
+        "python3 .claude/hooks/bash_guard.py; true",
+        "python3 .claude/hooks/bash_guard.py > /dev/null",
+        "python3 .claude/hooks/bash_guard.py &",
+        "python3 $(echo .claude/hooks/bash_guard.py)",
+        "true | python3 .claude/hooks/bash_guard.py",
+        "HANDS_ROLE= python3 .claude/hooks/bash_guard.py",
+        ".claude/hooks/bash_guard.py",
+        "python3 .claude/hooks/bash_guard.py\ntrue",
+        None,  # the shipped command, with "disableAllHooks": true
+    ],
+    ids=[
+        "selftest-argument", "or-true", "echo", "python3-c", "node", "cd-and",
+        "semicolon", "redirect", "background", "substitution", "pipe", "assignment",
+        "no-interpreter", "newline", "disable-all-hooks",
+    ],
+)
+def test_doctor_fails_when_the_hook_command_does_not_run_the_guard_as_the_guard(
+    tmp_home: Path, tmp_path: Path, fake_mode: None, command: str | None
+) -> None:
+    """§30 (REVIEW-13 should-fix 4): the command, shlex-split, is exactly `python3`
+    and the guard path, with no further word and no shell operator, and hooks are
+    not disabled; otherwise the row fails even though the file self-tests green."""
+    d = driver_dir(tmp_path)
+    if command is None:
+        settings = json.loads(SETTINGS.read_text(encoding="utf-8"))
+        settings["disableAllHooks"] = True
+        text = json.dumps(settings)
+    else:
+        text = _settings_running(command)
+    (d / ".claude" / "settings.json").write_text(text, encoding="utf-8")
+    add_driver(write_config(tmp_home, tmp_path), d)
+    code, found = checks()
+    row = found["role driver"]
+    assert code == 1 and row["status"] == "fail", row
+    assert "does not name the hook" in strip_paths(row["detail"])
+
+
 def test_doctor_fails_when_the_hook_the_settings_name_does_not_exist(
     tmp_home: Path, tmp_path: Path, fake_mode: None
 ) -> None:

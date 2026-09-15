@@ -196,7 +196,8 @@ class Daemon:
             for role in self._roles
         ]
         self.started = now_iso()
-        self.playbook.daemon_started = self.started  # §29: max_consults counts from it
+        # §29, §30: max_consults counts from the first daemon start pipeline.json keeps
+        self.playbook.daemon_start(self.started)
         self._readmit_queued()
         self._beat = asyncio.create_task(self._heartbeat(), name="hands-heartbeat")
         # §6: a resume scheduled by a daemon that then died is owed by this one.

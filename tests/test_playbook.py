@@ -2575,7 +2575,7 @@ def test_max_consults_counts_from_the_daemon_start_when_no_kickoff_was_seen_sinc
     assert engine.consults_used(engine.playbook) == 4  # no daemon start: every one counts
 
     time.sleep(0.01)  # job timestamps are milliseconds
-    engine.daemon_started = now_iso()
+    engine.daemon_start(now_iso())
     assert engine.consults_used(engine.playbook) == 0
     assert engine.pipeline()["consults"] == {"used": 0, "max_consults": 2}
     _driver_job(spool, state="done", verdict="VERDICT: resolved b", about=about)
@@ -2603,10 +2603,55 @@ def test_end_to_end_a_restarted_daemon_counts_consults_from_its_start(
     time.sleep(0.01)
 
     async def body(daemon: Daemon) -> None:
-        assert daemon.playbook.daemon_started == daemon.started
+        assert daemon.playbook.state.consults_since == daemon.started
         assert (await ok("pipeline"))["consults"] == {"used": 0, "max_consults": 2}
 
     drive(body)
+
+
+def test_a_daemon_restart_mid_mission_keeps_the_consult_count(
+    tmp_home: Path, workdir: Path
+) -> None:
+    """§30 (REVIEW-13 should-fix 5, the reviewer's probe): the anchor is persisted
+    in `pipeline.json`. A kickoff and two consultations after the first daemon
+    start are 2 used; after a restart they are still 2, so with max 2 the next
+    consult is refused. The restart's own start is not a new anchor while one is
+    persisted."""
+    _consult_project(tmp_home, workdir)
+    spool = Spool(tmp_home / ".hands" / PROJECT)
+    started: list[str | None] = []
+
+    async def first(daemon: Daemon) -> None:
+        started.append(daemon.started)
+        time.sleep(0.01)  # job timestamps are milliseconds
+        about = finished(spool, verdict="VERDICT: question x")
+        kickoff = spool.create_job(
+            role="builder", context="clear", prompt=KICKOFF, origin="phone"
+        )
+        spool.transition(kickoff, "running")
+        spool.transition(kickoff, "done")
+        for _ in range(2):
+            _driver_job(spool, state="done", verdict="VERDICT: resolved a", about=about)
+        assert (await ok("pipeline"))["consults"] == {"used": 2, "max_consults": 2}
+
+    drive(first)
+    time.sleep(0.01)
+
+    async def second(daemon: Daemon) -> None:
+        assert daemon.started != started[0]
+        assert (await ok("pipeline"))["consults"] == {"used": 2, "max_consults": 2}
+        question = finished(spool, verdict="VERDICT: question y")
+        await daemon.playbook.on_job(question)
+        await daemon.playbook.drain()
+        assert [job for job in spool.list_jobs() if job.role == "driver"
+                and job.state not in ("done",)] == []
+        assert "[limits] max_consults is 2" in strip_paths(
+            daemon.playbook.state.stop_reason or ""
+        )
+
+    drive(second)
+    persisted = json.loads((spool.root / "pipeline.json").read_text(encoding="utf-8"))
+    assert persisted["consults_since"] == started[0]
 
 
 def test_end_to_end_an_escalation_over_a_paused_pipeline_is_suppressed_and_notified(
