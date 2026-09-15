@@ -42,9 +42,13 @@ Base of the mission: bb9aab5 (`plan: mission 12 kit (DESIGN v3.11)`).
       read literally kills nothing and three §24 orphan tests fail (one
       hangs on pipes). U1-of-m11's `HANDS_JOB` rule stays. Not retried: a
       design stop, the same rules reach the same memo
-- [ ] U5 This repository's playbook — kickoff BUILDER-13; kit of
-      meta/BUILDER-12-PROMPT.md with `--repo .` exits 0 (blocker 5 per H-022)
-- [ ] U6 Final report — meta/FINAL-REPORT-12.md
+- [x] U5 This repository's playbook 1250817 — kickoff BUILDER-13 (one line);
+      kickoff test moved to BUILDER-13, red first on a HEAD-equal playbook;
+      kit of meta/BUILDER-12-PROMPT.md with `--repo .` 6 of 6, exit 0
+      (blocker 5 per H-022); BUILDER-13 not yet written
+- [x] U6 Final report (the commit that carries this line) —
+      meta/FINAL-REPORT-12.md (drafted under meta/drafts/); mission ends
+      `blocked U4` (sweep half, H-025)
 
 Review items by unit. REVIEW-11 blocker 1 → U1; blocker 2 → U3; blockers 3, 4
 → U4; blocker 5 → U0 (H-022 resolution) and U5 (the acceptance form); SF1,
