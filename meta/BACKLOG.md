@@ -12,12 +12,49 @@ item names the mission it is scheduled for; unscheduled items say so.
 ## Mission 11 — DONE 2026-09-13 (review 11: blockers=5, the driver guard
    bypassable; driver role not enabled until mission 12).
 
-## Mission 12 (scheduled 2026-09-15)
+## Mission 12 — DONE 2026-09-15 (review 12: blockers=3; the guard's comment hole).
+
+## Mission 13 (scheduled 2026-09-15) — closer: review 12, the sweep (H-025 b), two projects on one laptop (moved here from 13's architect item 7)
 
 - Review 11 blockers 1–5 and should-fix 1–9; the guard rewritten on shlex
   tokens; consult stops in the engine; H-022 resolved. Spec: DESIGN v3.11
   §28. After it: enable `[roles.driver]`, refresh the driver kit, first
   real consultation, then M5.
+
+## Mission 14 — the architect role (decided 2026-09-15; ROADMAP M4c)
+
+1. `[roles.architect]`: cwd `~/hands-architect/<project>/` with a fetch-only
+   clone; CLAUDE.md = `docs/ARCHITECT-INSTRUCTION.md` (role variant: reads
+   the handbook from the clone; outputs are kits under `kits/`); guard role
+   mode `HANDS_ROLE=architect`: read-only git, `hands kit check`, `hands
+   kit file`, `hands show|jobs|inbox|pipeline|status`; writes only under
+   `kits/`; no send, no approve, no push; `permission_flags` empty.
+2. `hands kit file <zip>`: files a held apply job exactly as the phone's
+   `kit` does, from a local path under the architect's `kits/`.
+3. `[series] architect = "phone" | "role"` and `[series] autonomous = true`:
+   in role mode with autonomous set, kit applies from the architect role
+   are approved by the engine (`decided_by: playbook`) and the kickoff is
+   sent after `kit applied`; the human's approval of the playbook is the
+   standing approval.
+4. Consult on review outcomes: `aux.done` rules with `then = "consult"`,
+   `role = "architect"`; the architect's verdict vocabulary and follow-up
+   rules; `[limits] max_architect_consults` per series.
+5. Escalation conditions in `[series]`: `gate_failures = 2`,
+   `escalate_on = ["blocker-unanswered", "milestone-missing",
+   "budget-exhausted"]`; each stops with a reason naming the condition and
+   the architect's last session id.
+6. `hands doctor` reports the architect role like the driver role.
+
+## Mission 15 — talking to the architect (decided 2026-09-15; ROADMAP M4c)
+
+1. `reply <secret> <text>` on `cmd_topic`: delivered as `hands send --role
+   architect --context keep` to the architect's last session; its reply's
+   text is published on `ntfy_topic` (title `architect`); one job per turn.
+2. `docs/INTEGRATION.md`: self-hosting ntfy in a container on the laptop,
+   reachable through the Tailscale tunnel; both topics configured with
+   `ntfy_url`; access control on the server so topics need credentials.
+3. The escalation notification carries the architect's last session id and
+   the one-line `claude --resume` for the Code tab route.
 
 ## Unscheduled
 

@@ -1,13 +1,13 @@
-# hands — DESIGN v3.11
+# hands — DESIGN v3.12
 
 Machinery that replaces the human relay between the planning brain and the two
 Claude Code roles (builder, aux) on the Ubuntu laptop, and that keeps a series
 moving without a human while everything goes by plan. Working name: `hands`.
 The method it serves is described in WORKING-MODEL.md (agile-skills) and
 OPERATING-MODEL.md (spanweave); hands changes the topology, not the method.
-v3.11 (2026-09-15) folds in the mission 11 review, which found the driver
-guard's role mode bypassable; changes are in §28; earlier changes in
-§27–§17.
+v3.12 (2026-09-15) folds in the mission 12 review (the guard's comment
+hole, the IDNA check, the sweep after the reap) and the two-project layout;
+changes are in §29; earlier changes in §28–§17.
 
 Status: proposal, 2026-09-10. Items marked DECIDED were settled in discussion.
 
@@ -1141,3 +1141,68 @@ Bookkeeping (blocker 5, should-fix 4, 5):
   finding's own section, never to a separate one.
 - The `docs/INTEGRATION.md` `done` statement is pinned against each
   `failure_reason` value, not only against the text.
+
+---
+
+## 29. Changes from v3.11 (mission 12 review; two projects on one laptop)
+
+The guard (review 12 blocker 1; H-024):
+- A `#` outside quotes anywhere in the command is refused, in both modes.
+  A driver has no use for comments, and a comment is where an unbalanced
+  quote can hide a second command from a tokenizer. Fail closed: the
+  refusal names the position.
+- H-024's reading is the text: an expansion character counts only where
+  bash would still expand it; never inside single quotes or after a
+  backslash; inside double quotes only `$`, a backtick, `\` and `!`;
+  brace words only with a comma or `..`; a non-leading `~` only after `=`
+  or `:`. Every review 11 and review 12 probe stays blocked.
+- Role mode pins `git -C` to the role's clone path (from
+  `HANDS_CLONE` in the environment) (review 12 should-fix 2).
+
+The sweep after the reap (review 11 blocker 3, review 12 blocker 3; H-025
+option b; H-023): a live process descends from the job when its session id
+is the job's pid and its start time precedes the last moment the job's pid
+was observed alive, or when it is a member of the job's cgroup scope; the
+`HANDS_JOB` mark is corroboration and never sufficient alone. The residual
+is a fork inside the job's last poll interval, documented in
+`docs/INTEGRATION.md`. Job end reads the pipes with a bounded timeout
+(`runner.pipe_timeout_s`, default 10) so an unkilled orphan cannot stall it;
+what remains after the sweep is reported as `monitor.orphan_processes` with
+`killed: false`.
+
+Kit transport (review 12 blocker 2, should-fix 1, 6, 7): "IDNA-valid" means
+`idna.encode(host)` succeeds (the `idna` package is a dependency of httpx and
+becomes an explicit one); the kit name is shell-quoted in the apply prompt
+like the message; `kit check` judges every file path a prompt names,
+including bare relative names and names inside parentheses; the
+apply-verdict exception is stated in the code's terms: exactly one
+`builder.done` rule may match the literal `VERDICT: kit applied <sha>` and
+nothing in the vocabulary, and a test enumerates it.
+
+Consult (should-fix 3, 4, 5): the engine's consult stops apply whether or
+not the pipeline is paused (a stop over a paused pipeline is
+`pipeline.stop_suppressed` with the consult reason, and notifies); doctor
+checks the hook file that the driver directory's `.claude/settings.json`
+actually names; `max_consults` also counts from the daemon start when no
+kickoff or apply has been seen since.
+
+Bookkeeping (should-fix 8, 9): the `done` statement's order and precedence
+are pinned by a table-driven test; `hands who` excludes a job's transcript
+for `who.grace_s` (default 60) after the job ends.
+
+Two projects on one laptop:
+- The spool is per project: `~/.hands/<project>/` holds `jobs/`, `roles/`,
+  the inbox and nonces; `handsd` refuses to start on the old flat layout
+  after offering the migration (`hands migrate-spool`, which moves the
+  flat contents to `~/.hands/hands/` and records the move in the inbox).
+- Templated user units `handsd@<project>.service` and
+  `handswho@<project>.service`, each reading `~/.config/hands/<project>.env`;
+  the un-templated units are retired.
+- `hands who` reads every project's spool and shows each daemon as a root.
+- `docs/INTEGRATION.md` describes two daemons, and states the one shared
+  resource, the subscription, and how each playbook's `auto_runs` meters it.
+
+Roadmap renumbering: mission 13 is this closer (review 12, the sweep, the
+two-project layout); the architect role is mission 14; `reply` and the
+self-hosted ntfy are mission 15. The driver role is enabled only after a
+review finds no guard hole.

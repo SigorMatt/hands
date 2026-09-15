@@ -33,6 +33,36 @@ then an install (`uv tool install --force`) and a driver-kit refresh.
   `consult`. Gate: one mission of hands run end to end with no Code tab
   opened, and one builder question resolved by the driver role and graded
   by the cold review.
+- **M4c The architect role** — missions 14 and 15 (decided 2026-09-15;
+  renumbered when mission 13 became review 12's closer).
+  A fourth headless role, `architect`, consulted by the playbook on each
+  review outcome: reads the branch, writes the next kit from this roadmap,
+  files it with `hands kit file` (the local twin of the phone's `kit`), and
+  replies `VERDICT: next kit <name>` | `VERDICT: series complete` |
+  `VERDICT: escalate <reason>`. Its guard: read-only git, `hands kit
+  check`, writes only under its own `kits/`, never a push, never a send.
+  `[series] architect = "phone" | "role"` chosen per project at the switch
+  point, which is the fully reviewed work plan: DESIGN, this roadmap with
+  checkable gates, the first plan and the sequence of the rest, the
+  playbook (consult on review outcomes, auto-approved kit applies, the
+  escalation conditions), and the architect directory kit. Escalation is
+  mechanical and approved with the plan: a roadmap gate failing twice, a
+  review blocker the plan does not answer, a milestone the plan lacks, or
+  the series' consult budget exhausted. Switching back to phone mode is
+  "pause, continue from the branch"; one architect at a time.
+  Mission 13 (closer): review 12, the sweep after the reap, the
+  per-project spool and templated units so two projects can run on one
+  laptop (M5 starts on that layout). Mission 14: the role, its guard,
+  `hands kit file`, the playbook mode and auto-approval, escalation
+  conditions. Mission 15: `reply <secret> <text>`
+  on the command topic delivered as a `keep` to the architect's last
+  session with its answer on the events topic, and self-hosted ntfy behind
+  the Tailscale tunnel (free text about a project no longer crosses a
+  public broker). Gate: one hands mission planned on the phone, handed to
+  the role at the switch point, and run to a reviewed-clean stop with no
+  human action; one escalation answered over `reply`.
+  Requires: a review that finds no guard hole (mission 13's), the driver
+  role enabled after it, and one real consultation graded by a review.
 - **M5 spanweave integration** — INSTRUCTION PASTE DUE: the spanweave
   Project gets its own copy, parameters filled in.
   spanweave integration — hands drives spanweave's *development*
@@ -60,8 +90,9 @@ then an install (`uv tool install --force`) and a driver-kit refresh.
      series close. Branch protection on `main` requires the checks. The
      presence of the merge rule in an approved playbook is the human's
      standing approval of every merge it makes.
-  5. First series is a shakeout: expect doc-versus-reality findings, keep
-     it short, and treat the first auto-merge as the milestone.
+  5. First series is a shakeout in phone mode: expect doc-versus-reality
+     findings, keep it short, and treat the first auto-merge as the
+     milestone. The second series runs in role mode (M4c).
   Gate: one series of at least two runs merged with no human action
   between kickoff and the series-close stop.
 - **M6 agile-skills integration** — INSTRUCTION PASTE DUE: the agile-skills
@@ -73,5 +104,6 @@ then an install (`uv tool install --force`) and a driver-kit refresh.
   `meta/` paths and the mission form (`meta/BUILDER-N-PROMPT.md`, checkpoint-driven kickoff, no
   `resume_line`), which is the form hands has been exercised on. PR per
   mission, auto-merge on a clean review.
-- **M7 Optional remote face** (DESIGN §9) — only if a chat brain as a
-  second driver is wanted after M5/M6.
+- **M7 (removed 2026-09-15):** the optional remote MCP face (DESIGN §9) is
+  dropped from the roadmap; the phone loop and the architect role cover
+  what it was for. DESIGN §9 stays as history.
