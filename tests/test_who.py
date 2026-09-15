@@ -24,6 +24,7 @@ from typing import Any
 import pytest
 
 from conftest import strip_paths
+from hands import config as hands_config
 from hands import who
 from hands.cli import main as hands_main
 from hands.spool import Spool
@@ -461,6 +462,192 @@ def test_job_sessions_are_every_session_id_the_spool_records(tmp_path: Path) -> 
     missing = tmp_path / "nowhere" / "jobs"
     assert who.JobSessions(missing)() == frozenset()
     assert not missing.exists()
+
+
+# ------------------------------------------ §29 (REVIEW-12 should-fix 9): who grace
+
+#: A job's run: it started at T0 and ended five minutes later.
+T0 = 1_789_000_000.0
+ENDED = T0 + 300
+
+
+def _iso(epoch: float) -> str:
+    """The spool's `now_iso` shape for a given moment."""
+    return time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(epoch)) + ".000Z"
+
+
+def _stamped_transcript(
+    projects: Path, cwd: str, sid: str, prompt: str, *, first: float, mtime: float
+) -> Path:
+    """A transcript whose lines carry `timestamp`, the first one at `first`."""
+    folder = projects / who.dashed(cwd)
+    folder.mkdir(parents=True, exist_ok=True)
+    path = folder / f"{sid}.jsonl"
+    path.write_text(
+        _line({"type": "custom-title", "customTitle": "t", "sessionId": sid})  # no timestamp
+        + _line({"type": "queue-operation", "operation": "enqueue", "sessionId": sid,
+                 "timestamp": _iso(first), "content": prompt})  # fmt: skip
+        + _line({"type": "user", "sessionId": sid, "timestamp": _iso(first + 1),
+                 "message": {"content": prompt}})  # fmt: skip
+        + _line({"type": "assistant", "timestamp": _iso(first + 2),
+                 "message": {"content": [{"type": "text", "text": "ok"}]}})  # fmt: skip
+    )
+    os.utime(path, (mtime, mtime))
+    return path
+
+
+def _ended_job(spool: Spool, *, role: str = "builder", state: str = "failed") -> None:
+    """A builder job that ran from T0 to ENDED and never got a `session_id`."""
+    job = spool.create_job(role=role, context="clear", prompt="Execute WORKPLAN.md run 2",
+                           origin="cli")  # fmt: skip
+    spool.transition(job, "running", pid=100, started=_iso(T0))
+    spool.transition(job, state, ended=_iso(ENDED))
+
+
+IDLE_DAEMON = {
+    "roles": {"builder": {"cwd": REPO, "running": None, "queued": []}},
+    "jobs": [], "pipeline": {}, "inbox": [],
+}  # fmt: skip
+
+
+def _just_ended(tmp_path: Path, *, now: float, daemon: Any, grace_s: float | None = None) -> str:
+    """The reviewer's case: the job has left `running` (the daemon lists no running
+    job, or is down), its record has no `session_id`, no sessions file names it, and
+    its transcript is the newest in the directory of the human session (pid 200,
+    no sessions file), whose own transcript began two hours before the job."""
+    projects, _sessions = _claude_dir(tmp_path)
+    _stamped_transcript(projects, REPO, HUMAN_SID, "the human asked this",
+                        first=T0 - 7200, mtime=T0 + 250)  # fmt: skip
+    _stamped_transcript(projects, REPO, JOB_SID, "JOB-PROMPT-TEXT from the builder",
+                        first=T0 + 2, mtime=ENDED - 1)  # fmt: skip
+    spool = Spool(tmp_path / "hands")
+    _ended_job(spool)
+    table = {
+        1: _proc(0, ["init"], "/", 9e6, "init"),
+        200: _proc(1, ["claude"], REPO, 7200 + 600, "claude"),
+    }
+    clock = lambda: now  # noqa: E731
+    reader = who.Transcripts(projects, sessions=_sessions, clock=clock)
+    grace = {} if grace_s is None else {"grace_s": grace_s}
+    jobs = who.JobSessions(spool.jobs_dir, role_cwds={"builder": REPO}, projects=projects,
+                           clock=clock, **grace)  # fmt: skip
+    src = replace(
+        replace_sources(sources(daemon=daemon, table=lambda: table), reader, jobs), clock=clock
+    )
+    text, _items = who.build_summary(src)
+    return text
+
+
+@pytest.mark.parametrize("daemon", [lambda: IDLE_DAEMON, lambda: None], ids=["idle", "down"])
+@pytest.mark.parametrize("after", [0.0, 1.0, 59.0, 60.0], ids=["0s", "1s", "59s", "60s"])
+def test_a_just_ended_jobs_transcript_is_not_shown_by_directory_within_the_grace(
+    tmp_path: Path, utc: None, daemon: Any, after: float
+) -> None:
+    """§29: for `who.grace_s` (default 60) after the job ends, its transcript is
+    excluded from the directory fallback although it has left `running` and its
+    record never got a session id; the human's own transcript is shown instead."""
+    text = _just_ended(tmp_path, now=ENDED + after, daemon=daemon)
+    block = _human_block(text)
+    assert "JOB-PROMPT-TEXT" not in strip_paths(text)
+    assert block.splitlines()[0].endswith("· transcript: by directory")
+    assert "    last: the human asked this" in strip_paths(block)
+
+
+@pytest.mark.parametrize("daemon", [lambda: IDLE_DAEMON, lambda: None], ids=["idle", "down"])
+@pytest.mark.parametrize("after", [60.001, 61.0, 3600.0], ids=["60.001s", "61s", "1h"])
+def test_after_the_grace_the_ended_jobs_transcript_is_no_longer_excluded(
+    tmp_path: Path, utc: None, daemon: Any, after: float
+) -> None:
+    """The other side of the boundary: past `grace_s` the grace excludes nothing,
+    so the newest transcript of the directory is read again (§29 "for who.grace_s
+    after the job ends")."""
+    text = _just_ended(tmp_path, now=ENDED + after, daemon=daemon)
+    block = _human_block(text)
+    assert "    last: JOB-PROMPT-TEXT from the builder" in strip_paths(block)
+
+
+@pytest.mark.parametrize(
+    ("grace_s", "after", "excluded"),
+    [(10.0, 10.0, True), (10.0, 11.0, False), (0.0, 0.0, True), (0.0, 1.0, False),
+     (600.0, 599.0, True), (600.0, 601.0, False)],
+)  # fmt: skip
+def test_the_grace_is_the_configured_number_of_seconds(
+    tmp_path: Path, utc: None, grace_s: float, after: float, excluded: bool
+) -> None:
+    text = _just_ended(tmp_path, now=ENDED + after, daemon=lambda: None, grace_s=grace_s)
+    assert ("JOB-PROMPT-TEXT" in strip_paths(_human_block(text))) is (not excluded)
+
+
+def test_the_grace_defaults_to_60_seconds() -> None:
+    assert who.JobSessions(Path("/nonexistent/jobs")).grace_s == 60
+    assert hands_config.DEFAULT_WHO_GRACE_S == 60
+
+
+def test_the_grace_excludes_only_transcripts_begun_during_the_jobs_run(tmp_path: Path) -> None:
+    """The mechanism: a record without `session_id`, ended within the grace, excludes
+    each transcript of its role's cwd folder whose first `timestamp` lies within the
+    record's [`started`, `ended`]. One begun before or after the run, one with no
+    timestamp, one in another folder, and a job of an unconfigured role exclude
+    nothing; a record that holds a session id excludes that id as before."""
+    projects = tmp_path / "projects"
+    other_cwd = "/home/u/git/other"
+    begun = {
+        "a0000000-0000-4000-8000-00000000000a": T0,  # the first moment of the run
+        "b0000000-0000-4000-8000-00000000000b": ENDED,  # the last
+        "c0000000-0000-4000-8000-00000000000c": T0 + 100,
+        "d0000000-0000-4000-8000-00000000000d": T0 - 1,  # before
+        "e0000000-0000-4000-8000-00000000000e": ENDED + 1,  # after
+    }
+    for sid, first in begun.items():
+        _stamped_transcript(projects, REPO, sid, "p", first=first, mtime=ENDED)
+    _transcript(projects, REPO, "f0000000-0000-4000-8000-00000000000f", "no stamp", ENDED)
+    _stamped_transcript(projects, other_cwd, OTHER_SID, "p", first=T0 + 5, mtime=ENDED)
+    spool = Spool(tmp_path / "hands")
+    _ended_job(spool)
+    _ended_job(spool, role="aux")  # aux is not in role_cwds below
+    spool.create_job(role="builder", context="clear", prompt="a", origin="cli",
+                     session_id=JOB_SID)  # fmt: skip
+    jobs = who.JobSessions(
+        spool.jobs_dir, role_cwds={"builder": REPO}, projects=projects, clock=lambda: ENDED + 30
+    )
+    assert jobs() == frozenset({
+        JOB_SID,
+        "a0000000-0000-4000-8000-00000000000a",
+        "b0000000-0000-4000-8000-00000000000b",
+        "c0000000-0000-4000-8000-00000000000c",
+    })  # fmt: skip
+
+
+@pytest.mark.parametrize(
+    "record",
+    [{"started": None}, {"ended": None}, {"started": "not a time"}, {"ended": 5},
+     {"role": ["builder"]}, {"role": "nobody"}],
+)  # fmt: skip
+def test_a_record_the_grace_cannot_place_excludes_nothing(
+    tmp_path: Path, record: dict[str, Any]
+) -> None:
+    projects = tmp_path / "projects"
+    _stamped_transcript(projects, REPO, OTHER_SID, "p", first=T0 + 5, mtime=ENDED)
+    jobs_dir = tmp_path / "jobs"
+    jobs_dir.mkdir()
+    body = {"id": "j", "role": "builder", "state": "failed", "pid": 100,
+            "started": _iso(T0), "ended": _iso(ENDED), **record}  # fmt: skip
+    (jobs_dir / "j.json").write_text(json.dumps(body))
+    jobs = who.JobSessions(
+        jobs_dir, role_cwds={"builder": REPO}, projects=projects, clock=lambda: ENDED + 1
+    )
+    assert jobs() == frozenset()
+
+
+def test_hands_who_takes_the_grace_and_the_role_cwds_from_the_config(
+    tmp_home: Path, tmp_path: Path
+) -> None:
+    write_project(tmp_home, config_body(tmp_home, tmp_path, extra="[who]\ngrace_s = 5\n"))
+    config = hands_config.load_config(PROJECT)
+    jobs = who.sources_for(config, tmp_home / "sock").job_sessions
+    assert isinstance(jobs, who.JobSessions)
+    assert jobs.grace_s == 5
+    assert jobs.role_cwds == {"builder": str(tmp_path), "aux": str(tmp_path)}
 
 
 # ------------------------------------------------------------- the picture (§24)

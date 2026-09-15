@@ -16,8 +16,9 @@ One short picture joined from three sources:
                     is never opened). With no usable sessions file the line says
                     `transcript: by directory` and the newest transcript of the
                     cwd's `~/.claude/projects/` folder is used, except one whose
-                    session id a hands job record holds (`JobSessions`) or the
-                    sessions file of a hands job's pid names (§28)
+                    session id a hands job record holds (`JobSessions`), the
+                    sessions file of a hands job's pid names (§28), or that began
+                    during a job that ended within `[who] grace_s` (§29)
 
 §24's rules: roles are labelled `role <r>`; your own interactive session in a
 role directory is `(your session)`; a session under `~/hands-driver/<project>/`
@@ -53,11 +54,12 @@ import time
 from collections import deque
 from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass, replace
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, TextIO
 
 from hands import notify as notify_mod
-from hands.config import ConfigError, load_config, resolve_project
+from hands.config import DEFAULT_WHO_GRACE_S, ConfigError, load_config, resolve_project
 from hands.phone import BACKOFF_S, SEEN_IDS
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -311,16 +313,72 @@ def session_id_for(sessions: Path, pid: int) -> str | None:
     return sid
 
 
+#: How many leading lines of a transcript are read for its first `timestamp`.
+FIRST_TIMESTAMP_LINES = 20
+
+
+def _epoch(value: Any) -> float | None:
+    """An ISO-8601 time (the spool's `…Z`, a transcript's `timestamp`) as epoch
+    seconds; a time without a zone is UTC. Anything else: None."""
+    if not isinstance(value, str):
+        return None
+    try:
+        when = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=UTC)
+    return when.timestamp()
+
+
+def first_timestamp(path: Path, lines: int = FIRST_TIMESTAMP_LINES) -> float | None:
+    """The first `timestamp` among a transcript's first `lines` lines, as epoch
+    seconds; None when none of them has one, or the file cannot be read."""
+    try:
+        with path.open("rb") as fh:
+            for _n, raw in zip(range(lines), fh, strict=False):
+                try:
+                    entry = json.loads(raw)
+                except ValueError:
+                    continue
+                when = _epoch(entry.get("timestamp")) if isinstance(entry, dict) else None
+                if when is not None:
+                    return when
+    except OSError:
+        return None
+    return None
+
+
 class JobSessions:
-    """Every session id a hands job record holds: `jobs/<id>.json` `session_id`.
+    """The session ids `hands who`'s directory fallback never attributes (§27, §29).
+
+    Every session id a hands job record holds: `jobs/<id>.json` `session_id`.
+    And, for `grace_s` seconds after a job without one ended (§29, REVIEW-12
+    should-fix 9), the basename of every transcript in its role's cwd folder
+    whose first `timestamp` lies within the record's [`started`, `ended`]: the
+    transcripts begun while that job ran. A record with no `started` or `ended`,
+    a role missing from `role_cwds`, or a transcript with no timestamp in its
+    first lines, excludes nothing by the grace.
 
     Read-only (the spool's CLI side only reads, §6); the directory is never
     created. A record that has a session id keeps it, so it is read once; one
     without is read again on the next call. Unreadable records are skipped.
     """
 
-    def __init__(self, jobs_dir: Path) -> None:
+    def __init__(
+        self,
+        jobs_dir: Path,
+        *,
+        role_cwds: dict[str, str] | None = None,
+        projects: Path | None = None,
+        grace_s: float = DEFAULT_WHO_GRACE_S,
+        clock: Callable[[], float] = time.time,
+    ) -> None:
         self.jobs_dir = jobs_dir
+        self.role_cwds = dict(role_cwds or {})
+        self.projects = projects
+        self.grace_s = grace_s
+        self.clock = clock
         self._known: dict[str, str] = {}
 
     def __call__(self) -> frozenset[str]:
@@ -328,6 +386,8 @@ class JobSessions:
             names = [p for p in self.jobs_dir.glob("*.json") if not p.name.startswith(".")]
         except OSError:
             names = []
+        now = self.clock()
+        begun: set[str] = set()
         for path in names:
             if path.name in self._known:
                 continue
@@ -335,10 +395,33 @@ class JobSessions:
                 data = json.loads(path.read_text(encoding="utf-8"))
             except (OSError, ValueError):
                 continue
-            sid = data.get("session_id") if isinstance(data, dict) else None
+            if not isinstance(data, dict):
+                continue
+            sid = data.get("session_id")
             if isinstance(sid, str) and sid:
                 self._known[path.name] = sid
-        return frozenset(self._known.values())
+            else:
+                begun |= self._begun_during(data, now)
+        return frozenset(self._known.values()) | begun
+
+    def _begun_during(self, record: dict[str, Any], now: float) -> set[str]:
+        """§29: the transcripts begun during a job that ended within the grace."""
+        role = record.get("role")
+        cwd = self.role_cwds.get(role) if isinstance(role, str) else None
+        started, ended = _epoch(record.get("started")), _epoch(record.get("ended"))
+        if cwd is None or started is None or ended is None or now - ended > self.grace_s:
+            return set()
+        folder = (self.projects or Path.home() / ".claude" / "projects") / dashed(cwd)
+        try:
+            files = [p for p in folder.glob("*.jsonl") if p.is_file()]
+        except OSError:
+            return set()
+        out = set()
+        for path in files:
+            first = first_timestamp(path)
+            if first is not None and started <= first <= ended:
+                out.add(path.stem)
+        return out
 
 
 class Transcripts:
@@ -662,7 +745,11 @@ def sources_for(config: Config, socket_path: Path) -> Sources:
         transcripts=transcripts,
         clock=time.time,
         home=Path.home(),
-        job_sessions=JobSessions(config.path.parent / "jobs"),
+        job_sessions=JobSessions(
+            config.path.parent / "jobs",
+            role_cwds={name: str(role.cwd) for name, role in config.roles.items()},
+            grace_s=config.who.grace_s,
+        ),
         session_of=transcripts.session_id,  # the same sessions directory
     )
 

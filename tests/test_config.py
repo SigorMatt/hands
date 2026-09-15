@@ -153,6 +153,7 @@ def test_every_optional_key_has_a_default(write_config, tmp_home: Path) -> None:
     assert cfg.runner.claude == "claude"
     assert cfg.runner.cancel_grace_s == 20
     assert cfg.runner.pipe_timeout_s == 10  # §29
+    assert cfg.who.grace_s == 60  # §29
 
 
 def test_the_kit_keys_of_files_load(write_config, tmp_home: Path) -> None:
@@ -656,6 +657,10 @@ def test_unknown_key_in_a_role_is_refused(write_config) -> None:
         "[roles.builder]\ncwd = '~/g'\n[files]\nkit_max_mb = true\n",
         "[roles.builder]\ncwd = '~/g'\n[playbook]\npath = '/abs/PLAYBOOK.toml'\n",
         "[roles.builder]\ncwd = '~/g'\n[runner]\ncancel_grace_s = -3\n",
+        "[roles.builder]\ncwd = '~/g'\n[who]\ngrace_s = -1\n",
+        "[roles.builder]\ncwd = '~/g'\n[who]\ngrace_s = '60'\n",
+        "[roles.builder]\ncwd = '~/g'\n[who]\ngrace_s = true\n",
+        "[roles.builder]\ncwd = '~/g'\nwho = 60\n",
         "roles = 1\n",
     ],
 )
@@ -750,6 +755,19 @@ pipe_timeout_s = 2.5
     assert cfg.runner.claude == "/usr/local/bin/claude"
     assert cfg.runner.cancel_grace_s == 5
     assert cfg.runner.pipe_timeout_s == 2.5  # §29
+
+
+@pytest.mark.parametrize(("value", "expected"), [("5", 5.0), ("0", 0.0), ("90.5", 90.5)])
+def test_who_grace_is_configurable(write_config, value: str, expected: float) -> None:
+    """§29: `[who] grace_s`, how long `hands who` excludes an ended job's transcript."""
+    write_config(f"[roles.builder]\ncwd = '~/g'\n[who]\ngrace_s = {value}\n")
+    assert load_config("demo").who.grace_s == expected
+
+
+def test_an_unknown_key_in_who_is_refused(write_config) -> None:
+    write_config("[roles.builder]\ncwd = '~/g'\n[who]\ngrace = 5\n")
+    with pytest.raises(ConfigError, match=r"\[who\]"):
+        load_config("demo")
 
 
 def test_unknown_role_lookup_raises(write_config) -> None:

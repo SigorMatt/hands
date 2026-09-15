@@ -111,6 +111,11 @@ cwd` is optional.
     pipe_timeout_s = 10                  # default: job end reads claude's pipes this
                                          # long after the sweep (§29)
 
+    [who]                                # read by `hands who` and handswho only
+    grace_s = 60                         # default: seconds after a job ends that its
+                                         # transcript is still never shown by
+                                         # directory (§29); a number >= 0
+
 Notes that are easy to get wrong:
 
 - `files.allowed_roots` defaults to exactly the role working directories.
@@ -481,7 +486,16 @@ Not proven, and not built:
   the line says `transcript: by directory`, and a transcript whose session id a
   hands job record holds, or a running hands job's own sessions file names
   (§28), is never shown under it. With handsd down, no running job's pid is
-  known, so only the job records exclude.
+  known, so only the job records exclude. For `[who] grace_s` (default 60)
+  after a job ends whose record never got a session id, a transcript of its
+  role's directory whose first `timestamp` falls between the record's `started`
+  and `ended` is excluded too (§29): that is how the ended job's transcript is
+  recognised, because H-020 found sessions files only for live processes, so an
+  ended job's pid may have none.
+  So a transcript with no `timestamp` in its first 20 lines is not excluded by
+  the grace, and a session of yours that has no sessions file and began in that
+  directory while the job ran is hidden from its own line until the grace
+  passes. After the grace such a transcript can be shown by directory again.
 - `hands kit check` checks the builder's verdict rules only; review verdicts
   have no literal in the brief to match (FINDINGS H-021).
 
@@ -497,7 +511,8 @@ session is waiting for you or working (from its transcript under
 `sessionId`; only `pid` and `sessionId` are read, and the `.key` file beside it
 never is). A session with no sessions file says `transcript: by directory`: its
 state is then read from the newest transcript of its directory that is not a
-hands job's. Your own session in a role directory is labelled
+hands job's, nor one begun during a job that ended less than `[who] grace_s`
+seconds ago (default 60, §29). Your own session in a role directory is labelled
 `(your session)`; a session under `~/hands-driver/<project>/` is
 `driver:<project>`. With handsd down it still prints the rest, says the daemon
 is not answering, and exits 0.

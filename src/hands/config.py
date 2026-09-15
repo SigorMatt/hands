@@ -36,6 +36,7 @@ __all__ = [
     "RoleConfig",
     "RunnerConfig",
     "ServerConfig",
+    "WhoConfig",
     "config_path",
     "driver_clone",
     "list_projects",
@@ -72,6 +73,8 @@ DEFAULT_CANCEL_GRACE_S = 20.0  # §2: SIGINT, wait, SIGTERM
 DEFAULT_PIPE_TIMEOUT_S = 10.0  # §29: how long job end reads claude's pipes after the sweep
 DEFAULT_KIT_DIR = "~/Downloads"  # §26: where a kit sent from the phone lands
 DEFAULT_KIT_MAX_MB = 20  # §26: the largest kit fetched, in MiB
+#: §29: how long after a job ends `hands who` still excludes its transcript.
+DEFAULT_WHO_GRACE_S = 60.0
 
 #: §2's "10-minute idle ceiling": how long `claude -p` stays open for a background
 #: task before it terminates the process and exits 0 (H-014).
@@ -340,6 +343,17 @@ class RunnerConfig:
 
 
 @dataclass(frozen=True)
+class WhoConfig:
+    """`[who]` (§29), read by `hands who` and `handswho`, not by handsd.
+
+    `grace_s`: for this many seconds after a job ends, its transcript is still
+    excluded from the directory fallback (`hands.who.JobSessions`).
+    """
+
+    grace_s: float = DEFAULT_WHO_GRACE_S
+
+
+@dataclass(frozen=True)
 class Config:
     project: str
     path: Path
@@ -354,6 +368,8 @@ class Config:
     runner: RunnerConfig
     #: `[notify]` (§24). Defaulted so a `Config` built by hand needs no table.
     notify: NotifyConfig = field(default_factory=NotifyConfig)
+    #: `[who]` (§29). Defaulted for the same reason.
+    who: WhoConfig = field(default_factory=WhoConfig)
 
     def role(self, name: str) -> RoleConfig:
         try:
@@ -420,7 +436,7 @@ def load_config(project: str, *, home: Path | None = None) -> Config:
 def parse_config(data: dict[str, Any], *, project: str, path: Path) -> Config:
     _check_keys(
         data,
-        ("server", "notify", "roles", "ops", "monitor", "limits", "playbook", "files",
+        ("server", "notify", "who", "roles", "ops", "monitor", "limits", "playbook", "files",
          "gates", "runner"),
         "config",
         path,
@@ -632,6 +648,10 @@ def parse_config(data: dict[str, Any], *, project: str, path: Path) -> Config:
         ),
     )
 
+    who_t = _table(data, "who", path)
+    _check_keys(who_t, ("grace_s",), "[who]", path)
+    who = WhoConfig(grace_s=_number(who_t, "grace_s", DEFAULT_WHO_GRACE_S, "[who]", path))
+
     return Config(
         project=project,
         path=path,
@@ -645,6 +665,7 @@ def parse_config(data: dict[str, Any], *, project: str, path: Path) -> Config:
         gates=gates,
         runner=runner,
         notify=notify,
+        who=who,
     )
 
 
