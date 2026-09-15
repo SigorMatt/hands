@@ -298,6 +298,120 @@ def test_the_integration_doc_pins_done_against_each_failure_reason() -> None:
             assert not said, f"docs/INTEGRATION.md calls {said} `done`: {sentence!r}"
 
 
+def how_a_job_ends() -> str:
+    """docs/INTEGRATION.md's **How a job ends** bullet, flattened."""
+    doc = flattened((ROOT / "docs" / "INTEGRATION.md").read_text(encoding="utf-8"))
+    return doc.split("**How a job ends**", 1)[1].split(" - **", 1)[0]
+
+
+def doc_failure_reason_order() -> list[str]:
+    """The bullet's `failure_reason` list, in the order the doc states it."""
+    listing = how_a_job_ends().split(
+        "The record's `failure_reason` says why a job failed, one value each: ", 1
+    )[1].split(" — ", 1)[0]
+    return [value.strip().strip("`") for value in listing.split(",")]
+
+
+#: REVIEW-12 should-fix 8, DESIGN §29: one row per `failure_reason`, in the doc's
+#: order — the value, then a finished run (parsed-stream fields, exit code) where
+#: that value holds and no earlier one does, with as many later ones holding as
+#: can. `spawn_error` has no run: no process exists, so nothing else can hold.
+FAILURE_REASON_ORDER: tuple[tuple[str, dict[str, object] | None, int | None], ...] = (
+    ("harness_terminated", {"harness_terminated": True}, 1),
+    ("no_final_result", {}, 1),
+    ("error_result", {"saw_result": True, "subtype": "error_max_turns"}, 1),
+    ("nonzero_exit", {"saw_result": True, "subtype": "success"}, 1),
+    ("no_num_turns", {"saw_result": True, "subtype": "success"}, 0),
+    ("spawn_error", None, None),
+)
+
+#: A run that is `done`: exit 0, a final `success` result carrying `num_turns`.
+DONE_RUN: dict[str, object] = {"saw_result": True, "subtype": "success", "num_turns": 3}
+
+
+def test_the_failure_reason_table_is_the_doc_order_unsorted() -> None:
+    """REVIEW-12 should-fix 8: the doc's list, compared unsorted, is the table's
+    order and the runner's `FAILURE_REASONS` order; the table covers §6's values;
+    and the doc says the order is the precedence."""
+    from hands.runner import FAILURE_REASONS
+
+    order = [value for value, _, _ in FAILURE_REASON_ORDER]
+    assert sorted(order) == sorted(section_6_vocabulary("failure_reason"))
+    assert doc_failure_reason_order() == order, "the doc's `failure_reason` order changed"
+    assert list(FAILURE_REASONS) == order, "the runner's `failure_reason` order changed"
+    assert f"`{order[-1]}` — the first that holds, in that order;" in how_a_job_ends()
+
+
+@pytest.mark.parametrize(
+    ("position", "value", "fields", "exit_code"),
+    [(i, *row) for i, row in enumerate(FAILURE_REASON_ORDER)],
+    ids=[row[0] for row in FAILURE_REASON_ORDER],
+)
+def test_each_failure_reason_holds_at_its_doc_position(
+    position: int, value: str, fields: dict[str, object] | None, exit_code: int | None
+) -> None:
+    """REVIEW-12 should-fix 8, §6, §29: `value` sits at `position` in the doc's
+    list, and the runner records it for a run where it and later values hold but
+    no earlier one does."""
+    from hands.runner import _final_state, _Parsed
+
+    assert doc_failure_reason_order().index(value) == position
+    if fields is None:
+        return
+    parsed = _Parsed(**fields)  # type: ignore[arg-type]
+    assert _final_state(parsed, exit_code, cancelled=False) == ("failed", value)
+
+
+#: REVIEW-12 should-fix 8: the doc's precedence clauses, in the order it states
+#: them, each with runs (parsed-stream fields, exit code, cancelled) and the
+#: (state, failure_reason) the runner must record for every one of them.
+PRECEDENCE = (
+    ("a cancel stays `killed`",
+     [({**DONE_RUN, "harness_terminated": line}, 0, True) for line in (True, False)]
+     + [({"harness_terminated": True}, 1, True)],
+     ("killed", None)),
+    ("a detected limit stays `limited`",
+     [({**DONE_RUN, "harness_terminated": line, "limit_category": "rate_limit"}, 0, False)
+      for line in (True, False)]
+     + [({"harness_terminated": True, "limit_category": "rate_limit"}, 1, False)],
+     ("limited", None)),
+    ("terminating line or not", [], None),
+    ("otherwise the terminating line wins even over a `success` result",
+     [({**DONE_RUN, "harness_terminated": True}, 0, False)],
+     ("failed", "harness_terminated")),
+)
+
+
+@pytest.mark.parametrize(("clause", "runs", "expected"), PRECEDENCE,
+                         ids=["killed", "limited", "line-or-not", "line-wins"])
+def test_the_doc_states_each_precedence_clause_and_the_runner_applies_it(
+    clause: str,
+    runs: list[tuple[dict[str, object], int, bool]],
+    expected: tuple[str, str | None] | None,
+) -> None:
+    """REVIEW-12 should-fix 8, §6, §29: the **How a job ends** precedence
+    sentence says `clause` at its place among the others, and the runner records
+    `expected` for each of `runs`."""
+    from hands.runner import _final_state, _Parsed
+
+    sentence = how_a_job_ends().split("Precedence: ", 1)[1].split(" Only the line's", 1)[0]
+    places = [sentence.find(said) for said, _, _ in PRECEDENCE]
+    assert clause in sentence, f"the precedence sentence does not say {clause!r}"
+    assert places == sorted(places), "the precedence clauses are out of order"
+    for fields, exit_code, cancelled in runs:
+        parsed = _Parsed(**fields)  # type: ignore[arg-type]
+        assert _final_state(parsed, exit_code, cancelled=cancelled) == expected
+
+
+def test_a_run_that_is_none_of_the_failures_is_done() -> None:
+    """§6: the `done` statement's run records `done` with a null reason."""
+    from hands.runner import _final_state, _Parsed
+
+    parsed = _Parsed(**DONE_RUN)  # type: ignore[arg-type]
+    assert _final_state(parsed, 0, cancelled=False) == ("done", None)
+    assert DONE_STATEMENT in how_a_job_ends()
+
+
 #: The closed phone loop (§26, §27 "the apply from the kit", REVIEW-10 SF2): one
 #: section, phone only — kit, buttons, `go`, buzz — and the statements that must
 #: be in it, each a text the code prints or does.

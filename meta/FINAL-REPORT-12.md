@@ -189,3 +189,18 @@ should-fix 1–9). Base: bb9aab5 (`plan: mission 12 kit (DESIGN v3.11)`).
    - every regex alternative must match a vocabulary literal.
 4. **BUILDER-13.** `PLAYBOOK.toml` now names `meta/BUILDER-13-PROMPT.md`,
    which the architect's next kit must ship.
+
+## Corrections (appended)
+
+2026-09-15 (mission 13 U0, from REVIEW-12 blocker 1). §3 item 2's "comments
+… are refused (fail-closed)" is false: shlex ran with `commenters = ""` and
+the scanner had no comment state, so an apostrophe inside `# …` opened a quote
+bash never sees and hid the next line (`hands show x # it's` + newline +
+`hands go #'` exited 0 in role mode; `ls # it's` + newline + `touch … #'` in
+normal mode). U1's commit body also listed the backslash-newline
+`--context=clear` probe as blocked only after the change; the parent hook
+already blocked it in role mode.
+
+2026-09-15 (mission 13 U0, from REVIEW-12 blocker 1). The Review items row
+"Blocker 1 — guard bypass … closed" is wrong: REVIEW-11 blocker 1 was not
+closed by mission 12. It stays open until mission 13 U1.

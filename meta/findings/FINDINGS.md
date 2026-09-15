@@ -1235,7 +1235,11 @@ is a descendant by pid chain (or a member of the job's cgroup scope); the
 Mission 12 U4 carries the code, with a test through `_sweep`/`_kill_group`
 that leaves a leaderless marked group alone and kills a descendant group.
 
-Status: open (code: mission 12 U4)
+Progress (mission 13 U0, 2026-09-15). §28's rule could not hold after the
+reap (H-025); DESIGN v3.12 §29 replaces it with H-025 option (b). This finding
+closes with mission 13 U2, which removes the `HANDS_JOB`-mark-alone rule.
+
+Status: open (closes with mission 13 U2)
 
 ## H-024 — §28's residual-character list, read literally, refuses commands the guard must keep allowing
 
@@ -1262,7 +1266,15 @@ Every REVIEW-11 blocker 1 probe stays blocked under this reading.
 Needs: the next DESIGN revision states the reading (expansion position, not
 raw character after `shlex`), or names a different one.
 
-Status: open (U1 shipped the expansion-position reading)
+Resolution (DESIGN v3.12 §29, 2026-09-15). "H-024's reading is the text: an
+expansion character counts only where bash would still expand it; never inside
+single quotes or after a backslash; inside double quotes only `$`, a backtick,
+`\` and `!`; brace words only with a comma or `..`; a non-leading `~` only
+after `=` or `:`. Every review 11 and review 12 probe stays blocked." §29 also
+refuses any `#` outside quotes in both modes (REVIEW-12 blocker 1). Mission 13
+U1 implements the reading exactly as stated.
+
+Status: resolved by DESIGN v3.12 (code: mission 13 U1)
 
 ## H-025 — §28's sweep rule, read literally, never signals a process group after claude is reaped
 
@@ -1313,4 +1325,15 @@ Needs: the architect's choice, for example one of these.
 Until then the U1 rule (the `HANDS_JOB` mark) stays in the code, and H-023
 stays open.
 
-Status: open (blocks mission 12 U4's sweep half)
+Resolution (DESIGN v3.12 §29, 2026-09-15): option (b) chosen. "A live process
+descends from the job when its session id is the job's pid and its start time
+precedes the last moment the job's pid was observed alive, or when it is a
+member of the job's cgroup scope; the `HANDS_JOB` mark is corroboration and
+never sufficient alone. The residual is a fork inside the job's last poll
+interval, documented in `docs/INTEGRATION.md`. Job end reads the pipes with a
+bounded timeout (`runner.pipe_timeout_s`, default 10) so an unkilled orphan
+cannot stall it; what remains after the sweep is reported as
+`monitor.orphan_processes` with `killed: false`." Mission 13 U2 carries the
+code; H-023 closes with it.
+
+Status: resolved by DESIGN v3.12 (code: mission 13 U2)
