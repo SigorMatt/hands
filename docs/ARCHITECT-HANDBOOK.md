@@ -260,23 +260,28 @@ taken relative to the directory. It prints one line per check,
 - `wording`: the brief contains neither "as before" nor a "Budget
   guidance" section (a heading or a bold lead).
 - `protocol`: every file path a `send` rule's prompt names is in the kit, or
-  else inside the repo, whatever punctuation surrounds it (DESIGN §28, §29).
-  DESIGN is silent on telling a path from an English word, so kit check reads
-  a word (split at whitespace and quotes, brackets, `,` `;` `!` `?` `*`, with a
-  trailing `.`, `:` or `/` dropped) as a file path when it is a file the kit
-  or the repo has (`Makefile`), or, not being a directory there, when its last
-  component has an extension holding a letter (`meta/X.c`,
-  `meta/MISSING.1st`, `WORKPLAN.md`), or when it holds a `/` and its first
+  else inside the repo, whatever punctuation surrounds it and bare names
+  included (DESIGN §28, §29, §30; `tests/fixtures/named_path_shapes.tsv`
+  enumerates the shapes). DESIGN does not say what tells a bare name from an
+  English word, so kit check splits the prompt at every character that is not
+  a letter, a digit or one of `_ . / ~ { } + - : #` (whitespace, ASCII and
+  Unicode quotes, brackets, `,` `;` `!` `?` `*` `|` `=` `@` `&` `…`), drops a
+  `#anchor`, a trailing `.`, `:` or `/` and a `:line` or `:line:col`, and reads
+  a word as a file path when it is a file the kit or the repo has, or, not
+  being a directory there, when its last component has an extension holding a
+  letter (`meta/X.c`, `WORKPLAN.md`), or when it holds a `/` and its first
   component is a directory of the kit or the repo (`meta/MISSING`) or it is
   not a repository path by the rules handsd applies to a kit's entries
-  (`../X.md`, `~/X.md`, `/etc/passwd`, `./scripts/check`, `../{n}.md`); those
-  fail, they are not skipped. What it cannot see: a missing bare name with no
-  extension (`Makefile` when the repo has none) and a missing name under a
-  directory neither has (`newdir/NOTES`) read as prose, like `origin/main`;
-  and a word like `e.g.` or `github.com` is read as a path and fails, so
-  rephrase it. A path with a `{placeholder}`, such as
-  `meta/reviews/REVIEW-{n}.md`, names a different file per job, so only its
-  syntax is checked.
+  (`../X.md`, `~/X.md`, `/etc/passwd`, `./scripts/check`, `../{n}.md`), or
+  when its last component before any `.` is a caps name (three or more
+  capitals and `_`: `NOTES`, `MISSING.1`; `VERDICT` excepted) or a build-file
+  name (`Makefile`, `Dockerfile`); those fail when missing, they are not
+  skipped. What it cannot see: a missing lower-case name with no extension
+  (`notes`, `newdir/notes`) reads as prose, like `origin/main`, and so does a
+  word with a `:` left inside it (a URL). A word like `e.g.`, `github.com`,
+  `API` or `Profile` is read as a path and fails, so rephrase it. A path with
+  a `{placeholder}`, such as `meta/reviews/REVIEW-{n}.md`, names a different
+  file per job, so only its syntax is checked.
 
 When every check passes, it prints three things. First, the §3 apply prompt,
 which names each file the kit replaces (the file exists in the repo) and each

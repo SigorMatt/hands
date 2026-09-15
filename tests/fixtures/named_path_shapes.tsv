@@ -1,0 +1,79 @@
+# §30 (review 13 blocker 2): the shapes a send prompt's punctuation gives a file name.
+# One row per line: what a prompt says, a tab, then the names kit check reads from it
+# (space-separated; nothing after the tab when it names none). Read against a repo
+# holding Makefile, meta/A.md, .gitignore and the directory src/hands, with a kit
+# holding kitdir/X.md (tests/test_kit.py::test_the_named_path_shapes_fixture).
+
+# plain, and every quote the handbook's prompts use (ASCII and Unicode)
+meta/MISSING.md	meta/MISSING.md
+`meta/MISSING.md`	meta/MISSING.md
+'meta/MISSING.md'	meta/MISSING.md
+"meta/MISSING.md"	meta/MISSING.md
+“meta/MISSING.md”	meta/MISSING.md
+‘meta/MISSING.md’	meta/MISSING.md
+«meta/MISSING.md»	meta/MISSING.md
+**meta/MISSING.md**	meta/MISSING.md
+# brackets
+(meta/MISSING.md)	meta/MISSING.md
+[meta/MISSING.md]	meta/MISSING.md
+<meta/MISSING.md>	meta/MISSING.md
+[the notes](meta/MISSING.md)	meta/MISSING.md
+@meta/MISSING.md	meta/MISSING.md
+# trailing punctuation
+meta/MISSING.md.	meta/MISSING.md
+meta/MISSING.md,	meta/MISSING.md
+meta/MISSING.md;	meta/MISSING.md
+meta/MISSING.md:	meta/MISSING.md
+meta/MISSING.md!	meta/MISSING.md
+meta/MISSING.md?	meta/MISSING.md
+meta/MISSING.md…	meta/MISSING.md
+meta/MISSING.md...	meta/MISSING.md
+meta/MISSING.md|	meta/MISSING.md
+meta/MISSING.md/	meta/MISSING.md
+meta/MISSING.md&&	meta/MISSING.md
+# a line, a column, an anchor
+meta/MISSING.md:12	meta/MISSING.md
+see meta/MISSING.md:12	meta/MISSING.md
+meta/MISSING.md:12:3	meta/MISSING.md
+meta/MISSING.md:12.	meta/MISSING.md
+(meta/MISSING.md:12)	meta/MISSING.md
+meta/MISSING.md#L3	meta/MISSING.md
+meta/MISSING.md#the-section	meta/MISSING.md
+# joined to another word
+--prompt-file=meta/MISSING.md	meta/MISSING.md
+NOTES=meta/MISSING.md	NOTES meta/MISSING.md
+meta/A.md,meta/MISSING.md	meta/A.md meta/MISSING.md
+meta/MISSING.md|wc	meta/MISSING.md
+# bare relative names: a caps name, a build-file name, a file the repo has
+NOTES	NOTES
+read NOTES	NOTES
+`NOTES`	NOTES
+(NOTES).	NOTES
+MISSING.1	MISSING.1
+READ_ME	READ_ME
+newdir/NOTES	newdir/NOTES
+run Makefile	Makefile
+Dockerfile	Dockerfile
+GNUmakefile:	GNUmakefile
+.gitignore	.gitignore
+# prose
+review	
+Read the protocol.	
+VERDICT: review mission {n} blockers=<k>	
+the VERDICT line	
+the PR's checks	
+File a finding	
+U2	
+REVIEW-13	
+v3.12	
+§0.2	
+origin/main	
+https://example.com/x.md	
+localhost:8080	
+--squash	
+{n+1}	
+src/hands/	
+# this repository's and the templates' send prompts, verbatim
+Read meta/REVIEW-PROTOCOL.md and review mission {n} of this repository: every commit after the last review: commit on origin/main (the protocol says how to find the base). Follow the protocol exactly, commit only meta/reviews/REVIEW-{n}.md, and begin your reply with the VERDICT line it specifies.	meta/REVIEW-PROTOCOL.md meta/reviews/REVIEW-{n}.md
+Review WORKPLAN.md commits since the last review: commit on this branch, per WORKPLAN.md §0.2. Begin your reply with: VERDICT: review run {n} blockers=<k> should-fix=<m>	WORKPLAN.md WORKPLAN.md
+The review of run {n} has no blockers. Confirm the PR's checks are green, merge it with gh pr merge --squash, then Execute WORKPLAN.md run {n+1} on a new branch from main. Begin your reply with: VERDICT: run {n+1} finished, or VERDICT: run {n+1} blocked <reason>, or VERDICT: question <one line>	WORKPLAN.md

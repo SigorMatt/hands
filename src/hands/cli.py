@@ -736,9 +736,11 @@ def main(
             names = list_projects() if project is None else []
             if command == "who" and not args.daemon and names:
                 # §29: `hands who` shows every project's daemon as a root, so with
-                # several configs and none named it starts from the first by name.
-                project = names[0]
-                config = load_config(project)
+                # several configs and none named it starts from the first by name
+                # that loads. §30 (review 13 blocker 3): each config in its own
+                # try; `who` renders the broken ones as root lines of their own.
+                config = _first_loadable(names)
+                project = config.project
             # §4/§20 (review 3 should-fix 8): doctor is the command whose job is
             # explaining a broken config, so it reports the error as its failed
             # `config` check instead of dying with a bare message. Every other
@@ -810,6 +812,19 @@ def main(
         return 1
     print(json.dumps(result, sort_keys=True) if as_json else _render(command, result), file=out)
     return exit_code(command, result)
+
+
+def _first_loadable(names: Sequence[str]) -> Config:
+    """The first of `names` whose config loads (§29, §30). When none does, a
+    ConfigError naming each, one `<project>: config error <reason>` line apiece:
+    there is no picture to render, so it is surfaced like any config error."""
+    errors = []
+    for name in names:
+        try:
+            return load_config(name)
+        except ConfigError as exc:
+            errors.append(who_mod.config_error_line(name, exc))
+    raise ConfigError("\n".join(errors))
 
 
 def exit_code(command: str, result: Any) -> int:

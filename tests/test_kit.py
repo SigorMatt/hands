@@ -945,7 +945,8 @@ def _path_repo(root: Path) -> Path:
         ("meta/reviews/REVIEW-{n}", ["meta/reviews/REVIEW-{n}"]),
         ("origin/main", []),
         ("and/or", []),
-        ("newdir/NOTES", []),  # no such directory: indistinguishable from `origin/main`
+        ("newdir/NOTES", ["newdir/NOTES"]),  # §30: its last component is a caps name
+        ("newdir/notes", []),  # no such directory: indistinguishable from `origin/main`
         ("src/hands", []),  # a directory, not a file
         ("src/hands/", []),
         # ... or it is not a repository path by the daemon's syntax: it fails closed
@@ -958,7 +959,8 @@ def _path_repo(root: Path) -> Path:
         # a bare word: only a file the kit or the repo has
         ("Makefile", ["Makefile"]),
         ("`Makefile`", ["Makefile"]),
-        ("GNUmakefile", []),  # absent: indistinguishable from prose
+        ("GNUmakefile", ["GNUmakefile"]),  # §30: a build-file name, judged absent
+        ("notes", []),  # absent and lower-case: indistinguishable from prose
         (".gitignore", [".gitignore"]),
         (".dockerignore", []),
         ("review", []),
@@ -967,7 +969,7 @@ def _path_repo(root: Path) -> Path:
         ("blockers=<k>", []),
         ("--squash", []),
         ("https://example.com/x.md", []),
-        ("meta/X.md:12", []),
+        ("meta/X.md:12", ["meta/X.md"]),  # §30: `path:line` names the path
         ("meta/A.md,meta/B.md", ["meta/A.md", "meta/B.md"]),
         ("Read meta/A.md, then Makefile (and origin/main).", ["meta/A.md", "Makefile"]),
     ],
@@ -978,6 +980,74 @@ def test_the_named_path_rule_table(tmp_path: Path, said: str, named: list[str]) 
     states the rule this table enumerates."""
     repo = _path_repo(tmp_path / "repo")
     assert kit_mod.named_paths(said, ["kitdir/X.md"], repo) == named
+
+
+SHAPES = ROOT / "tests" / "fixtures" / "named_path_shapes.tsv"
+
+
+def _shape_rows() -> list[tuple[str, list[str]]]:
+    rows = []
+    for text in SHAPES.read_text(encoding="utf-8").splitlines():
+        if not text or text.startswith("# "):
+            continue
+        said, names = text.split("\t")
+        rows.append((said, names.split()))
+    return rows
+
+
+@pytest.mark.parametrize("said,named", _shape_rows())
+def test_the_named_path_shapes_fixture(tmp_path: Path, said: str, named: list[str]) -> None:
+    """§30 (review 13 blocker 2): `kit check` judges bare relative names and names in
+    any punctuation the handbook's prompts use; tests/fixtures/named_path_shapes.tsv
+    enumerates the shapes, each with the names read from it."""
+    repo = _path_repo(tmp_path / "repo")
+    assert kit_mod.named_paths(said, ["kitdir/X.md"], repo) == named
+
+
+def test_the_shapes_fixture_holds_the_reviewers_inputs_and_the_real_prompts() -> None:
+    """The fixture is the enumeration §30 asks for: review 13's probes, and this
+    repository's and both templates' send prompts, verbatim, are rows of it."""
+    rows = _shape_rows()
+    for probe in REVIEW_13_PROBES:
+        assert probe in [said for said, _ in rows], probe
+    books = [ROOT / "PLAYBOOK.toml", TEMPLATES / "PLAYBOOK-missions.toml",
+             TEMPLATES / "PLAYBOOK-runs.toml"]  # fmt: skip
+    prompts = [
+        line.split(" = ", 1)[1].strip().strip('"')
+        for book in books
+        for line in book.read_text(encoding="utf-8").splitlines()
+        if line.startswith("prompt = ")
+    ]
+    assert len(prompts) == 4
+    for prompt in prompts:
+        assert prompt in [said for said, _ in rows], prompt
+
+
+#: Review 13 blocker 2's inputs, each with the file it names.
+REVIEW_13_PROBES = {
+    "read NOTES": "NOTES",
+    "run Makefile": "Makefile",
+    "see meta/MISSING.md:12": "meta/MISSING.md",
+    "meta/MISSING.md#L3": "meta/MISSING.md",
+    "\u201cmeta/MISSING.md\u201d": "meta/MISSING.md",
+    "meta/MISSING.md\u2026": "meta/MISSING.md",
+    "--prompt-file=meta/MISSING.md": "meta/MISSING.md",
+    "meta/MISSING.md|": "meta/MISSING.md",
+    "NOTES": "NOTES",
+    "MISSING.1": "MISSING.1",
+}
+
+
+@pytest.mark.parametrize("said,named", sorted(REVIEW_13_PROBES.items()))
+def test_review_13s_inputs_fail_protocol_end_to_end(
+    tmp_path: Path, repo: Path, said: str, named: str
+) -> None:
+    """Review 13 blocker 2: `hands kit check` exited 0 with "PASS protocol" when a
+    send named any of these; each missing file now fails protocol, and only it."""
+    kit = write_tree(tmp_path / "k", {**good_kit(), "PLAYBOOK.toml": _send_naming(said)})
+    code, out, _ = run_check(kit, repo)
+    failed = assert_failed_only(code, out, "protocol")
+    assert f"names {named}, which is in neither the kit nor the repo" in strip_paths(failed)
 
 
 def test_a_word_under_a_directory_only_the_kit_has_is_a_path(tmp_path: Path) -> None:
@@ -994,12 +1064,18 @@ def test_a_named_bare_file_the_repo_has_is_judged_and_listed(tmp_path: Path, rep
     assert "Makefile (repo)" in strip_paths(line(out, "protocol"))
 
 
-def test_this_repositorys_brief_checked_against_this_repository_passes(tmp_path: Path) -> None:
-    """§28 H-022's acceptance, kept under §29's wider path rule: a kit of
-    meta/BUILDER-13-PROMPT.md checked with `--repo` this repository exits 0
-    (its playbook's send names `origin/main`, which is not a file)."""
-    brief = (ROOT / "meta" / "BUILDER-13-PROMPT.md").read_text(encoding="utf-8")
-    kit = write_tree(tmp_path / "k", {"meta/BUILDER-13-PROMPT.md": brief})
+@pytest.mark.parametrize("n", range(8, 15))
+def test_this_repositorys_brief_checked_against_this_repository_passes(
+    tmp_path: Path, n: int
+) -> None:
+    """§28 H-022's acceptance, kept under §29's and §30's wider path rule: a kit of
+    meta/BUILDER-<n>-PROMPT.md checked with `--repo` this repository exits 0 (its
+    playbook's send names `origin/main` and says `VERDICT`, neither a file). The
+    briefs 8 to 14 are the ones that passed before §30; 1 to 7 fail on checks the
+    path rule does not touch."""
+    name = f"meta/BUILDER-{n}-PROMPT.md"
+    brief = (ROOT / name).read_text(encoding="utf-8")
+    kit = write_tree(tmp_path / "k", {name: brief})
     code, out, err = run_check(kit, ROOT)
     assert code == 0, out + err
 

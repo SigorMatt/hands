@@ -62,7 +62,10 @@ A daemon reads and writes only its own project's spool. The default
 that sets `server.socket` must name a path no other project's config names.
 `hands who` reads every project that has a config in `~/.hands/` and shows each
 daemon as a root of the picture; `handswho@<project>` pushes only its own
-project's picture to its own `who_topic`.
+project's picture to its own `who_topic`. Each config is loaded on its own: one
+that does not load is shown as the root line `<project>: config error <reason>`
+and the others still render (exit 0); when none loads, `hands who` exits 1 with
+one such line per project.
 
 **The one shared resource is the subscription.** Both daemons run `claude -p`
 as you, on the same Claude login, so every job of either project draws on the

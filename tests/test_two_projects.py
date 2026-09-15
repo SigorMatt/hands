@@ -194,6 +194,74 @@ def test_hands_who_with_two_fixture_spools_shows_two_roots(
     assert [s.job_sessions() for s in srcs] == [frozenset({"alpha"}), frozenset({"beta"})]
 
 
+def _broken(home: Path, name: str) -> None:
+    (home / ".hands" / f"{name}.toml").write_text("not [valid toml\n", encoding="utf-8")
+
+
+def test_hands_who_with_a_broken_first_config_and_none_named_renders_the_others(
+    tmp_home: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """§30 (review 13 blocker 3): each config is loaded in its own try; a broken one
+    becomes a root line `<project>: config error <reason>` and the others render."""
+    _two_projects(tmp_home, tmp_path)
+    _broken(tmp_home, "alpha")
+    monkeypatch.delenv("HANDS_PROJECT", raising=False)
+    monkeypatch.setattr(who, "proc_table", lambda: {})
+
+    out, err = io.StringIO(), io.StringIO()
+    assert hands_main(["who"], stdout=out, stderr=err) == 0, err.getvalue()
+    text = strip_paths(out.getvalue())
+    assert text.startswith("alpha: config error ") or "\nalpha: config error " in strip_paths(
+        out.getvalue()
+    ), text
+    assert "is not valid TOML" in strip_paths(text.split("alpha: config error ", 1)[1])
+    assert "handsd (daemon, project beta)\n    not answering" in strip_paths(out.getvalue())
+    assert "project alpha" not in strip_paths(out.getvalue())
+    assert err.getvalue() == ""
+
+
+def test_hands_who_named_beta_shows_the_broken_alpha_as_a_config_error_root(
+    tmp_home: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _two_projects(tmp_home, tmp_path)
+    _broken(tmp_home, "alpha")
+    monkeypatch.delenv("HANDS_PROJECT", raising=False)
+    monkeypatch.setattr(who, "proc_table", lambda: {})
+
+    out, err = io.StringIO(), io.StringIO()
+    assert hands_main(["--project", "beta", "who"], stdout=out, stderr=err) == 0, err.getvalue()
+    text = strip_paths(out.getvalue())
+    assert text.index("handsd (daemon, project beta)") < text.index("alpha: config error ")
+    assert "\nalpha: config error " in strip_paths(out.getvalue())
+
+    out = io.StringIO()
+    assert hands_main(["--project", "beta", "who", "--json"], stdout=out, stderr=err) == 0
+    payload = json.loads(out.getvalue())
+    assert "\nalpha: config error " in strip_paths(payload["picture"])
+    assert sorted(payload["daemons"]) == ["beta"]
+
+
+def test_hands_who_with_every_config_broken_exits_1_naming_each(
+    tmp_home: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """With no config that loads there is no picture to render: exit 1, the way
+    every command surfaces a config error, with one `<project>: config error` line
+    per project on stderr."""
+    _two_projects(tmp_home, tmp_path)
+    _broken(tmp_home, "alpha")
+    _broken(tmp_home, "beta")
+    monkeypatch.delenv("HANDS_PROJECT", raising=False)
+    monkeypatch.setattr(who, "proc_table", lambda: {})
+
+    out, err = io.StringIO(), io.StringIO()
+    assert hands_main(["who"], stdout=out, stderr=err) == 1
+    text = strip_paths(err.getvalue())
+    assert "alpha: config error " in strip_paths(err.getvalue()), text
+    assert "beta: config error " in strip_paths(err.getvalue()), text
+    assert text.index("alpha: config error ") < text.index("beta: config error ")
+    assert out.getvalue() == ""
+
+
 # --------------------------------------------------------------------- systemd
 
 

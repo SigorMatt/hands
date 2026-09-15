@@ -787,8 +787,13 @@ def _peers(config: Config) -> tuple[list[Config], list[str]]:
         try:
             peers.append(load_config(name, home=base.parent))
         except ConfigError as exc:
-            errors.append(f"handsd (daemon, project {name})\n    config unreadable: {exc}")
+            errors.append(config_error_line(name, exc))
     return peers, errors
+
+
+def config_error_line(project: str, exc: ConfigError) -> str:
+    """§30 (review 13 blocker 3): the root line a config that does not load becomes."""
+    return f"{project}: config error {exc}"
 
 
 def all_sources(config: Config, socket_path: Path | None) -> list[Sources]:

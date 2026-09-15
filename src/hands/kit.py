@@ -66,10 +66,11 @@ The checks, in order (docs/ARCHITECT-HANDBOOK.md §11 says the same):
 * `wording` — the brief says neither "as before" nor has a "Budget guidance"
   section (a heading or a bold lead).
 * `protocol` — every file path a `send` rule's prompt names, whatever punctuation
-  surrounds it (§28, §29), is a repository path by the rules handsd applies to a
-  kit's entries (`_path_problem`, `_inside`), and is in the kit or else inside the
-  repo. Which words are file paths is `NAMED_PATH_RULE` (§29 is silent on telling
-  a path from an English word). A path with a `{placeholder}` names a different
+  surrounds it (§28, §29, §30), is a repository path by the rules handsd applies to
+  a kit's entries (`_path_problem`, `_inside`), and is in the kit or else inside
+  the repo. Which words are file paths, bare relative names included, is
+  `NAMED_PATH_RULE` (the design names the shapes but not the syntax that tells a
+  bare name from an English word). A path with a `{placeholder}` names a different
   file per job, so it is judged by its syntax only (placeholders read as `0`) and
   not read. A named path the check cannot resolve (`../X.md`, `~/X.md`,
   `../{n}.md`, `./scripts/check`) fails rather than being skipped (§27).
@@ -172,26 +173,42 @@ MAX_PLACEHOLDERS = 6
 CHECK_NAMES = ("paths", "playbook", "brief", "verdicts", "wording", "protocol")
 GIT_TIMEOUT_S = 10.0
 
-#: §29: which words of a send prompt are file paths. §29 is silent on telling a
-#: path from an English word, so this is hands' rule (`named_paths` applies it).
+#: §29, §30: which words of a send prompt are file paths. The design says a bare
+#: relative name and a name in any punctuation are judged, but not what tells a
+#: bare name from an English word, so this is hands' rule (`named_paths` applies it).
 NAMED_PATH_RULE = """\
-A send prompt's words are its text split at whitespace and at the characters
-" ' ` ( ) [ ] < > , ; ! ? *, each with trailing . : / removed. A word of path
-characters only (letters, digits, _ . / ~ { } + -) holding a letter or a digit
-names a file path when:
+A send prompt's words are its text split at every character that is not a
+letter, a digit or one of _ . / ~ { } + - : # (so at whitespace, at ASCII and
+Unicode quotes and brackets, and at , ; ! ? * | = @ & and …). From each word
+an #anchor is dropped, then trailing . : / and a :line or :line:col suffix. A
+word left of path characters only (letters, digits, _ . / ~ { } + -) holding
+a letter or a digit names a file path when:
 1. it is a file of the kit, or (without a placeholder) a file in the repo; or
 2. it is not a directory of the kit or the repo, and its last component has a .
    after its first character with a letter after the last .; or
 3. it is not a directory of the kit or the repo, holds a /, and either is not a
    repository path by the daemon's syntax (_path_problem) or its first component
-   is a directory of the kit or the repo.
-Any other word is prose. So a missing bare name with no . (Makefile) and a
-missing name under a directory neither has (newdir/NOTES) are not seen, and a
-word such as e.g. or github.com is judged as a path and fails."""
+   is a directory of the kit or the repo; or
+4. it is not a directory of the kit or the repo, and its last component up to
+   its first . is a caps name (three or more capital letters and _, first and
+   last a letter: NOTES, MISSING.1, READ_ME; VERDICT, the verdict line's word,
+   excepted) or a build-file name (a capital letter, letters, then file:
+   Makefile, Dockerfile).
+Any other word is prose. So a missing lower-case bare name with no extension
+(notes) and a missing lower-case name under a directory neither has
+(newdir/notes) are not seen, a word with a : left inside it (a URL) is prose,
+and a word such as e.g., github.com, API or Profile is judged as a path and
+fails."""
 #: Where a prompt's words split (`NAMED_PATH_RULE`).
-_WORD_SPLIT_RE = re.compile(r"[\s\"'`()\[\]<>,;!?*]+")
+_WORD_SPLIT_RE = re.compile(r"[^\w./~{}+:#-]+")
 #: A word of path characters only.
 _PATH_WORD_RE = re.compile(r"[\w./~{}+-]+")
+#: A `:line` or `:line:col` suffix after a named path.
+_LINE_SUFFIX_RE = re.compile(r"(?::\d+)+$")
+#: A bare name read as a file (`NAMED_PATH_RULE` 4): a caps name, a build-file name.
+_BARE_NAME_RE = re.compile(r"[A-Z][A-Z_]+[A-Z]|[A-Z][A-Za-z]*file")
+#: Caps words that are hands' own vocabulary, not files.
+PROSE_CAPS = frozenset({"VERDICT"})
 #: A playbook placeholder inside a named path (`{n}`, `{n+1}`).
 _PATH_PLACEHOLDER_RE = re.compile(r"\{[^{}]*\}")
 #: Why a named path with a placeholder is not read (`_named_file`).
@@ -829,7 +846,7 @@ def _check_wording(name: str | None, text: str | None) -> Check:
 
 
 def named_paths(text: str, files: Iterable[str], repo: Path) -> list[str]:
-    """The file paths `text` names, in order, by `NAMED_PATH_RULE` (§29).
+    """The file paths `text` names, in order, by `NAMED_PATH_RULE` (§29, §30).
 
     `files` are the kit's file entries and `repo` the repository the kit lands in.
     """
@@ -846,7 +863,8 @@ def named_paths(text: str, files: Iterable[str], repo: Path) -> list[str]:
 
     found = []
     for piece in _WORD_SPLIT_RE.split(text):
-        word = piece.rstrip(".:/")
+        word = piece.split("#", 1)[0].rstrip(".:/")
+        word = _LINE_SUFFIX_RE.sub("", word).rstrip(".:/")
         if not _PATH_WORD_RE.fullmatch(word) or not any(char.isalnum() for char in word):
             continue
         filled = _PATH_PLACEHOLDER_RE.sub("0", word)
@@ -862,6 +880,8 @@ def named_paths(text: str, files: Iterable[str], repo: Path) -> list[str]:
         if dot > 0 and any(char.isalpha() for char in last[dot + 1 :]):
             found.append(word)
         elif "/" in word and (problem is not None or is_dir(filled.split("/", 1)[0])):
+            found.append(word)
+        elif (stem := last.split(".", 1)[0]) not in PROSE_CAPS and _BARE_NAME_RE.fullmatch(stem):
             found.append(word)
     return found
 
