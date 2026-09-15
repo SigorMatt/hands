@@ -1236,3 +1236,30 @@ Mission 12 U4 carries the code, with a test through `_sweep`/`_kill_group`
 that leaves a leaderless marked group alone and kills a descendant group.
 
 Status: open (code: mission 12 U4)
+
+## H-024 — §28's residual-character list, read literally, refuses commands the guard must keep allowing
+
+Severity: low · Component: DESIGN §28 (the guard: "a token in argument position
+that still contains `$`, a backtick, `{`, `}`, `\`, `~` (not leading), `*`, `?`,
+`[` or `!` after `shlex` processing is refused") against §12 rule 6 ("the guard
+treats quoted text as text") and the existing allowed tables;
+`driver/hooks/bash_guard.py`
+Filed by: mission 12, orchestrator, from U1's report (`3966f9b`).
+
+The conflict. `shlex` removes quotes, so "after `shlex` processing" cannot tell
+a quoted character from a bare one. Read literally, the list refuses commands
+the brief requires to stay allowed: `git diff HEAD~1` (non-leading `~`),
+`git rev-parse HEAD^{commit}` (`{`, `}`), and a quoted send prompt such as
+"Apply ~/Downloads/k.zip …". §28's own reason is "because the shell would expand
+it after the guard saw it".
+
+Chosen (U1, stated in its commit body): a character counts only where bash
+would still expand it — never inside single quotes or after a backslash;
+inside double quotes only `$`, backtick, `\` and `!`; `{letters}` without a
+comma or `..` is allowed; a non-leading `~` is refused only after `=` or `:`.
+Every REVIEW-11 blocker 1 probe stays blocked under this reading.
+
+Needs: the next DESIGN revision states the reading (expansion position, not
+raw character after `shlex`), or names a different one.
+
+Status: open (U1 shipped the expansion-position reading)

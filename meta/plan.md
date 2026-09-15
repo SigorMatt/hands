@@ -11,12 +11,16 @@ Base of the mission: bb9aab5 (`plan: mission 12 kit (DESIGN v3.11)`).
       FINDINGS: H-018..H-021 resolutions moved into their own sections, status
       lines in place (SF5); H-022 §28 resolution, resolved; H-023 filed
       (blocker 3); SF4 `done` statement pinned per `failure_reason` value
-- [ ] U1 The guard on shlex (§28; blocker 1) — driver/hooks/bash_guard.py,
-      its self-test tables, tests/test_bash_guard.py; every REVIEW-11 probe
-      blocked in both modes; every previously allowed command still allowed
+- [x] U1 The guard on shlex (§28; blocker 1) 3966f9b — shlex segments and
+      tokens; every REVIEW-11 probe blocked in role mode (verdict stated in
+      normal mode), plus `2>f`, `&>f`, `$SHELL -c`, `--project` on a role send;
+      self-test 154/154; residual characters counted in expansion position
+      only (H-024); unset HANDS_CONSULT_ROLE refuses every role send; `-C`
+      not pinned to the clone; `--gate` on a role send allowed
 - [ ] U2 Consult and the driver role, engine-side (§28; SF1, SF2, SF3, SF8) —
       engine stops, driver.killed/orphaned/limited events, max_consults
-      counter, doctor driver row; docs/PLAYBOOK.md, docs/INTEGRATION.md
+      counter, doctor driver row, HANDS_CONSULT_ROLE in the driver job's
+      environment; docs/PLAYBOOK.md, docs/INTEGRATION.md
 - [ ] U3 Kit transport and the apply (§28; blocker 2, SF6, SF7, SF9) — URL
       checks in the try, kit check named paths, apply-verdict exception to
       one rule, KIT.md line rules and shell-quoting
