@@ -208,6 +208,9 @@ neither, every driver job in the spool counts.
 
 The driver job's environment carries `HANDS_CONSULT_ROLE`, the role named on
 the prompt's first line; the guard in role mode allows a send to that role only.
+It also carries `HANDS_CLONE`, the driver's clone (`<cwd>/repo`, or the cwd when
+that is the repository; absent with neither), and the guard in role mode allows
+`git -C` on that path only (DESIGN §29).
 
 Every consultation files `consult.sent` in the inbox when the driver job is
 created and `consult.done` when it ends, with its terminal state and verdict

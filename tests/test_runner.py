@@ -1244,3 +1244,39 @@ def test_a_driver_job_runs_with_hands_role_driver(
     assert asyncio.run(runner.run(job)).result == "driver"
     # a builder job does not get it from hands (it inherits handsd's own)
     assert send(runner, spool, "FAKE:env HANDS_ROLE").result == "builder"
+
+
+@pytest.mark.parametrize("layout", ["repo-under-cwd", "cwd-is-the-repo", "no-clone"])
+def test_a_driver_job_carries_its_clone_as_hands_clone(
+    tmp_home: Path, workdir: Path, spool: Spool, monkeypatch: pytest.MonkeyPatch, layout: str
+) -> None:
+    """§29: the guard pins role mode's `git -C` to `HANDS_CLONE`, which handsd sets on
+    the driver job to the role's clone: `<cwd>/repo` (driver/README.md), or `<cwd>`
+    when that is the repository (doctor's rule). Never from handsd's environment or
+    the role's env table; with no clone it is absent and every `git -C` is refused."""
+    monkeypatch.setenv("HANDS_CLONE", "/tmp")
+    if layout == "repo-under-cwd":
+        (workdir / "repo" / ".git").mkdir(parents=True)
+        expected = str(workdir / "repo")
+    elif layout == "cwd-is-the-repo":
+        (workdir / ".git").mkdir()
+        expected = str(workdir)
+    else:
+        expected = "UNSET:HANDS_CLONE"
+    cfg = parse_config(
+        {
+            "roles": {
+                "builder": {"cwd": str(workdir)},
+                "driver": {"cwd": str(workdir), "env": {"HANDS_CLONE": "/etc"}},
+            },
+            "runner": {"claude": str(FAKE)},
+        },
+        project="demo",
+        path=tmp_home / ".hands" / "demo.toml",
+    )
+    runner = Runner(cfg, spool)
+    job = spool.create_job(role="driver", context="clear", prompt="FAKE:env HANDS_CLONE",
+                           origin="cli")
+    assert asyncio.run(runner.run(job)).result == expected
+    # a builder job does not get it from hands (it inherits handsd's own)
+    assert send(runner, spool, "FAKE:env HANDS_CLONE").result == "/tmp"

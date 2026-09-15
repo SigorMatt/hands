@@ -20,18 +20,26 @@ all the option `--context=clear`. A command `shlex` cannot parse (unbalanced
 quotes, a trailing backslash) or with an unterminated substitution is refused.
 A backslash-newline is deleted first, as the shell deletes it.
 
+A `#` outside quotes anywhere in the command is refused in both modes, and the
+refusal names its character offset in the command (DESIGN §29): a comment is
+where an unbalanced quote hides a second command from a tokenizer, and a
+driver has no use for one. "Outside quotes" is bash's quoting — not inside
+single or double quotes, not after a backslash — in every context the shell
+parses, so inside `$(…)` and backticks as well. A `#` inside a word (`a#b`) is
+not a bash comment, and is refused anyway: §29 says "anywhere".
+
 For `hands` and `git` in both modes, a token in argument position that still
 carries `$`, a backtick, `{`, `}`, `\`, `~` (not leading), `*`, `?`, `[` or
 `!` where the shell would still expand it is refused, because the expansion
-happens after the guard saw the word. "Where the shell would still expand it"
-is bash's quoting: nothing inside single quotes and nothing escaped by a
-backslash; inside double quotes only `$`, the backtick, `\` and `!` (§12 rule
-6: quoted text is text). Two spellings the shell leaves literal are not
-refused: a brace group of letters only (git's `HEAD^{commit}`; bash
-brace-expands only a comma or `..` list), and a `~` inside a word that does
-not follow `=` or `:` (git's `HEAD~1`; bash tilde-expands only a word's start
-and after those two). Leading assignments (`x=… cmd`, and `x=…` alone) and
-`$'…'` words are refused anywhere.
+happens after the guard saw the word. §29 (H-024) states where that is: never
+inside single quotes or after a backslash; inside double quotes only `$`, the
+backtick, `\` and `!` (so any backslash inside double quotes counts, and the
+character it escapes does not; §12 rule 6: quoted text is text); `{` and `}`
+only in a brace word with a comma or `..` (between an unquoted `{` and a later
+unquoted `}`: `x{a,b}` and `x{1..3}` count, git's `HEAD^{commit}` and
+`HEAD@{1}` do not); a non-leading `~` only after `=` or `:` (git's `HEAD~1`
+does not count). Leading assignments (`x=… cmd`, and `x=…` alone) and `$'…'`
+words are refused anywhere.
 
 Every `git` token is checked against the read-only subcommand allowlist,
 wherever it sits: a wrapper puts the real command in argument position, so
@@ -57,7 +65,13 @@ guard guards the driver ROLE, a headless session handsd starts to resolve one
 consultation, and the allowlist narrows to §27's: read-only git (the table
 above, with `-C <path>` the only option before the subcommand),
 `hands show|jobs|inbox|pipeline|status|tail|kit check`, `hands send`, and
-`hands resume`. A send carries exactly one `--context`, whose literal value is
+`hands resume`. `git -C <path>` is pinned to the role's clone (§29): the value
+must equal `HANDS_CLONE` from the environment, both compared as
+`os.path.abspath` (normalised and joined to the hook's working directory, which
+is the role's cwd; no `~` is expanded, so `-C ~/x` fails closed unless
+`HANDS_CLONE` is spelled the same), and with `HANDS_CLONE` unset or empty every
+`git -C` is refused. A `git` without `-C` runs in the role's cwd and is judged
+by the table alone. A send carries exactly one `--context`, whose literal value is
 `keep`, and exactly one `--role`, equal to `HANDS_CONSULT_ROLE` — the role the
 consultation named, from the environment; with that variable unset or empty
 no send passes. A send may not name `--project` or `--socket` (it goes to the
@@ -136,6 +150,7 @@ FORBIDDEN_HANDS_SUBCOMMANDS = {"open"}
 # the allowlist. `send` and `kit` are judged by their arguments below.
 ROLE_ENV = "HANDS_ROLE"
 CONSULT_ROLE_ENV = "HANDS_CONSULT_ROLE"
+CLONE_ENV = "HANDS_CLONE"  # §29: role mode's `git -C` must name this path
 DRIVER_ROLE = "driver"
 ROLE_HANDS_SUBCOMMANDS = {"show", "jobs", "inbox", "pipeline", "status", "tail", "resume"}
 ROLE_SEND_TARGETS = {"builder", "aux"}
@@ -162,9 +177,13 @@ RESIDUAL = frozenset("$`{}\\~*?[!")
 # Inside double quotes bash still gives these their meaning; the rest of
 # RESIDUAL is literal there.
 DOUBLE_QUOTE_LIVE = frozenset("$`\\!")
-# A brace group of letters only is never a brace expansion (that needs a comma
-# or `..`): git's `HEAD^{commit}` and `HEAD^{}`.
-BRACE_LITERAL = re.compile(r"\{[A-Za-z]*\}")
+# What the mask hides where the shell will not act on it: RESIDUAL, and the
+# comma and dot a brace expansion needs (`{"a,b"}` is not one).
+MASKED = RESIDUAL | frozenset(",.")
+# §29: a brace word counts only with a comma or `..` between an unquoted `{` and
+# a later unquoted `}`. Wider than bash's matched-pair rule (`{a},{b}` counts),
+# never narrower.
+BRACE_EXPANSION = re.compile(r"\{.*(?:,|\.\.).*\}", re.S)
 # Where bash tilde-expands inside a word: after `=` (an assignment-shaped
 # argument, `a=~/x`) and, in assignments, after `:`.
 TILDE_EXPANDED = re.compile(r"[=:]~")
@@ -268,20 +287,25 @@ def segments(cmd: str):
     character the shell will not expand (single-quoted, backslash-escaped, or
     literal inside double quotes) replaced by `_`, so `shlex` splits both into
     the same words. Raises `Refused` for unbalanced quotes, a trailing
-    backslash, an unterminated substitution and a `$'…'` word.
+    backslash, an unterminated substitution, a `$'…'` word and a `#` outside
+    quotes (§29, naming its offset in `cmd`).
     """
     out: list[tuple[str, str]] = []
     _scan(cmd, 0, out, closer=None)
     return out
 
 
-def _scan(cmd: str, i: int, out: list, closer):
+def _scan(cmd: str, i: int, out: list, closer, where=None):
+    """`where[k]` is the offset in the whole command of `cmd[k]` (None: the same)."""
     raw: list[str] = []
     mask: list[str] = []
     quote = None
     depth = 0
     after_redirect = False
     n = len(cmd)
+
+    def at(k: int) -> int:
+        return k if where is None else where[k]
 
     def put(r: str, m=None, redirect: bool = False) -> None:
         nonlocal after_redirect
@@ -302,7 +326,7 @@ def _scan(cmd: str, i: int, out: list, closer):
                 quote = None
                 put(c)
             else:
-                put(c, "_" if c in RESIDUAL else c)
+                put(c, "_" if c in MASKED else c)
             i += 1
             continue
         if c == "\\":
@@ -312,9 +336,11 @@ def _scan(cmd: str, i: int, out: list, closer):
                 i += 2
                 continue
             if quote == '"':
-                put(c + nxt)
+                # §29: a backslash inside double quotes counts; the character
+                # it escapes does not. The mask's `\\` survives `shlex` as one `\`.
+                put(c + nxt, "\\\\" + ("_" if nxt in MASKED or nxt == '"' else nxt))
             else:
-                put(c + nxt, c + ("_" if nxt in RESIDUAL else nxt))
+                put(c + nxt, c + ("_" if nxt in MASKED else nxt))
             i += 2
             continue
         if quote is None and c == "$" and nxt == "'":
@@ -326,12 +352,20 @@ def _scan(cmd: str, i: int, out: list, closer):
             if j >= n:
                 raise Refused("an unterminated backtick")
             # inside backticks `\\`, `\``, `\$` lose their backslash first
-            _scan(re.sub(r"\\([\\`$])", r"\1", cmd[i + 1:j]), 0, out, closer=None)
+            inner: list[str] = []
+            inner_at: list[int] = []
+            k = i + 1
+            while k < j:
+                step = 2 if cmd[k] == "\\" and k + 1 < j and cmd[k + 1] in "\\`$" else 1
+                inner.append(cmd[k + step - 1])
+                inner_at.append(at(k + step - 1))
+                k += step
+            _scan("".join(inner), 0, out, closer=None, where=inner_at)
             put(SUBSTITUTED)
             i = j + 1
             continue
         if c == "$" and nxt == "(":
-            i = _scan(cmd, i + 2, out, closer=")")
+            i = _scan(cmd, i + 2, out, closer=")", where=where)
             put(SUBSTITUTED)
             continue
         if quote == '"':
@@ -339,7 +373,7 @@ def _scan(cmd: str, i: int, out: list, closer):
                 quote = None
                 put(c)
             else:
-                put(c, c if c in DOUBLE_QUOTE_LIVE or c not in RESIDUAL else "_")
+                put(c, c if c in DOUBLE_QUOTE_LIVE or c not in MASKED else "_")
             i += 1
             continue
         if c in "'\"":
@@ -347,6 +381,9 @@ def _scan(cmd: str, i: int, out: list, closer):
             put(c)
             i += 1
             continue
+        if c == "#":
+            raise Refused(f"a `#` outside quotes at offset {at(i)} (§29: a comment can "
+                          f"hide a second command)")
         if c == ")" and closer == ")" and depth == 0:
             flush()
             return i + 1
@@ -395,13 +432,12 @@ def tokens(raw: str, mask: str):
 
 def residual(mask: str):
     """The expansion characters the shell would still act on in this word."""
-    word = BRACE_LITERAL.sub(lambda m: "_" * len(m.group()), mask)
-    found = sorted({c for c in word if c in RESIDUAL and c != "~"})
-    if word.startswith("~"):
-        word = word[1:]
-    if TILDE_EXPANDED.search(word):
-        found.append("~")
-    return found
+    found = {c for c in mask if c in RESIDUAL and c not in "{}~"}
+    if BRACE_EXPANSION.search(mask):
+        found |= {"{", "}"}
+    if TILDE_EXPANDED.search(mask[1:] if mask.startswith("~") else mask):
+        found.add("~")
+    return sorted(found)
 
 
 def residual_violation(values, masks, start: int, name: str, cmd: str):
@@ -431,7 +467,18 @@ def command_start(values) -> int:
     return i
 
 
-def git_subcommand(words, start: int, role=None):
+def clone_problem(value: str, clone):
+    """§29: why role mode's `git -C value` is not the role's clone, or None."""
+    if not clone:
+        return (f"role mode pins `git -C` to the role's clone, and {CLONE_ENV} is not set "
+                f"(§29), not {value!r}")
+    if os.path.abspath(value) != os.path.abspath(clone):
+        return (f"role mode pins `git -C` to the role's clone ({CLONE_ENV}={clone!r}, §29), "
+                f"not {value!r}")
+    return None
+
+
+def git_subcommand(words, start: int, role=None, clone=None):
     """Read the option area of the `git` at words[start - 1].
 
     Returns `(subcommand, index, refusal)`: the subcommand word and its index,
@@ -440,7 +487,7 @@ def git_subcommand(words, start: int, role=None):
     and `-C`'s value must be a single path that does not begin with `-`: the
     word after `-C` used to be stepped over unjudged, which carried
     `git -C --exec-path=/tmp/evil log` through. In role mode (§28) only
-    `-C <path>`.
+    `-C <path>`, and the path is the role's clone (§29, `clone_problem`).
     """
     pre_flags = set() if role == DRIVER_ROLE else GIT_ALLOWED_PRE_FLAGS
     i = start
@@ -453,6 +500,10 @@ def git_subcommand(words, start: int, role=None):
             if value.startswith("-"):
                 return None, i, (f"the `-C` value must be a single path that does "
                                  f"not begin with `-`, not {value!r}")
+            if role == DRIVER_ROLE:
+                pinned = clone_problem(value, clone)
+                if pinned is not None:
+                    return None, i, pinned
             i += 2
             continue
         if w in pre_flags:
@@ -504,7 +555,7 @@ def invocations(words, name):
             if w == name or (i == 0 and w.endswith("/" + name))]
 
 
-def git_violation(words, masks, cmd, role=None):
+def git_violation(words, masks, cmd, role=None, clone=None):
     """Reason if any `git` in this segment is not a read-only invocation.
 
     The allowlist applies to every `git` token, not only to a segment's first
@@ -517,7 +568,7 @@ def git_violation(words, masks, cmd, role=None):
         reason = residual_violation(words, masks, i, "git", cmd)
         if reason:
             return reason
-        sub, at, refusal = git_subcommand(words, i + 1, role)
+        sub, at, refusal = git_subcommand(words, i + 1, role, clone)
         if refusal is not None:
             return f"{refusal} in {cmd!r}"
         if sub not in GIT_SUBCOMMAND_OPTIONS:
@@ -640,7 +691,7 @@ def send_violation(args, rest, cmd, consult_role):
     return None
 
 
-def judge(values, masks, cmd, role, consult_role):
+def judge(values, masks, cmd, role, consult_role, clone=None):
     """Reason this segment's words are refused, or None."""
     at = command_start(values)
     words, marks = values[at:], masks[at:]
@@ -648,7 +699,7 @@ def judge(values, masks, cmd, role, consult_role):
         return None
     if ASSIGNMENT.match(words[0]):
         return f"a leading assignment ({words[0]!r}) is refused (§28): {cmd!r}"
-    reason = git_violation(words, marks, cmd, role)
+    reason = git_violation(words, marks, cmd, role, clone)
     if reason:
         return reason
     action = find_action(words)
@@ -674,15 +725,21 @@ def judge(values, masks, cmd, role, consult_role):
     return None
 
 
-def check(cmd: str, role=None, consult_role=None):
+def check(cmd: str, role=None, consult_role=None, clone=None):
     """Return None if allowed, else a reason string.
 
     `role` is `HANDS_ROLE`: None for the human's driver session, `driver` for
     §27's role mode, and anything else is refused outright (fail closed).
-    `consult_role` is `HANDS_CONSULT_ROLE`, read only in role mode.
+    `consult_role` is `HANDS_CONSULT_ROLE` and `clone` is `HANDS_CLONE`, both
+    read only in role mode. The command is scanned before anything else, so a
+    `#` outside quotes is the refusal whatever follows it (§29).
     """
     if role is not None and role != DRIVER_ROLE:
         return f"unknown {ROLE_ENV} {role!r} (only {DRIVER_ROLE!r} is a mode): {cmd!r}"
+    try:
+        segs = segments(cmd)
+    except Refused as e:
+        return f"{e}, refused (§28, §29): {cmd!r}"
     try:
         bare = strip_quoted(cmd)
     except UnbalancedQuotes as e:
@@ -692,9 +749,9 @@ def check(cmd: str, role=None, consult_role=None):
         if re.search(pat, noise_free):
             return f"{why}: {cmd!r}"
     try:
-        for raw, mask in segments(cmd):
+        for raw, mask in segs:
             values, masks = tokens(raw, mask)
-            reason = judge(values, masks, cmd, role, consult_role)
+            reason = judge(values, masks, cmd, role, consult_role, clone)
             if reason:
                 return reason
     except Refused as e:
@@ -849,11 +906,22 @@ SELFTEST = [
     ("git status 2>probe.txt", False),
     ("git status &> probe.txt", False),
     ("$SHELL -c 'git push'", False),
+    # §29: review 12's probes, and a `#` outside quotes anywhere, in both modes
+    ("hands show x # it's\nhands go #'", False),
+    ("hands show x # it's\nhands send --role builder --context clear m #'", False),
+    ("ls # it's\ntouch /tmp/rev12-pwned #'", False),
+    ("hands status # a note", False),
+    ("hands show a#b", False),
+    ("hands send --role builder --context clear 'fix #12'", True),
+    ("git -C ./repo log HEAD@{1} --oneline -1", True),
+    ("git log --grep=x{a,b}", False),
 ]
 
 
-# The role the consultation named, as the self-test's HANDS_CONSULT_ROLE.
+# The role the consultation named, as the self-test's HANDS_CONSULT_ROLE, and
+# the role's clone, as its HANDS_CLONE (driver/CLAUDE.md's CLONE).
 SELFTEST_CONSULT_ROLE = "builder"
+SELFTEST_CLONE = "./repo"
 
 # Role mode (§27, §28): `check(cmd, role="driver", consult_role="builder")`.
 ROLE_SELFTEST = [
@@ -887,6 +955,15 @@ ROLE_SELFTEST = [
     ("hands --project other send --role builder --context keep m", False),
     ("hands send --role builder --context keep --project=other m", False),
     ("hands send --role builder --context keep --socket /tmp/other.sock m", False),
+    # §29: every probe review 12 executed, a `#` anywhere, and the clone pin
+    ("hands show x # it's\nhands go #'", False),
+    ("hands show x # it's\nhands send --role builder --context clear m #'", False),
+    ("ls # it's\ntouch /tmp/rev12-pwned #'", False),
+    ("hands status # a note", False),
+    ("hands show a#b", False),
+    ("git -C /tmp log", False),
+    ("git -C ./repo/.. log", False),
+    ("git -C repo log --oneline -1", True),
 ]
 
 
@@ -895,7 +972,7 @@ def selftest() -> int:
     cases = [(cmd, expected, None) for cmd, expected in SELFTEST]
     cases += [(cmd, expected, DRIVER_ROLE) for cmd, expected in ROLE_SELFTEST]
     for cmd, expected, role in cases:
-        reason = check(cmd, role=role, consult_role=SELFTEST_CONSULT_ROLE)
+        reason = check(cmd, role=role, consult_role=SELFTEST_CONSULT_ROLE, clone=SELFTEST_CLONE)
         ok = (reason is None) == expected
         if not ok:
             bad += 1
@@ -918,12 +995,14 @@ def main() -> int:
     cmd = (data.get("tool_input") or {}).get("command", "")
     role = os.environ.get(ROLE_ENV) or None
     consult_role = os.environ.get(CONSULT_ROLE_ENV) or None
-    reason = check(cmd, role=role, consult_role=consult_role)
+    clone = os.environ.get(CLONE_ENV) or None
+    reason = check(cmd, role=role, consult_role=consult_role, clone=clone)
     if reason is None:
         return 0
     if role is not None:
         print(f"bash_guard blocked this command ({reason}). The driver role may only run "
-              f"read-only git, hands show|jobs|inbox|pipeline|status|tail|kit check, "
+              f"read-only git (`git -C` only on ${CLONE_ENV}), "
+              f"hands show|jobs|inbox|pipeline|status|tail|kit check, "
               f"hands send --context keep to the role the consultation named "
               f"(${CONSULT_ROLE_ENV}), and hands resume (§27, §28). "
               f"If the consultation needs more, reply VERDICT: escalate <reason>.",

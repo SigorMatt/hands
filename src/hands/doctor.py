@@ -49,7 +49,14 @@ from typing import Any
 
 import hands.monitor
 import hands.runner
-from hands.config import BG_WAIT_CEILING_ENV, DRIVER_ROLE, ROLE_ENV, Config, RoleConfig
+from hands.config import (
+    BG_WAIT_CEILING_ENV,
+    DRIVER_ROLE,
+    ROLE_ENV,
+    Config,
+    RoleConfig,
+    driver_clone,
+)
 from hands.playbook import PlaybookError, load_playbook, playbook_path
 from hands.runner import build_argv
 from hands.spool import SpoolError, resolve_under_roots
@@ -410,10 +417,9 @@ def _driver_check(config: Config) -> Check:
         return Check(name, FAIL, f"cwd {role.cwd} does not exist; §27 [roles.driver] cwd")
     warnings: list[str] = []
     failures: list[str] = []
-    if (role.cwd / "repo" / ".git").exists():
-        clone = f"clone {role.cwd / 'repo'}"
-    elif (role.cwd / ".git").exists():
-        clone = f"clone {role.cwd}"
+    found = driver_clone(role.cwd)  # §29: the same path the job gets as HANDS_CLONE
+    if found is not None:
+        clone = f"clone {found}"
     else:
         clone = f"no clone: neither {role.cwd / 'repo'} nor {role.cwd} is a git repository"
         warnings.append(clone)

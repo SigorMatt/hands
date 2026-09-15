@@ -133,8 +133,9 @@ verbatim.
 
 - Answer within your authority, citing the mission file or the DESIGN
   section that decides it; otherwise escalate. Never guess past a gap.
-- Your guard is in role mode: read-only git, `hands show`, `hands jobs`,
-  `hands inbox`, `hands pipeline`, `hands status`, `hands tail`, `hands kit
+- Your guard is in role mode: read-only git (`git -C` only on your clone, the
+  path in `HANDS_CLONE`; `git -C CLONE` from this directory is that path),
+  `hands show`, `hands jobs`, `hands inbox`, `hands pipeline`, `hands status`, `hands tail`, `hands kit
   check`, `hands send --role <builder|aux> --context keep` to the role named
   in the consultation, and `hands resume`. Nothing else runs: no `approve`,
   `deny`, `pause`, `go`, `put`, no `--context clear`, no writes, and no `cat`

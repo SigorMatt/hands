@@ -58,7 +58,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, TextIO
 
-from hands.config import CONSULT_ROLE_ENV, DRIVER_ROLE, Config, RoleConfig
+from hands.config import CLONE_ENV, CONSULT_ROLE_ENV, DRIVER_ROLE, Config, RoleConfig, driver_clone
 from hands.limits import is_limit_notice, parse_reset_at, to_iso
 from hands.monitor import (
     CGROUP_ROOT,
@@ -940,6 +940,9 @@ def job_env(job: Job, role: RoleConfig) -> dict[str, str]:
     §28: a driver job also carries `HANDS_CONSULT_ROLE`, the role its consult
     prompt's first line names, and never a value from anywhere else: with no
     readable head the variable is absent, and the guard refuses every send.
+    §29: it also carries `HANDS_CLONE`, the role's clone (`driver_clone`), the same
+    way: never from handsd's environment or the env table, and absent with no
+    clone, when the guard refuses every `git -C`.
     """
     env = {**os.environ, **role.spawn_env, JOB_ENV: job.id}
     if job.role == DRIVER_ROLE:
@@ -947,6 +950,10 @@ def job_env(job: Job, role: RoleConfig) -> dict[str, str]:
         head = consult_head(job.prompt)
         if head is not None:
             env[CONSULT_ROLE_ENV] = head["role"]
+        env.pop(CLONE_ENV, None)
+        clone = driver_clone(role.cwd)
+        if clone is not None:
+            env[CLONE_ENV] = str(clone)
     return env
 
 

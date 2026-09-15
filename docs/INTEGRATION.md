@@ -136,7 +136,9 @@ Notes that are easy to get wrong:
   a driver-role job in the driver's cwd, `context: clear`, `origin: playbook`,
   and files `consult.sent`. The job's environment carries `HANDS_CONSULT_ROLE`,
   the role the consultation is about, read from the prompt's first line (§28);
-  the guard allows a send to that role only. The prompt carries the event, the job's id, role,
+  the guard allows a send to that role only. It also carries `HANDS_CLONE`, the
+  clone doctor's row names (absent when there is none), and the guard allows
+  `git -C` on that path only (§29). The prompt carries the event, the job's id, role,
   state and verdict, and its `result` verbatim. The driver answers within its
   authority with `hands send --role builder --context keep` (the one send role
   mode allows) and replies `VERDICT: resolved <what was sent, and the section

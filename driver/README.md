@@ -35,7 +35,8 @@ Notes:
   trying something outside its role; answer no.
 - The same guard has a role mode (§27): with `HANDS_ROLE=driver` in the
   environment, which handsd sets for a `[roles.driver]` job, it allows only
-  read-only git, `hands show|jobs|inbox|pipeline|status|tail|kit check`,
+  read-only git (`git -C` only on the clone handsd names in `HANDS_CLONE`),
+  `hands show|jobs|inbox|pipeline|status|tail|kit check`,
   `hands send --context keep` to builder or aux, and `hands resume`. This
   interactive session never sets it, so the rules above are the ones in force.
 - `hands open <job>` is blocked in both layers: it execs an interactive

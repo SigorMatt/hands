@@ -18,6 +18,7 @@ from typing import Any
 
 __all__ = [
     "BG_WAIT_CEILING_ENV",
+    "CLONE_ENV",
     "CONSULT_ROLE_ENV",
     "DEFAULT_GATE_PATTERNS",
     "DEFAULT_ROLE_ENV",
@@ -36,6 +37,7 @@ __all__ = [
     "RunnerConfig",
     "ServerConfig",
     "config_path",
+    "driver_clone",
     "list_projects",
     "load_config",
     "resolve_project",
@@ -81,6 +83,9 @@ ROLE_ENV = "HANDS_ROLE"
 #: §28: the role a consultation names, in its driver job's environment (the runner
 #: sets it from the consult prompt; the guard allows a send to that role only).
 CONSULT_ROLE_ENV = "HANDS_CONSULT_ROLE"
+#: §29: the driver role's clone, in its job's environment (the runner sets it from
+#: `driver_clone`; the guard in role mode allows `git -C` on that path only).
+CLONE_ENV = "HANDS_CLONE"
 DRIVER_ROLE = "driver"
 #: A name `[roles.<r>] env` may set: what a POSIX shell accepts as a variable name.
 _ENV_NAME_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
@@ -133,6 +138,16 @@ class NotifyConfig:
     def channel(self) -> bool:
         """Does handsd subscribe to `cmd_topic` (§24)?"""
         return self.cmd_topic is not None and self.cmd_secret is not None
+
+
+def driver_clone(cwd: Path) -> Path | None:
+    """§27, §29: the driver role's clone — `<cwd>/repo`, where driver/README.md puts
+    it, or `<cwd>` itself when that is the git repository; None when neither is."""
+    if (cwd / "repo" / ".git").exists():
+        return cwd / "repo"
+    if (cwd / ".git").exists():
+        return cwd
+    return None
 
 
 @dataclass(frozen=True)

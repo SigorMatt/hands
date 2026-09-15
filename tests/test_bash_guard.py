@@ -380,6 +380,9 @@ def test_the_adversarial_table_is_independent_of_the_guard() -> None:
 # refused; the read-only inspection words of the human driver's guard (`cat`,
 # `ls`, `grep`, ...) are not on §27's list, so they are refused — the role
 # reads the clone with `git show`/`git grep`/`git cat-file`.
+#: §29: the role's clone in these tables, as `HANDS_CLONE` (driver/CLAUDE.md's CLONE).
+CLONE = "./repo"
+
 ROLE_MODE: list[tuple[str, bool]] = [
     # read-only git: whatever the guard already treats as read-only
     ("git status", True),
@@ -455,8 +458,9 @@ ROLE_MODE_ALLOWED_HANDS = {"show", "jobs", "inbox", "pipeline", "status", "tail"
 @pytest.mark.parametrize("cmd,allowed", ROLE_MODE)
 def test_role_mode_case(cmd: str, allowed: bool) -> None:
     """DESIGN §27: the driver role's allowlist, from `tests/`' own table. §28:
-    the consultation named builder, so `HANDS_CONSULT_ROLE` is `builder`."""
-    reason = guard.check(cmd, role="driver", consult_role="builder")
+    the consultation named builder, so `HANDS_CONSULT_ROLE` is `builder`. §29: the
+    clone is `./repo`, so `HANDS_CLONE` is `./repo`."""
+    reason = guard.check(cmd, role="driver", consult_role="builder", clone=CLONE)
     if allowed:
         assert reason is None, f"role mode blocked an allowed command: {cmd} -> {reason}"
     else:
@@ -560,7 +564,7 @@ REVIEW_11_PROBES: list[tuple[str, bool]] = [
 
 @pytest.mark.parametrize("cmd,blocked_normal", REVIEW_11_PROBES)
 def test_review_11_probe_is_blocked_in_role_mode(cmd: str, blocked_normal: bool) -> None:
-    reason = guard.check(cmd, role="driver", consult_role="builder")
+    reason = guard.check(cmd, role="driver", consult_role="builder", clone=CLONE)
     assert reason is not None, f"role mode allowed a review 11 probe: {cmd}"
 
 
@@ -635,7 +639,6 @@ SHELL_DELIVERY_BOTH_MODES: list[tuple[str, bool]] = [
     ("git -C ./repo diff --stat HEAD~1", True),
     ("git -C ./repo rev-parse HEAD^{commit}", True),
     ("git -C ./repo rev-parse HEAD^{}", True),
-    ("git -C ~/git/hands log --oneline -1", True),
     # the command word itself is what the shell delivers
     ("'git' push", False),
     ("g\\it push", False),
@@ -654,7 +657,7 @@ SHELL_DELIVERY_BOTH_MODES: list[tuple[str, bool]] = [
 @pytest.mark.parametrize("cmd,allowed", SHELL_DELIVERY_BOTH_MODES)
 def test_the_shell_delivery_rules_hold_in_both_modes(cmd: str, allowed: bool) -> None:
     for role in (None, "driver"):
-        reason = guard.check(cmd, role=role, consult_role="builder")
+        reason = guard.check(cmd, role=role, consult_role="builder", clone=CLONE)
         assert (reason is None) == allowed, (role, cmd, reason)
 
 
@@ -691,7 +694,7 @@ HANDS_NORMAL_MODE: list[tuple[str, bool]] = [
 @pytest.mark.parametrize("cmd,allowed", HANDS_BOTH_MODES)
 def test_hands_rules_that_hold_in_both_modes(cmd: str, allowed: bool) -> None:
     for role in (None, "driver"):
-        reason = guard.check(cmd, role=role, consult_role="builder")
+        reason = guard.check(cmd, role=role, consult_role="builder", clone=CLONE)
         assert (reason is None) == allowed, (role, cmd, reason)
 
 
@@ -728,7 +731,7 @@ ROLE_SEND: list[tuple[str, str | None, bool]] = [
 
 @pytest.mark.parametrize("cmd,consult,allowed", ROLE_SEND)
 def test_role_mode_send(cmd: str, consult: str | None, allowed: bool) -> None:
-    reason = guard.check(cmd, role="driver", consult_role=consult)
+    reason = guard.check(cmd, role="driver", consult_role=consult, clone=CLONE)
     assert (reason is None) == allowed, (cmd, consult, reason)
 
 
@@ -756,3 +759,212 @@ def test_the_selftest_runs_role_mode_with_a_consult_role() -> None:
     table proves a send can pass, not only that every send is refused."""
     assert guard.SELFTEST_CONSULT_ROLE
     assert any(ok and cmd.startswith("hands send") for cmd, ok in guard.ROLE_SELFTEST)
+
+
+# --- §29: THE GUARD (review 12 blocker 1, should-fix 2; H-024) ---------------
+#
+# A `#` outside quotes anywhere is refused in both modes, naming its offset:
+# a comment is where an unbalanced quote hides a second command from a
+# tokenizer. "Outside quotes" is bash's quoting (not in single quotes, not in
+# double quotes, not after a backslash), judged in every context the shell
+# parses, so inside `$(…)` and backticks too. A `#` inside a word (`a#b`) is
+# not a bash comment, but §29 says "anywhere", so it is refused as well.
+REVIEW_12_PROBES: list[str] = [
+    "hands show x # it's\nhands go #'",
+    "hands show x # it's\nhands send --role builder --context clear m #'",
+    "ls # it's\ntouch /tmp/rev12-pwned #'",
+]
+
+
+def _both_modes(cmd: str, clone: str | None = CLONE) -> list[tuple[str | None, str | None]]:
+    return [(role, guard.check(cmd, role=role, consult_role="builder", clone=clone))
+            for role in (None, "driver")]
+
+
+@pytest.mark.parametrize("cmd", REVIEW_12_PROBES)
+def test_review_12_probe_is_blocked_in_both_modes_naming_the_comment(cmd: str) -> None:
+    for role, reason in _both_modes(cmd):
+        assert reason is not None, f"a review 12 probe was allowed ({role}): {cmd!r}"
+        assert f"offset {cmd.index('#')}" in reason, (role, cmd, reason)
+
+
+@pytest.mark.parametrize("cmd", REVIEW_12_PROBES)
+def test_review_12_probe_is_blocked_by_the_hook_in_both_modes(
+    monkeypatch: pytest.MonkeyPatch, cmd: str
+) -> None:
+    monkeypatch.setenv("HANDS_CONSULT_ROLE", "builder")
+    monkeypatch.setenv("HANDS_CLONE", CLONE)
+    assert run_hook(monkeypatch, cmd, None) == 2
+    assert run_hook(monkeypatch, cmd, "driver") == 2
+
+
+def test_the_guards_own_tables_carry_every_review_12_probe() -> None:
+    role, normal = dict(guard.ROLE_SELFTEST), dict(guard.SELFTEST)
+    for cmd in REVIEW_12_PROBES:
+        assert role.get(cmd) is False, f"ROLE_SELFTEST lacks the blocked probe {cmd!r}"
+        assert normal.get(cmd) is False, f"SELFTEST lacks the blocked probe {cmd!r}"
+    assert role.get("git -C /tmp log") is False
+    assert guard.SELFTEST_CLONE == CLONE
+
+
+# (command, allowed) in both modes.
+COMMENTS: list[tuple[str, bool]] = [
+    ("hands status # a note", False),
+    ("git -C ./repo log --oneline -1 # a note", False),
+    ("hands show a#b", False),
+    ("hands show x #", False),
+    ("# only a comment", False),
+    ("hands show x\n# it's", False),
+    ('hands show "x" #"', False),
+    ("hands show x $#", False),
+    ('hands show "$(hands status # it\'s)"', False),
+    ("hands show `hands status #`", False),
+    ("hands show x ; # y", False),
+    # quoted or escaped, a `#` is text
+    ("hands send --role builder --context keep 'fix #12'", True),
+    ('hands send --role builder --context keep "fix #12"', True),
+    ("hands show x\\#y", True),
+    ("git -C ./repo log --grep='#12'", True),
+]
+
+
+@pytest.mark.parametrize("cmd,allowed", COMMENTS)
+def test_a_hash_outside_quotes_is_refused_in_both_modes(cmd: str, allowed: bool) -> None:
+    for role, reason in _both_modes(cmd):
+        assert (reason is None) == allowed, (role, cmd, reason)
+        if not allowed:
+            assert "#" in reason and "offset" in reason, (role, cmd, reason)
+
+
+@pytest.mark.parametrize(
+    "cmd,offset",
+    [
+        ("hands status # a note", 13),
+        ("hands show x\n# it's", 13),
+        ("hands show 'a#b' c#d", 18),
+        ('hands show "$(hands status # x)"', 27),
+        # inside backticks `\$` loses its backslash first; the offset is still the
+        # command's own
+        ("hands show `hands \\$x #`", 22),
+    ],
+)
+def test_the_refusal_names_the_offset_of_the_first_unquoted_hash(cmd: str, offset: int) -> None:
+    assert cmd[offset] == "#"
+    for role, reason in _both_modes(cmd):
+        assert reason is not None and f"offset {offset}" in reason, (role, cmd, reason)
+
+
+# H-024 as §29 states it, one clause at a time, for `git` and `hands` argument
+# words in both modes: (clause, command, allowed).
+H024_CLAUSES: list[tuple[str, str, bool]] = [
+    ("single quotes", "git -C ./repo log --grep='$x*?[a]{b,c}!~'", True),
+    ("single quotes", "git -C ./repo log --grep='a'$x", False),
+    ("backslash", "git -C ./repo log --grep=\\$x\\*\\?\\[a\\]\\{b,c\\}\\!", True),
+    ("backslash", "git -C ./repo log --grep=\\\\$x", False),
+    ("double quotes", 'git -C ./repo log --grep="a*b?[c]{d,e}~"', True),
+    ("double quotes", 'git -C ./repo log --grep="$x"', False),
+    ("double quotes", 'git -C ./repo log --grep="a`true`"', False),
+    ("double quotes", 'git -C ./repo log --grep="a\\"b"', False),
+    ("double quotes", 'git -C ./repo log --grep="a\\x"', False),
+    ("double quotes", 'git -C ./repo log --grep="a!b"', False),
+    ("braces", "git -C ./repo log HEAD@{1}", True),
+    ("braces", "git -C ./repo rev-parse HEAD^{commit}", True),
+    ("braces", "hands show x{1}", True),
+    ("braces", "hands show x{a}y}", True),
+    ('braces', 'hands show x{"a,b"}', True),
+    ("braces", "hands show x{a,b}", False),
+    ("braces", "hands show x{1..3}", False),
+    ("braces", "hands show x{a,{b}}", False),
+    ("tilde", "git -C ./repo diff --stat HEAD~1", True),
+    ("tilde", "hands show ~/x", True),
+    ("tilde", "hands show a~b", True),
+    ("tilde", "hands show a=~/x", False),
+    ("tilde", "hands show a:~/x", False),
+]
+
+
+@pytest.mark.parametrize("clause,cmd,allowed", H024_CLAUSES)
+def test_h024_reading_clause(clause: str, cmd: str, allowed: bool) -> None:
+    for role, reason in _both_modes(cmd):
+        assert (reason is None) == allowed, (clause, role, cmd, reason)
+
+
+def test_h024_every_clause_has_an_allowed_and_a_refused_example() -> None:
+    for clause in {c for c, _, _ in H024_CLAUSES}:
+        verdicts = {ok for c, _, ok in H024_CLAUSES if c == clause}
+        assert verdicts == {True, False}, clause
+
+
+def test_h024_a_character_after_a_backslash_does_not_count_inside_double_quotes() -> None:
+    """Inside double quotes the backslash itself counts (§29 lists it); the `$` it
+    escapes does not."""
+    reason = guard.check('git log --grep="\\$x"')
+    assert reason is not None and "carries \\ the shell" in reason, reason
+
+
+# §29: role mode pins `git -C` to the role's clone (HANDS_CLONE). Both sides are
+# compared as `os.path.abspath` (normpath joined to the hook's working
+# directory); no tilde is expanded, so a `-C ~/…` equals only a HANDS_CLONE
+# spelled the same. (command, HANDS_CLONE, allowed in role mode)
+ABS_CLONE = "/home/u/hands-driver/hands/repo"
+CLONE_PIN: list[tuple[str, str | None, bool]] = [
+    ("git -C /tmp log", ABS_CLONE, False),
+    (f"git -C {ABS_CLONE} log --oneline -1", ABS_CLONE, True),
+    (f"git -C {ABS_CLONE}/ log", ABS_CLONE, True),
+    (f"git -C {ABS_CLONE}/../repo log", ABS_CLONE, True),
+    (f"git -C {ABS_CLONE}/.. log", ABS_CLONE, False),
+    (f"git -C {ABS_CLONE} -C /tmp log", ABS_CLONE, False),
+    (f"git -C /tmp -C {ABS_CLONE} log", ABS_CLONE, False),
+    (f"git -C {ABS_CLONE}x log", ABS_CLONE, False),
+    ("git -C ./repo log", "./repo", True),
+    ("git -C repo log", "./repo", True),
+    ("git -C ./repo/.. log", "./repo", False),
+    ("git -C ~/git/hands log --oneline -1", "~/git/hands", True),
+    ("git -C ~/git/hands log --oneline -1", "./repo", False),
+    ("git -C ./repo log", None, False),
+    ("git -C ./repo log", "", False),
+    ("git status", None, True),
+    ("git -C ./repo status && git -C /tmp status", "./repo", False),
+]
+
+
+@pytest.mark.parametrize("cmd,clone,allowed", CLONE_PIN)
+def test_role_mode_pins_git_dash_c_to_the_clone(
+    cmd: str, clone: str | None, allowed: bool
+) -> None:
+    reason = guard.check(cmd, role="driver", consult_role="builder", clone=clone)
+    assert (reason is None) == allowed, (cmd, clone, reason)
+
+
+@pytest.mark.parametrize("cmd,clone,allowed", CLONE_PIN)
+def test_normal_mode_does_not_pin_git_dash_c(cmd: str, clone: str | None, allowed: bool) -> None:
+    for reason in (guard.check(cmd, clone=clone), guard.check(cmd)):
+        assert reason is None, (cmd, reason)
+
+
+def test_a_relative_dash_c_is_resolved_against_the_working_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    clone = str(tmp_path / "repo")
+    role = {"role": "driver", "consult_role": "builder", "clone": clone}
+    assert guard.check("git -C ./repo log --oneline -5", **role) is None
+    assert guard.check("git -C repo log", **role) is None
+    assert guard.check(f"git -C {clone} log", **role) is None
+    assert guard.check("git -C ../repo log", **role) is not None
+    assert guard.check("git -C /tmp log", **role) is not None
+
+
+def test_the_hook_takes_the_clone_from_the_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+    """§29: HANDS_CLONE in the hook's environment; unset or empty, every `git -C`
+    is refused in role mode, and the human's session never needs it."""
+    monkeypatch.setenv("HANDS_CONSULT_ROLE", "builder")
+    monkeypatch.setenv("HANDS_CLONE", ABS_CLONE)
+    assert run_hook(monkeypatch, f"git -C {ABS_CLONE} log", "driver") == 0
+    assert run_hook(monkeypatch, "git -C /tmp log", "driver") == 2
+    monkeypatch.setenv("HANDS_CLONE", "")
+    assert run_hook(monkeypatch, f"git -C {ABS_CLONE} log", "driver") == 2
+    monkeypatch.delenv("HANDS_CLONE")
+    assert run_hook(monkeypatch, f"git -C {ABS_CLONE} log", "driver") == 2
+    assert run_hook(monkeypatch, "git status", "driver") == 0
+    assert run_hook(monkeypatch, "git -C /tmp log", None) == 0
