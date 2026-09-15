@@ -467,7 +467,9 @@ Not proven, and not built:
   FINDINGS H-020). That file is Claude Code's and undocumented; its shape was
   read on one machine and one Claude Code version. With no such file for a pid
   the line says `transcript: by directory`, and a transcript whose session id a
-  hands job record holds is never shown under it.
+  hands job record holds, or a running hands job's own sessions file names
+  (§28), is never shown under it. With handsd down, no running job's pid is
+  known, so only the job records exclude.
 - `hands kit check` checks the builder's verdict rules only; review verdicts
   have no literal in the brief to match (FINDINGS H-021).
 

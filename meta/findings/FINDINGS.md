@@ -1263,3 +1263,54 @@ Needs: the next DESIGN revision states the reading (expansion position, not
 raw character after `shlex`), or names a different one.
 
 Status: open (U1 shipped the expansion-position reading)
+
+## H-025 — §28's sweep rule, read literally, never signals a process group after claude is reaped
+
+Severity: high · Component: DESIGN §28 ("the post-exit sweep signals a group
+only when its leader is alive and is the job's pid, or when every live member
+is a descendant by pid chain (or a member of the job's cgroup scope)") against
+§24 ("at job end anything still in the scope is filed as
+`monitor.orphan_processes` … then the scope is killed", process-group fallback
+included); `src/hands/runner.py` (`run`, `_sweep`, `_kill_group`,
+`_last_resort`, `_group_is_the_jobs`)
+Filed by: mission 12 U4 (the sweep half stopped here; the `who` half shipped).
+
+The conflict. In process-group mode the sweep runs after asyncio has reaped
+claude (`proc.returncode` is set, or `proc.wait()` returned; the child watcher
+calls `waitpid` as soon as the pidfd fires). So at every sweep:
+- no process holds the job's pid, so the "leader alive" branch never applies;
+- a member that outlived claude was reparented to init or the nearest
+  subreaper, so no member's pid chain reaches the job's pid;
+- there is no cgroup scope in group mode.
+Read literally, the group sweep never signals anything.
+
+Measured (U4, a probe line in `_group_is_the_jobs` plus "leaderless → False";
+reverted, not committed): every sweep printed `leader start_time None`, and
+three existing §24 tests fail:
+- `tests/test_runner.py::test_a_cancelled_jobs_orphan_is_reported_and_killed`
+  (nothing reported);
+- `tests/test_monitor.py::test_a_double_forked_orphan_is_filed_with_its_command_line_and_killed`,
+  `[detached]` (nothing filed) and `[holding-its-pipes]`, which times out:
+  `run()` awaits the pipes after the sweep, and the unkilled orphan holds
+  them, so job end stalls until the orphan exits.
+
+A proof of descent that works with the leader gone exists, but it is not "by
+pid chain". Linux keeps a pid allocated while any process holds it as its
+pgid or sid. A live member whose sid is the job's pid, and which started
+before the last moment claude was seen holding that pid, is in claude's
+session, so the pid was never free and every member descends from claude.
+Its gap is timing: a fork in claude's last poll interval (≤ 50 ms) cannot be
+proven, and those processes are left alive.
+
+Needs: the architect's choice, for example one of these.
+- (a) Group mode never signals after the reap. §24's group-mode kill and its
+  tests are retired, and the design says what job end does when an unkilled
+  orphan holds claude's pipes.
+- (b) The session and start-time proof above is admitted as "descent".
+- (c) The leader is kept observable until the sweep, for example with a
+  subreaper or an unreaped leader. That changes spawning, §24.
+
+Until then the U1 rule (the `HANDS_JOB` mark) stays in the code, and H-023
+stays open.
+
+Status: open (blocks mission 12 U4's sweep half)

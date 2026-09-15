@@ -16,7 +16,8 @@ One short picture joined from three sources:
                     is never opened). With no usable sessions file the line says
                     `transcript: by directory` and the newest transcript of the
                     cwd's `~/.claude/projects/` folder is used, except one whose
-                    session id a hands job record holds (`JobSessions`)
+                    session id a hands job record holds (`JobSessions`) or the
+                    sessions file of a hands job's pid names (§28)
 
 §24's rules: roles are labelled `role <r>`; your own interactive session in a
 role directory is `(your session)`; a session under `~/hands-driver/<project>/`
@@ -363,12 +364,15 @@ class Transcripts:
         self.sessions = sessions
         self.clock = clock
 
+    def session_id(self, pid: int) -> str | None:
+        """The `sessionId` of this reader's `sessions/<pid>.json` (`session_id_for`)."""
+        return session_id_for(self.sessions or Path.home() / ".claude" / "sessions", pid)
+
     def __call__(
         self, pid: int, cwd: str, age_s: float, exclude: frozenset[str] = frozenset()
     ) -> tuple[str, dict[str, Any] | None]:
-        claude = Path.home() / ".claude"
-        root = self.projects or claude / "projects"
-        sid = session_id_for(self.sessions or claude / "sessions", pid)
+        root = self.projects or Path.home() / ".claude" / "projects"
+        sid = self.session_id(pid)
         now = self.clock()
         if sid is not None:
             named = root / dashed(cwd) / f"{sid}.jsonl"
@@ -430,6 +434,9 @@ class Sources:
     home: Path
     #: The session ids hands' job records hold; never attributed by directory (§27).
     job_sessions: Callable[[], frozenset[str]]
+    #: `pid -> sessionId` of `~/.claude/sessions/<pid>.json`, or None. A hands job
+    #: pid's session is never attributed by directory either (§28).
+    session_of: Callable[[int], str | None]
 
 
 def _within(cwd: str, root: str) -> bool:
@@ -548,7 +555,11 @@ def build_summary(src: Sources) -> tuple[str, list[tuple[str, str]]]:
     role_cwds = list(src.role_cwds.values())
     driver_shown = False
     others = [p for p in procs if p["pid"] not in hands_pids]
-    jobs = src.job_sessions() if others else frozenset()
+    jobs: frozenset[str] = frozenset()
+    if others:
+        # §28: a job's transcript can exist before its record holds the session id.
+        by_pid = (src.session_of(pid) for pid in sorted(hands_pids))
+        jobs = src.job_sessions() | {sid for sid in by_pid if sid is not None}
     others.sort(key=lambda x: (_driver_of(x["cwd"], src.home) is None, x["cwd"], x["pid"]))
     for p in others:
         driver = _driver_of(p["cwd"], src.home)
@@ -642,15 +653,17 @@ def socket_state(socket_path: Path, project: str) -> Callable[[], dict[str, Any]
 
 
 def sources_for(config: Config, socket_path: Path) -> Sources:
+    transcripts = Transcripts()
     return Sources(
         project=config.project,
         role_cwds={name: str(role.cwd) for name, role in config.roles.items()},
         daemon=socket_state(socket_path, config.project),
         procs=lambda: proc_table(),  # looked up at call time, so a test can replace it
-        transcripts=Transcripts(),
+        transcripts=transcripts,
         clock=time.time,
         home=Path.home(),
         job_sessions=JobSessions(config.path.parent / "jobs"),
+        session_of=transcripts.session_id,  # the same sessions directory
     )
 
 

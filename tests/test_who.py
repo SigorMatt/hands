@@ -257,12 +257,15 @@ def test_two_transcripts_in_one_directory_are_attributed_each_to_its_own_pid(
 
 
 def replace_sources(src: who.Sources, reader: Any, jobs: Any = frozenset) -> who.Sources:
-    return replace(src, transcripts=reader, job_sessions=jobs)
+    return replace(src, transcripts=reader, job_sessions=jobs, session_of=reader.session_id)
 
 
-def _job_and_human(tmp_path: Path, *, human_file: bool, human_transcript: bool = True) -> str:
-    """A hands builder job (pid 100, session JOB_SID, recorded in the spool) and a
-    human session (pid 200) in the same cwd; the job's transcript is the newest."""
+def _job_and_human(
+    tmp_path: Path, *, human_file: bool, human_transcript: bool = True, recorded: bool = True
+) -> str:
+    """A hands builder job (pid 100, the daemon's running job, session JOB_SID in its
+    sessions file and, when `recorded`, in its spool record) and a human session
+    (pid 200) in the same cwd; the job's transcript is the newest."""
     projects, sessions = _claude_dir(tmp_path)
     if human_transcript:
         _transcript(projects, REPO, HUMAN_SID, "the human asked this", 2000)
@@ -271,8 +274,9 @@ def _job_and_human(tmp_path: Path, *, human_file: bool, human_transcript: bool =
     if human_file:
         _sessions_file(sessions, 200, HUMAN_SID, REPO)
     spool = Spool(tmp_path / "hands")
+    recorded_sid = {"session_id": JOB_SID} if recorded else {}
     spool.create_job(role="builder", context="clear", prompt="Execute WORKPLAN.md run 2",
-                     origin="cli", session_id=JOB_SID, pid=100)  # fmt: skip
+                     origin="cli", pid=100, **recorded_sid)  # fmt: skip
     spool.create_job(role="aux", context="clear", prompt="q", origin="cli")  # no session yet
     table = {
         1: _proc(0, ["init"], "/", 9e6, "init"),
@@ -317,6 +321,28 @@ def test_with_no_sessions_file_and_only_the_job_transcript_nothing_is_attributed
     block = _human_block(text)
     assert block == "demo (your session) (session, 2h00) — state unknown · transcript: by directory"
     assert "JOB-PROMPT-TEXT" not in strip_paths(text)
+
+
+@pytest.mark.parametrize("human_transcript", [True, False], ids=["human-transcript", "job-only"])
+def test_a_hands_pids_sessions_file_excludes_its_transcript_before_the_spool_has_it(
+    tmp_path: Path, utc: None, human_transcript: bool
+) -> None:
+    """§28 (REVIEW-11 blocker 4), the reviewer's probe: the job's pid 100 has a
+    sessions file naming its session, its spool record has no `session_id` yet, and
+    the human (pid 200) has none. The directory fallback excludes the `sessionId` of
+    every hands pid's sessions file, so nothing of the job's transcript is shown."""
+    text = _job_and_human(
+        tmp_path, human_file=False, human_transcript=human_transcript, recorded=False
+    )
+    block = _human_block(text)
+    assert "JOB-PROMPT-TEXT" not in strip_paths(text)
+    if human_transcript:
+        assert block.splitlines()[0].endswith("· transcript: by directory")
+        assert "    last: the human asked this" in strip_paths(block)
+    else:
+        assert block == (
+            "demo (your session) (session, 2h00) — state unknown · transcript: by directory"
+        )
 
 
 def test_the_key_file_beside_the_sessions_file_is_never_opened_or_listed(
@@ -368,8 +394,10 @@ def test_the_key_file_beside_the_sessions_file_is_never_opened_or_listed(
     assert "last: the human asked this" in strip_paths(text)
     assert str(sessions / "200.json") in opened
     assert not [p for p in opened if p.endswith(".key")]
+    # 100 is the daemon's running job: §28 reads a hands pid's sessions file too.
     assert not [p for p in opened if p.startswith(str(sessions)) and p not in (
-        str(sessions / "200.json"), str(sessions / "300.json"))]  # fmt: skip
+        str(sessions / "100.json"), str(sessions / "200.json"),
+        str(sessions / "300.json"))]  # fmt: skip
     assert not [p for p in listed if p.rstrip("/") == str(sessions)]
 
 
@@ -512,6 +540,7 @@ def sources(
         clock=lambda: 3600.0 * 9 + 60 * 5,
         home=HOME,
         job_sessions=frozenset,
+        session_of=lambda _pid: None,
     )
 
 
