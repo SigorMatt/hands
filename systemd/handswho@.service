@@ -1,0 +1,37 @@
+# handswho@<project> — the `hands who` picture, pushed to your phone (DESIGN §4, §24, §29).
+#
+# Optional, and off unless you enable it. A *user* unit, like handsd@: it reads
+# /proc and your ~/.claude transcripts as you. It needs `[notify] who_topic` in
+# ~/.hands/<project>.toml (and, for `status`/`who`/`check`/`?` from the phone,
+# `who_cmd_topic`); without who_topic it exits 1 and says so.
+#
+#   install -Dm644 systemd/handswho@.service ~/.config/systemd/user/handswho@.service
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now handswho@spanweave
+#   journalctl --user -u handswho@spanweave -f
+#
+# Templated like handsd@.service: `%i` is the project, and it reads the same
+# environment file, ~/.config/hands/<project>.env. It pushes that project's
+# picture to that project's who_topic. ExecStart is an absolute path for the
+# reason handsd@.service gives: a user unit has no login shell.
+# It runs with handsd down too — the picture then says the daemon is not answering.
+
+[Unit]
+Description=handswho — push the hands who picture on change (project %i)
+Documentation=https://github.com/SigorMatt/hands
+After=network-online.target handsd@%i.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=%h/.config/hands/%i.env
+ExecStart=%h/.local/bin/handswho --project %i
+Restart=on-failure
+RestartSec=30
+WorkingDirectory=%h
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=handswho@%i
+
+[Install]
+WantedBy=default.target

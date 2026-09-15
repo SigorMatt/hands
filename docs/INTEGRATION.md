@@ -23,21 +23,74 @@ Python ≥ 3.11 and `uv`. The only runtime dependency is `httpx`, for ntfy.
 
 ## 2. Run handsd (once per machine, per project)
 
-    install -Dm644 ~/git/hands/systemd/handsd.service ~/.config/systemd/user/handsd.service
-    printf 'HANDS_PROJECT=<project>\n' > ~/.config/hands.env
+    install -Dm644 ~/git/hands/systemd/handsd@.service ~/.config/systemd/user/handsd@.service
+    mkdir -p ~/.config/hands && touch ~/.config/hands/<project>.env
     systemctl --user daemon-reload
-    systemctl --user enable --now handsd
-    journalctl --user -u handsd -f
+    systemctl --user enable --now handsd@<project>
+    journalctl --user -u handsd@<project> -f
 
 The unit is a **user** unit — hands spawns `claude -p` as you, with your
-subscription login and your `~/.claude` settings — and it takes the project
-from the environment file, never from a login shell. `Restart=on-failure`;
-`ExecStart` is the absolute `%h/.local/bin/handsd` because a unit has no PATH
-from your shell. For a second project, copy the unit to
-`handsd-<project>.service` with its own `EnvironmentFile`, and give each
-project's config a different `server.socket`.
+subscription login and your `~/.claude` settings — and it is templated: the
+instance name is the project (`handsd@<project>` runs `handsd --project
+<project>`), and the instance reads `~/.config/hands/<project>.env`, that
+project's environment file (`KEY=value` lines; it may be empty, but it must
+exist). Nothing comes from a login shell. `Restart=on-failure`; `ExecStart` is
+the absolute `%h/.local/bin/handsd` because a unit has no PATH from your shell.
+A second project is a second instance of the same unit (see "Two projects on
+one laptop" below).
 
 Without systemd, `handsd --project <project>` in a terminal is the same thing.
+
+## Two projects on one laptop (§29)
+
+Each project has its own config, its own daemon and its own spool:
+
+    ~/.hands/<project>.toml     the config (§13)
+    ~/.hands/<project>/         the spool: jobs/, roles/, inbox.jsonl,
+                                inbox.acks.jsonl, pipeline.json, and the
+                                daemon's default socket, handsd.sock
+
+Two daemons are two instances of the templated units, each with its own
+environment file:
+
+    touch ~/.config/hands/spanweave.env ~/.config/hands/agile-skills.env
+    systemctl --user enable --now handsd@spanweave handsd@agile-skills
+    systemctl --user enable --now handswho@spanweave    # optional, per project
+
+A daemon reads and writes only its own project's spool. The default
+`server.socket` is inside that spool, so two projects never share one; a config
+that sets `server.socket` must name a path no other project's config names.
+`hands who` reads every project that has a config in `~/.hands/` and shows each
+daemon as a root of the picture; `handswho@<project>` pushes only its own
+project's picture to its own `who_topic`.
+
+**The one shared resource is the subscription.** Both daemons run `claude -p`
+as you, on the same Claude login, so every job of either project draws on the
+same usage allowance; the usage limit belongs to the account, not to a project,
+and each daemon meets it as its own `job.limited` and backs off by its own
+`[limits]`. Nothing in hands divides the subscription between projects. What
+meters it is each playbook's `auto_runs`: a daemon starts on its own only the
+run numbers its project's `PLAYBOOK.toml` lists in `[limits] auto_runs`, and
+stops for a human at any other, so what the laptop spends unattended is bounded
+by the runs the two playbooks allow, taken together.
+
+**Moving the flat spool.** Before §29 the spool sat directly under
+`~/.hands/` (`jobs/`, `roles/`, `inbox.jsonl`, `inbox.acks.jsonl`,
+`pipeline.json`). While any of those is there, `handsd` refuses to start: it
+exits 1, names what it found and says to run the migration, and it creates and
+binds nothing. Stop the old daemon, remove the retired `handsd.service` and
+`handswho.service` units (and `~/.config/hands.env`), then run:
+
+    hands migrate-spool
+
+It moves those items to `~/.hands/hands/` and files a `spool.migrated` event in
+that spool's inbox, naming what moved. It is refused, with nothing moved, while
+a daemon answers on a `*.sock` directly under `~/.hands/` or on the
+`server.socket` of any config there, and when `~/.hands/hands` already exists.
+With nothing flat it says so and exits 0, so running it twice moves once. The
+moved spool is the spool of the project called `hands`; if the flat spool was
+another project's, rename that directory to the project's name before starting
+its daemon.
 
 ## 3. Write the config (§14 step 1)
 
@@ -46,7 +99,7 @@ an unknown key or section is refused, and everything except `[roles.builder]
 cwd` is optional.
 
     [server]
-    socket = "~/.hands/handsd.sock"      # default
+    socket = "~/.hands/<project>/handsd.sock"  # default (§29)
 
     [notify]                             # the two ntfy keys are also read from
     ntfy_topic = "hands-<something-random>"  # [server], where older configs have
@@ -524,8 +577,8 @@ To have it pushed to your phone, add two more random topics:
     who_cmd_topic = "hands-who-cmd-<something-random>"   # optional
 
 and run `handswho --project <project>` (the same as `hands who --daemon`).
-`systemd/handswho.service` is an optional user unit, off unless you enable it;
-install it the way its header says. `handswho` pushes the picture to
+`systemd/handswho@.service` is an optional user unit, off unless you enable it;
+install it the way its header says, as `handswho@<project>`. `handswho` pushes the picture to
 `who_topic` when what is running, held or waiting changes (a session's state
 must hold for two scans first; your own
 sessions never trigger a push), and whenever `status`, `who`, `check` or `?` is

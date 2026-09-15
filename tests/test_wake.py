@@ -498,7 +498,7 @@ def test_the_daemon_reschedules_owed_resumes_when_it_starts(
     tmp_home: Path, workdir: Path
 ) -> None:
     (tmp_home / ".hands" / f"{PROJECT}.toml").write_text(config_body(tmp_home, workdir))
-    spool = Spool(tmp_home / ".hands")
+    spool = Spool(tmp_home / ".hands" / PROJECT)  # §29: the project's own spool
     job = limited_job(spool, reset_at=to_iso(datetime.now(UTC) - timedelta(hours=1)))
 
     async def scenario() -> None:

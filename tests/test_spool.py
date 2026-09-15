@@ -34,8 +34,8 @@ def make(spool: Spool, **kw):
 
 
 def test_spool_creates_its_directories(tmp_home: Path) -> None:
-    spool = Spool()
-    assert spool.root == tmp_home / ".hands"
+    spool = Spool("~/.hands/demo")
+    assert spool.root == tmp_home / ".hands" / "demo"
     assert spool.jobs_dir.is_dir()
     assert spool.roles_dir.is_dir()
 
@@ -74,14 +74,14 @@ def test_job_record_has_exactly_the_design_fields(tmp_home: Path) -> None:
     # is §23's (H-014): which of the failure causes made a job `failed`.
     assert set(JOB_FIELDS) == design | {"state", "playbook_sha256", "failure_reason"}
 
-    spool = Spool()
+    spool = Spool("~/.hands/demo")
     job = make(spool)
     on_disk = json.loads((spool.jobs_dir / f"{job.id}.json").read_text())
     assert set(on_disk) == set(JOB_FIELDS)
 
 
 def test_new_job_starts_queued_and_stamps_created(tmp_home: Path) -> None:
-    spool = Spool()
+    spool = Spool("~/.hands/demo")
     job = make(spool)
     assert job.state == "queued"
     assert job.created.endswith("Z")
@@ -91,14 +91,14 @@ def test_new_job_starts_queued_and_stamps_created(tmp_home: Path) -> None:
 
 
 def test_a_gated_job_may_start_held(tmp_home: Path) -> None:
-    spool = Spool()
+    spool = Spool("~/.hands/demo")
     job = make(spool, state="held", gate={"reason": "decisions file"})
     assert job.state == "held"
     assert spool.load_job(job.id).gate == {"reason": "decisions file"}
 
 
 def test_a_job_cannot_be_created_in_a_non_initial_state(tmp_home: Path) -> None:
-    spool = Spool()
+    spool = Spool("~/.hands/demo")
     assert INITIAL_STATES == frozenset({"held", "queued"})
     with pytest.raises(SpoolError):
         make(spool, state="running")
@@ -106,13 +106,13 @@ def test_a_job_cannot_be_created_in_a_non_initial_state(tmp_home: Path) -> None:
 
 @pytest.mark.parametrize("field,value", [("context", "resume"), ("origin", "robot"), ("role", "")])
 def test_bad_job_fields_are_refused(tmp_home: Path, field: str, value: str) -> None:
-    spool = Spool()
+    spool = Spool("~/.hands/demo")
     with pytest.raises(SpoolError):
         make(spool, **{field: value})
 
 
 def test_job_ids_are_short_sortable_and_unique(tmp_home: Path) -> None:
-    spool = Spool()
+    spool = Spool("~/.hands/demo")
     ids = [make(spool).id for _ in range(50)]
     assert len(set(ids)) == 50
     assert all(len(i) <= 16 for i in ids)
@@ -124,11 +124,11 @@ def test_job_ids_are_short_sortable_and_unique(tmp_home: Path) -> None:
 
 def test_missing_job_raises(tmp_home: Path) -> None:
     with pytest.raises(SpoolError):
-        Spool().load_job("nosuchjob")
+        Spool("~/.hands/demo").load_job("nosuchjob")
 
 
 def test_list_jobs_is_sorted_and_ignores_stray_files(tmp_home: Path) -> None:
-    spool = Spool()
+    spool = Spool("~/.hands/demo")
     ids = sorted(make(spool).id for _ in range(3))
     (spool.jobs_dir / "notes.txt").write_text("hi")
     (spool.jobs_dir / ".tmp-half.json").write_text("{")
@@ -180,7 +180,7 @@ ILLEGAL = sorted((a, b) for a in STATES for b in STATES if b not in TRANSITIONS[
 
 @pytest.mark.parametrize("start,end", LEGAL)
 def test_every_legal_transition_is_allowed(tmp_home: Path, start: str, end: str) -> None:
-    spool = Spool()
+    spool = Spool("~/.hands/demo")
     job = job_in_state(spool, start)
     out = spool.transition(job, end)
     assert out.state == end
@@ -189,7 +189,7 @@ def test_every_legal_transition_is_allowed(tmp_home: Path, start: str, end: str)
 
 @pytest.mark.parametrize("start,end", ILLEGAL)
 def test_every_illegal_transition_is_refused(tmp_home: Path, start: str, end: str) -> None:
-    spool = Spool()
+    spool = Spool("~/.hands/demo")
     job = job_in_state(spool, start)
     before = (spool.jobs_dir / f"{job.id}.json").read_bytes()
     with pytest.raises(IllegalTransition) as exc:
@@ -200,7 +200,7 @@ def test_every_illegal_transition_is_refused(tmp_home: Path, start: str, end: st
 
 
 def test_unknown_state_is_refused(tmp_home: Path) -> None:
-    spool = Spool()
+    spool = Spool("~/.hands/demo")
     job = make(spool)
     with pytest.raises(IllegalTransition):
         spool.transition(job, "finished")
@@ -208,7 +208,7 @@ def test_unknown_state_is_refused(tmp_home: Path) -> None:
 
 def test_denied_is_terminal(tmp_home: Path) -> None:
     """U4 depends on this: nothing releases a denied job."""
-    spool = Spool()
+    spool = Spool("~/.hands/demo")
     job = make(spool, state="held")
     spool.transition(job, "denied", gate={"reason": "no", "decided_by": "cli"})
     for state in STATES:
@@ -217,7 +217,7 @@ def test_denied_is_terminal(tmp_home: Path) -> None:
 
 
 def test_running_stamps_started_and_terminal_stamps_ended(tmp_home: Path) -> None:
-    spool = Spool()
+    spool = Spool("~/.hands/demo")
     job = make(spool)
     spool.transition(job, "running", pid=4242)
     assert job.started is not None and job.ended is None
@@ -228,7 +228,7 @@ def test_running_stamps_started_and_terminal_stamps_ended(tmp_home: Path) -> Non
 
 
 def test_transition_refuses_unknown_fields(tmp_home: Path) -> None:
-    spool = Spool()
+    spool = Spool("~/.hands/demo")
     job = make(spool)
     with pytest.raises(SpoolError):
         spool.transition(job, "running", pdi=1)
@@ -236,7 +236,7 @@ def test_transition_refuses_unknown_fields(tmp_home: Path) -> None:
 
 
 def test_a_limited_job_is_superseded_by_a_resume_job_not_a_transition(tmp_home: Path) -> None:
-    spool = Spool()
+    spool = Spool("~/.hands/demo")
     job = make(spool)
     spool.transition(job, "running")
     spool.transition(job, "limited", limit={"category": "rate_limit", "message": "x"})
@@ -252,7 +252,7 @@ def test_a_limited_job_is_superseded_by_a_resume_job_not_a_transition(tmp_home: 
 def test_atomic_write_leaves_the_old_record_intact_when_the_replace_crashes(
     tmp_home: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    spool = Spool()
+    spool = Spool("~/.hands/demo")
     job = make(spool)
     path = spool.jobs_dir / f"{job.id}.json"
     before = path.read_bytes()
@@ -273,7 +273,7 @@ def test_atomic_write_leaves_the_old_record_intact_when_the_replace_crashes(
 def test_a_record_is_never_visible_half_written(
     tmp_home: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    spool = Spool()
+    spool = Spool("~/.hands/demo")
     job = make(spool)
     path = spool.jobs_dir / f"{job.id}.json"
     seen = []
@@ -295,14 +295,14 @@ def test_a_record_is_never_visible_half_written(
 
 
 def test_unknown_role_state_is_empty(tmp_home: Path) -> None:
-    state = Spool().read_role("builder")
+    state = Spool("~/.hands/demo").read_role("builder")
     assert state.role == "builder"
     assert state.last_session_id is None
     assert state.last_job is None
 
 
 def test_role_state_round_trips(tmp_home: Path) -> None:
-    spool = Spool()
+    spool = Spool("~/.hands/demo")
     job = make(spool)
     spool.set_last_session("builder", session_id="sess-1", job_id=job.id)
     state = spool.read_role("builder")
@@ -312,7 +312,7 @@ def test_role_state_round_trips(tmp_home: Path) -> None:
 
 
 def test_role_state_is_written_atomically(tmp_home: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    spool = Spool()
+    spool = Spool("~/.hands/demo")
     spool.set_last_session("builder", session_id="sess-1", job_id="j1")
     monkeypatch.setattr(spool_mod.os, "replace", lambda src, dst: (_ for _ in ()).throw(OSError()))
     with pytest.raises(OSError):
@@ -326,7 +326,7 @@ def test_role_state_is_written_atomically(tmp_home: Path, monkeypatch: pytest.Mo
 
 
 def test_inbox_is_append_only_jsonl(tmp_home: Path) -> None:
-    spool = Spool()
+    spool = Spool("~/.hands/demo")
     first = spool.append_event("job.done", {"job": "j1", "verdict": "VERDICT: ok"})
     before = spool.inbox_path.read_bytes()
     second = spool.append_event("stop", {"reason": "blockers"})
@@ -341,7 +341,7 @@ def test_inbox_is_append_only_jsonl(tmp_home: Path) -> None:
 
 
 def test_ack_does_not_rewrite_history(tmp_home: Path) -> None:
-    spool = Spool()
+    spool = Spool("~/.hands/demo")
     a = spool.append_event("job.done", {"job": "j1"})
     b = spool.append_event("stop", {"reason": "why"})
     before = spool.inbox_path.read_bytes()
@@ -360,14 +360,14 @@ def test_ack_does_not_rewrite_history(tmp_home: Path) -> None:
 
 
 def test_acking_an_unknown_event_is_an_error(tmp_home: Path) -> None:
-    spool = Spool()
+    spool = Spool("~/.hands/demo")
     with pytest.raises(SpoolError):
-        Spool().ack("e000999")
+        Spool("~/.hands/demo").ack("e000999")
     assert spool.unacked() == []
 
 
 def test_events_since_filters_by_id(tmp_home: Path) -> None:
-    spool = Spool()
+    spool = Spool("~/.hands/demo")
     a = spool.append_event("heartbeat", {})
     b = spool.append_event("stop", {})
     assert [e.id for e in spool.events(since=a.id)] == [b.id]
@@ -398,7 +398,7 @@ def test_events_since_filters_by_id(tmp_home: Path) -> None:
     ],
 )
 def test_every_design_event_kind_is_accepted(tmp_home: Path, kind: str) -> None:
-    assert Spool().append_event(kind, {}).kind == kind
+    assert Spool("~/.hands/demo").append_event(kind, {}).kind == kind
 
 
 def test_wait_for_task_killed_resolves_to_the_monitor_kind() -> None:
@@ -420,11 +420,11 @@ def test_wait_for_orphan_processes_resolves_to_the_monitor_kind() -> None:
 @pytest.mark.parametrize("kind", ["", "Job.Done", "weather.report", "job..done", "job done"])
 def test_unknown_event_kinds_are_refused(tmp_home: Path, kind: str) -> None:
     with pytest.raises(SpoolError):
-        Spool().append_event(kind, {})
+        Spool("~/.hands/demo").append_event(kind, {})
 
 
 def test_inbox_survives_a_truncated_last_line(tmp_home: Path) -> None:
-    spool = Spool()
+    spool = Spool("~/.hands/demo")
     spool.append_event("heartbeat", {})
     with spool.inbox_path.open("a") as fh:
         fh.write('{"id": "e000002", "kind": "st')
@@ -531,7 +531,7 @@ def test_a_root_that_is_itself_a_symlink_still_works(tmp_home: Path) -> None:
 
 def test_a_record_written_before_a_later_field_existed_still_loads(tmp_home: Path) -> None:
     """Records are kept forever (§7); an optional field added later takes its default."""
-    spool = Spool()
+    spool = Spool("~/.hands/demo")
     job = make(spool)
     path = spool.jobs_dir / f"{job.id}.json"
     data = json.loads(path.read_text())
@@ -542,7 +542,7 @@ def test_a_record_written_before_a_later_field_existed_still_loads(tmp_home: Pat
 
 def test_a_record_written_before_failure_reason_existed_still_loads(tmp_home: Path) -> None:
     """§23 added `failure_reason`; every record kept from before has none (§7)."""
-    spool = Spool()
+    spool = Spool("~/.hands/demo")
     job = make(spool)
     path = spool.jobs_dir / f"{job.id}.json"
     data = json.loads(path.read_text())
@@ -552,7 +552,7 @@ def test_a_record_written_before_failure_reason_existed_still_loads(tmp_home: Pa
 
 
 def test_a_record_missing_a_required_field_is_refused(tmp_home: Path) -> None:
-    spool = Spool()
+    spool = Spool("~/.hands/demo")
     job = make(spool)
     path = spool.jobs_dir / f"{job.id}.json"
     data = json.loads(path.read_text())
@@ -563,7 +563,7 @@ def test_a_record_missing_a_required_field_is_refused(tmp_home: Path) -> None:
 
 
 def test_a_record_with_an_unknown_field_is_refused(tmp_home: Path) -> None:
-    spool = Spool()
+    spool = Spool("~/.hands/demo")
     job = make(spool)
     path = spool.jobs_dir / f"{job.id}.json"
     data = json.loads(path.read_text())

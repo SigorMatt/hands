@@ -203,7 +203,8 @@ def test_approve_with_the_secret_records_decided_by_phone(project: str, tmp_home
         assert record["gate"]["decision"] == "approved"
         assert record["gate"]["decided_by"] == "phone"
         # The record on disk says the same thing, not only the API's view of it.
-        on_disk = json.loads((tmp_home / ".hands" / "jobs" / f"{job['id']}.json").read_text())
+        record_path = tmp_home / ".hands" / project / "jobs" / f"{job['id']}.json"  # §29
+        on_disk = json.loads(record_path.read_text())
         assert on_disk["gate"]["decided_by"] == "phone"
         decided = [e for e in (await ok("inbox"))["events"] if e["kind"] == "gate.decided"]
         assert [e["payload"]["decided_by"] for e in decided] == ["phone"]

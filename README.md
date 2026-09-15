@@ -25,11 +25,11 @@ phone.
     driver (a Claude Code session, own dir, remote control on) │
         │  Bash: hands <command>
         ▼
-    handsd (user daemon, unix socket ~/.hands/handsd.sock)
+    handsd (user daemon per project, unix socket ~/.hands/<project>/handsd.sock)
         ├─ runner    one `claude -p` per job, one job per role
         ├─ monitor   liveness, stalls, commit tripwires, killed tasks, leftovers
         ├─ playbook  event → action, entirely pre-planned
-        ├─ spool     job records, role state, inbox — the only state
+        ├─ spool     ~/.hands/<project>/: job records, role state, inbox — the only state
         └─ notify    ntfy, for the four things that need you
 
 The core never opens a port: the CLI talks to the daemon over a unix socket in
@@ -42,13 +42,18 @@ dependency is `httpx`.
 
     uv tool install ~/git/hands      # installs 3 executables: hands, handsd, handswho
 
-Run the daemon under systemd (user unit; the project name comes from an
-environment file):
+Run the daemon under systemd (a templated user unit; the instance name is the
+project, and each instance reads `~/.config/hands/<project>.env`):
 
-    install -Dm644 ~/git/hands/systemd/handsd.service ~/.config/systemd/user/handsd.service
-    printf 'HANDS_PROJECT=<project>\n' > ~/.config/hands.env
+    install -Dm644 ~/git/hands/systemd/handsd@.service ~/.config/systemd/user/handsd@.service
+    mkdir -p ~/.config/hands && touch ~/.config/hands/<project>.env
     systemctl --user daemon-reload
-    systemctl --user enable --now handsd
+    systemctl --user enable --now handsd@<project>
+
+A second project is a second instance (`handsd@<other>`), with its own spool
+under `~/.hands/<other>/`. A spool from before that layout (directly under
+`~/.hands/`) is refused by `handsd` until `hands migrate-spool` moves it; see
+`docs/INTEGRATION.md`, "Two projects on one laptop".
 
 or just `handsd --project <project>` in a terminal.
 

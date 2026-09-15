@@ -2595,7 +2595,7 @@ def test_end_to_end_a_restarted_daemon_counts_consults_from_its_start(
 ) -> None:
     """The probe over a real daemon: its start is the engine's anchor."""
     _consult_project(tmp_home, workdir)
-    spool = Spool(tmp_home / ".hands")
+    spool = Spool(tmp_home / ".hands" / PROJECT)  # §29: the daemon's own spool
     about = finished(spool, verdict="VERDICT: question x")
     for _ in range(4):
         _driver_job(spool, state="done", verdict="VERDICT: resolved a", about=about)
@@ -2797,7 +2797,7 @@ def test_end_to_end_an_orphaned_driver_job_stops_when_the_daemon_starts(
     tmp_home: Path, workdir: Path
 ) -> None:
     _no_rules_project(tmp_home, workdir)
-    spool = Spool(tmp_home / ".hands")
+    spool = Spool(tmp_home / ".hands" / PROJECT)  # §29: the daemon's own spool
     about = finished(spool, verdict="VERDICT: question x")
     job = spool.create_job(
         role="driver", context="clear", prompt=consult_prompt("builder.done", about),

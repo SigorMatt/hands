@@ -180,7 +180,7 @@ def test_a_queued_job_can_be_cancelled_before_it_runs(project: str) -> None:
 def test_running_jobs_of_a_dead_daemon_are_orphaned_at_startup(
     project: str, tmp_home: Path, workdir: Path
 ) -> None:
-    spool = Spool(tmp_home / ".hands")
+    spool = Spool(tmp_home / ".hands" / PROJECT)
     job = spool.create_job(role="builder", context="clear", prompt="x", origin="cli")
     spool.transition(job, "running", pid=999999, session_id="gone")
 
@@ -194,7 +194,7 @@ def test_the_captured_stream_is_persisted_per_job(project: str, tmp_home: Path) 
     async def body(daemon: Daemon) -> None:
         sent = await ok("send", "--role", "builder", "--context", "clear", "FAKE:result streamed")
         await ok("wait", sent["id"])
-        path = tmp_home / ".hands" / "jobs" / f"{sent['id']}.stream.jsonl"
+        path = tmp_home / ".hands" / PROJECT / "jobs" / f"{sent['id']}.stream.jsonl"
         assert path.exists(), "the daemon must persist the stream for `hands log` (U9)"
         events = [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
         kinds = [(e.get("type"), e.get("subtype")) for e in events]
@@ -274,7 +274,7 @@ def test_send_refuses_the_driver_role_which_only_a_consult_starts(
         for context in ("clear", "keep"):
             err = await fails("send", "--role", "driver", "--context", context, "x")
             assert "consult" in strip_paths(err), err
-        assert not Spool(tmp_home / ".hands").list_jobs()
+        assert not Spool(tmp_home / ".hands" / PROJECT).list_jobs()
 
     drive(body)
 

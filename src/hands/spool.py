@@ -1,11 +1,17 @@
 """The spool — the whole of hands' runtime state (DESIGN §6, §7, §11).
 
-Files under `~/.hands/`:
+Files under `~/.hands/<project>/` (§29: one spool per project; the root is
+`hands.config.spool_root`):
 
     jobs/<id>.json      one job record per file, written atomically, never pruned
     roles/<role>.json   last_session_id + last_job for `--context keep`
     inbox.jsonl         append-only event list
     inbox.acks.jsonl    append-only ack markers, so acking never rewrites history
+    pipeline.json       the playbook engine's counters (§10)
+    handsd.sock         the daemon's socket, by default (§13)
+
+The flat layout of missions before §29 kept the same files directly under
+`~/.hands/`; `flat_layout` finds it and `migrate_flat` moves it.
 
 The daemon (§3) is a single asyncio process and the CLI only reads, so plain
 synchronous IO with `os.replace` is enough; no locking is needed.
@@ -27,6 +33,7 @@ log = logging.getLogger("hands.spool")
 
 __all__ = [
     "EVENT_KINDS",
+    "FLAT_ITEMS",
     "INITIAL_STATES",
     "JOB_FIELDS",
     "STATES",
@@ -39,6 +46,8 @@ __all__ = [
     "RoleState",
     "Spool",
     "SpoolError",
+    "flat_layout",
+    "migrate_flat",
     "new_job_id",
     "resolve_kinds",
     "resolve_under_roots",
@@ -129,6 +138,9 @@ EVENT_KINDS = frozenset(
         "kit.refused",  # a kit command with the secret was refused, with the check (§27)
         "consult.sent",  # a playbook `consult` started a driver job (§27)
         "consult.done",  # that driver job ended, with its verdict line (§27)
+        # §29: `hands migrate-spool` moved the flat layout into this spool. The name
+        # is this unit's choice; §29 says only that the move is recorded in the inbox.
+        "spool.migrated",
     }
 )
 
@@ -397,15 +409,17 @@ def resolve_under_roots(candidate: str | os.PathLike[str], roots: Iterable[str |
 
 
 class Spool:
-    """Reader/writer for `~/.hands/`."""
+    """Reader/writer for `~/.hands/<project>/` (§29)."""
 
-    def __init__(self, root: str | Path | None = None) -> None:
+    def __init__(self, root: str | Path) -> None:
         #: Called with every event this spool appends, in the appending call's own
         #: stack. The daemon puts one here so `hands wait --for` is a subscription
         #: and not a poll (§11); a listener that raises is logged and ignored,
         #: because writing the event is the part that must not fail.
         self.listeners: list[Callable[[Event], None]] = []
-        self.root = Path(root).expanduser() if root is not None else Path("~/.hands").expanduser()
+        # §29: always a project's own directory; no default, so nothing can write
+        # the retired flat layout by omission.
+        self.root = Path(root).expanduser()
         self.jobs_dir = self.root / "jobs"
         self.roles_dir = self.root / "roles"
         self.inbox_path = self.root / "inbox.jsonl"
@@ -659,3 +673,60 @@ class Spool:
         except OSError as exc:
             raise SpoolError(f"{path} is not readable: {exc}") from exc
         return [line for line in text.splitlines() if line.strip()]
+
+
+# ------------------------------------------------------- the flat layout §29
+
+#: What sat directly under `~/.hands/` before §29 and belongs to one daemon. Any
+#: one of them there is "the flat layout". The socket is not in the list: a
+#: stale `handsd.sock` is not state, and a live one is refused by the caller.
+FLAT_ITEMS: tuple[str, ...] = (
+    "jobs",
+    "roles",
+    "inbox.jsonl",
+    "inbox.acks.jsonl",
+    "pipeline.json",
+)
+
+#: §29: the project the flat layout's contents move to.
+MIGRATED_PROJECT = "hands"
+
+
+def flat_layout(hands_dir: str | Path) -> list[Path]:
+    """The `FLAT_ITEMS` present directly under `hands_dir`, in `FLAT_ITEMS` order."""
+    base = Path(hands_dir).expanduser()
+    return [base / name for name in FLAT_ITEMS if os.path.lexists(base / name)]
+
+
+def migrate_flat(hands_dir: str | Path) -> Path | None:
+    """Move the flat layout into `<hands_dir>/hands/` and record it (§29).
+
+    None when there is no flat layout (nothing is done, nothing is recorded).
+    Refuses, before moving anything, when `<hands_dir>/hands` already exists.
+    Each item is one `os.rename` in the same directory tree; a failure part way
+    leaves the rest where it was and says which.
+    """
+    base = Path(hands_dir).expanduser()
+    present = flat_layout(base)
+    if not present:
+        return None
+    target = base / MIGRATED_PROJECT
+    if os.path.lexists(target):
+        raise SpoolError(
+            f"{target} already exists; move the flat spool ({', '.join(p.name for p in present)}) "
+            "by hand, or move that directory aside first"
+        )
+    target.mkdir()
+    moved: list[str] = []
+    for item in present:
+        try:
+            os.rename(item, target / item.name)
+        except OSError as exc:
+            raise SpoolError(
+                f"moving {item} to {target} failed ({exc}); moved so far: {moved or 'nothing'}"
+            ) from exc
+        moved.append(item.name)
+    Spool(target).append_event(
+        "spool.migrated", {"from": str(base), "to": str(target), "moved": moved}
+    )
+    return target

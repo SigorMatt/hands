@@ -87,7 +87,7 @@ def test_full_config_loads_every_field(write_config, tmp_home: Path) -> None:
     assert cfg.project == "spanweave"
     assert cfg.path == tmp_home / ".hands" / "spanweave.toml"
 
-    assert cfg.server.socket == tmp_home / ".hands" / "handsd.sock"
+    assert cfg.server.socket == tmp_home / ".hands" / "handsd.sock"  # set explicitly in FULL
     assert cfg.server.ntfy_topic == "hands-abc123"
     assert cfg.server.ntfy_url == "https://ntfy.sh"
 
@@ -123,7 +123,7 @@ def test_every_optional_key_has_a_default(write_config, tmp_home: Path) -> None:
     write_config()  # only [roles.builder] cwd
     cfg = load_config("demo")
 
-    assert cfg.server.socket == tmp_home / ".hands" / "handsd.sock"
+    assert cfg.server.socket == tmp_home / ".hands" / "demo" / "handsd.sock"  # §29
     assert cfg.server.ntfy_topic is None
     assert cfg.server.ntfy_url == "https://ntfy.sh"
 

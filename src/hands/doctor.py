@@ -219,7 +219,8 @@ def _who_check(config: Config) -> Check:
         OK,
         f"who view on: `handswho` pushes the picture to who_topic when it changes; {asks}"
         f"\nnot checked here: whether handswho is running — `handswho --project "
-        f"{config.project}`, or systemd/handswho.service, off unless enabled (§24)",
+        f"{config.project}`, or systemd/handswho@.service as `handswho@{config.project}`, "
+        "off unless enabled (§24, §29)",
     )
 
 
@@ -688,7 +689,7 @@ def _daemon_check(
             WARN,
             f"{exc}\nnothing is wrong with the config; start it with "
             f"`handsd --project {config.project}`, or "
-            f"`systemctl --user start handsd` (systemd/handsd.service)",
+            f"`systemctl --user start handsd@{config.project}` (systemd/handsd@.service)",
         )
     running = status.get("daemon", {})
     jobs = sum(1 for role in status.get("roles", {}).values() if role.get("running"))

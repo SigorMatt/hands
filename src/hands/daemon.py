@@ -1,9 +1,9 @@
 """The daemon — the process that owns the roles, the queue and the socket (DESIGN §3).
 
-    handsd  (user daemon, unix socket ~/.hands/handsd.sock)
+    handsd  (user daemon, unix socket ~/.hands/<project>/handsd.sock)
       ├─ api         local JSON-RPC over the socket; the CLI is a thin client
       ├─ runner      spawns claude -p per job, one per role, stream-json parser
-      └─ spool       ~/.hands/jobs/<id>.json, ~/.hands/roles/<role>.json, inbox
+      └─ spool       ~/.hands/<project>/jobs/<id>.json, …/roles/<role>.json, inbox
 
 Everything the daemon knows is in the spool, so a restart loses nothing: running
 jobs whose process is gone are marked `orphaned` (§3) and jobs still `queued` are
@@ -46,7 +46,7 @@ from hands.notify import Notifier
 from hands.phone import PhoneChannel
 from hands.playbook import PlaybookEngine
 from hands.runner import LINE_LIMIT, Runner, RunnerError, reconcile_orphans
-from hands.spool import TERMINAL_STATES, Event, Job, Spool, now_iso
+from hands.spool import TERMINAL_STATES, Event, Job, Spool, flat_layout, now_iso
 
 __all__ = ["Daemon", "DaemonError", "main"]
 
@@ -101,8 +101,8 @@ class Daemon:
         heartbeat_s: float = HEARTBEAT_S,
     ) -> None:
         self.config = config
-        # The spool lives beside the config: `~/.hands/<project>.toml` → `~/.hands`.
-        self.spool = Spool(config.path.parent)
+        # §29: the spool is the project's own: `~/.hands/<project>.toml` → `~/.hands/<project>/`.
+        self.spool = Spool(config.spool_root)
         self.runner = Runner(config, self.spool)
         #: §6's limits: it is handed every terminal job and schedules the resume.
         #: Its `sleep` and `clock` are attributes so a test never waits one out.
@@ -879,6 +879,18 @@ def main(argv: Sequence[str] | None = None) -> int:
     except ConfigError as exc:
         print(f"handsd: {exc}", file=sys.stderr)
         return 1
+    # §29: the flat layout is refused before anything is created or bound.
+    flat = flat_layout(config.path.parent)
+    if flat:
+        print(
+            f"handsd: {config.path.parent} holds the flat spool of an older hands "
+            f"({', '.join(p.name for p in flat)}); each project now has its own spool "
+            f"under {config.path.parent}/<project>/. Stop any running handsd, run "
+            f"`hands migrate-spool` (it moves them to {config.path.parent}/hands/), "
+            "then start handsd again.",
+            file=sys.stderr,
+        )
+        return 1
     socket_path = Path(args.socket).expanduser() if args.socket else None
     try:
         return asyncio.run(_serve(config, socket_path))
@@ -895,7 +907,7 @@ def _notify_crash(config: Config, exc: BaseException) -> None:
     before the process exits so the publish is not lost with it."""
 
     async def publish() -> None:
-        notifier = Notifier(config, Spool(config.path.parent))
+        notifier = Notifier(config, Spool(config.spool_root))
         await notifier.deliver(
             "hands: handsd crashed",
             f"{type(exc).__name__}: {exc}",

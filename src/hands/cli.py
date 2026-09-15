@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import contextlib
 import functools
 import json
 import os
@@ -29,9 +30,17 @@ from hands import notify as notify_mod
 from hands import who as who_mod
 from hands.api import MAX_TAIL_ENTRIES, TAIL_WINDOW_BYTES
 from hands.api import TIMEOUT as TIMEOUT_CODE
-from hands.config import Config, ConfigError, config_path, load_config, resolve_project
+from hands.config import (
+    Config,
+    ConfigError,
+    config_path,
+    hands_dir,
+    list_projects,
+    load_config,
+    resolve_project,
+)
 from hands.runner import LINE_LIMIT, MAX_PROMPT_BYTES
-from hands.spool import ORIGINS
+from hands.spool import FLAT_ITEMS, ORIGINS, SpoolError, flat_layout, migrate_flat
 
 __all__ = [
     "EXIT_REFUSED",
@@ -326,14 +335,22 @@ def build_parser() -> argparse.ArgumentParser:
     )
     who = command(
         "who",
-        "the one-screen picture: this daemon's jobs and pipeline, every other claude "
-        "process, and interactive sessions' waiting/working state (§4, §24)",
+        "the one-screen picture: every project's daemon with its jobs and pipeline "
+        "(§29), every other claude process, and interactive sessions' "
+        "waiting/working state (§4, §24)",
     )
     who.add_argument(
         "--daemon",
         action="store_true",
         help="keep running: push the picture to [notify] who_topic when it changes and "
         "on status/who/check/? from who_cmd_topic (the handswho entry point)",
+    )
+    # §29: answered by the client with no daemon and no config, like `kit check`.
+    command(
+        "migrate-spool",
+        f"move the flat spool ({', '.join(FLAT_ITEMS)} directly under ~/.hands) to "
+        "~/.hands/hands/ and record the move in its inbox (§29); refused while a daemon "
+        "answers, or when ~/.hands/hands exists",
     )
     check = command("doctor", "check the install end to end (§4, §14)")
     check.add_argument(
@@ -707,6 +724,8 @@ def main(
         # sandbox), so it is answered before any config is looked for.
         if command == "kit":
             return kit_mod.run(args.kit, args.repo, out=out, as_json=as_json)
+        if command == "migrate-spool":
+            return _migrate_spool(out=out, err=err, as_json=as_json)
         if command == "send":
             args.prompt = _prompt_of(args, sys.stdin if stdin is None else stdin)
         project: str | None = None
@@ -714,13 +733,20 @@ def main(
             project = resolve_project(getattr(args, "project", None))
             config = load_config(project)
         except ConfigError as exc:
+            names = list_projects() if project is None else []
+            if command == "who" and not args.daemon and names:
+                # §29: `hands who` shows every project's daemon as a root, so with
+                # several configs and none named it starts from the first by name.
+                project = names[0]
+                config = load_config(project)
             # §4/§20 (review 3 should-fix 8): doctor is the command whose job is
             # explaining a broken config, so it reports the error as its failed
             # `config` check instead of dying with a bare message. Every other
             # command still surfaces a ConfigError the way it always has.
-            if command != "doctor":
+            elif command != "doctor":
                 raise
-            return _doctor_unloadable(project, exc, live=args.live, out=out, as_json=as_json)
+            else:
+                return _doctor_unloadable(project, exc, live=args.live, out=out, as_json=as_json)
         override = getattr(args, "socket", None)
         socket_path = Path(override).expanduser() if override else config.server.socket
         # §14 step 1 is "write the config; `hands doctor`" — before handsd has
@@ -826,6 +852,63 @@ def _doctor_unloadable(
     path = config_path(project) if project else None
     found = [doctor.config_error(exc, path)]
     return _doctor_print(named, path, found, live=live, out=out, as_json=as_json)
+
+
+def _answering(path: Path) -> bool:
+    """Does something accept a connection on the unix socket `path`?"""
+    probe = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    probe.settimeout(1.0)
+    try:
+        probe.connect(str(path))
+    except OSError:
+        return False
+    finally:
+        probe.close()
+    return True
+
+
+def _migrate_spool(*, out: TextIO, err: TextIO, as_json: bool) -> int:
+    """`hands migrate-spool` (§29): the flat layout → `~/.hands/hands/`, recorded.
+
+    Nothing flat: says so and exits 0 (run it twice, get one move). Refused, with
+    nothing moved, exit 1: while anything answers on a `*.sock` directly under
+    `~/.hands/` or on the `server.socket` of a config there that loads; and when
+    `~/.hands/hands` already exists.
+    """
+    base = hands_dir()
+    present = flat_layout(base)
+    if not present:
+        result: dict[str, Any] = {"migrated": False, "moved": [], "to": None}
+        text = f"nothing to migrate: no flat spool directly under {base}"
+        print(json.dumps(result, sort_keys=True) if as_json else text, file=out)
+        return 0
+    sockets = set(base.glob("*.sock"))
+    for name in list_projects():
+        with contextlib.suppress(ConfigError):
+            sockets.add(load_config(name).server.socket)
+    live = sorted(str(path) for path in sockets if _answering(path))
+    if live:
+        print(
+            f"hands: a daemon is running on {', '.join(live)}; stop it "
+            "(`systemctl --user stop handsd`, or the terminal it runs in), then run "
+            "`hands migrate-spool` again",
+            file=err,
+        )
+        return 1
+    moved = [path.name for path in present]
+    try:
+        target = migrate_flat(base)
+    except SpoolError as exc:
+        print(f"hands: {exc}", file=err)
+        return 1
+    result = {"migrated": True, "moved": moved, "to": str(target)}
+    text = (
+        f"moved {', '.join(moved)} from {base} to {target}; recorded as spool.migrated "
+        f"in its inbox. Its config is {base}/hands.toml: rename a project's config to "
+        "hands.toml, or move the directory to that project's name, before starting handsd."
+    )
+    print(json.dumps(result, sort_keys=True) if as_json else text, file=out)
+    return 0
 
 
 def _doctor_print(

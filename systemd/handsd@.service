@@ -1,0 +1,48 @@
+# handsd@<project> — the hands daemon for one project (DESIGN §3, §13, §14, §29).
+#
+# A *user* unit: hands runs `claude -p` as you, with your subscription login and
+# your ~/.claude settings. It is never a system service.
+#
+# Templated: the instance name is the project, so one file serves every project
+# (§29, two projects on one laptop). `%i` is `<project>` of `~/.hands/<project>.toml`;
+# each instance keeps its spool and default socket under `~/.hands/<project>/`.
+#
+#   install -Dm644 systemd/handsd@.service ~/.config/systemd/user/handsd@.service
+#   mkdir -p ~/.config/hands && touch ~/.config/hands/spanweave.env
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now handsd@spanweave
+#   journalctl --user -u handsd@spanweave -f
+#
+# `~/.config/hands/<project>.env` is that project's environment file (`KEY=value`
+# lines, may be empty); it must exist. The project itself comes from the
+# instance name, never from the file.
+#
+# ExecStart is an absolute path because a systemd unit has no login shell and so
+# no `~/.local/bin` on PATH. `uv tool install ~/git/hands` installs all
+# executables ("Installed 3 executables: hands, handsd, handswho") into uv's tool bin
+# directory, `~/.local/bin` by default; if you installed into a venv instead,
+# point ExecStart at `<venv>/bin/handsd`. `%h` is your home directory.
+
+[Unit]
+Description=handsd — dispatch prompts to headless Claude Code roles (project %i)
+Documentation=https://github.com/SigorMatt/hands
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=%h/.config/hands/%i.env
+ExecStart=%h/.local/bin/handsd --project %i
+Restart=on-failure
+RestartSec=5
+# The spool and the socket live under %h/.hands/%i (§29); the daemon creates
+# them. A user unit has no login shell, so nothing here may rely on one.
+WorkingDirectory=%h
+# §11 sends the ntfy notification itself, and the crash notice is best-effort, so
+# journald is the only log that has to survive.
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=handsd@%i
+
+[Install]
+WantedBy=default.target

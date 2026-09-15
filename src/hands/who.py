@@ -52,7 +52,7 @@ import re
 import sys
 import time
 from collections import deque
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -614,43 +614,58 @@ def _daemon_block(
 
 
 def build_summary(src: Sources) -> tuple[str, list[tuple[str, str]]]:
+    """(text, items) for one project: `build_summary_all([src])`."""
+    return build_summary_all([src])
+
+
+def build_summary_all(srcs: Sequence[Sources]) -> tuple[str, list[tuple[str, str]]]:
     """(text, items). Text is the hierarchy; items are the (key, value) pairs the
-    caller fingerprints — what is running, held or waiting, never ages or clocks."""
+    caller fingerprints — what is running, held or waiting, never ages or clocks.
+
+    §29: one root per project's daemon, in `srcs` order, then every other claude
+    process once. The process table, transcripts, clock and home are the first
+    source's; each project contributes its daemon, role directories, inbox and
+    job sessions."""
+    src = srcs[0]
     table = src.procs()
     procs = claude_processes(table)
-    state = src.daemon()
     items: list[tuple[str, str]] = []
     blocks: list[str] = []
     hands_pids: set[int] = set()
-    inbox: list[dict[str, Any]] = []
+    inboxes: dict[str, list[dict[str, Any]]] = {}
 
-    if state is None:
-        blocks.append(f"handsd (daemon, project {src.project})\n    not answering")
-        items.append((src.project, "down"))
-    else:
-        lines, daemon_items, hands_pids = _daemon_block(state, table, src.project)
+    for each in srcs:
+        state = each.daemon()
+        if state is None:
+            blocks.append(f"handsd (daemon, project {each.project})\n    not answering")
+            items.append((each.project, "down"))
+            continue
+        lines, daemon_items, pids = _daemon_block(state, table, each.project)
+        hands_pids |= pids
         items += daemon_items
         inbox = list(state.get("inbox") or [])
         if inbox:
-            items.append((f"{src.project}:inbox", str(len(inbox))))
+            items.append((f"{each.project}:inbox", str(len(inbox))))
+            inboxes[each.project] = inbox
         blocks.append("\n".join(lines))
 
-    role_cwds = list(src.role_cwds.values())
-    driver_shown = False
+    role_cwds = [(cwd, each.project) for each in srcs for cwd in each.role_cwds.values()]
+    drivers_shown: set[str] = set()
     others = [p for p in procs if p["pid"] not in hands_pids]
     jobs: frozenset[str] = frozenset()
     if others:
         # §28: a job's transcript can exist before its record holds the session id.
         by_pid = (src.session_of(pid) for pid in sorted(hands_pids))
-        jobs = src.job_sessions() | {sid for sid in by_pid if sid is not None}
+        jobs = frozenset().union(*(each.job_sessions() for each in srcs))
+        jobs |= {sid for sid in by_pid if sid is not None}
     others.sort(key=lambda x: (_driver_of(x["cwd"], src.home) is None, x["cwd"], x["pid"]))
     for p in others:
         driver = _driver_of(p["cwd"], src.home)
-        in_role_dir = any(_within(p["cwd"], c) for c in role_cwds)
+        owner = next((project for cwd, project in role_cwds if _within(p["cwd"], cwd)), None)
         if driver is not None:
             label = f"driver:{driver}"
-        elif in_role_dir:
-            label = src.project + ("" if p["headless"] else " (your session)")
+        elif owner is not None:
+            label = owner + ("" if p["headless"] else " (your session)")
         else:
             label = os.path.basename(p["cwd"].rstrip("/")) or p["cwd"] or "?"
         meta = ["headless" if p["headless"] else "session", age(p["age_s"])]
@@ -663,8 +678,9 @@ def build_summary(src: Sources) -> tuple[str, list[tuple[str, str]]]:
         kind = "background process" if value == "wait" else "process"
         for cmd, cage in child_commands(table, p["pid"]):
             lines.append(f"  {short(cmd, CMD_CHARS)} ({kind}, {age(cage)})")
-        if driver == src.project and inbox:
-            driver_shown = True
+        inbox = inboxes.get(driver) if driver is not None else None
+        if inbox:
+            drivers_shown.add(str(driver))
             need = any(e.get("kind") in NEEDS_YOU for e in inbox)
             whose = "needs YOU" if need else "informational, the driver acks it on its next check"
             lines.append(
@@ -675,11 +691,12 @@ def build_summary(src: Sources) -> tuple[str, list[tuple[str, str]]]:
             items.append((f"s:{p['pid']}", value))
         blocks.append("\n".join(lines))
 
-    if inbox and not driver_shown:
-        blocks.append(
-            f"inbox for a driver of {src.project} (no driver session running)\n"
-            f"    {len(inbox)} unread from handsd — {_inbox_kinds(inbox)}"
-        )
+    for project, inbox in inboxes.items():
+        if project not in drivers_shown:
+            blocks.append(
+                f"inbox for a driver of {project} (no driver session running)\n"
+                f"    {len(inbox)} unread from handsd — {_inbox_kinds(inbox)}"
+            )
     n = len(procs)
     head = time.strftime("%H:%M", time.localtime(src.clock()))
     head += f" · {n} claude process{'es' if n != 1 else ''}"
@@ -746,7 +763,7 @@ def sources_for(config: Config, socket_path: Path) -> Sources:
         clock=time.time,
         home=Path.home(),
         job_sessions=JobSessions(
-            config.path.parent / "jobs",
+            config.spool_root / "jobs",  # §29: the project's own spool
             role_cwds={name: str(role.cwd) for name, role in config.roles.items()},
             grace_s=config.who.grace_s,
         ),
@@ -754,14 +771,52 @@ def sources_for(config: Config, socket_path: Path) -> Sources:
     )
 
 
+def _peers(config: Config) -> tuple[list[Config], list[str]]:
+    """§29: every other project with a config beside this one, loaded; and one
+    line for each that does not load (shown, never silently dropped)."""
+    base = config.path.parent
+    try:
+        names = sorted(path.stem for path in base.glob("*.toml"))
+    except OSError:  # pragma: no cover - unreadable ~/.hands
+        names = []
+    peers: list[Config] = []
+    errors: list[str] = []
+    for name in names:
+        if name == config.project:
+            continue
+        try:
+            peers.append(load_config(name, home=base.parent))
+        except ConfigError as exc:
+            errors.append(f"handsd (daemon, project {name})\n    config unreadable: {exc}")
+    return peers, errors
+
+
+def all_sources(config: Config, socket_path: Path | None) -> list[Sources]:
+    """§29: `config`'s project first (with `socket_path`, when given), then every
+    other project with a config in `~/.hands/`, by name, each on its own socket
+    and its own spool."""
+    peers, _errors = _peers(config)
+    first = sources_for(config, socket_path or config.server.socket)
+    return [first, *(sources_for(peer, peer.server.socket) for peer in peers)]
+
+
 def print_once(config: Config, socket_path: Path, *, out: TextIO, as_json: bool) -> int:
-    """`hands who`: the picture, once. Exit 0 whether or not the daemon answered —
-    a daemon that is down is part of the picture, and the rest is still true."""
-    src = sources_for(config, socket_path)
-    state = src.daemon()
-    text, items = build_summary(replace(src, daemon=lambda: state))
+    """`hands who`: the picture, once, with every project's daemon as a root (§29).
+    Exit 0 whether or not a daemon answered — a daemon that is down is part of the
+    picture, and the rest is still true."""
+    _peers_, errors = _peers(config)
+    srcs = all_sources(config, socket_path)
+    states = {src.project: src.daemon() for src in srcs}
+    frozen = [replace(src, daemon=lambda st=states[src.project]: st) for src in srcs]
+    text, items = build_summary_all(frozen)
+    text += "".join(f"\n\n{error}" for error in errors)
     if as_json:
-        payload = {"picture": text, "daemon": state, "items": [list(i) for i in items]}
+        payload = {
+            "picture": text,
+            "daemon": states[config.project],
+            "daemons": states,
+            "items": [list(i) for i in items],
+        }
         print(json.dumps(payload, sort_keys=True), file=out)
     else:
         print(text, file=out)

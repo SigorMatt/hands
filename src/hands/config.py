@@ -39,9 +39,11 @@ __all__ = [
     "WhoConfig",
     "config_path",
     "driver_clone",
+    "hands_dir",
     "list_projects",
     "load_config",
     "resolve_project",
+    "spool_root",
 ]
 
 
@@ -63,7 +65,8 @@ KNOWN_ROLES: tuple[str, ...] = ("builder", "aux", "driver")  # §27: driver is t
 DEFAULT_QUEUE_DEPTH = {"builder": 1, "aux": 4, "driver": 1}  # §6; §27 is silent for driver
 DEFAULT_MODEL = "opus"
 DEFAULT_NTFY_URL = "https://ntfy.sh"
-DEFAULT_SOCKET = "~/.hands/handsd.sock"
+#: §29: under the project's own spool, so two daemons' default sockets never collide.
+DEFAULT_SOCKET = "~/.hands/<project>/handsd.sock"
 DEFAULT_STALL_MINUTES = 40.0  # §5
 DEFAULT_BACKOFF_MINUTES = 30.0  # §6
 DEFAULT_MAX_RESUMES = 3  # §10 example; the playbook may override it
@@ -371,6 +374,11 @@ class Config:
     #: `[who]` (§29). Defaulted for the same reason.
     who: WhoConfig = field(default_factory=WhoConfig)
 
+    @property
+    def spool_root(self) -> Path:
+        """`~/.hands/<project>/` beside this config (§29)."""
+        return spool_root(self.project, base=self.path.parent)
+
     def role(self, name: str) -> RoleConfig:
         try:
             return self.roles[name]
@@ -378,14 +386,28 @@ class Config:
             raise KeyError(f"role {name!r} is not configured in {self.path}") from None
 
 
+def hands_dir(*, home: Path | None = None) -> Path:
+    """`~/.hands/`: every project's config and every project's spool (§13, §29)."""
+    return Path("~/.hands").expanduser() if home is None else Path(home) / ".hands"
+
+
+def spool_root(project: str, *, base: Path | None = None) -> Path:
+    """`~/.hands/<project>/` — one daemon's spool (§29). The one place it is computed.
+
+    `base` is the directory that holds `<project>.toml` (default `~/.hands`), so a
+    config loaded from elsewhere keeps its spool beside it.
+    """
+    return (hands_dir() if base is None else Path(base)) / project
+
+
 def config_path(project: str, *, home: Path | None = None) -> Path:
-    base = Path("~/.hands").expanduser() if home is None else Path(home) / ".hands"
+    base = hands_dir(home=home)
     return base / f"{project}.toml"
 
 
 def list_projects(*, home: Path | None = None) -> list[str]:
     """Every project with a config in `~/.hands/`, by name."""
-    base = Path("~/.hands").expanduser() if home is None else Path(home) / ".hands"
+    base = hands_dir(home=home)
     try:
         return sorted(path.stem for path in base.glob("*.toml"))
     except OSError:  # pragma: no cover - unreadable ~/.hands
@@ -407,7 +429,7 @@ def resolve_project(explicit: str | None = None, *, home: Path | None = None) ->
     names = list_projects(home=home)
     if len(names) == 1:
         return names[0]
-    base = Path("~/.hands").expanduser() if home is None else Path(home) / ".hands"
+    base = hands_dir(home=home)
     if not names:
         raise ConfigError(
             f"no project config in {base}/*.toml; write one (DESIGN §13) "
@@ -502,7 +524,7 @@ def parse_config(data: dict[str, Any], *, project: str, path: Path) -> Config:
         socket=_path(
             server_t,
             "socket",
-            DEFAULT_SOCKET,
+            str(spool_root(project, base=path.parent) / "handsd.sock"),
             "[server]",
             path,
             blank=_omit(f"the socket is then {DEFAULT_SOCKET}", "path"),

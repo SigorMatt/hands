@@ -31,13 +31,13 @@ DOCS = [
     ROOT / "driver" / "CLAUDE.md",
     ROOT / "driver" / "README.md",
 ]
-UNIT = ROOT / "systemd" / "handsd.service"
+UNIT = ROOT / "systemd" / "handsd@.service"
 EXAMPLE = ROOT / "tests" / "fixtures" / "playbook_example.toml"
 
 #: Words that follow `hands ` in a command without naming a command of §4.
 NOT_COMMANDS = {"--help", "--version", "--project", "--json", "--socket", "<command>"}
 #: Commands of §4 the CLI answers itself, with no daemon method (`kit check`, §26).
-CLIENT_COMMANDS = {"kit"}
+CLIENT_COMMANDS = {"kit", "migrate-spool"}  # §29: migrate-spool needs no daemon
 #: `hands <command>`, where `hands` is the program and not the tail of a path
 #: (`git clone …/hands repo`) — hence the lookbehind.
 COMMAND_RE = re.compile(r"(?<![\w/.~-])hands (?:--\w+ [\w<>-]+ )?([a-z-]+|--[a-z-]+)")
@@ -169,7 +169,7 @@ OPTIONAL_STATEMENTS = (
     "All three are off unless configured",
     "**The long-term secret never goes into a notification**",
     "is logged in handsd's journal (`journalctl --user -u handsd`) and ignored",
-    "`systemd/handswho.service` is an optional user unit, off unless you enable it",
+    "`systemd/handswho@.service` is an optional user unit, off unless you enable it",
     "`hands doctor` reports each of the three as on or off, never as a failure",
 )
 
@@ -515,9 +515,10 @@ def test_the_playbook_doc_lists_every_event_and_action() -> None:
 
 
 def test_the_systemd_unit_is_a_user_unit_with_the_project_in_an_environment_file() -> None:
+    """§29: templated; the instance name is the project, the env file is per project."""
     unit = UNIT.read_text(encoding="utf-8")
-    assert "EnvironmentFile=" in unit
-    assert "--project ${HANDS_PROJECT}" in unit
+    assert "EnvironmentFile=%h/.config/hands/%i.env" in unit
+    assert "--project %i" in unit
     assert "Restart=on-failure" in unit
     assert "WantedBy=default.target" in unit  # a user unit, not multi-user.target
     assert "User=" not in unit and "Group=" not in unit  # it runs as you, by being yours
@@ -530,16 +531,16 @@ def test_the_systemd_unit_is_a_user_unit_with_the_project_in_an_environment_file
 
 def test_the_handswho_unit_mirrors_handsd_and_is_off_unless_enabled() -> None:
     """§24: `handswho` ships as an optional user unit, off unless enabled."""
-    unit = (ROOT / "systemd" / "handswho.service").read_text(encoding="utf-8")
-    assert "EnvironmentFile=%h/.config/hands.env" in unit
-    assert "--project ${HANDS_PROJECT}" in unit
+    unit = (ROOT / "systemd" / "handswho@.service").read_text(encoding="utf-8")
+    assert "EnvironmentFile=%h/.config/hands/%i.env" in unit
+    assert "--project %i" in unit
     assert "Restart=on-failure" in unit
     assert "WantedBy=default.target" in unit
     assert "User=" not in unit and "Group=" not in unit
     exec_start = [line for line in unit.splitlines() if line.startswith("ExecStart=")]
-    assert exec_start == ["ExecStart=%h/.local/bin/handswho --project ${HANDS_PROJECT}"]
+    assert exec_start == ["ExecStart=%h/.local/bin/handswho --project %i"]
     # Optional: the install recipe enables it only as a step the human takes.
-    assert "systemctl --user enable --now handswho" in unit
+    assert "systemctl --user enable --now handswho@" in unit
     scripts = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
     assert scripts["project"]["scripts"]["handswho"] == "hands.who:main"
 
@@ -789,7 +790,7 @@ def test_the_sweep_reads_every_tracked_text_file_and_only_excludes_path_classes(
         "src/hands/doctor.py",
         "tests/test_playbook.py",
         "tests/test_doctor.py",
-        "systemd/handsd.service",
+        "systemd/handsd@.service",
         "scripts/check",
         "uv.lock",
         ".gitignore",
