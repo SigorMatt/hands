@@ -51,7 +51,17 @@ Base of the mission: 723dbeb (`plan: mission 13 kit (DESIGN v3.12)`).
       whose first `timestamp` (first 20 lines) lies in [started, ended];
       boundary tested with an injected clock; a human session begun in that
       folder during the job is hidden until the grace passes (documented)
-- [ ] U6 Two projects on one laptop (§29)
+- [x] U6 Two projects on one laptop (§29) 8f79f98 — `config.spool_root`:
+      jobs/, roles/, inbox.jsonl, inbox.acks.jsonl, pipeline.json and the
+      default socket under `~/.hands/<project>/` (config stays
+      `~/.hands/<project>.toml`; nonces in memory only); flat layout = any of
+      those five directly in `~/.hands/`, handsd exits 1 naming
+      `hands migrate-spool`; migrate-spool moves them to `~/.hands/hands/`,
+      files `spool.migrated`, no-op when nothing flat, refuses on an existing
+      target or a live socket; `systemd/` only handsd@/handswho@ with
+      `%h/.config/hands/%i.env`; `hands who` over every `~/.hands/*.toml`
+      project, one root each; INTEGRATION two daemons, subscription metered
+      by `auto_runs`
 - [ ] U7 This repository's playbook (kickoff BUILDER-14)
 - [ ] U8 Final report (meta/FINAL-REPORT-13.md)
 
