@@ -1,81 +1,44 @@
-# plan — mission 11 (review 10, the apply from the kit, the driver role)
+# plan — mission 12 (close review 11)
 
-Source: meta/BUILDER-11-PROMPT.md, DESIGN v3.10 §27 (with §6, §8, §10, §11,
-§26), meta/reviews/REVIEW-10.md, meta/FINAL-REPORT-10.md §5, findings H-018 to
-H-021. Units run in order; each ends with a commit and a push. `[x]` = done and
-pushed, `[b]` = blocked (two failures).
+Source: meta/BUILDER-12-PROMPT.md, DESIGN v3.11 §28 (with §8, §10, §12, §27),
+meta/reviews/REVIEW-11.md, findings H-022, H-023. Units run in order; each ends
+with a commit and a push. `[x]` = done and pushed, `[b]` = blocked (two
+failures).
 
-Base of the mission: 0fef436 (`plan: mission 11 kit (DESIGN v3.10)`).
+Base of the mission: bb9aab5 (`plan: mission 12 kit (DESIGN v3.11)`).
 
-- [x] U0 Plan and corrections (`plan:`) e8daca8 — this file, meta/CHECKPOINT.md;
-      H-018..H-021 v3.10 resolutions appended with status lines; REVIEW-10 SF7
-      (a test pins docs/INTEGRATION.md's `done` statement to §6; phrase
-      containment only)
-- [x] U1 REVIEW-10 SF1, SF3, SF4, SF5, SF6 (§27) efe4d56 — descendant = the
-      job's `HANDS_JOB=<id>` env mark in /proc (a member that cleared or hides
-      its env leaves the group unsignalled); apply literal excuses only a plain
-      `^VERDICT: kit applied` rule; aux.done placeholders tried as 0/1/12; any
-      pre-fetch refusal after a good secret files `kit.refused`; zip caps 16/64
-      MiB — `go` refused while the
-      builder has a held job (message names it), rechecked after the playbook
-      load; sweep signals a group only when its leader is the job's pid and all
-      members are descendants (foreign-group test); `kit check`: apply-verdict
-      exception never excuses a broken builder rule, `aux.done` rules checked
-      against the protocol's `VERDICT: review …` line (H-021 per §27), paths
-      outside the repo / absolute / `..` / a missing protocol path refused;
-      malformed attachment URL refused before any fetch with `kit.refused`;
-      INTEGRATION :304 name-clash wording
-- [x] U2 Who by the sessions file (§27; H-020; REVIEW-10 blocker 1) 525dc66 —
-      transcript by `<sessionId>.jsonl` (cwd project dir first, then any); bad
-      or foreign sessions file = no file (`by directory`); job transcript = a
-      session id held by any spool job record; another human's transcript can
-      still show under `by directory`
-- [x] U3 The apply from the kit (§27; REVIEW-10 SF2; H-018 `kit` origin and
-      un-pause for `phone`/`kit`) d4bea98 — one `plan_apply` for kit check and
-      daemon; commit message `KIT.md` first line else `plan: kit <stem>` (old
-      `plan: mission <N> kit` gone); only the paths check blocks the apply; a
-      busy builder does not; the prompt names the file where written, so
-      byte-equal with kit check only for `~/Downloads/<same name>`
-- [x] U4 The driver role (§8, §27) d491f6b — non-empty driver
-      `permission_flags` refused at config load (doctor `config` row fails);
-      HANDS_ROLE always `driver`; every send to the driver refused until U5's
-      `consult`; role mode runs only `git` read-only and listed `hands`
-      (no cat/ls/grep), send needs explicit `--context keep` and builder|aux;
-      clone at `<cwd>/repo` or `<cwd>`, missing clone/guard a warning
-- [x] U5 `consult` (§10, §27) c1d8ed5 — no driver role stops at fire time
-      (not load); driver started through the daemon queue, not `Api.send`,
-      ungated, origin playbook, context clear; `resolved` follow-up uses
-      `notify` (§10 has no no-op); max_consults counts driver jobs after the
-      last builder job whose prompt is the kickoff; consult.done/journal on any
-      end but `limited`; fake_claude gains `exec`
-- [x] U6 This repository's playbook (BUILDER-12 kickoff, consult rules)
-      089e72f — catch-all is `^VERDICT:` → consult (a reply with no VERDICT
-      line still stops); playbook loads (tests). Gate half open: `hands kit
-      check .` exits 1 (H-022: `.git/` in the dir, eleven briefs, kickoff names
-      the unwritten BUILDER-12); BUILDER-11 alone with `--repo .` passes 6 of
-      6. Not retried: a second run under the same rules stops at the same memo
-- [x] U7 Final report (the commit that carries this line) —
-      meta/FINAL-REPORT-11.md (drafted under meta/drafts/); mission ends
-      `blocked U6` (acceptance `kit check .` exit 0, H-022)
+- [ ] U0 Plan and bookkeeping (`plan:`) — this file, meta/CHECKPOINT.md;
+      FINDINGS: H-018..H-021 resolutions moved into their own sections, status
+      lines in place (SF5); H-022 §28 resolution, resolved; H-023 filed
+      (blocker 3); SF4 `done` statement pinned per `failure_reason` value
+- [ ] U1 The guard on shlex (§28; blocker 1) — driver/hooks/bash_guard.py,
+      its self-test tables, tests/test_bash_guard.py; every REVIEW-11 probe
+      blocked in both modes; every previously allowed command still allowed
+- [ ] U2 Consult and the driver role, engine-side (§28; SF1, SF2, SF3, SF8) —
+      engine stops, driver.killed/orphaned/limited events, max_consults
+      counter, doctor driver row; docs/PLAYBOOK.md, docs/INTEGRATION.md
+- [ ] U3 Kit transport and the apply (§28; blocker 2, SF6, SF7, SF9) — URL
+      checks in the try, kit check named paths, apply-verdict exception to
+      one rule, KIT.md line rules and shell-quoting
+- [ ] U4 Sweep and who (§28; blockers 3, 4; H-023)
+- [ ] U5 This repository's playbook — kickoff BUILDER-13; kit of
+      meta/BUILDER-12-PROMPT.md with `--repo .` exits 0 (blocker 5 per H-022)
+- [ ] U6 Final report — meta/FINAL-REPORT-12.md
 
-Review items by unit. REVIEW-10 blocker 1 → U2; SF1, SF3, SF4, SF5, SF6 → U1;
-SF2 → U3 (§27 resolves it by the apply from the kit, so no separate finding);
-SF7 → U0.
+Review items by unit. REVIEW-11 blocker 1 → U1; blocker 2 → U3; blockers 3, 4
+→ U4; blocker 5 → U0 (H-022 resolution) and U5 (the acceptance form); SF1,
+SF2, SF3, SF8 → U2; SF4, SF5 → U0; SF6, SF7, SF9 → U3.
 
-Scope choices (orchestrator's, from §27 where the brief's unit text is
-shorter):
-- H-021's `aux.done` check (§27 "verifies every `verdict` rule … `aux.done`
-  included, against … the `VERDICT: review …` line") goes to U1 with SF4, the
-  other half of the same check.
-- H-018's `kit` origin and its un-pause go to U3, which creates the first
-  `origin: kit` job; `phone` un-pause already exists (m10 U2).
-- REVIEW-10 SF5's extra probes (`.GIT`, duplicate entries, NUL, size cap,
-  unresolvable send paths) are beyond §27's list; U1 refuses what §27 names and
-  may take the rest where simplest, stating what it did not take.
+Scope choices (orchestrator's):
+- U0's SF4 test is product-tree work (tests/test_docs.py), so a sub-agent
+  writes it without committing; the orchestrator commits it with the meta
+  files as the one `plan:` commit.
+- REVIEW-11 Notes (sessions-file staleness, journal-line race, resolved
+  `notify` buzz) are outside §28 and not taken.
 
-Dependencies. U3 builds on U1's kit check path rules (same refusals for the
-zip) and on U1's `go` held-job rule (the apply job is the held one). U5 needs
-U4's role. U6 needs U5's action and events. U2 is independent.
+Dependencies. U5 needs U2 (the playbook must load under the engine-side
+stops) and U3 (kit check's named-path and verdict rules). U1, U3, U4 are
+independent of each other.
 
-Findings. H-018..H-021 resolved by v3.10 (U0 status lines). H-001 and H-009
-stay open.
+Findings. H-022 resolved by v3.11 (U0). H-023 filed (U0), code U4. H-001 and
+H-009 stay open.

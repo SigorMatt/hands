@@ -984,7 +984,14 @@ U0 makes `docs/INTEGRATION.md` state §6's rule; U1 makes the runner follow it
 (an `error`/`error_*` subtype is `error_result` whatever `is_error` says), with a
 test that is red before.
 
-Status: fixing (mission 10 U1 gap 3, U2 gaps 1 and 2)
+Resolution (DESIGN v3.10 §27, 2026-09-13). §27: "`phone` and `kit` are job
+origins (§6); a job of either origin un-pauses the pipeline when it starts, as
+a `cli` one does." Gap 1 and gap 2 are resolved as U2 of mission 10 chose,
+extended to `kit` (mission 11 U3 creates the first `origin: kit` job). §27 also
+refuses `go` while the builder has a **held** job (REVIEW-10 SF1, mission 11
+U1). Gap 3 was closed by mission 10 U1. (Moved into this section by mission 12 U0, REVIEW-11 should-fix 5.)
+
+Status: resolved by DESIGN v3.10 (code: gap 3 m10 U1; `phone` m10 U2; `kit` m11 U3)
 
 ## H-019 — `series = "…"` and `[series] kickoff` cannot share one TOML file
 
@@ -1017,13 +1024,18 @@ Needs: U5 reconciles `templates/` (the name moves into the table as `name`, or
 is dropped) so they load; §10/§26 in the next DESIGN revision state the
 table's keys (a different choice there supersedes this one).
 
-Status: open (code U2; templates U5; DESIGN next revision)
-
-Status (mission 10, U5): `templates/PLAYBOOK-missions.toml` and
+Progress (mission 10, U5): `templates/PLAYBOOK-missions.toml` and
 `templates/PLAYBOOK-runs.toml` now spell `[series] name` beside `kickoff`, with no
 top-level `series`; both load, and filled in (N=11, `<project>`=hands) they pass
 `hands kit check` (`tests/test_kit.py`). `docs/ARCHITECT-HANDBOOK.md` §6 names the
 table's two keys. DESIGN §10/§26 still to state them.
+
+Resolution (DESIGN v3.10 §27, 2026-09-13). §27: "the playbook's `[series]`
+table is `name` and `kickoff`; a bare `series = "…"` string remains accepted as
+the name." This is the form mission 10 U2 shipped and U5 put in the
+templates. (Moved into this section by mission 12 U0, REVIEW-11 should-fix 5.)
+
+Status: resolved by DESIGN v3.10 (no code change needed)
 
 ## H-020 — no transcript records a pid; §26's "the transcript's first line records" it does not hold
 
@@ -1086,7 +1098,17 @@ match (e.g. `~/.claude/sessions/<pid>.json` `sessionId`, reading only `pid` and
 (the `transcript: by directory` fallback), and whether `entrypoint` may be
 used. U4 is then re-run against it.
 
-Status: open (U4 blocked on DESIGN)
+Resolution (DESIGN v3.10 §27, 2026-09-13). §27: `hands who` matches an
+interactive `claude` process to its transcript through
+`~/.claude/sessions/<pid>.json`, whose `sessionId` names the transcript; the
+transcript stays the source of the session's state; with no sessions file for a
+pid the line says `transcript: by directory` and is never attributed a job's
+transcript. §27 does not name `entrypoint`; mission 11 U2 reads only `pid` and
+`sessionId` and never the `.key` file. (Moved into this section by mission 12 U0, REVIEW-11 should-fix 5.) DESIGN v3.11 §28 adds
+that the directory fallback also excludes the `sessionId` of every hands pid's
+sessions file (REVIEW-11 blocker 4, mission 12 U4).
+
+Status: resolved by DESIGN v3.10 (code: mission 11 U2; §28 fallback: mission 12 U4)
 
 ## H-021 — §26's verdict check reads the builder's brief; review verdicts have no literal to match
 
@@ -1118,37 +1140,16 @@ Needs: the next DESIGN revision says whether and how review verdict rules are
 checked (for example against the protocol's verdict line, with each named
 placeholder read as its class of values), or confirms the builder-only scope.
 
-Status: open (U5 shipped the builder-only scope)
+Resolution (DESIGN v3.10 §27, 2026-09-13). §27: `hands kit check` verifies
+every `verdict` rule, `aux.done` included, against the vocabulary the review
+protocol specifies (the `VERDICT: review …` line), and refuses a kit whose brief
+or protocol vocabulary a rule cannot match; a broken builder rule is never
+excused by the apply-verdict exception (REVIEW-10 SF4). The builder-only scope
+U5 shipped is superseded. (Moved into this section by mission 12 U0, REVIEW-11 should-fix 5.) DESIGN v3.11 §28 narrows the
+apply-verdict exception to one `builder.done` rule (REVIEW-11 should-fix 7,
+mission 12 U3).
 
-## Resolutions in DESIGN v3.10 (§27), appended by mission 11 U0
-
-H-018 (2026-09-13). §27: "`phone` and `kit` are job origins (§6); a job of
-either origin un-pauses the pipeline when it starts, as a `cli` one does." Gap 1
-and gap 2 are resolved as U2 of mission 10 chose, extended to `kit` (mission 11
-U3 creates the first `origin: kit` job). §27 also refuses `go` while the builder
-has a **held** job (REVIEW-10 SF1, mission 11 U1). Gap 3 was closed by mission 10
-U1.
-Status: resolved by DESIGN v3.10 (code: `phone` done in m10 U2; `kit` in m11 U3)
-
-H-019 (2026-09-13). §27: "the playbook's `[series]` table is `name` and
-`kickoff`; a bare `series = "…"` string remains accepted as the name." This is
-the form mission 10 U2 shipped and U5 put in the templates.
-Status: resolved by DESIGN v3.10 (no code change needed)
-
-H-020 (2026-09-13). §27: `hands who` matches an interactive `claude` process to
-its transcript through `~/.claude/sessions/<pid>.json`, whose `sessionId` names
-the transcript; the transcript stays the source of the session's state; with no
-sessions file for a pid the line says `transcript: by directory` and is never
-attributed a job's transcript. §27 does not name `entrypoint`; mission 11 U2
-reads only `pid` and `sessionId` and never the `.key` file.
-Status: resolved by DESIGN v3.10 (code: mission 11 U2)
-
-H-021 (2026-09-13). §27: `hands kit check` verifies every `verdict` rule,
-`aux.done` included, against the vocabulary the review protocol specifies (the
-`VERDICT: review …` line), and refuses a kit whose brief or protocol vocabulary
-a rule cannot match; a broken builder rule is never excused by the apply-verdict
-exception (REVIEW-10 SF4). The builder-only scope U5 shipped is superseded.
-Status: resolved by DESIGN v3.10 (code: mission 11 U1)
+Status: resolved by DESIGN v3.10 (code: mission 11 U1; §28 narrowing: mission 12 U3)
 
 ## H-022 — `hands kit check .` on this repository cannot exit 0
 
@@ -1201,4 +1202,37 @@ gains a repository mode (skip `.git`, pick the brief the kickoff names), which
 is a DESIGN change. U6 did not write BUILDER-12, did not edit BUILDER-11, and did
 not change `kit.py`.
 
-Status: open
+Resolution (DESIGN v3.11 §28, 2026-09-15). §28: "H-022 resolved: the
+acceptance meant a kit of the mission's brief checked against the repository
+passes; `kit check` stays a kit checker." That is option (a): a kit of
+`meta/BUILDER-<N>-PROMPT.md` with `--repo .`. No repository mode is added.
+Mission 12 U5 runs that form on `meta/BUILDER-12-PROMPT.md` (REVIEW-11 blocker
+5).
+
+Status: resolved by DESIGN v3.11 (acceptance form; checked by mission 12 U5)
+
+## H-023 — the post-exit sweep kills a leaderless group on an environment mark, not on descent
+
+Severity: medium · Component: DESIGN §27 (the sweep "signals only a group whose
+leader is the job's own pid and whose members are all descendants") against
+`src/hands/runner.py` (`_sweep`, `_kill_group`, `_last_resort`) as mission 11 U1
+(`efe4d56`) shipped it
+Filed by: mission 12, U0, from REVIEW-11 blocker 3 (a departure U1 made and
+disclosed in FINAL-REPORT-11 §5 item 5 without a finding).
+
+The departure. When no process holds the job's pid (the leader is gone), U1
+still signals the group if every live member carries the job's `HANDS_JOB=<id>`
+environment mark. §27 names the leader as the job's own pid; it does not name a
+mark. The mark is a stand-in for descent, not descent: any process can set it,
+and a member that clears its environment leaves the group unsignalled. The
+leaderless, marked group is tested only through `_last_resort`
+(`tests/test_runner.py:1144`), never through `_sweep`/`_kill_group`.
+
+Resolution (DESIGN v3.11 §28, 2026-09-15). "The post-exit sweep signals a group
+only when its leader is alive and is the job's pid, or when every live member
+is a descendant by pid chain (or a member of the job's cgroup scope); the
+`HANDS_JOB` mark alone never qualifies. H-023 records the departure U1 made."
+Mission 12 U4 carries the code, with a test through `_sweep`/`_kill_group`
+that leaves a leaderless marked group alone and kills a descendant group.
+
+Status: open (code: mission 12 U4)

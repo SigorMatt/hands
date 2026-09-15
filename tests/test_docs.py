@@ -250,6 +250,54 @@ def test_the_integration_doc_states_section_6s_error_subtype_rule() -> None:
         assert said in doc, f"docs/INTEGRATION.md does not say {said!r}"
 
 
+#: docs/INTEGRATION.md's `done` statement, one string (REVIEW-11 should-fix 4).
+DONE_STATEMENT = (
+    "A job that finished and is none of those is `done`: claude exited 0 with a "
+    "final `result` of subtype `success` carrying `num_turns`, and the line never "
+    "appeared."
+)
+
+#: Each §6 `failure_reason` value: the clause of the doc's `failed` sentence that
+#: states it, and the clause of DONE_STATEMENT that rules it out.
+FAILURE_REASON_CLAUSES = {
+    "no_final_result": ("when the process ends without a final `result` event",
+                        "with a final `result`"),
+    "error_result": ("with a `result` of subtype `error`", "of subtype `success`"),
+    "no_num_turns": ("without `num_turns`", "carrying `num_turns`"),
+    "nonzero_exit": ("when it exits non-zero without a limit", "claude exited 0"),
+    "spawn_error": ("when it could not be spawned", "A job that finished"),
+    "harness_terminated": ("when stderr carries the harness's", "the line never appeared"),
+}
+
+
+def test_the_integration_doc_pins_done_against_each_failure_reason() -> None:
+    """Review 11 should-fix 4, DESIGN §28: the **How a job ends** `done` statement
+    is one exact string, each §6 `failure_reason` value is stated as a `failed`
+    cause that the `done` statement rules out, and no other sentence of the doc
+    calls a failing result (an `error` subtype, `is_error`, a non-zero exit, or
+    any `failure_reason` value) `done`."""
+    reasons = section_6_vocabulary("failure_reason")
+    assert set(FAILURE_REASON_CLAUSES) == set(reasons)
+    assert len(FAILURE_REASON_CLAUSES) == len(reasons)
+    doc = flattened((ROOT / "docs" / "INTEGRATION.md").read_text(encoding="utf-8"))
+    assert doc.count(DONE_STATEMENT) == 1, "docs/INTEGRATION.md does not say the `done` statement"
+    bullet = doc.split("**How a job ends**", 1)[1].split(" - **", 1)[0]
+    failed = bullet.split("A job is `failed` ", 1)[1].split(DONE_STATEMENT, 1)[0]
+    listing = bullet.split("The record's `failure_reason` says why a job failed, one value each: ",
+                           1)[1].split(" — ", 1)[0]
+    assert sorted(v.strip().strip("`") for v in listing.split(",")) == sorted(reasons)
+    for value in reasons:
+        cause, ruled_out = FAILURE_REASON_CLAUSES[value]
+        assert cause in failed, f"`{value}`: the `failed` sentence does not say {cause!r}"
+        assert ruled_out in DONE_STATEMENT, f"`{value}`: `done` does not say {ruled_out!r}"
+    failing = ("error", "non-zero", "nonzero", "exited 1", *reasons)
+    assert not any(word in DONE_STATEMENT for word in failing)
+    for sentence in re.split(r"(?<=[.;:])\s+", doc.replace(DONE_STATEMENT, "")):
+        if "`done`" in sentence:
+            said = [word for word in failing if word in sentence]
+            assert not said, f"docs/INTEGRATION.md calls {said} `done`: {sentence!r}"
+
+
 #: The closed phone loop (§26, §27 "the apply from the kit", REVIEW-10 SF2): one
 #: section, phone only — kit, buttons, `go`, buzz — and the statements that must
 #: be in it, each a text the code prints or does.
