@@ -25,9 +25,15 @@ Base of the mission: bb9aab5 (`plan: mission 12 kit (DESIGN v3.11)`).
       start); "`plan:` kit apply" read as a started `origin: kit` builder
       job (prefix not read); limited driver job not resumed; doctor fails on
       settings/hook wiring, role-mode self-test red, permission_flags
-- [ ] U3 Kit transport and the apply (§28; blocker 2, SF6, SF7, SF9) — URL
-      checks in the try, kit check named paths, apply-verdict exception to
-      one rule, KIT.md line rules and shell-quoting
+- [x] U3 Kit transport and the apply (§28; blocker 2, SF6, SF7, SF9) 043413d
+      — URL scheme/host IDNA/port/whitespace in the try, kit.refused, no
+      fetch (the review's three URLs); named paths = words with a ≥2-char
+      extension, kit then repo, placeholder paths syntax-checked only;
+      apply exception only a pattern exactly `VERDICT: kit applied`; every
+      regex alternative must match a literal (runs template stub updated);
+      KIT.md line rules with default and notice; message shell-quoted;
+      prompts byte-equal for the same `~/Downloads/<name>`, unequal for
+      another kit_dir or a `-1` rename; BUILDER-12 kit `--repo .` 6/6 exit 0
 - [ ] U4 Sweep and who (§28; blockers 3, 4; H-023)
 - [ ] U5 This repository's playbook — kickoff BUILDER-13; kit of
       meta/BUILDER-12-PROMPT.md with `--repo .` exits 0 (blocker 5 per H-022)
