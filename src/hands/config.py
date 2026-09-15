@@ -8,6 +8,7 @@ otherwise, and this file is edited by hand.
 
 from __future__ import annotations
 
+import math
 import os
 import re
 import shlex
@@ -397,7 +398,27 @@ def spool_root(project: str, *, base: Path | None = None) -> Path:
     `base` is the directory that holds `<project>.toml` (default `~/.hands`), so a
     config loaded from elsewhere keeps its spool beside it.
     """
+    check_project_name(project)
     return (hands_dir() if base is None else Path(base)) / project
+
+
+#: §30 (review 13 should-fix 6): one path component, never `.`/`..`, no `/`, ASCII.
+PROJECT_NAME_PATTERN = "[A-Za-z0-9][A-Za-z0-9._-]{0,63}"
+
+
+def check_project_name(project: str) -> None:
+    """Refuse a project name outside `PROJECT_NAME_PATTERN` (§30).
+
+    The name becomes a file (`<project>.toml`) and a directory (the spool), so
+    `..` put the spool at `~` and `a/b` nested it. Called where a name enters
+    (`load_config`: the flag, $HANDS_PROJECT, and every `~/.hands/*.toml` stem)
+    and where the spool path is computed.
+    """
+    if not re.fullmatch(PROJECT_NAME_PATTERN, project):
+        raise ConfigError(
+            f"project name {project!r} does not match {PROJECT_NAME_PATTERN} "
+            "(a letter or digit, then up to 63 letters, digits, '.', '_' or '-')"
+        )
 
 
 def config_path(project: str, *, home: Path | None = None) -> Path:
@@ -443,6 +464,7 @@ def resolve_project(explicit: str | None = None, *, home: Path | None = None) ->
 
 def load_config(project: str, *, home: Path | None = None) -> Config:
     """Load and validate `~/.hands/<project>.toml`."""
+    check_project_name(project)  # §30: before the name becomes a path
     path = config_path(project, home=home)
     try:
         raw = path.read_bytes()
@@ -889,6 +911,12 @@ def _number(table: dict[str, Any], key: str, default: float, where: str, path: P
     value = table.get(key, default)
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise ConfigError(f"{path}: {where} {key} must be a number, got {value!r}")
+    # §30 (review 13 blocker 4): TOML spells `nan` and `inf`, and a nan compares
+    # false with everything, so `now - ended > nan` never fires. No config number
+    # is meaningfully infinite, so every caller refuses both. (An int is finite;
+    # `math.isfinite` would overflow on a TOML int past a float's range.)
+    if isinstance(value, float) and not math.isfinite(value):
+        raise ConfigError(f"{path}: {where} {key} must be a finite number, got {value}")
     if value < 0:
         raise ConfigError(f"{path}: {where} {key} must not be negative, got {value}")
     return float(value)

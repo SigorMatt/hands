@@ -50,6 +50,13 @@ Each project has its own config, its own daemon and its own spool:
                                 inbox.acks.jsonl, pipeline.json, and the
                                 daemon's default socket, handsd.sock
 
+A project name matches `[A-Za-z0-9][A-Za-z0-9._-]{0,63}` (§30): `--project`,
+`$HANDS_PROJECT` and the stem of every `~/.hands/*.toml`. Any other name is
+refused with a message naming it and the pattern, exit 1, before anything is
+read or created; in `hands who` a config file whose stem does not match is the
+root line `<stem>: config error <reason>`. The pattern still admits `jobs` and
+`roles`, which are also names of the flat layout below; do not use them.
+
 Two daemons are two instances of the templated units, each with its own
 environment file:
 
@@ -170,7 +177,8 @@ cwd` is optional.
     [who]                                # read by `hands who` and handswho only
     grace_s = 60                         # default: seconds after a job ends that its
                                          # transcript is still never shown by
-                                         # directory (§29); a number >= 0
+                                         # directory (§29); a finite number >= 0
+                                         # (`nan` and `inf` are refused, §30)
 
 Notes that are easy to get wrong:
 

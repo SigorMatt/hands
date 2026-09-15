@@ -2,6 +2,7 @@
 
 import ast
 import dataclasses
+import re
 from pathlib import Path
 from typing import Any, NamedTuple
 
@@ -768,6 +769,67 @@ def test_an_unknown_key_in_who_is_refused(write_config) -> None:
     write_config("[roles.builder]\ncwd = '~/g'\n[who]\ngrace = 5\n")
     with pytest.raises(ConfigError, match=r"\[who\]"):
         load_config("demo")
+
+
+@pytest.mark.parametrize("spelling", ["nan", "+nan", "-nan", "inf", "+inf", "-inf"])
+def test_who_grace_must_be_finite(write_config, spelling: str) -> None:
+    """§30 (review 13 blocker 4): `[who] grace_s = nan` made `now - ended > nan`
+    never true, hiding a matched transcript for good. The `[who]` table is known,
+    so the refusal is the value's: the message names the key and says finite."""
+    write_config(f"[roles.builder]\ncwd = '~/g'\n[who]\ngrace_s = {spelling}\n")
+    with pytest.raises(ConfigError, match=r"\[who\] grace_s must be a finite number"):
+        load_config("demo")
+
+
+@pytest.mark.parametrize(
+    ("table", "key"),
+    [
+        ("monitor", "stall_minutes"),
+        ("limits", "backoff_minutes"),
+        ("runner", "cancel_grace_s"),
+        ("runner", "pipe_timeout_s"),
+        ("who", "grace_s"),
+    ],
+)
+@pytest.mark.parametrize("spelling", ["nan", "inf", "-inf"])
+def test_every_number_key_refuses_non_finite(
+    write_config, table: str, key: str, spelling: str
+) -> None:
+    """The shared `_number` helper refuses non-finite for every caller: no config
+    number is meaningfully infinite, and a nan compares false with everything."""
+    write_config(f"[roles.builder]\ncwd = '~/g'\n[{table}]\n{key} = {spelling}\n")
+    with pytest.raises(ConfigError, match=rf"\[{table}\] {key} must be a finite number"):
+        load_config("demo")
+
+
+# ------------------------------------------------ project names (§30, should-fix 6)
+
+PROJECT_PATTERN = "[A-Za-z0-9][A-Za-z0-9._-]{0,63}"
+BAD_PROJECT_NAMES = [
+    "..", ".", "a/b", "", "a" * 65, "-a", ".a", "_a", "é", "café", "a b", "a\n",
+]
+GOOD_PROJECT_NAMES = ["hands", "a", "A.b-c_9", "a" * 64, "jobs", "roles"]
+
+
+@pytest.mark.parametrize("name", BAD_PROJECT_NAMES)
+def test_a_project_name_outside_the_pattern_is_refused_naming_it_and_the_pattern(
+    tmp_home: Path, name: str
+) -> None:
+    with pytest.raises(ConfigError) as refused:
+        load_config(name)
+    message = str(refused.value)
+    assert repr(name) in message
+    assert PROJECT_PATTERN in strip_paths(message)
+    with pytest.raises(ConfigError, match=re.escape(PROJECT_PATTERN)):
+        hands.config.spool_root(name)
+
+
+@pytest.mark.parametrize("name", GOOD_PROJECT_NAMES)
+def test_a_project_name_inside_the_pattern_loads(write_config, name: str) -> None:
+    write_config(project=name)
+    cfg = load_config(name)
+    assert cfg.project == name
+    assert cfg.spool_root == cfg.path.parent / name
 
 
 def test_unknown_role_lookup_raises(write_config) -> None:

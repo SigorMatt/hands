@@ -262,6 +262,94 @@ def test_hands_who_with_every_config_broken_exits_1_naming_each(
     assert out.getvalue() == ""
 
 
+# ------------------------------------------------------ project names (§30)
+
+PROJECT_PATTERN = "[A-Za-z0-9][A-Za-z0-9._-]{0,63}"
+
+
+def _tree(root: Path) -> list[str]:
+    return sorted(str(p.relative_to(root)) for p in root.rglob("*"))
+
+
+@pytest.mark.parametrize("name", ["..", ".", "a/b", "-a"])
+def test_handsd_refuses_a_project_name_outside_the_pattern_and_creates_nothing(
+    tmp_home: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str], name: str,
+) -> None:  # fmt: skip
+    """§30 (review 13 should-fix 6): `handsd --project ..` put the spool at `~`.
+    A loadable config sits where the name points (`~/.hands/...toml` for `..`),
+    so only the name refuses it; the temp HOME is the same tree afterwards."""
+    target = tmp_home / ".hands" / f"{name}.toml"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(config_body(tmp_home, tmp_path).replace(
+        f'socket = "{tmp_home}/.hands/handsd.sock"\n', ""
+    ))  # fmt: skip
+    monkeypatch.delenv("HANDS_PROJECT", raising=False)
+    started: list[object] = []
+
+    async def serve(*args: object) -> int:  # pragma: no cover - must not run
+        started.append(args)
+        return 0
+
+    monkeypatch.setattr(daemon_mod, "_serve", serve)
+    before = _tree(tmp_home)
+    assert daemon_mod.main([f"--project={name}"]) == 1
+    err = capsys.readouterr().err
+    assert repr(name) in err and PROJECT_PATTERN in strip_paths(err), err
+    assert started == []
+    assert _tree(tmp_home) == before
+
+
+def test_hands_and_handswho_refuse_a_bad_project_from_the_flag_and_the_environment(
+    tmp_home: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _two_projects(tmp_home, tmp_path)
+    (tmp_home / ".hands" / "...toml").write_text(config_body(tmp_home, tmp_path))
+    monkeypatch.setattr(who, "proc_table", lambda: {})
+    monkeypatch.delenv("HANDS_PROJECT", raising=False)
+    for argv in (["--project", "..", "status"], ["--project", "..", "who"]):
+        out, err = io.StringIO(), io.StringIO()
+        assert hands_main(argv, stdout=out, stderr=err) == 1, argv
+        assert "'..'" in strip_paths(err.getvalue()), err.getvalue()
+        assert PROJECT_PATTERN in strip_paths(err.getvalue()), err.getvalue()
+        assert out.getvalue() == ""
+    err = io.StringIO()
+    assert who.main(["--project", ".."], stderr=err) == 1
+    assert PROJECT_PATTERN in strip_paths(err.getvalue())
+
+    monkeypatch.setenv("HANDS_PROJECT", "..")
+    out, err = io.StringIO(), io.StringIO()
+    assert hands_main(["status"], stdout=out, stderr=err) == 1
+    assert "'..'" in strip_paths(err.getvalue()), err.getvalue()
+    assert PROJECT_PATTERN in strip_paths(err.getvalue()), err.getvalue()
+    err = io.StringIO()
+    assert who.main([], stderr=err) == 1
+    assert PROJECT_PATTERN in strip_paths(err.getvalue())
+
+
+def test_hands_who_shows_a_config_whose_file_name_is_outside_the_pattern_as_a_config_error(
+    tmp_home: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Discovery from `~/.hands/*.toml`: a stem outside the pattern is not a
+    project; it is the U2 root line `<stem>: config error <reason>`, not a daemon."""
+    _two_projects(tmp_home, tmp_path)
+    body = config_body(tmp_home, tmp_path).replace(
+        f'socket = "{tmp_home}/.hands/handsd.sock"\n', ""
+    )
+    (tmp_home / ".hands" / "-x.toml").write_text(body)
+    monkeypatch.delenv("HANDS_PROJECT", raising=False)
+    monkeypatch.setattr(who, "proc_table", lambda: {})
+
+    out, err = io.StringIO(), io.StringIO()
+    assert hands_main(["--project", "beta", "who"], stdout=out, stderr=err) == 0, err.getvalue()
+    text = strip_paths(out.getvalue())
+    line = "\n-x: config error project name '-x' does not match " + PROJECT_PATTERN
+    assert line in strip_paths(out.getvalue()), text
+    assert "project -x" not in strip_paths(out.getvalue())
+    assert "handsd (daemon, project alpha)" in strip_paths(out.getvalue())
+    assert "handsd (daemon, project beta)" in strip_paths(out.getvalue())
+
+
 # --------------------------------------------------------------------- systemd
 
 
