@@ -32,9 +32,14 @@ What lives here and what does not:
 * `consult` (§27) starts a driver-role job with a prompt hands writes itself
   (`consult_prompt`) through the daemon's queue, like `resume`: `Api.send`
   refuses the driver role from every origin, and a consultation is not re-gated.
-  The driver's reply comes back as `driver.done` / `driver.failed`, which are
-  ordinary events for ordinary rules; `[limits] max_consults` bounds how many a
-  mission may start.
+  The driver job's end comes back as `driver.done|failed|killed|orphaned|limited`;
+  `[limits] max_consults` bounds how many a mission may start.
+* §28: the stops of a consultation are the engine's, not the playbook's. Every
+  driver end but a `driver.done` whose verdict is `VERDICT: resolved …` stops —
+  escalate, an unrecognised or missing verdict, failed, killed, orphaned,
+  limited — whatever `driver.*` rules the playbook carries. A rule that matches
+  first and is itself a `stop` is that stop (its message is the reason); any
+  other matching rule does not fire. A resolved verdict goes to the rules.
 """
 
 from __future__ import annotations
@@ -77,6 +82,7 @@ __all__ = [
     "load_playbook",
     "parse_playbook",
     "playbook_path",
+    "consult_head",
     "consult_prompt",
     "render",
     "run_number",
@@ -99,6 +105,9 @@ EVENTS: tuple[str, ...] = (
     "aux.failed",
     "driver.done",
     "driver.failed",
+    "driver.killed",  # §28: a consultation's driver job ended any other way
+    "driver.orphaned",
+    "driver.limited",
     "monitor.stall",
     "monitor.tripwire",
     "monitor.task_killed",
@@ -129,6 +138,14 @@ _CONSULT_HEAD_RE = re.compile(
     r"\Ahands consult: (?P<event>\S+) on job (?P<job>\S+) \(role (?P<role>\S+)\)$",
     re.MULTILINE,
 )
+#: §28: the driver job's end states that stop whatever the playbook says; and the
+#: two verdicts of §27 read from a `driver.done`: only `resolved` goes to the rules.
+DRIVER_STOP_STATES: tuple[str, ...] = ("failed", "killed", "orphaned", "limited")
+_RESOLVED_RE = re.compile(r"\AVERDICT: resolved \S")
+_ESCALATE_RE = re.compile(r"\AVERDICT: escalate(?:\s+(?P<reason>.*))?\Z")
+#: §27, §28: the origin of the held apply handsd files for a kit; one that ran is a
+#: kit apply, from which `max_consults` also counts.
+KIT_ORIGIN = "kit"
 #: §27: the journal a consultation appends one line to, under `roles.builder.cwd`.
 JOURNAL = Path("meta") / "journal.md"
 
@@ -732,6 +749,9 @@ class PipelineState:
     #: it is cleared.
     last_rule_sha256: str | None = None
     auto_runs_used: list[int] = field(default_factory=list)
+    #: §28: every `[series] kickoff` value a loaded playbook has carried, in the
+    #: order first seen; `max_consults` counts from a job whose prompt is any.
+    kickoffs: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -742,6 +762,7 @@ class PipelineState:
             "last_rule": self.last_rule,
             "last_rule_sha256": self.last_rule_sha256,
             "auto_runs_used": list(self.auto_runs_used),
+            "kickoffs": list(self.kickoffs),
         }
 
     @classmethod
@@ -761,6 +782,7 @@ class PipelineState:
             last_rule=last_rule,
             last_rule_sha256=sha if isinstance(sha, str) else None,
             auto_runs_used=list(data.get("auto_runs_used") or []),
+            kickoffs=[item for item in data.get("kickoffs") or [] if isinstance(item, str)],
         )
 
 
@@ -846,6 +868,11 @@ class PlaybookEngine:
             return
         self.load_error = None
         self.playbook = book
+        if book is not None and book.kickoff is not None:
+            kickoff = book.kickoff.strip()
+            if kickoff not in self.state.kickoffs:  # §28: seen in the pipeline's history
+                self.state.kickoffs.append(kickoff)
+                self._save()
         if book is not None and self.state.last_rule is not None:
             # §10: "`last_rule` is cleared when a different playbook file is
             # loaded" — rule 3 of the file that fired is not rule 3 of this one.
@@ -899,13 +926,16 @@ class PlaybookEngine:
         if self.state.paused:
             log.info("playbook: paused (%s); %s fires nothing", self.state.paused_by, event)
             return
-        book = self.playbook
-        if book is None:
-            return  # no playbook: hands runs jobs, nothing chains (§10)
         if job is None and payload:
             job = self._job(payload.get("job"))
+        enforced = driver_stop(event, job)
+        book = self.playbook
+        if book is None:
+            if enforced is not None:  # §28: the engine's stop needs no playbook
+                await self.stop(enforced, _payload(event, job))
+            return  # no playbook: hands runs jobs, nothing chains (§10)
         try:
-            await self._match(book, event, job, payload)
+            await self._match(book, event, job, payload, enforced=enforced)
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # a bug here must stop the pipeline, not chain blindly
@@ -916,9 +946,25 @@ class PlaybookEngine:
             )
 
     async def _match(
-        self, book: Playbook, event: str, job: Job | None, payload: dict[str, Any] | None
+        self,
+        book: Playbook,
+        event: str,
+        job: Job | None,
+        payload: dict[str, Any] | None,
+        *,
+        enforced: str | None = None,
     ) -> None:
         candidates = book.rules_for(event)
+        if enforced is not None:
+            # §28: the playbook cannot remove this stop. A first matching `stop`
+            # rule is the stop, with its message; any other rule does not fire.
+            chosen, match = _choose(candidates, job)
+            if chosen is not None and chosen.then == "stop":
+                await self._fire(chosen, event, job, match)
+                return
+            extra = {} if chosen is None else {"rule_not_fired": chosen.index}
+            await self.stop(enforced, _payload(event, job, **extra))
+            return
         if not candidates:
             await self.stop(
                 f"{event}: the playbook has no rule for it, and §10 stops for anything "
@@ -928,19 +974,7 @@ class PlaybookEngine:
             return
 
         verdict = job.verdict if job is not None else None
-        chosen: Rule | None = None
-        match: re.Match[str] | None = None
-        for rule in candidates:  # §10 reads top to bottom: the first match wins
-            if rule.verdict is None:
-                chosen = rule
-                break
-            if verdict is None:
-                continue
-            found = rule.verdict.search(verdict)
-            if found is not None:
-                chosen, match = rule, found
-                break
-
+        chosen, match = _choose(candidates, job)
         if chosen is None:
             if verdict is None:
                 what = (
@@ -1146,21 +1180,24 @@ class PlaybookEngine:
         self._fired(rule, event, job, fired_job=started.id)
 
     def consults_used(self, book: Playbook | None) -> int:
-        """§27: the consultations of this mission — driver jobs (a §6 resume of one
-        is not another) after the last builder job whose prompt is the `[series]
-        kickoff` line (not a resume of it). With no kickoff, or none sent yet, every
-        driver job in the spool counts: the safe direction is to stop sooner."""
+        """§27, §28: the consultations of this mission — driver jobs (a §6 resume of
+        one is not another) after the later of the last builder job whose prompt is
+        *any* `[series] kickoff` value seen (`PipelineState.kickoffs`, plus the
+        loaded file's) and the last kit apply that ran (a builder job of origin
+        `kit` that started), neither a resume. With neither, every driver job in the
+        spool counts: the safe direction is to stop sooner."""
         jobs = self.spool.list_jobs()
+        kickoffs = set(self.state.kickoffs)
+        if book is not None and book.kickoff:
+            kickoffs.add(book.kickoff.strip())
         start = 0
-        kickoff = book.kickoff.strip() if book is not None and book.kickoff else None
-        if kickoff is not None:
-            for index, record in enumerate(jobs):
-                if (
-                    record.role == "builder"
-                    and record.resumed_from is None
-                    and record.prompt.strip() == kickoff
-                ):
-                    start = index + 1
+        for index, record in enumerate(jobs):
+            if record.role != "builder" or record.resumed_from is not None:
+                continue
+            if record.prompt.strip() in kickoffs or (
+                record.origin == KIT_ORIGIN and record.started is not None
+            ):
+                start = index + 1
         return sum(
             1 for record in jobs[start:] if record.role == DRIVER and record.resumed_from is None
         )
@@ -1168,14 +1205,13 @@ class PlaybookEngine:
     def _consult_done(self, job: Job) -> None:
         """§27: the inbox event and the `meta/journal.md` line of a consultation.
 
-        A `limited` driver job is not the end of its consultation: §6 resumes it.
+        §28: every end is the end of its consultation, `limited` included (§6 does
+        not resume a driver job), and the payload's `state` is that terminal state.
         """
-        if job.state == "limited":
-            return
-        head = _CONSULT_HEAD_RE.search(job.prompt)
-        about = head.group("job") if head else None
-        event = head.group("event") if head else None
-        role = head.group("role") if head else None
+        head = consult_head(job.prompt) or {}
+        about = head.get("job")
+        event = head.get("event")
+        role = head.get("role")
         said = job.verdict if job.verdict is not None else "no VERDICT: line"
         journal = self.config.role("builder").cwd / JOURNAL
         line = (
@@ -1471,6 +1507,54 @@ class PlaybookEngine:
 
 async def _await(outcome: Any) -> None:  # pragma: no cover - U8's seam may be async
     await outcome
+
+
+def _choose(rules: list[Rule], job: Job | None) -> tuple[Rule | None, re.Match[str] | None]:
+    """§10: the first rule whose verdict regex matches (or that has none), top to bottom."""
+    verdict = job.verdict if job is not None else None
+    for rule in rules:
+        if rule.verdict is None:
+            return rule, None
+        if verdict is None:
+            continue
+        found = rule.verdict.search(verdict)
+        if found is not None:
+            return rule, found
+    return None, None
+
+
+def driver_stop(event: str, job: Job | None) -> str | None:
+    """§27, §28: the stop reason the engine enforces for a driver event, or None
+    for a `driver.done` whose verdict is `VERDICT: resolved …` (and every event
+    that is not a driver's)."""
+    role, _, state = event.partition(".")
+    if role != DRIVER:
+        return None
+    if state in DRIVER_STOP_STATES:
+        return (
+            f"{event}: the consultation's driver job ended {state}, and a consultation "
+            "that does not end resolved stops (§27, §28)"
+        )
+    verdict = job.verdict if job is not None else None
+    if verdict is None:
+        return f"{event}: the driver's reply has no VERDICT: line, so it stops (§27, §28)"
+    if _RESOLVED_RE.match(verdict):
+        return None
+    escalated = _ESCALATE_RE.match(verdict)
+    if escalated is not None:
+        reason = escalated.group("reason") or "(no reason given)"
+        return f"{event}: the driver escalated: {reason} (§27, §28)"
+    return (
+        f"{event}: the driver's verdict {verdict!r} is neither resolved nor escalate, "
+        "so it stops (§27, §28)"
+    )
+
+
+def consult_head(prompt: str) -> dict[str, str] | None:
+    """The consult prompt's first line read back — `event`, `job`, and `role`, the
+    role the consultation names (§27, §28) — or None for a prompt that is not one."""
+    head = _CONSULT_HEAD_RE.search(prompt)
+    return None if head is None else head.groupdict()
 
 
 def consult_prompt(event: str, job: Job) -> str:

@@ -39,7 +39,7 @@ from typing import Any
 
 from hands import __version__
 from hands.api import Api, ApiError, job_summary
-from hands.config import Config, ConfigError, load_config, resolve_project
+from hands.config import DRIVER_ROLE, Config, ConfigError, load_config, resolve_project
 from hands.limits import LimitManager
 from hands.monitor import MonitorSupervisor
 from hands.notify import Notifier
@@ -180,6 +180,8 @@ class Daemon:
         orphans = reconcile_orphans(self.spool)
         for job in orphans:
             log.warning("job %s was running with no process; marked orphaned", job.id)
+        for job in orphans:
+            await self._consultation_ended(job)  # §28: `driver.orphaned` stops
 
         self._bind_guard()
         self._server = await asyncio.start_unix_server(
@@ -459,11 +461,14 @@ class Daemon:
             # the reason is in the inbox because §6's record has no field for it.
             current = self.spool.load_job(job_id)
             if current.state == "queued":
-                self.spool.transition(current, "killed")
+                killed = self.spool.transition(current, "killed")
                 self.spool.append_event(
                     "job.killed",
                     {"job": job_id, "role": role, "state": "killed", "reason": str(exc)},
                 )
+                # REVIEW-11 SF2: a driver job that never spawned still ends its
+                # consultation: consult.done, the journal line, the stop (§28).
+                await self._consultation_ended(killed)
             log.warning("job %s (%s) could not run: %s", job_id, role, exc)
         except Exception:  # pragma: no cover - a bug here must not kill the worker
             log.exception("job %s (%s) raised", job_id, role)
@@ -472,6 +477,18 @@ class Daemon:
                 await self.monitors.stop(job_id)  # §5: the watch ends with the job
             self._running[role] = None
             await self._announce()
+
+    async def _consultation_ended(self, job: Job) -> None:
+        """§28: a driver job that ended outside the worker's run (never spawned,
+        cancelled while queued, orphaned by a dead daemon) is still the end of its
+        consultation, so the engine hears it. Other roles' such ends are unchanged."""
+        if job.role != DRIVER_ROLE:
+            return
+        try:
+            await self.playbook.on_job(job)
+        except Exception:  # pragma: no cover - a bug here must not kill the caller
+            log.exception("job %s (%s): its consultation's end could not be decided",
+                          job.id, job.role)
 
     async def _enqueue_resume(self, **fields: Any) -> Job:
         """The limit manager's way in: a resume is an ordinary send (§6).
@@ -623,6 +640,7 @@ class Daemon:
                 "job.killed",
                 {"job": job.id, "role": job.role, "state": "killed", "reason": reason},
             )
+            await self._consultation_ended(killed)  # §28: a driver job cancelled queued
             await self._announce()
             return killed
 

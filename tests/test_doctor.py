@@ -994,9 +994,12 @@ def test_kit_transport_is_on_inside_the_roots_and_shows_kit_dir_and_the_cap(
 # ----------------------------------------------- the driver role (§27, U4)
 
 GUARD = Path(__file__).parents[1] / "driver" / "hooks" / "bash_guard.py"
+SETTINGS = Path(__file__).parents[1] / "driver" / "settings.json"
 
 
-def driver_dir(tmp_path: Path, *, clone: bool = True, guard: bool = True) -> Path:
+def driver_dir(
+    tmp_path: Path, *, clone: bool = True, guard: bool = True, settings: bool = True
+) -> Path:
     """`~/hands-driver/<project>` as driver/README.md builds it (§12)."""
     d = tmp_path / "hands-driver"
     d.mkdir(exist_ok=True)
@@ -1005,6 +1008,9 @@ def driver_dir(tmp_path: Path, *, clone: bool = True, guard: bool = True) -> Pat
     if guard:
         (d / ".claude" / "hooks").mkdir(parents=True, exist_ok=True)
         shutil.copy(GUARD, d / ".claude" / "hooks" / "bash_guard.py")
+    if settings:
+        (d / ".claude").mkdir(parents=True, exist_ok=True)
+        shutil.copy(SETTINGS, d / ".claude" / "settings.json")
     return d
 
 
@@ -1041,21 +1047,93 @@ def test_a_good_driver_role_reports_cwd_clone_and_guard_mode(
         assert "guard <path>/hands-driver/.claude/hooks/bash_guard.py" in strip_paths(text)
         assert "role mode (HANDS_ROLE=driver" in strip_paths(text)
         assert "permission_flags (none)" in strip_paths(text)
+        assert "settings <path>/hands-driver/.claude/settings.json names the hook" in strip_paths(
+            text
+        )
+        assert "self-test green in role mode (HANDS_ROLE=driver)" in strip_paths(text)
     # the generic role row is not printed for the driver: it has its own
     assert list(found).count("role driver") == 1
 
 
-def test_a_driver_role_without_its_clone_or_its_guard_is_a_warning(
+def test_a_driver_role_without_its_clone_is_a_warning(
     tmp_home: Path, tmp_path: Path, fake_mode: None
 ) -> None:
-    d = driver_dir(tmp_path, clone=False, guard=False)
+    d = driver_dir(tmp_path, clone=False)
     add_driver(write_config(tmp_home, tmp_path), d)
     code, found = checks()
     assert code == 0
     row = found["role driver"]
     assert row["status"] == "warn", row
     assert "no clone" in strip_paths(row["detail"])
+
+
+def test_a_driver_role_without_its_guard_fails_doctor(
+    tmp_home: Path, tmp_path: Path, fake_mode: None
+) -> None:
+    """§28: the hook file must self-test green; a missing one cannot."""
+    d = driver_dir(tmp_path, guard=False)
+    add_driver(write_config(tmp_home, tmp_path), d)
+    code, found = checks()
+    assert code == 1
+    row = found["role driver"]
+    assert row["status"] == "fail", row
     assert "no guard" in strip_paths(row["detail"])
+
+
+@pytest.mark.parametrize(
+    "settings",
+    [
+        None,  # no .claude/settings.json at all
+        "{not json",
+        json.dumps({"permissions": {"deny": ["Edit"]}}),  # no hooks
+        json.dumps({"hooks": {"PreToolUse": [{"matcher": "Bash", "hooks": [
+            {"type": "command", "command": "python3 other_hook.py"}]}]}}),
+        json.dumps({"hooks": {"PreToolUse": [{"matcher": "Edit", "hooks": [
+            {"type": "command",
+             "command": 'python3 "$CLAUDE_PROJECT_DIR"/.claude/hooks/bash_guard.py'}]}]}}),
+        json.dumps({"hooks": {"PostToolUse": [{"matcher": "Bash", "hooks": [
+            {"type": "command",
+             "command": 'python3 "$CLAUDE_PROJECT_DIR"/.claude/hooks/bash_guard.py'}]}]}}),
+    ],
+    ids=["missing", "unparseable", "no-hooks", "another-hook", "not-bash", "not-pretooluse"],
+)
+def test_a_driver_role_whose_settings_do_not_name_the_hook_fails_doctor(
+    tmp_home: Path, tmp_path: Path, fake_mode: None, settings: str | None
+) -> None:
+    """§28: the driver directory's `.claude/settings.json` names the hook, else fail."""
+    d = driver_dir(tmp_path, settings=False)
+    if settings is not None:
+        (d / ".claude" / "settings.json").write_text(settings, encoding="utf-8")
+    add_driver(write_config(tmp_home, tmp_path), d)
+    code, found = checks()
+    assert code == 1
+    row = found["role driver"]
+    assert row["status"] == "fail", row
+    assert "settings.json" in strip_paths(row["detail"])
+    assert "does not name the hook" in strip_paths(row["detail"])
+
+
+def test_a_driver_role_whose_hook_fails_its_self_test_in_role_mode_fails_doctor(
+    tmp_home: Path, tmp_path: Path, fake_mode: None
+) -> None:
+    """§28: the hook self-tests green *in role mode*: this hook is green without
+    HANDS_ROLE and red with HANDS_ROLE=driver, so doctor must run it as the role."""
+    d = driver_dir(tmp_path)
+    (d / ".claude" / "hooks" / "bash_guard.py").write_text(
+        "import os, sys\n"
+        "if sys.argv[1:] == ['--selftest']:\n"
+        "    bad = os.environ.get('HANDS_ROLE') == 'driver'\n"
+        "    print('selftest: 0/1 ok' if bad else 'selftest: 1/1 ok')\n"
+        "    sys.exit(1 if bad else 0)\n",
+        encoding="utf-8",
+    )
+    add_driver(write_config(tmp_home, tmp_path), d)
+    code, found = checks()
+    assert code == 1
+    row = found["role driver"]
+    assert row["status"] == "fail", row
+    assert "self-test" in strip_paths(row["detail"])
+    assert "selftest: 0/1 ok" in strip_paths(row["detail"])
 
 
 def test_a_driver_role_with_a_permission_bypass_fails_doctor(

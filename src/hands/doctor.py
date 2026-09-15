@@ -39,8 +39,10 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -71,6 +73,8 @@ OK, WARN, SKIP, FAIL = "ok", "warn", "skip", "fail"
 
 #: Seconds for the free probes (`claude --version`, the ops script).
 PROBE_S = 10.0
+#: §28: the hook the driver directory's settings.json must run before every Bash call.
+GUARD_HOOK = ".claude/hooks/bash_guard.py"
 #: Seconds for one real `claude -p` turn. A one-line answer, not a task.
 LIVE_S = 180.0
 #: The live turn's prompt: one turn, no tools, and it exercises §10's VERDICT
@@ -371,14 +375,19 @@ def _role_check(role: RoleConfig) -> Check:
 
 
 def _driver_check(config: Config) -> Check:
-    """§27: the driver role — cwd, its clone, the guard's mode — and no bypass.
+    """§27, §28: the driver role — cwd, its clone, the guard's wiring — and no bypass.
 
     Always one `role driver` row. No `[roles.driver]` is `ok`: nothing consults.
     A non-empty `permission_flags` does not load (config.py), so the failure a
     human sees is the `config` row; this row fails the same way for a `Config`
     built without the loader. The clone is `<cwd>/repo`, where driver/README.md
-    puts it, or `<cwd>` itself when that is the git repository; missing either,
-    or a guard at `<cwd>/.claude/hooks/bash_guard.py` without role mode, warns.
+    puts it, or `<cwd>` itself when that is the git repository; missing, it warns.
+
+    §28: the row proves the wiring, and fails otherwise: `<cwd>/.claude/settings.json`
+    names the hook (a `PreToolUse` entry whose matcher selects `Bash` and whose
+    command runs `.claude/hooks/bash_guard.py`), and that hook file self-tests
+    green (`--selftest`, exit 0) run with the role's own environment, so with
+    `HANDS_ROLE=driver`.
     """
     name = f"role {DRIVER_ROLE}"
     role = config.roles.get(DRIVER_ROLE)
@@ -399,34 +408,100 @@ def _driver_check(config: Config) -> Check:
         )
     if not role.cwd.is_dir():
         return Check(name, FAIL, f"cwd {role.cwd} does not exist; §27 [roles.driver] cwd")
-    problems = []
+    warnings: list[str] = []
+    failures: list[str] = []
     if (role.cwd / "repo" / ".git").exists():
         clone = f"clone {role.cwd / 'repo'}"
     elif (role.cwd / ".git").exists():
         clone = f"clone {role.cwd}"
     else:
         clone = f"no clone: neither {role.cwd / 'repo'} nor {role.cwd} is a git repository"
-        problems.append(clone)
-    hook = role.cwd / ".claude" / "hooks" / "bash_guard.py"
-    try:
-        text = hook.read_text(encoding="utf-8", errors="replace")
-    except OSError:
-        text = None
-    if text is None:
-        guard = f"no guard at {hook}: nothing narrows the role's Bash calls (driver/README.md)"
-        problems.append(guard)
-    elif ROLE_ENV not in text:
-        guard = f"guard {hook} has no role mode: copy driver/hooks/bash_guard.py again"
-        problems.append(guard)
+        warnings.append(clone)
+
+    settings_path = role.cwd / ".claude" / "settings.json"
+    named = _settings_name_the_guard(settings_path)
+    if named is None:
+        settings = f"settings {settings_path} names the hook"
     else:
-        guard = f"guard {hook}"
+        settings = (
+            f"settings {settings_path} does not name the hook ({named}): copy "
+            "driver/settings.json again (§28)"
+        )
+        failures.append(settings)
+
+    hook = role.cwd / ".claude" / "hooks" / "bash_guard.py"
+    mode = f"{ROLE_ENV}={role.spawn_env[ROLE_ENV]}"
+    if not hook.is_file():
+        guard = f"no guard at {hook}: nothing narrows the role's Bash calls (driver/README.md)"
+        failures.append(guard)
+    else:
+        probe = _run_probe(
+            [shutil.which("python3") or sys.executable, str(hook), "--selftest"],
+            cwd=role.cwd,
+            env={**os.environ, **role.spawn_env},
+        )
+        if probe is not None and probe.code == 0 and not probe.timed_out:
+            guard = f"guard {hook}\nself-test green in role mode ({mode})"
+        else:
+            said = (
+                "could not be run" if probe is None
+                else "timed out" if probe.timed_out
+                else f"exit {probe.code}"
+            )
+            tail = "" if probe is None else "\n" + "\n".join(probe.text.strip().splitlines()[-5:])
+            guard = (
+                f"guard {hook}\nself-test in role mode ({mode}) is not green ({said}): "
+                f"copy driver/hooks/bash_guard.py again (§28){tail}"
+            )
+            failures.append(guard)
+
     detail = (
         f"{role.cwd}  model {role.model}; permission_flags (none)"
-        f"\n{clone}\n{guard}"
-        f"\nguard mode: role mode ({ROLE_ENV}={role.spawn_env[ROLE_ENV]} in every "
-        "driver-role job's environment; §27)"
+        f"\n{clone}\n{settings}\n{guard}"
+        f"\nguard mode: role mode ({mode} in every driver-role job's environment; §27)"
     )
-    return Check(name, WARN if problems else OK, detail)
+    status = FAIL if failures else WARN if warnings else OK
+    return Check(name, status, detail)
+
+
+def _settings_name_the_guard(path: Path) -> str | None:
+    """None when `path` wires `.claude/hooks/bash_guard.py` as a `PreToolUse` command
+    hook for `Bash` (§28); otherwise why not, in a few words."""
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return "no such file"
+    except (OSError, ValueError) as exc:
+        return f"not readable JSON: {type(exc).__name__}"
+    hooks = data.get("hooks") if isinstance(data, dict) else None
+    entries = hooks.get("PreToolUse") if isinstance(hooks, dict) else None
+    if not isinstance(entries, list):
+        return "no hooks.PreToolUse"
+    for entry in entries:
+        if not isinstance(entry, dict) or not _matches_bash(entry.get("matcher")):
+            continue
+        for hook in entry.get("hooks") or []:
+            if (
+                isinstance(hook, dict)
+                and hook.get("type") == "command"
+                and isinstance(hook.get("command"), str)
+                and GUARD_HOOK in hook["command"]
+            ):
+                return None
+    return f"no PreToolUse command hook for Bash runs {GUARD_HOOK}"
+
+
+def _matches_bash(matcher: Any) -> bool:
+    """A hook matcher that selects the Bash tool: absent, empty, `*`, or a pattern
+    matching `Bash` whole."""
+    if matcher is None or matcher in ("", "*"):
+        return True
+    if not isinstance(matcher, str):
+        return False
+    try:
+        return re.fullmatch(matcher, "Bash") is not None
+    except re.error:
+        return matcher == "Bash"
 
 
 def _roots_check(config: Config) -> Check:
@@ -758,12 +833,15 @@ class _Probe:
     timed_out: bool
 
 
-def _run_probe(argv: list[str], *, cwd: Path | None) -> _Probe | None:
+def _run_probe(
+    argv: list[str], *, cwd: Path | None, env: dict[str, str] | None = None
+) -> _Probe | None:
     """Run a short-lived probe. None when it could not be started at all."""
     try:
         proc = subprocess.run(
             argv,
             cwd=str(cwd) if cwd else None,
+            env=env,
             stdin=subprocess.DEVNULL,
             capture_output=True,
             text=True,

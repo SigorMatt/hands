@@ -18,6 +18,7 @@ from typing import Any
 
 __all__ = [
     "BG_WAIT_CEILING_ENV",
+    "CONSULT_ROLE_ENV",
     "DEFAULT_GATE_PATTERNS",
     "DEFAULT_ROLE_ENV",
     "DRIVER_ROLE",
@@ -77,6 +78,9 @@ BG_WAIT_CEILING_ENV = "CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS"
 DEFAULT_ROLE_ENV: dict[str, str] = {BG_WAIT_CEILING_ENV: "0"}
 #: §27: the driver guard's role mode is this name set to `driver` in the environment.
 ROLE_ENV = "HANDS_ROLE"
+#: §28: the role a consultation names, in its driver job's environment (the runner
+#: sets it from the consult prompt; the guard allows a send to that role only).
+CONSULT_ROLE_ENV = "HANDS_CONSULT_ROLE"
 DRIVER_ROLE = "driver"
 #: A name `[roles.<r>] env` may set: what a POSIX shell accepts as a variable name.
 _ENV_NAME_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")

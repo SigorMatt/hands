@@ -126,22 +126,34 @@ Notes that are easy to get wrong:
   whatever that table says, which puts the guard in role mode. The driver role
   is started by handsd only through a playbook `consult` action: `hands send
   --role driver` is refused. `hands doctor` prints a `role driver` row with the
-  cwd, the clone, the guard and its mode, and fails on a permission bypass.
+  cwd, the clone, the settings, the guard and its mode (§28). The row fails on
+  a permission bypass, when the driver directory's `.claude/settings.json` does
+  not name the hook (a `PreToolUse` command hook for `Bash` that runs
+  `.claude/hooks/bash_guard.py`), and when that hook's `--selftest` is not green
+  run with the role's environment (`HANDS_ROLE=driver`). A missing clone warns.
 - **The consult flow** (§27, docs/PLAYBOOK.md "Consult"). A rule `then =
   "consult"` fires on an event, say a builder `VERDICT: question`. handsd starts
   a driver-role job in the driver's cwd, `context: clear`, `origin: playbook`,
-  and files `consult.sent`. The prompt carries the event, the job's id, role,
+  and files `consult.sent`. The job's environment carries `HANDS_CONSULT_ROLE`,
+  the role the consultation is about, read from the prompt's first line (§28);
+  the guard allows a send to that role only. The prompt carries the event, the job's id, role,
   state and verdict, and its `result` verbatim. The driver answers within its
   authority with `hands send --role builder --context keep` (the one send role
   mode allows) and replies `VERDICT: resolved <what was sent, and the section
   cited>`, or replies `VERDICT: escalate <reason>`. When the driver job ends,
-  handsd files `consult.done` with its verdict and appends one line to
-  `meta/journal.md` under `roles.builder.cwd` (working tree only). The reply is
-  `driver.done` or `driver.failed` to the playbook: `resolved` notifies,
-  `escalate` stops with the reason, and anything else stops. A consult with no
-  `[roles.driver]`, or beyond `[limits] max_consults` (default 2, counted from
-  the last `[series] kickoff` job), stops and starts no driver job. `hands
-  pipeline` shows `consults <used> of max_consults <n>`.
+  handsd files `consult.done` with its terminal state and verdict and appends
+  one line to `meta/journal.md` under `roles.builder.cwd` (working tree only),
+  whether the job ended done, failed, killed (a cancel, or a job that could not
+  be spawned), orphaned or limited. The end is an event:
+  `driver.done|failed|killed|orphaned|limited`. The engine stops and notifies
+  for every one of them except a `driver.done` whose verdict is `VERDICT:
+  resolved …`, whatever `driver.*` rules the playbook has (§28); a resolved
+  verdict goes to the playbook's rules. A limited driver job is not resumed.
+  A consult with no `[roles.driver]`, or beyond `[limits] max_consults`
+  (default 2), stops and starts no driver job. The count starts at the later
+  of the last builder job whose prompt equals any `[series] kickoff` value the
+  pipeline has loaded (kept in `pipeline.json`) and the last kit apply that ran.
+  `hands pipeline` shows `consults <used> of max_consults <n>`.
 - **`[roles.<role>] env`** (§23, H-014) is a table of environment variables for
   that role's `claude -p` jobs, on top of handsd's own environment. Names are
   environment variable names (letters, digits, `_`); values are non-empty

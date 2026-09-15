@@ -58,7 +58,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, TextIO
 
-from hands.config import Config, RoleConfig
+from hands.config import CONSULT_ROLE_ENV, DRIVER_ROLE, Config, RoleConfig
 from hands.limits import is_limit_notice, parse_reset_at, to_iso
 from hands.monitor import (
     CGROUP_ROOT,
@@ -71,6 +71,7 @@ from hands.monitor import (
     group_pids,
     start_time,
 )
+from hands.playbook import consult_head
 from hands.spool import TERMINAL_STATES, Job, Spool, SpoolError
 
 __all__ = [
@@ -579,7 +580,7 @@ class Runner:
                 limit=_STREAM_LIMIT,
                 # §23, plus the job's id: the mark the post-exit sweep reads to
                 # tell the job's descendants from strangers (§27).
-                env={**os.environ, **role.spawn_env, JOB_ENV: job.id},
+                env=job_env(job, role),
                 start_new_session=isolation == GROUP,  # §24: its own process group
             )
         except OSError as exc:
@@ -931,6 +932,22 @@ def _failure_reason(parsed: _Parsed, exit_code: int | None) -> str | None:
     if parsed.num_turns is None:
         return "no_num_turns"
     return None
+
+
+def job_env(job: Job, role: RoleConfig) -> dict[str, str]:
+    """handsd's environment, the role's `spawn_env` (§23) and `HANDS_JOB` (§27).
+
+    §28: a driver job also carries `HANDS_CONSULT_ROLE`, the role its consult
+    prompt's first line names, and never a value from anywhere else: with no
+    readable head the variable is absent, and the guard refuses every send.
+    """
+    env = {**os.environ, **role.spawn_env, JOB_ENV: job.id}
+    if job.role == DRIVER_ROLE:
+        env.pop(CONSULT_ROLE_ENV, None)
+        head = consult_head(job.prompt)
+        if head is not None:
+            env[CONSULT_ROLE_ENV] = head["role"]
+    return env
 
 
 def _signal(proc: asyncio.subprocess.Process, signum: int) -> None:

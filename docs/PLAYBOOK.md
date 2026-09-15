@@ -90,12 +90,14 @@ while it is paused.
 ## Events (`on`)
 
 `builder.done`, `builder.failed`, `builder.limited`, `builder.orphaned`,
-`aux.done`, `aux.failed`, `driver.done`, `driver.failed`, `monitor.stall`,
-`monitor.tripwire`, `monitor.task_killed`, `monitor.orphan_processes`,
-`job.held`, `job.denied`.
+`aux.done`, `aux.failed`, `driver.done`, `driver.failed`, `driver.killed`,
+`driver.orphaned`, `driver.limited`, `monitor.stall`, `monitor.tripwire`,
+`monitor.task_killed`, `monitor.orphan_processes`, `job.held`, `job.denied`.
 
-`driver.done` and `driver.failed` (DESIGN §27) are a consultation's driver job
-ending done or failed; see `consult` below.
+`driver.done`, `driver.failed`, `driver.killed`, `driver.orphaned` and
+`driver.limited` (DESIGN §27, §28) are a consultation's driver job ending that
+way. Every one of them but a resolved `driver.done` is a stop the engine
+enforces; see `consult` below.
 
 The list is closed: anything else is not a playbook event and fires nothing. A
 job you cancelled yourself (`killed`) is not an event — you already know.
@@ -196,23 +198,41 @@ Always a `stop` instead, and no driver job: no `[roles.driver]` in the config
 (checked when the rule fires, because the playbook does not see the config), an
 event that carries no job, and a mission that has used `[limits]
 max_consults` (default 2). The stop reason names `max_consults`. The mission is
-counted from the last builder job whose prompt is the `[series] kickoff` line
-(not a resume of it). Every driver job after it counts, except a §6 resume of
-one. With no `kickoff`, or none sent yet, every driver job in the spool counts.
+counted from the later of two jobs (DESIGN §28): the last builder job whose
+prompt equals any `[series] kickoff` value the pipeline has loaded, not a
+resume of it, and the last kit apply that ran (a builder job of `origin: kit`
+that started). Every kickoff value a loaded playbook carried is kept in the
+spool's `pipeline.json`, so renaming the next kickoff does not freeze the count.
+Every driver job after that start counts, except a §6 resume of one. With
+neither, every driver job in the spool counts.
+
+The driver job's environment carries `HANDS_CONSULT_ROLE`, the role named on
+the prompt's first line; the guard in role mode allows a send to that role only.
 
 Every consultation files `consult.sent` in the inbox when the driver job is
-created and `consult.done` when it ends, with its state and verdict line (a
-`limited` driver job has not ended: §6 resumes it). At the end, handsd also
+created and `consult.done` when it ends, with its terminal state and verdict
+line: `done`, `failed`, `killed` (a cancel, or a job the runner could not
+spawn), `orphaned` (its daemon died) or `limited`. A limited driver job is not
+resumed: the consultation has ended. At the end, handsd also
 appends one line to `meta/journal.md` under `roles.builder.cwd`, creating the
 file and `meta/` when they are absent. The line is written to the working tree
 and never committed by hands. The driver's reply is its job's `result`, stored
 verbatim like every job's.
 
-The driver's reply is `driver.done`, matched by ordinary rules. §10 has no
-do-nothing action, so the rule for `resolved` is a `notify`: the driver already
-sent its answer, and the phone hears what it did. `escalate` is a `stop` whose
-message carries the reason. An unrecognised verdict matches no rule and stops,
-and so does `driver.failed` with no rule for it:
+The stops are the engine's (DESIGN §28). A consultation that does not end in a
+`driver.done` whose verdict begins `VERDICT: resolved ` stops and notifies:
+`VERDICT: escalate <reason>` (the reason is in the stop), an unrecognised or
+missing verdict, `driver.failed`, `driver.killed`, `driver.orphaned` and
+`driver.limited`. A playbook needs no rule for any of them and cannot remove
+one: when the first matching rule for such an event is itself a `stop`, that
+rule is the stop and its message the reason; any other matching rule (a
+`notify`, a `send`) does not fire, and the stop records it as `rule_not_fired`.
+
+A resolved verdict goes to ordinary rules. §10 has no do-nothing action, so the
+rule for `resolved` is a `notify`: the driver already sent its answer, and the
+phone hears what it did. With no rule for it, a resolved verdict stops too
+(§10). The escalate and `driver.failed` rules below only give the stops their
+messages:
 
     [limits]
     max_consults = 2

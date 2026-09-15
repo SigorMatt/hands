@@ -24,6 +24,7 @@ from typing import Any
 
 import pytest
 
+import hands.runner as hands_runner
 from conftest import commit_file, strip_paths
 from hands.cli import _pipeline_block
 from hands.config import Config, load_config, parse_config
@@ -420,6 +421,9 @@ def test_the_events_and_actions_are_exactly_section_10s() -> None:
         "aux.failed",
         "driver.done",  # §27: a consultation's driver job ended done
         "driver.failed",  # §27: … or failed
+        "driver.killed",  # §28: … or any other way, each a stop the engine enforces
+        "driver.orphaned",
+        "driver.limited",
         "monitor.stall",
         "monitor.tripwire",
         "monitor.task_killed",  # §24: mission 8's detector, mapped to `stop`
@@ -2047,8 +2051,9 @@ def test_an_unrecognised_driver_verdict_stops(tmp_home: Path, workdir: Path) -> 
     driver = _driver_job(engine.spool, state="done", verdict="VERDICT: maybe", about=about)
     run(engine.on_job(driver))
     assert engine.state.paused
-    assert "driver.done: no rule matches the verdict 'VERDICT: maybe'" in strip_paths(
-        engine.state.stop_reason or ""
+    assert (
+        "driver.done: the driver's verdict 'VERDICT: maybe' is neither resolved nor escalate"
+        in strip_paths(engine.state.stop_reason or "")
     )
     assert recorder.enqueued == []
 
@@ -2072,7 +2077,7 @@ def test_a_failed_driver_job_stops_and_notifies(tmp_home: Path, workdir: Path) -
     driver = _driver_job(engine.spool, state="failed", verdict=None, about=about)
     run(engine.on_job(driver))
     assert engine.state.paused
-    assert "driver.failed: the playbook has no rule for it" in strip_paths(
+    assert "driver.failed: the consultation's driver job ended failed" in strip_paths(
         engine.state.stop_reason or ""
     )
     assert [title for title, _ in recorder.notified] == ["hands: the pipeline stopped"]
@@ -2284,5 +2289,347 @@ def test_a_third_consult_in_one_mission_stops_naming_max_consults(
                    if row["role"] == "driver"]
         assert len(drivers) == 2
         assert len(await _events("consult.sent")) == 2
+
+    drive(body)
+
+
+# ------------------------------------ §28: the engine's driver stops (U2, m12)
+
+#: A playbook with a consult rule and no rule on any driver event.
+NO_DRIVER_RULES = f"""version = 1
+
+[series]
+kickoff = "{KICKOFF}"
+
+[[rule]]
+on = "builder.done"
+verdict = '^VERDICT: question'
+then = "consult"
+"""
+
+#: A playbook whose own driver rules would carry on instead of stopping.
+CARRY_ON = f"""version = 1
+
+[series]
+kickoff = "{KICKOFF}"
+
+[[rule]]
+on = "driver.done"
+verdict = '^VERDICT: resolved (?P<what>.+)'
+then = "notify"
+message = "resolved: {{what}}"
+
+[[rule]]
+on = "driver.done"
+verdict = '^VERDICT: escalate'
+then = "notify"
+message = "escalated, carrying on"
+
+[[rule]]
+on = "driver.done"
+then = "send"
+role = "builder"
+prompt = "carry on"
+
+[[rule]]
+on = "driver.failed"
+then = "send"
+role = "builder"
+prompt = "carry on"
+
+[[rule]]
+on = "driver.killed"
+then = "notify"
+message = "killed, carrying on"
+
+[[rule]]
+on = "driver.orphaned"
+then = "notify"
+message = "orphaned, carrying on"
+
+[[rule]]
+on = "driver.limited"
+then = "notify"
+message = "limited, carrying on"
+"""
+
+
+def test_the_driver_end_events_are_events() -> None:
+    """§28: `driver.killed`, `driver.orphaned` and `driver.limited` are events."""
+    wanted = ["driver.done", "driver.failed", "driver.killed", "driver.orphaned",
+              "driver.limited"]
+    assert set(wanted) <= set(EVENTS), sorted(set(wanted) - set(EVENTS))
+
+
+@pytest.mark.parametrize(
+    ("state", "verdict", "reason"),
+    [
+        ("done", "VERDICT: escalate the brief is silent",
+         "the driver escalated: the brief is silent"),
+        ("done", "VERDICT: maybe", "neither resolved nor escalate"),
+        ("done", None, "no VERDICT: line"),
+        ("failed", None, "driver.failed"),
+        ("killed", None, "driver.killed"),
+        ("orphaned", None, "driver.orphaned"),
+        ("limited", None, "driver.limited"),
+    ],
+)
+@pytest.mark.parametrize("body", [NO_DRIVER_RULES, CARRY_ON], ids=["no-driver-rules", "carry-on"])
+def test_the_engine_stops_a_consultation_whatever_the_playbooks_driver_rules(
+    tmp_home: Path, workdir: Path, body: str, state: str, verdict: str | None, reason: str
+) -> None:
+    """§28: escalate, an unrecognised verdict, `driver.failed`, `killed`, `orphaned`
+    and `limited` stop and notify, and a playbook's own `driver.*` rules (notify,
+    send) cannot remove the stop: no rule of theirs fires, no job is sent."""
+    engine, recorder = engine_for(tmp_home, workdir, body, driver=workdir.parent / "d")
+    about = finished(engine.spool, verdict="VERDICT: question x")
+    run(engine.on_job(_driver_job(engine.spool, state=state, verdict=verdict, about=about)))
+    assert engine.state.paused, (state, verdict)
+    assert reason in strip_paths(engine.state.stop_reason or "")
+    assert "§28" in strip_paths(engine.state.stop_reason or "")
+    assert recorder.sent == [] and recorder.enqueued == []
+    assert [title for title, _ in recorder.notified] == ["hands: the pipeline stopped"]
+    assert [e for e in engine.spool.events() if e.kind == "playbook.rule"] == []
+    [done] = [e for e in engine.spool.events() if e.kind == "consult.done"]
+    assert done.payload["state"] == state  # §28: consult.done carries the terminal state
+
+
+def test_a_resolved_verdict_still_goes_to_the_playbooks_own_rules(
+    tmp_home: Path, workdir: Path
+) -> None:
+    """§28: "a playbook may add rules on `driver.done` for its own messages"."""
+    engine, recorder = engine_for(tmp_home, workdir, CARRY_ON, driver=workdir.parent / "d")
+    about = finished(engine.spool, verdict="VERDICT: question x")
+    verdict = "VERDICT: resolved sent keep, §27"
+    run(engine.on_job(_driver_job(engine.spool, state="done", verdict=verdict, about=about)))
+    assert not engine.state.paused, engine.state.stop_reason
+    assert [title for title, _ in recorder.notified] == ["hands: resolved: sent keep, §27"]
+
+
+def test_a_playbook_stop_rule_on_an_escalation_keeps_its_message(
+    tmp_home: Path, workdir: Path
+) -> None:
+    """The engine's stop is not a second stop: a matching `stop` rule is the stop."""
+    engine, recorder = engine_for(tmp_home, workdir, CONSULT_BOOK, driver=workdir.parent / "d")
+    about = finished(engine.spool, verdict="VERDICT: question x")
+    driver = _driver_job(engine.spool, state="done", verdict="VERDICT: escalate why", about=about)
+    run(engine.on_job(driver))
+    assert engine.state.stop_reason == "driver escalated: why"
+    assert [title for title, _ in recorder.notified] == ["hands: the pipeline stopped"]
+
+
+def test_max_consults_counts_from_a_kickoff_seen_before_it_was_renamed(
+    tmp_home: Path, workdir: Path
+) -> None:
+    """§28: the count starts at the most recent job whose prompt equals *any*
+    `[series] kickoff` value seen in the pipeline's history, or the last kit apply,
+    whichever is later; renaming the kickoff does not freeze it. "Seen" is
+    remembered in `pipeline.json`, so a fresh engine (a daemon restart) keeps it."""
+    driver_dir = workdir.parent / "d"
+    engine, _ = engine_for(tmp_home, workdir, CONSULT_BOOK, driver=driver_dir)
+    spool = engine.spool
+    about = finished(spool, verdict="VERDICT: question x")
+    for _ in range(3):  # an earlier mission's consultations
+        _driver_job(spool, state="done", verdict="VERDICT: resolved a", about=about)
+    kickoff = spool.create_job(role="builder", context="clear", prompt=KICKOFF, origin="phone")
+    run(engine.on_job_start(kickoff))  # the kickoff job starts: its playbook is loaded
+    spool.transition(kickoff, "running")
+    spool.transition(kickoff, "done")
+    _driver_job(spool, state="done", verdict="VERDICT: resolved b", about=about)
+    assert engine.consults_used(engine.playbook) == 1
+
+    renamed = CONSULT_BOOK.replace(KICKOFF, "Kick off mission 12")
+    commit_file(workdir, "PLAYBOOK.toml", renamed)
+    fresh = PlaybookEngine(
+        make_config(tmp_home, workdir, driver=driver_dir), Spool(tmp_home / ".hands"),
+        send=Recorder().send, enqueue=Recorder().enqueue,
+    )
+    run(fresh.on_job_start(finished(spool, verdict="VERDICT: question y")))
+    assert fresh.playbook is not None and fresh.playbook.kickoff == "Kick off mission 12"
+    assert fresh.consults_used(fresh.playbook) == 1
+    assert fresh.pipeline()["consults"] == {"used": 1, "max_consults": 2}
+
+    # A kit apply that ran, after the kickoff, is the later start.
+    apply = spool.create_job(role="builder", context="clear", prompt="Apply kit", origin="kit")
+    spool.transition(apply, "running")
+    spool.transition(apply, "done", verdict="VERDICT: kit applied abc")
+    assert fresh.consults_used(fresh.playbook) == 0
+    _driver_job(spool, state="done", verdict="VERDICT: resolved c", about=about)
+    assert fresh.consults_used(fresh.playbook) == 1
+    # A kit apply still held (never ran) is not an apply.
+    spool.create_job(role="builder", context="clear", prompt="Apply kit 2", origin="kit",
+                     state="held")
+    assert fresh.consults_used(fresh.playbook) == 1
+
+
+# ---------------------------------------------- §28 end to end, no driver rules
+
+
+def _no_rules_project(tmp_home: Path, workdir: Path, driver_extra: str = "") -> Path:
+    driver = tmp_home.parent / "driver"
+    driver.mkdir(exist_ok=True)
+    write_project(
+        tmp_home,
+        config_body(
+            tmp_home, workdir, extra=f'[roles.driver]\ncwd = "{driver}"\n{driver_extra}'
+        ),
+    )
+    write_playbook(workdir, NO_DRIVER_RULES)
+    return driver
+
+
+def _script(tmp_home: Path, monkeypatch: pytest.MonkeyPatch, replies: list[Any]) -> None:
+    path = tmp_home / "replies.json"
+    path.write_text(json.dumps(replies))
+    monkeypatch.setenv("HANDS_FAKE_CLAUDE_REPLIES", str(path))
+
+
+async def _driver_rows() -> list[dict[str, Any]]:
+    return [row for row in (await ok("jobs", "-n", "50"))["jobs"] if row["role"] == "driver"]
+
+
+async def _stopped_consultation(state: str, reason: str) -> dict[str, Any]:
+    """The pipeline stopped with `reason`, one `stop` event, one consult.done in `state`."""
+    stopped = await wait_for_stop()
+    assert reason in strip_paths(stopped["stop_reason"]), stopped["stop_reason"]
+    assert "§28" in strip_paths(stopped["stop_reason"]), "the engine's stop, not §10's default"
+    [done] = await _wait_events("consult.done", 1)
+    assert done["payload"]["state"] == state
+    assert len(await _events("stop")) == 1
+    return done
+
+
+@pytest.mark.parametrize(
+    ("reply", "reason"),
+    [
+        ("VERDICT: escalate the mission file does not decide it",
+         "the driver escalated: the mission file does not decide it"),
+        ("VERDICT: maybe", "neither resolved nor escalate"),
+    ],
+    ids=["escalate", "unrecognised"],
+)
+def test_end_to_end_a_driver_verdict_that_is_not_resolved_stops(
+    tmp_home: Path, workdir: Path, monkeypatch: pytest.MonkeyPatch, reply: str, reason: str
+) -> None:
+    _no_rules_project(tmp_home, workdir)
+    _script(tmp_home, monkeypatch, [QUESTION_RESULT, reply])
+
+    async def body(daemon: Daemon) -> None:
+        first = await ok("send", "--role", "builder", "--context", "clear", KICKOFF)
+        await ok("wait", first["id"])
+        await _stopped_consultation("done", reason)
+        assert len(await _driver_rows()) == 1
+
+    drive(body)
+
+
+def test_end_to_end_a_failed_driver_job_stops(
+    tmp_home: Path, workdir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The builder's reply is carried verbatim, so its `FAKE:error` line fails the driver."""
+    _no_rules_project(tmp_home, workdir)
+    _script(tmp_home, monkeypatch, ["VERDICT: question x\nFAKE:error boom"])
+
+    async def body(daemon: Daemon) -> None:
+        first = await ok("send", "--role", "builder", "--context", "clear", KICKOFF)
+        await ok("wait", first["id"])
+        await _stopped_consultation("failed", "driver.failed")
+
+    drive(body)
+
+
+def test_end_to_end_a_killed_driver_job_stops(
+    tmp_home: Path, workdir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _no_rules_project(tmp_home, workdir, "cancel_gated = false")
+    _script(tmp_home, monkeypatch, ["VERDICT: question x\nFAKE:block"])
+
+    async def body(daemon: Daemon) -> None:
+        first = await ok("send", "--role", "builder", "--context", "clear", KICKOFF)
+        await ok("wait", first["id"])
+
+        async def running() -> Any:
+            rows = await _driver_rows()
+            return rows if rows and rows[0]["state"] == "running" else None
+
+        [row] = await poll(running, "the driver job to run")
+        await ok("cancel", row["id"])
+        await _stopped_consultation("killed", "driver.killed")
+
+    drive(body)
+
+
+def test_end_to_end_a_driver_job_that_cannot_spawn_files_consult_done_and_stops(
+    tmp_home: Path, workdir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """REVIEW-11 SF2: a driver job the runner refuses before spawning (its prompt,
+    which carries the builder's reply verbatim, is over the cap) is `killed`."""
+    _no_rules_project(tmp_home, workdir)
+    monkeypatch.setattr(hands_runner, "MAX_PROMPT_BYTES", 4000)
+    _script(tmp_home, monkeypatch, ["VERDICT: question x\n" + "y" * 5000])
+
+    async def body(daemon: Daemon) -> None:
+        first = await ok("send", "--role", "builder", "--context", "clear", KICKOFF)
+        await ok("wait", first["id"])
+        done = await _stopped_consultation("killed", "driver.killed")
+        assert done["payload"]["about"] == first["id"]
+        lines = (workdir / "meta" / "journal.md").read_text(encoding="utf-8").splitlines()
+        assert len(lines) == 1 and "(killed)" in strip_paths(lines[0])
+
+    drive(body)
+
+
+def test_end_to_end_a_limited_driver_job_stops_and_is_not_resumed(
+    tmp_home: Path, workdir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _no_rules_project(tmp_home, workdir)
+    _script(tmp_home, monkeypatch, ["VERDICT: question x\nFAKE:rate-limit slow down"])
+
+    async def body(daemon: Daemon) -> None:
+        first = await ok("send", "--role", "builder", "--context", "clear", KICKOFF)
+        await ok("wait", first["id"])
+        await _stopped_consultation("limited", "driver.limited")
+        assert [row["state"] for row in await _driver_rows()] == ["limited"]
+        assert daemon.limits.pending_resumes() == []  # §28: the consultation ended
+        assert not [t for t in daemon.limits._tasks if not t.done()]
+
+    drive(body)
+
+
+def test_end_to_end_an_orphaned_driver_job_stops_when_the_daemon_starts(
+    tmp_home: Path, workdir: Path
+) -> None:
+    _no_rules_project(tmp_home, workdir)
+    spool = Spool(tmp_home / ".hands")
+    about = finished(spool, verdict="VERDICT: question x")
+    job = spool.create_job(
+        role="driver", context="clear", prompt=consult_prompt("builder.done", about),
+        origin="playbook",
+    )
+    spool.transition(job, "running")  # no pid: its process is gone
+
+    async def body(daemon: Daemon) -> None:
+        done = await _stopped_consultation("orphaned", "driver.orphaned")
+        assert done["payload"]["job"] == job.id
+
+    drive(body)
+
+
+def test_end_to_end_the_driver_job_carries_the_consultations_role(
+    tmp_home: Path, workdir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """§28: the role the consultation names reaches the driver as HANDS_CONSULT_ROLE,
+    whatever handsd's own environment says (U1's guard refuses a role send without it)."""
+    _no_rules_project(tmp_home, workdir)
+    monkeypatch.setenv("HANDS_CONSULT_ROLE", "aux")
+    _script(tmp_home, monkeypatch, ["VERDICT: question x\nFAKE:env HANDS_CONSULT_ROLE"])
+
+    async def body(daemon: Daemon) -> None:
+        first = await ok("send", "--role", "builder", "--context", "clear", KICKOFF)
+        await ok("wait", first["id"])
+        await wait_for_stop()
+        [row] = await _driver_rows()
+        driver = await ok("result", row["id"])
+        assert driver["result"] == "builder"
 
     drive(body)
