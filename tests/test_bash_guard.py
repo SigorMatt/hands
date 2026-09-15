@@ -406,7 +406,7 @@ ROLE_MODE: list[tuple[str, bool]] = [
     ("hands resume", True),
     # send: only an explicit keep, only to builder or aux
     ("hands send --role builder --context keep 'Answer: use §27, then continue.'", True),
-    ("hands send --role aux --context keep --prompt-file ~/Downloads/answer.txt", True),
+    ("hands send --role builder --context keep --prompt-file ~/Downloads/answer.txt", True),
     ("hands send --role=builder --context=keep 'ok'", True),
     ("hands --json send --context keep --role builder 'ok'", True),
     ("hands send --role builder --context clear 'Execute run 2'", False),
@@ -454,8 +454,9 @@ ROLE_MODE_ALLOWED_HANDS = {"show", "jobs", "inbox", "pipeline", "status", "tail"
 
 @pytest.mark.parametrize("cmd,allowed", ROLE_MODE)
 def test_role_mode_case(cmd: str, allowed: bool) -> None:
-    """DESIGN §27: the driver role's allowlist, from `tests/`' own table."""
-    reason = guard.check(cmd, role="driver")
+    """DESIGN §27: the driver role's allowlist, from `tests/`' own table. §28:
+    the consultation named builder, so `HANDS_CONSULT_ROLE` is `builder`."""
+    reason = guard.check(cmd, role="driver", consult_role="builder")
     if allowed:
         assert reason is None, f"role mode blocked an allowed command: {cmd} -> {reason}"
     else:
@@ -521,3 +522,237 @@ def test_the_hook_takes_role_mode_from_the_environment(monkeypatch: pytest.Monke
 def test_an_unknown_hands_role_fails_closed(monkeypatch: pytest.MonkeyPatch) -> None:
     assert guard.check("hands status", role="builder") is not None
     assert run_hook(monkeypatch, "hands status", "Driver") == 2
+
+
+# --- §28: THE GUARD ON WHAT THE SHELL DELIVERS -------------------------------
+#
+# Review 11 blocker 1: the guard judged a quote-stripped string, so a quoted or
+# escaped option word, a lone `&`, `$'…'`, a brace word and an assignment all
+# reached `hands` unjudged. Every probe the review executed is below, with the
+# verdict it must get in each mode. `None` in the normal-mode column never
+# occurs: every probe has a normal-mode verdict, because a probe allowed there
+# is still a command the human's session may run (`hands go` is its right).
+# Normal mode refuses only what it refused before (writes, `open`) plus the
+# §28 rules that hold in both modes ($'…', brace words, assignments, residual
+# expansion characters). HANDS_CONSULT_ROLE is `builder` in role mode.
+REVIEW_11_PROBES: list[tuple[str, bool]] = [
+    # (command, blocked in normal mode) -- always blocked in role mode
+    ("hands show x & hands go", False),
+    ("hands jobs & hands approve j1 --human-confirmed --quote yes", False),
+    ("hands show & hands open x", True),
+    ("hands send --role builder --context keep '--context=clear' m", False),
+    ('hands send --role builder --context keep "--context=clear" m', False),
+    ("hands send --role builder --context keep \\--context=clear m", False),
+    ("hands send --role builder --context keep $'--context=clear' m", True),
+    ("hands send --role builder --context keep {--context=clear,m}", True),
+    ("x=--context=clear; hands send --role builder --context keep $x m", True),
+    ("hands send --role builder --context keep '--file' a=b m", False),
+    ("hands send --role builder --context keep \\--file a=b m", False),
+    # "to the role named in the consultation": --role other than HANDS_CONSULT_ROLE
+    ("hands send --role aux --context keep m", False),
+    # and to another project: the CLI accepts --project before and after `send`
+    ("hands send --project other --role builder --context keep m", False),
+    ("hands --project other send --role builder --context keep m", False),
+    ("hands send --role builder --context keep --project=other m", False),
+    ("hands send --role builder --context keep --socket /tmp/other.sock m", False),
+]
+
+
+@pytest.mark.parametrize("cmd,blocked_normal", REVIEW_11_PROBES)
+def test_review_11_probe_is_blocked_in_role_mode(cmd: str, blocked_normal: bool) -> None:
+    reason = guard.check(cmd, role="driver", consult_role="builder")
+    assert reason is not None, f"role mode allowed a review 11 probe: {cmd}"
+
+
+@pytest.mark.parametrize("cmd,blocked_normal", REVIEW_11_PROBES)
+def test_review_11_probe_in_normal_mode(cmd: str, blocked_normal: bool) -> None:
+    reason = guard.check(cmd)
+    assert (reason is not None) == blocked_normal, (cmd, reason)
+
+
+def test_the_guards_own_tables_carry_every_review_11_probe() -> None:
+    """§28: the self-test carries every probe review 11 executed, in both modes
+    where applicable."""
+    role = dict(guard.ROLE_SELFTEST)
+    normal = dict(guard.SELFTEST)
+    for cmd, blocked_normal in REVIEW_11_PROBES:
+        assert role.get(cmd) is False, f"ROLE_SELFTEST lacks the blocked probe {cmd!r}"
+        if blocked_normal:
+            assert normal.get(cmd) is False, f"SELFTEST lacks the blocked probe {cmd!r}"
+
+
+# §28, the rules behind the probes, one family at a time. (command, allowed) in
+# both modes unless the table says role mode.
+SHELL_DELIVERY_BOTH_MODES: list[tuple[str, bool]] = [
+    # segments: every separator, a lone `&` included
+    ("git status & git push", False),
+    ("git status & git -C ./repo log --oneline -1", True),
+    ("git status |& git push", False),
+    ("git status\ngit push", False),
+    ("(git status) && (git push)", False),
+    ("git status; (git push)", False),
+    ("echo $(git push)", False),
+    ("echo `git push`", False),
+    ('echo "$(git status; git push)"', False),
+    ('echo "`git push`"', False),
+    ("echo $(echo $(git push))", False),
+    # the backslash-newline the shell deletes before it splits words
+    ("git status \\\n; git push", False),
+    ("git log --oneline -1 \\\n--output=/tmp/x", False),
+    # an escaped or quoted separator is text, not a separator
+    ("git -C ./repo grep -n 'a;b' origin/main", True),
+    ("git -C ./repo grep -n a\\&b origin/main", True),
+    # unparsable: unbalanced quotes, an unterminated substitution
+    ("git log 'oops", False),
+    ('git log "oops', False),
+    ("git log --oneline -1 \\", False),
+    ("echo $(git status", False),
+    ("echo `git status", False),
+    # leading assignments, with a command and alone
+    ("GIT_PAGER=touch git log", False),
+    ("x=1 git status", False),
+    ("x=1; git status", False),
+    ("x=1", False),
+    # `$'…'` words, anywhere a word can be
+    ("git log $'--output=/tmp/x'", False),
+    ("git log --grep=$'a'", False),
+    # residual expansion characters in git argument position
+    ("git log $x", False),
+    ("git log ${x}", False),
+    ('git log "$x"', False),
+    ("git log `echo -1`", False),
+    ("git log --grep=a{b,c}", False),
+    ("git log -- *.py", False),
+    ("git log -- x?", False),
+    ("git log -- [ab]", False),
+    ("git log HEAD^!", False),
+    ('git log "--grep=\\x"', False),
+    ("git log --grep=x=~/y", False),
+    # ... and the same characters where the shell does not expand them
+    ("git log -- '*.py'", True),
+    ("git -C ./repo grep -n -e '$x' origin/main", True),
+    ('git -C ./repo grep -n -e "a*b?[c]{d,e}~" origin/main', True),
+    ("git -C ./repo diff --stat HEAD~1", True),
+    ("git -C ./repo rev-parse HEAD^{commit}", True),
+    ("git -C ./repo rev-parse HEAD^{}", True),
+    ("git -C ~/git/hands log --oneline -1", True),
+    # the command word itself is what the shell delivers
+    ("'git' push", False),
+    ("g\\it push", False),
+    ("$SHELL -c 'git push'", False),
+    ("$GIT push", False),
+    # writes by redirection that the old pattern let through
+    ("git status 2>probe.txt", False),
+    ("git status &> probe.txt", False),
+    ("git status &>probe.txt", False),
+    ("echo hi 2>probe.txt", False),
+    ("git status 2>/dev/null", True),
+    ("git status 2>&1", True),
+]
+
+
+@pytest.mark.parametrize("cmd,allowed", SHELL_DELIVERY_BOTH_MODES)
+def test_the_shell_delivery_rules_hold_in_both_modes(cmd: str, allowed: bool) -> None:
+    for role in (None, "driver"):
+        reason = guard.check(cmd, role=role, consult_role="builder")
+        assert (reason is None) == allowed, (role, cmd, reason)
+
+
+# `hands` in both modes: the same residual-character and assignment rules, and
+# the subcommand read past the global options' values.
+HANDS_BOTH_MODES: list[tuple[str, bool]] = [
+    ("hands show $x", False),
+    ("hands show x{a,b}", False),
+    ("hands show 'x{a,b}'", True),
+    ("hands show job-*", False),
+    ("hands show 'job-*'", True),
+    ("HANDS_PROJECT=other hands show x", False),
+    ("hands show $'x'", False),
+    ("'hands' show x", True),
+    ("hands show x & hands tail --role builder -n 5", True),
+]
+
+HANDS_NORMAL_MODE: list[tuple[str, bool]] = [
+    # the subcommand is read past a global option's value
+    ("hands --project x open y", False),
+    ("hands --project=x open y", False),
+    ("hands --socket /tmp/s --json open y", False),
+    ("hands 'open' y", False),
+    ("hands --project x show y", True),
+    # quoted prose is text: characters the shell leaves alone inside quotes
+    ("hands send --role builder --context clear 'Did it pass? Run *all* [the] {checks}!'", True),
+    ('hands send --role builder --context clear "Did it pass? Run *all* [the] {checks}"', True),
+    # ... except the ones it still expands inside double quotes
+    ('hands send --role builder --context clear "costs $5"', False),
+    ('hands send --role builder --context clear "run `id`"', False),
+]
+
+
+@pytest.mark.parametrize("cmd,allowed", HANDS_BOTH_MODES)
+def test_hands_rules_that_hold_in_both_modes(cmd: str, allowed: bool) -> None:
+    for role in (None, "driver"):
+        reason = guard.check(cmd, role=role, consult_role="builder")
+        assert (reason is None) == allowed, (role, cmd, reason)
+
+
+@pytest.mark.parametrize("cmd,allowed", HANDS_NORMAL_MODE)
+def test_hands_in_normal_mode(cmd: str, allowed: bool) -> None:
+    reason = guard.check(cmd)
+    assert (reason is None) == allowed, (cmd, reason)
+
+
+# Role mode's send: exactly one --context, literally `keep`; exactly one --role,
+# equal to HANDS_CONSULT_ROLE; no --project or --socket (the send goes to the
+# consultation's own project, which the CLI resolves without them). (command,
+# HANDS_CONSULT_ROLE, allowed)
+ROLE_SEND: list[tuple[str, str | None, bool]] = [
+    ("hands send --role builder --context keep m", "builder", True),
+    ("hands send --role aux --context keep --prompt-file ~/Downloads/answer.txt", "aux", True),
+    ("hands send --role=aux --context=keep m", "aux", True),
+    ("hands send --role builder --context keep m", "aux", False),
+    ("hands send --role aux --context keep m", "builder", False),
+    ("hands send --role builder --context keep m", None, False),
+    ("hands send --role builder --context keep m", "", False),
+    ("hands send --role driver --context keep m", "driver", False),
+    ("hands send --role builder --role builder --context keep m", "builder", False),
+    ("hands send --role builder --context keep --context keep m", "builder", False),
+    ("hands send --role builder --context 'keep' m", "builder", True),
+    ("hands send --role builder --context kee m", "builder", False),
+    ("hands send --role builder --context=keep= m", "builder", False),
+    ("hands send --role builder --context m", "builder", False),
+    ("hands send --role builder --context keep -- --context=clear", "builder", False),
+    ("hands send --role builder --context keep --fil a=b m", "builder", False),
+    ("hands send --role builder --context keep --proj other m", "builder", False),
+]
+
+
+@pytest.mark.parametrize("cmd,consult,allowed", ROLE_SEND)
+def test_role_mode_send(cmd: str, consult: str | None, allowed: bool) -> None:
+    reason = guard.check(cmd, role="driver", consult_role=consult)
+    assert (reason is None) == allowed, (cmd, consult, reason)
+
+
+def test_the_hook_takes_the_consult_role_from_the_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """§28: the role the consultation named reaches the guard as
+    HANDS_CONSULT_ROLE; unset or empty, no send passes in role mode."""
+    send = "hands send --role aux --context keep m"
+    monkeypatch.setenv("HANDS_CONSULT_ROLE", "aux")
+    assert run_hook(monkeypatch, send, "driver") == 0
+    monkeypatch.setenv("HANDS_CONSULT_ROLE", "builder")
+    assert run_hook(monkeypatch, send, "driver") == 2
+    monkeypatch.setenv("HANDS_CONSULT_ROLE", "")
+    assert run_hook(monkeypatch, send, "driver") == 2
+    monkeypatch.delenv("HANDS_CONSULT_ROLE")
+    assert run_hook(monkeypatch, send, "driver") == 2
+    assert run_hook(monkeypatch, "hands status", "driver") == 0
+    # the human's session never needed it
+    assert run_hook(monkeypatch, send, None) == 0
+
+
+def test_the_selftest_runs_role_mode_with_a_consult_role() -> None:
+    """ROLE_SELFTEST's sends are judged with a named consultation role, so the
+    table proves a send can pass, not only that every send is refused."""
+    assert guard.SELFTEST_CONSULT_ROLE
+    assert any(ok and cmd.startswith("hands send") for cmd, ok in guard.ROLE_SELFTEST)

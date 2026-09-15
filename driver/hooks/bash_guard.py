@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""bash_guard.py — PreToolUse hook for the hands DRIVER session.
+r"""bash_guard.py — PreToolUse hook for the hands DRIVER session.
 
 Claude Code runs this before every Bash tool call. It reads the hook JSON on
 stdin, extracts the command, and exits 2 (block, with the reason on stderr)
@@ -7,11 +7,35 @@ unless every command segment starts with an allowed word and the command
 contains no way to write: no redirection, no tee, no in-place edits, no
 interpreters, no direct `claude`. `hands open` is blocked too: it execs an
 interactive `claude --resume`, which is a direct claude by another name.
-Quoted text is stripped before inspection: prose inside quotes is text, but
-$(...) and backticks inside double quotes are still executed and still checked.
+
+What the shell delivers (DESIGN §28). The guard does not judge a quote-stripped
+string: it splits the command into segments on every separator the shell obeys
+outside quotes — `;`, `&&`, `||`, `|`, a lone `&`, newlines, subshell
+parentheses — and on `$(` and backticks wherever they still execute (inside
+double quotes too; a substitution is its own segment, and its place in the
+word around it is a `$`). Each segment is tokenized with `shlex` in POSIX mode,
+so `hands`, `git` and the rest are judged on the literal words they would
+receive: `'--context=clear'`, `"--context=clear"` and `\--context=clear` are
+all the option `--context=clear`. A command `shlex` cannot parse (unbalanced
+quotes, a trailing backslash) or with an unterminated substitution is refused.
+A backslash-newline is deleted first, as the shell deletes it.
+
+For `hands` and `git` in both modes, a token in argument position that still
+carries `$`, a backtick, `{`, `}`, `\`, `~` (not leading), `*`, `?`, `[` or
+`!` where the shell would still expand it is refused, because the expansion
+happens after the guard saw the word. "Where the shell would still expand it"
+is bash's quoting: nothing inside single quotes and nothing escaped by a
+backslash; inside double quotes only `$`, the backtick, `\` and `!` (§12 rule
+6: quoted text is text). Two spellings the shell leaves literal are not
+refused: a brace group of letters only (git's `HEAD^{commit}`; bash
+brace-expands only a comma or `..` list), and a `~` inside a word that does
+not follow `=` or `:` (git's `HEAD~1`; bash tilde-expands only a word's start
+and after those two). Leading assignments (`x=… cmd`, and `x=…` alone) and
+`$'…'` words are refused anywhere.
+
 Every `git` token is checked against the read-only subcommand allowlist,
 wherever it sits: a wrapper puts the real command in argument position, so
-`find . -exec git remote add ... \\;` is a `git remote add`. Git is an
+`find . -exec git remote add ... \;` is a `git remote add`. Git is an
 allowlist of options per subcommand (DESIGN §12): each allowed subcommand
 carries the exact options the driver needs, and any token beginning with `-`
 that its row does not list is refused. That is the whole policy — a wrapper
@@ -28,14 +52,18 @@ an invocation — the human's workspace is `~/git`, and `ls ~/git` is a read.
 outright: those run commands (or delete) whatever the payload looks like, and
 `-fprint`, `-fprint0`, `-fprintf` and `-fls` write a file at any path.
 
-Role mode (DESIGN §27): with `HANDS_ROLE=driver` in the environment the guard
-guards the driver ROLE, a headless session handsd starts to resolve one
+Role mode (DESIGN §27, §28): with `HANDS_ROLE=driver` in the environment the
+guard guards the driver ROLE, a headless session handsd starts to resolve one
 consultation, and the allowlist narrows to §27's: read-only git (the table
-above), `hands show|jobs|inbox|pipeline|status|tail|kit check`, `hands send`
-with an explicit `--context keep` to builder or aux, and `hands resume`.
-Everything else is refused: `approve`, `deny`, `pause`, `go`, `put`, a send
-with `--context clear` or no `--context`, a send with `--file` (it writes a
-file), and every command word that is not `git` or `hands` — the read-only
+above, with `-C <path>` the only option before the subcommand),
+`hands show|jobs|inbox|pipeline|status|tail|kit check`, `hands send`, and
+`hands resume`. A send carries exactly one `--context`, whose literal value is
+`keep`, and exactly one `--role`, equal to `HANDS_CONSULT_ROLE` — the role the
+consultation named, from the environment; with that variable unset or empty
+no send passes. A send may not name `--project` or `--socket` (it goes to the
+consultation's own project) or `--file` (it writes a file). Everything else is
+refused, the `hands` subcommands by name: `approve`, `deny`, `pause`, `go`,
+`put`, and every command word that is not `git` or `hands` — the read-only
 inspection words above included, since §27 does not list them; the role reads
 its clone with `git show`/`git grep`/`git cat-file`. argparse accepts an
 unambiguous prefix of an option, so `--cont clear` is read as `--context
@@ -46,6 +74,7 @@ Self-test: python3 bash_guard.py --selftest
 import json
 import os
 import re
+import shlex
 import sys
 
 ALLOWED_FIRST_WORDS = {
@@ -96,26 +125,30 @@ FIND_ACTION_FLAGS = {"-exec", "-execdir", "-ok", "-okdir", "-delete",
 # value is a single path: git itself takes it as the next word (`-C./x` and
 # `-C=./x` are both "unknown option" to git 2.43), and it may not begin with
 # `-`, or `git -C --exec-path=/tmp/evil log` would ride through unjudged.
+# Role mode (§28) accepts `-C <path>` alone.
 GIT_PRE_FLAG_WITH_PATH = "-C"
 GIT_ALLOWED_PRE_FLAGS = {"--no-pager"}
 # `hands open <job>` execs `claude --resume <id>` in the role's directory
 # (DESIGN §7): an interactive session inside the driver's Bash call, and a way
 # past the `claude` block. The driver reads jobs with show/log/tail instead.
 FORBIDDEN_HANDS_SUBCOMMANDS = {"open"}
-# DESIGN §27, role mode: the environment variable, its one value, and the
-# allowlist. `send` and `kit` are judged by their arguments below.
+# DESIGN §27/§28, role mode: the environment variables, the one mode value, and
+# the allowlist. `send` and `kit` are judged by their arguments below.
 ROLE_ENV = "HANDS_ROLE"
+CONSULT_ROLE_ENV = "HANDS_CONSULT_ROLE"
 DRIVER_ROLE = "driver"
 ROLE_HANDS_SUBCOMMANDS = {"show", "jobs", "inbox", "pipeline", "status", "tail", "resume"}
 ROLE_SEND_TARGETS = {"builder", "aux"}
 # `hands` options that may precede the subcommand: two take a value, one does not.
 HANDS_VALUE_OPTIONS = ("--project", "--socket")
 HANDS_FLAG_OPTIONS = ("--json",)
-SHELL_KEYWORDS = {"for", "while", "until", "do", "done", "if", "then", "else",
-                  "elif", "fi", "in", "break", "continue", "!", "{", "}", "("}
+SHELL_KEYWORDS = {"do", "done", "if", "then", "else", "elif", "fi", "while",
+                  "until", "in", "break", "continue", "!", "{", "}"}
 
 FORBIDDEN_PATTERNS = [
-    (r"(?<![0-9&<>])>{1,2}(?!&[12])", "output redirection"),
+    # after `strip_redirect_noise`: every `>` left is a write, `2>f` and `&>f`
+    # included (the old look-behind let a digit or `&` before `>` through)
+    (r">{1,2}(?!&[12])", "output redirection"),
     (r"\btee\b", "tee"),
     (r"\bsed\s+(-[a-zA-Z]*i|--in-place)", "sed -i"),
     (r"(^|[\s;&|(`])(rm|mv|cp|touch|mkdir|rmdir|chmod|chown|ln|truncate|dd|install)\b", "file mutation"),
@@ -124,20 +157,41 @@ FORBIDDEN_PATTERNS = [
     (r"\bkill\b(?!\s+-0\b)", "kill other than -0"),
 ]
 
-SPLIT_RE = re.compile(r"\|\||&&|;|\||\n|\$\(|`|\(\s*")
+# §28: the characters the shell may still expand in a word the guard has read.
+RESIDUAL = frozenset("$`{}\\~*?[!")
+# Inside double quotes bash still gives these their meaning; the rest of
+# RESIDUAL is literal there.
+DOUBLE_QUOTE_LIVE = frozenset("$`\\!")
+# A brace group of letters only is never a brace expansion (that needs a comma
+# or `..`): git's `HEAD^{commit}` and `HEAD^{}`.
+BRACE_LITERAL = re.compile(r"\{[A-Za-z]*\}")
+# Where bash tilde-expands inside a word: after `=` (an assignment-shaped
+# argument, `a=~/x`) and, in assignments, after `:`.
+TILDE_EXPANDED = re.compile(r"[=:]~")
+SEPARATORS = frozenset(";&|\n()")
+ASSIGNMENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(\[[^\]]*\])?\+?=")
+# The mark a substitution leaves in the word around it: a `$` the residual
+# check sees.
+SUBSTITUTED = "$_"
 
 
 class UnbalancedQuotes(Exception):
     pass
 
 
+class Refused(Exception):
+    """The command cannot be judged as the shell would run it."""
+
+
 def strip_quoted(cmd: str) -> str:
     """Return the command with quoted text removed.
 
-    Text inside single quotes is literal to bash and is dropped entirely.
-    Inside double quotes only $(...) and `...` are executed, so those parts
-    are kept and the rest is dropped. Unbalanced quotes raise: the shell
-    would wait for more input, and the guard fails closed.
+    Used only for the FORBIDDEN_PATTERNS pass; the words are judged from the
+    `shlex` tokens of `segments`. Text inside single quotes is literal to bash
+    and is dropped entirely. Inside double quotes only $(...) and `...` are
+    executed, so those parts are kept and the rest is dropped. Unbalanced
+    quotes raise: the shell would wait for more input, and the guard fails
+    closed.
     """
     out = []
     i, n = 0, len(cmd)
@@ -202,19 +256,182 @@ def strip_redirect_noise(cmd: str) -> str:
     return cmd
 
 
-def first_word(segment: str):
-    words = segment.strip().split()
-    if len(words) >= 2 and words[0] in ("for", "select"):
-        words = words[2:]  # drop the loop variable
-    while words and (words[0] in SHELL_KEYWORDS or words[0].endswith(";")):
-        words = words[1:]
-    # skip leading VAR=value assignments
-    while words and re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", words[0]):
-        words = words[1:]
-    return words
+def segments(cmd: str):
+    """The command's segments as `(raw, mask)` string pairs (§28).
+
+    A segment ends at every separator the shell obeys outside quotes: `;`,
+    `&` (so `&&` and a lone `&`), `|`, a newline, `(` and `)`. The `&` of a
+    redirection (`2>&1`, `&>`) is not a separator. `$(…)` and backticks, which
+    execute outside single quotes, become segments of their own, scanned
+    recursively, and leave `$_` in the word around them. `raw` is the segment
+    as the shell reads it; `mask` is the same text with every RESIDUAL
+    character the shell will not expand (single-quoted, backslash-escaped, or
+    literal inside double quotes) replaced by `_`, so `shlex` splits both into
+    the same words. Raises `Refused` for unbalanced quotes, a trailing
+    backslash, an unterminated substitution and a `$'…'` word.
+    """
+    out: list[tuple[str, str]] = []
+    _scan(cmd, 0, out, closer=None)
+    return out
 
 
-def git_subcommand(words, start: int):
+def _scan(cmd: str, i: int, out: list, closer):
+    raw: list[str] = []
+    mask: list[str] = []
+    quote = None
+    depth = 0
+    after_redirect = False
+    n = len(cmd)
+
+    def put(r: str, m=None, redirect: bool = False) -> None:
+        nonlocal after_redirect
+        raw.append(r)
+        mask.append(r if m is None else m)
+        after_redirect = redirect
+
+    def flush() -> None:
+        out.append(("".join(raw), "".join(mask)))
+        raw.clear()
+        mask.clear()
+
+    while i < n:
+        c = cmd[i]
+        nxt = cmd[i + 1] if i + 1 < n else ""
+        if quote == "'":
+            if c == "'":
+                quote = None
+                put(c)
+            else:
+                put(c, "_" if c in RESIDUAL else c)
+            i += 1
+            continue
+        if c == "\\":
+            if not nxt:
+                raise Refused("a trailing backslash")
+            if nxt == "\n":  # a line continuation: the shell deletes both
+                i += 2
+                continue
+            if quote == '"':
+                put(c + nxt)
+            else:
+                put(c + nxt, c + ("_" if nxt in RESIDUAL else nxt))
+            i += 2
+            continue
+        if quote is None and c == "$" and nxt == "'":
+            raise Refused("a $'…' word")
+        if c == "`":
+            j = i + 1
+            while j < n and cmd[j] != "`":
+                j += 2 if cmd[j] == "\\" else 1
+            if j >= n:
+                raise Refused("an unterminated backtick")
+            # inside backticks `\\`, `\``, `\$` lose their backslash first
+            _scan(re.sub(r"\\([\\`$])", r"\1", cmd[i + 1:j]), 0, out, closer=None)
+            put(SUBSTITUTED)
+            i = j + 1
+            continue
+        if c == "$" and nxt == "(":
+            i = _scan(cmd, i + 2, out, closer=")")
+            put(SUBSTITUTED)
+            continue
+        if quote == '"':
+            if c == '"':
+                quote = None
+                put(c)
+            else:
+                put(c, c if c in DOUBLE_QUOTE_LIVE or c not in RESIDUAL else "_")
+            i += 1
+            continue
+        if c in "'\"":
+            quote = c
+            put(c)
+            i += 1
+            continue
+        if c == ")" and closer == ")" and depth == 0:
+            flush()
+            return i + 1
+        if c in SEPARATORS:
+            if c == "&" and (after_redirect or nxt == ">"):
+                put(c)
+                i += 1
+                continue
+            if c == "(":
+                depth += 1
+            elif c == ")" and depth > 0:
+                depth -= 1
+            flush()
+            after_redirect = False
+            i += 1
+            continue
+        put(c, redirect=c in "<>")
+        i += 1
+    if quote is not None:
+        raise Refused(f"unbalanced {quote} quote")
+    if closer is not None:
+        raise Refused("an unterminated $(")
+    flush()
+    return n
+
+
+def shell_words(text: str):
+    """`shlex` POSIX words, split on the blanks bash splits on (not a carriage return)."""
+    lex = shlex.shlex(text, posix=True)
+    lex.whitespace_split = True
+    lex.whitespace = " \t\n"
+    lex.commenters = ""
+    try:
+        return list(lex)
+    except ValueError as e:
+        raise Refused(f"unparsable ({e})") from None
+
+
+def tokens(raw: str, mask: str):
+    """The segment's words and, index for index, their masks."""
+    values, masks = shell_words(raw), shell_words(mask)
+    if len(values) != len(masks):
+        raise Refused("the words could not be read unambiguously")
+    return values, masks
+
+
+def residual(mask: str):
+    """The expansion characters the shell would still act on in this word."""
+    word = BRACE_LITERAL.sub(lambda m: "_" * len(m.group()), mask)
+    found = sorted({c for c in word if c in RESIDUAL and c != "~"})
+    if word.startswith("~"):
+        word = word[1:]
+    if TILDE_EXPANDED.search(word):
+        found.append("~")
+    return found
+
+
+def residual_violation(values, masks, start: int, name: str, cmd: str):
+    """Reason if a word after the `name` at `start` is expanded after the guard read it."""
+    for value, mask in zip(values[start + 1:], masks[start + 1:], strict=True):
+        found = residual(mask)
+        if found:
+            return (f"{name} argument {value!r} carries {' '.join(found)} the shell would "
+                    f"expand after the guard read it (§28): {cmd!r}")
+    return None
+
+
+def command_start(values) -> int:
+    """Index of the segment's command word, past shell keywords.
+
+    `for NAME in WORDS` and `select NAME in WORDS` carry words, not a command:
+    the whole segment is skipped (a substitution in the list is a segment of
+    its own and is judged there).
+    """
+    i = 0
+    if values and values[0] in ("for", "select"):
+        if len(values) >= 3 and values[2] == "in":
+            return len(values)
+        i = 2
+    while i < len(values) and values[i] in SHELL_KEYWORDS:
+        i += 1
+    return i
+
+
+def git_subcommand(words, start: int, role=None):
     """Read the option area of the `git` at words[start - 1].
 
     Returns `(subcommand, index, refusal)`: the subcommand word and its index,
@@ -222,27 +439,31 @@ def git_subcommand(words, start: int):
     `-C <path>` and `--no-pager` may precede the subcommand (DESIGN §12/§21),
     and `-C`'s value must be a single path that does not begin with `-`: the
     word after `-C` used to be stepped over unjudged, which carried
-    `git -C --exec-path=/tmp/evil log` through.
+    `git -C --exec-path=/tmp/evil log` through. In role mode (§28) only
+    `-C <path>`.
     """
+    pre_flags = set() if role == DRIVER_ROLE else GIT_ALLOWED_PRE_FLAGS
     i = start
     while i < len(words):
-        w = words[i].strip("()")
+        w = words[i]
         if w == GIT_PRE_FLAG_WITH_PATH:
             if i + 1 >= len(words):
                 return None, i, "`-C` with no path after it"
-            value = words[i + 1].strip("()")
+            value = words[i + 1]
             if value.startswith("-"):
                 return None, i, (f"the `-C` value must be a single path that does "
                                  f"not begin with `-`, not {value!r}")
             i += 2
             continue
-        if w in GIT_ALLOWED_PRE_FLAGS:
+        if w in pre_flags:
             i += 1
             continue
         if w.startswith("-"):
+            allowed = ("only `-C <path>` may come before a git subcommand in role mode"
+                       if role == DRIVER_ROLE else
+                       "only `-C <path>` and `--no-pager` may come before a git subcommand")
             return None, i, (f"git option before the subcommand not allowed: {w!r} "
-                             f"(only `-C <path>` and `--no-pager` may come before a "
-                             f"git subcommand; `-c`, `--config-env` and the rest can "
+                             f"({allowed}; `-c`, `--config-env` and the rest can "
                              f"make a read-only subcommand run a command)")
         return w, i, None
     return None, len(words), None
@@ -260,14 +481,13 @@ def unlisted_git_option(sub: str, word: str):
     refused because it is not listed — including every option that names a
     program to run or a file to write.
     """
-    w = word.strip("()")
-    if not w.startswith("-") or w == "--":
+    if not word.startswith("-") or word == "--":
         return None
-    if w.split("=", 1)[0] in GIT_SUBCOMMAND_OPTIONS[sub]:
+    if word.split("=", 1)[0] in GIT_SUBCOMMAND_OPTIONS[sub]:
         return None
-    if sub == "log" and re.fullmatch(r"-n?\d+", w):
+    if sub == "log" and re.fullmatch(r"-n?\d+", word):
         return None
-    return w
+    return word
 
 
 def invocations(words, name):
@@ -280,15 +500,11 @@ def invocations(words, name):
     name a directory, not a program, and a guard that refuses them is useless
     in a real driver session.
     """
-    out = []
-    for i, w in enumerate(words):
-        bare = w.strip("()")
-        if bare == name or (i == 0 and bare.endswith("/" + name)):
-            out.append(i)
-    return out
+    return [i for i, w in enumerate(words)
+            if w == name or (i == 0 and w.endswith("/" + name))]
 
 
-def git_violation(words, cmd):
+def git_violation(words, masks, cmd, role=None):
     """Reason if any `git` in this segment is not a read-only invocation.
 
     The allowlist applies to every `git` token, not only to a segment's first
@@ -298,16 +514,18 @@ def git_violation(words, cmd):
     (`log --grep=push`) is still a word, not a verb.
     """
     for i in invocations(words, "git"):
-        sub, at, refusal = git_subcommand(words, i + 1)
+        reason = residual_violation(words, masks, i, "git", cmd)
+        if reason:
+            return reason
+        sub, at, refusal = git_subcommand(words, i + 1, role)
         if refusal is not None:
             return f"{refusal} in {cmd!r}"
         if sub not in GIT_SUBCOMMAND_OPTIONS:
             return f"git subcommand not allowed: {sub!r} in {cmd!r}"
         listed = sorted(GIT_SUBCOMMAND_OPTIONS[sub])
         for w in words[at + 1:]:
-            bare = w.strip("()")
-            if bare in MUTATING_GIT_ARGS:
-                return f"git {sub} {bare} writes: {cmd!r}"
+            if w in MUTATING_GIT_ARGS:
+                return f"git {sub} {w} writes: {cmd!r}"
             opt = unlisted_git_option(sub, w)
             if opt is not None:
                 return (f"git option not allowed for {sub!r}: {opt!r} in {cmd!r} "
@@ -326,8 +544,8 @@ def find_action(words):
     """
     for i in invocations(words, "find"):
         for w in words[i + 1:]:
-            if w.strip("()") in FIND_ACTION_FLAGS:
-                return w.strip("()")
+            if w in FIND_ACTION_FLAGS:
+                return w
     return None
 
 
@@ -354,9 +572,9 @@ def option_values(args, name: str):
     return values
 
 
-def hands_role_violation(words, cmd):
-    """Reason this `hands` invocation is outside §27's role-mode allowlist, or None."""
-    args = [w.strip("()") for w in words[1:]]
+def hands_subcommand(args):
+    """Index of the subcommand in `hands`' arguments, past the global options
+    and the values `--project`/`--socket` take (§28: values read from tokens)."""
     i = 0
     while i < len(args):
         a = args[i]
@@ -367,6 +585,21 @@ def hands_role_violation(words, cmd):
             i += 1
             continue
         break
+    return i
+
+
+def hands_violation(words, masks, cmd, role=None, consult_role=None):
+    """Reason this `hands` invocation (words[0]) is refused, or None."""
+    reason = residual_violation(words, masks, 0, "hands", cmd)
+    if reason:
+        return reason
+    args = words[1:]
+    i = hands_subcommand(args)
+    if role != DRIVER_ROLE:
+        sub = next((a for a in args[i:] if not a.startswith("-")), None)
+        if sub in FORBIDDEN_HANDS_SUBCOMMANDS:
+            return f"hands {sub} starts an interactive session: {cmd!r}"
+        return None
     if i >= len(args) or args[i].startswith("-"):
         got = args[i] if i < len(args) else "nothing"
         return f"hands needs an allowed subcommand in role mode, got {got!r}: {cmd!r}"
@@ -378,26 +611,75 @@ def hands_role_violation(words, cmd):
             return None
         return f"only `hands kit check` is allowed in role mode: {cmd!r}"
     if sub == "send":
-        if any(option_is(a, "--file") for a in rest):
-            return f"hands send --file writes a file, refused in role mode: {cmd!r}"
-        contexts = option_values(rest, "--context")
-        if not contexts or any(value != "keep" for value in contexts):
-            return (f"role mode sends only with an explicit --context keep "
-                    f"(§27), got {contexts or 'no --context'}: {cmd!r}")
-        roles = option_values(rest, "--role")
-        if not roles or any(value not in ROLE_SEND_TARGETS for value in roles):
-            return (f"role mode sends keep only to builder or aux (§27), got "
-                    f"{roles or 'no --role'}: {cmd!r}")
-        return None
+        return send_violation(args, rest, cmd, consult_role)
     return (f"hands {sub} is not allowed for the driver role (§27: show, jobs, inbox, "
             f"pipeline, status, tail, kit check, send --context keep, resume): {cmd!r}")
 
 
-def check(cmd: str, role=None):
+def send_violation(args, rest, cmd, consult_role):
+    """§28: a role-mode send carries exactly one `--context`, literally `keep`,
+    and exactly one `--role`, equal to HANDS_CONSULT_ROLE."""
+    if not consult_role:
+        return (f"role mode sends only to the role the consultation named, and "
+                f"{CONSULT_ROLE_ENV} is not set: {cmd!r}")
+    if any(option_is(a, "--file") for a in rest):
+        return f"hands send --file writes a file, refused in role mode: {cmd!r}"
+    for name in HANDS_VALUE_OPTIONS:
+        if any(option_is(a, name) for a in args):
+            return (f"hands send {name} leaves the consultation's project, refused in "
+                    f"role mode: {cmd!r}")
+    contexts = option_values(rest, "--context")
+    if contexts != ["keep"]:
+        return (f"role mode sends with exactly one --context, and it is keep (§27, §28), "
+                f"got {contexts or 'no --context'}: {cmd!r}")
+    roles = option_values(rest, "--role")
+    if roles != [consult_role] or consult_role not in ROLE_SEND_TARGETS:
+        return (f"role mode sends keep only to the role the consultation named "
+                f"({CONSULT_ROLE_ENV}={consult_role!r}, §28), got "
+                f"{roles or 'no --role'}: {cmd!r}")
+    return None
+
+
+def judge(values, masks, cmd, role, consult_role):
+    """Reason this segment's words are refused, or None."""
+    at = command_start(values)
+    words, marks = values[at:], masks[at:]
+    if not words:
+        return None
+    if ASSIGNMENT.match(words[0]):
+        return f"a leading assignment ({words[0]!r}) is refused (§28): {cmd!r}"
+    reason = git_violation(words, marks, cmd, role)
+    if reason:
+        return reason
+    action = find_action(words)
+    if action:
+        return f"find {action}: {cmd!r}"
+    w = words[0]
+    if role == DRIVER_ROLE:
+        if w == "git":
+            return None  # every git token was checked above
+        if w != "hands":
+            return f"command not allowed for the driver role (§27): {w!r} in {cmd!r}"
+        return hands_violation(words, marks, cmd, role, consult_role)
+    if w == "git":
+        return None
+    if w == "hands":
+        return hands_violation(words, marks, cmd)
+    if w == "kill":
+        if len(words) < 2 or words[1] != "-0":
+            return f"kill other than -0: {cmd!r}"
+        return None
+    if w not in ALLOWED_FIRST_WORDS:
+        return f"command not allowed for the driver: {w!r} in {cmd!r}"
+    return None
+
+
+def check(cmd: str, role=None, consult_role=None):
     """Return None if allowed, else a reason string.
 
     `role` is `HANDS_ROLE`: None for the human's driver session, `driver` for
     §27's role mode, and anything else is refused outright (fail closed).
+    `consult_role` is `HANDS_CONSULT_ROLE`, read only in role mode.
     """
     if role is not None and role != DRIVER_ROLE:
         return f"unknown {ROLE_ENV} {role!r} (only {DRIVER_ROLE!r} is a mode): {cmd!r}"
@@ -409,42 +691,14 @@ def check(cmd: str, role=None):
     for pat, why in FORBIDDEN_PATTERNS:
         if re.search(pat, noise_free):
             return f"{why}: {cmd!r}"
-    for raw in SPLIT_RE.split(bare):
-        words = first_word(raw)
-        if not words:
-            continue
-        reason = git_violation(words, cmd)
-        if reason:
-            return reason
-        action = find_action(words)
-        if action:
-            return f"find {action}: {cmd!r}"
-        w = words[0].strip("()")
-        if not w:
-            continue
-        # variable expansions / loop variables are not commands
-        if w.startswith("$") or re.match(r"^\d+$", w):
-            continue
-        if w == "git":
-            continue  # every git token was checked above
-        if role == DRIVER_ROLE:
-            if w != "hands":
-                return f"command not allowed for the driver role (§27): {w!r} in {cmd!r}"
-            reason = hands_role_violation(words, cmd)
+    try:
+        for raw, mask in segments(cmd):
+            values, masks = tokens(raw, mask)
+            reason = judge(values, masks, cmd, role, consult_role)
             if reason:
                 return reason
-            continue
-        if w == "hands":
-            sub = next((x for x in words[1:] if not x.startswith("-")), None)
-            if sub in FORBIDDEN_HANDS_SUBCOMMANDS:
-                return f"hands {sub} starts an interactive session: {cmd!r}"
-            continue
-        if w == "kill":
-            if len(words) < 2 or words[1] != "-0":
-                return f"kill other than -0: {cmd!r}"
-            continue
-        if w not in ALLOWED_FIRST_WORDS:
-            return f"command not allowed for the driver: {w!r} in {cmd!r}"
+    except Refused as e:
+        return f"{e}, refused (§28): {cmd!r}"
     return None
 
 
@@ -565,14 +819,49 @@ SELFTEST = [
     # stdin route
     ("hands send --role builder --context clear --stdin < ~/Downloads/m2-send.txt", True),
     ("cat ~/Downloads/m2-send.txt | hands send --role builder --context clear --stdin", True),
+    # §28: review 11's probes, as the human's session judges them. `go`,
+    # `approve`, a clear send and `--file` are the human session's to run, so
+    # only the probes §28 refuses in both modes (and `open`) are blocked here;
+    # ROLE_SELFTEST blocks every one.
+    ("hands show x & hands go", True),
+    ("hands jobs & hands approve j1 --human-confirmed --quote yes", True),
+    ("hands show & hands open x", False),
+    ("hands send --role builder --context keep '--context=clear' m", True),
+    ("hands send --role builder --context keep \"--context=clear\" m", True),
+    ("hands send --role builder --context keep \\--context=clear m", True),
+    ("hands send --role builder --context keep $'--context=clear' m", False),
+    ("hands send --role builder --context keep {--context=clear,m}", False),
+    ("x=--context=clear; hands send --role builder --context keep $x m", False),
+    ("hands send --role builder --context keep '--file' a=b m", True),
+    ("hands send --role builder --context keep \\--file a=b m", True),
+    ("hands send --role aux --context keep m", True),
+    ("hands send --project other --role builder --context keep m", True),
+    ("hands --project other send --role builder --context keep m", True),
+    ("hands send --role builder --context keep --project=other m", True),
+    ("hands send --role builder --context keep --socket /tmp/other.sock m", True),
+    # §28: the words the shell delivers, not a quote-stripped string
+    ("hands --project x open y", False),
+    ("git status & git push", False),
+    ("git log $x", False),
+    ("git log -- '*.py'", True),
+    ("git -C ./repo diff --stat HEAD~1", True),
+    ("GIT_PAGER=touch git log", False),
+    ("git status 2>probe.txt", False),
+    ("git status &> probe.txt", False),
+    ("$SHELL -c 'git push'", False),
 ]
 
 
-# Role mode (§27): `check(cmd, role="driver")`.
+# The role the consultation named, as the self-test's HANDS_CONSULT_ROLE.
+SELFTEST_CONSULT_ROLE = "builder"
+
+# Role mode (§27, §28): `check(cmd, role="driver", consult_role="builder")`.
 ROLE_SELFTEST = [
     ("git -C ./repo log --oneline -5", True),
+    ("git -C ./repo rev-parse HEAD^{commit}", True),
     ("hands show job-1 --json", True),
     ("hands send --role builder --context keep 'Answer per DESIGN §27.'", True),
+    ("hands send --role=builder --context=keep 'Answer per DESIGN §27.'", True),
     ("hands kit check ~/Downloads/kit.zip", True),
     ("hands resume", True),
     ("hands send --role builder --context clear 'Execute run 2'", False),
@@ -580,6 +869,24 @@ ROLE_SELFTEST = [
     ("hands go", False),
     ("cat ./repo/DESIGN.md", False),
     ("echo x > f", False),
+    ("git --no-pager log --oneline -3", False),
+    # §28: every probe review 11 executed
+    ("hands show x & hands go", False),
+    ("hands jobs & hands approve j1 --human-confirmed --quote yes", False),
+    ("hands show & hands open x", False),
+    ("hands send --role builder --context keep '--context=clear' m", False),
+    ("hands send --role builder --context keep \"--context=clear\" m", False),
+    ("hands send --role builder --context keep \\--context=clear m", False),
+    ("hands send --role builder --context keep $'--context=clear' m", False),
+    ("hands send --role builder --context keep {--context=clear,m}", False),
+    ("x=--context=clear; hands send --role builder --context keep $x m", False),
+    ("hands send --role builder --context keep '--file' a=b m", False),
+    ("hands send --role builder --context keep \\--file a=b m", False),
+    ("hands send --role aux --context keep m", False),
+    ("hands send --project other --role builder --context keep m", False),
+    ("hands --project other send --role builder --context keep m", False),
+    ("hands send --role builder --context keep --project=other m", False),
+    ("hands send --role builder --context keep --socket /tmp/other.sock m", False),
 ]
 
 
@@ -588,7 +895,7 @@ def selftest() -> int:
     cases = [(cmd, expected, None) for cmd, expected in SELFTEST]
     cases += [(cmd, expected, DRIVER_ROLE) for cmd, expected in ROLE_SELFTEST]
     for cmd, expected, role in cases:
-        reason = check(cmd, role=role)
+        reason = check(cmd, role=role, consult_role=SELFTEST_CONSULT_ROLE)
         ok = (reason is None) == expected
         if not ok:
             bad += 1
@@ -610,13 +917,15 @@ def main() -> int:
         return 0
     cmd = (data.get("tool_input") or {}).get("command", "")
     role = os.environ.get(ROLE_ENV) or None
-    reason = check(cmd, role=role)
+    consult_role = os.environ.get(CONSULT_ROLE_ENV) or None
+    reason = check(cmd, role=role, consult_role=consult_role)
     if reason is None:
         return 0
     if role is not None:
         print(f"bash_guard blocked this command ({reason}). The driver role may only run "
               f"read-only git, hands show|jobs|inbox|pipeline|status|tail|kit check, "
-              f"hands send --context keep to builder or aux, and hands resume (§27). "
+              f"hands send --context keep to the role the consultation named "
+              f"(${CONSULT_ROLE_ENV}), and hands resume (§27, §28). "
               f"If the consultation needs more, reply VERDICT: escalate <reason>.",
               file=sys.stderr)
         return 2
