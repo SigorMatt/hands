@@ -4,7 +4,7 @@ version = 1
 # lives in the table: TOML cannot hold `series = "…"` beside `[series]` (H-019).
 [series]
 name = "hands-missions"
-kickoff = "Read meta/BUILDER-12-PROMPT.md and execute the mission below its divider."
+kickoff = "Read meta/BUILDER-13-PROMPT.md and execute the mission below its divider."
 
 [limits]
 max_resumes = 2
