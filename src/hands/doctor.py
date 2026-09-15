@@ -40,6 +40,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -425,17 +426,19 @@ def _driver_check(config: Config) -> Check:
         warnings.append(clone)
 
     settings_path = role.cwd / ".claude" / "settings.json"
-    named = _settings_name_the_guard(settings_path)
-    if named is None:
+    named, problem = _settings_name_the_guard(settings_path, role.cwd)
+    if problem is None:
         settings = f"settings {settings_path} names the hook"
     else:
         settings = (
-            f"settings {settings_path} does not name the hook ({named}): copy "
+            f"settings {settings_path} does not name the hook ({problem}): copy "
             "driver/settings.json again (§28)"
         )
         failures.append(settings)
 
-    hook = role.cwd / ".claude" / "hooks" / "bash_guard.py"
+    # §29: the self-test runs on the file the settings name, not on a default path;
+    # only when they name none is the default the one reported.
+    hook = named if named is not None else role.cwd / GUARD_HOOK
     mode = f"{ROLE_ENV}={role.spawn_env[ROLE_ENV]}"
     if not hook.is_file():
         guard = f"no guard at {hook}: nothing narrows the role's Bash calls (driver/README.md)"
@@ -470,31 +473,53 @@ def _driver_check(config: Config) -> Check:
     return Check(name, status, detail)
 
 
-def _settings_name_the_guard(path: Path) -> str | None:
-    """None when `path` wires `.claude/hooks/bash_guard.py` as a `PreToolUse` command
-    hook for `Bash` (§28); otherwise why not, in a few words."""
+def _settings_name_the_guard(path: Path, cwd: Path) -> tuple[Path | None, str | None]:
+    """The hook file `path` wires as a `PreToolUse` command hook for `Bash` (§28,
+    §29), and None; or None and why not, in a few words.
+
+    The file is read from the command itself: `shlex` splits it, and the first word
+    that is `.claude/hooks/bash_guard.py` or ends in `/.claude/hooks/bash_guard.py` is
+    the file, with `$CLAUDE_PROJECT_DIR` (or `${CLAUDE_PROJECT_DIR}`) standing for
+    `cwd` and a relative path read against `cwd`, where Claude Code runs the hook.
+    A word with any other `$` is not a path doctor can resolve. With several such
+    hooks, the first is the one checked."""
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except FileNotFoundError:
-        return "no such file"
+        return None, "no such file"
     except (OSError, ValueError) as exc:
-        return f"not readable JSON: {type(exc).__name__}"
+        return None, f"not readable JSON: {type(exc).__name__}"
     hooks = data.get("hooks") if isinstance(data, dict) else None
     entries = hooks.get("PreToolUse") if isinstance(hooks, dict) else None
     if not isinstance(entries, list):
-        return "no hooks.PreToolUse"
+        return None, "no hooks.PreToolUse"
+    unresolved: str | None = None
     for entry in entries:
         if not isinstance(entry, dict) or not _matches_bash(entry.get("matcher")):
             continue
         for hook in entry.get("hooks") or []:
-            if (
+            if not (
                 isinstance(hook, dict)
                 and hook.get("type") == "command"
                 and isinstance(hook.get("command"), str)
-                and GUARD_HOOK in hook["command"]
             ):
-                return None
-    return f"no PreToolUse command hook for Bash runs {GUARD_HOOK}"
+                continue
+            try:
+                words = shlex.split(hook["command"])
+            except ValueError:
+                continue
+            for word in words:
+                word = word.replace("${CLAUDE_PROJECT_DIR}", str(cwd))
+                word = word.replace("$CLAUDE_PROJECT_DIR", str(cwd))
+                if not (word == GUARD_HOOK or word.endswith("/" + GUARD_HOOK)):
+                    continue
+                if "$" in word:
+                    unresolved = unresolved or word
+                    continue
+                return cwd / word, None  # an absolute word replaces cwd
+    if unresolved is not None:
+        return None, f"the hook path {unresolved!r} names a variable doctor cannot resolve"
+    return None, f"no PreToolUse command hook for Bash runs {GUARD_HOOK}"
 
 
 def _matches_bash(matcher: Any) -> bool:

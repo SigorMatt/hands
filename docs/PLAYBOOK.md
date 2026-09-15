@@ -168,7 +168,11 @@ the reason or its timestamp, no second notification, and one
 `pipeline.stop_suppressed` event in the inbox naming the reason it would have
 set and the reason that was kept. That kind is in the `pipeline` namespace and
 not in `stop`'s, so `hands wait --for stop,held` is not woken by a stop that was
-deliberately not notified; `--for pipeline` waits for them.
+deliberately not notified; `--for pipeline` waits for them. One exception
+(DESIGN §29): a consultation that does not end resolved (see Consult) over a
+paused pipeline is filed the same way, as `pipeline.stop_suppressed` carrying
+the consult reason, and it also notifies, once, with `hands: a consultation
+stopped over a paused pipeline`; no playbook rule fires for it.
 
 `hands pause` is a stop you make yourself: it files the same `stop` event
 (reason `paused by human`) and the same notification, which is what a
@@ -206,8 +210,10 @@ prompt equals any `[series] kickoff` value the pipeline has loaded, not a
 resume of it, and the last kit apply that ran (a builder job of `origin: kit`
 that started). Every kickoff value a loaded playbook carried is kept in the
 spool's `pipeline.json`, so renaming the next kickoff does not freeze the count.
-Every driver job after that start counts, except a §6 resume of one. With
-neither, every driver job in the spool counts.
+Every driver job after that start counts, except a §6 resume of one. A driver
+job created before the running daemon started does not count either (§29): the
+start is the latest of the kickoff, the kit apply and the daemon's start. With
+none of them, every driver job in the spool counts.
 
 The driver job's environment carries `HANDS_CONSULT_ROLE`, the role named on
 the prompt's first line; the guard in role mode allows a send to that role only.

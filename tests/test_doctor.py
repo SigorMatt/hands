@@ -1136,6 +1136,85 @@ def test_a_driver_role_whose_hook_fails_its_self_test_in_role_mode_fails_doctor(
     assert "selftest: 0/1 ok" in strip_paths(row["detail"])
 
 
+BROKEN_HOOK = "import sys\nprint('selftest: 0/1 ok')\nsys.exit(1)\n"
+
+
+def _settings_running(command: str) -> str:
+    return json.dumps({"hooks": {"PreToolUse": [{"matcher": "Bash", "hooks": [
+        {"type": "command", "command": command}]}]}})
+
+
+def test_doctor_self_tests_the_hook_file_the_settings_name_not_the_default_one(
+    tmp_home: Path, tmp_path: Path, fake_mode: None
+) -> None:
+    """§29 (REVIEW-12 SF4): the settings name another file with the
+    `.claude/hooks/bash_guard.py` suffix, and that one is broken; the default
+    `<cwd>/.claude/hooks/bash_guard.py` is the real guard. Doctor fails on the named one."""
+    d = driver_dir(tmp_path)
+    other = tmp_path / "elsewhere" / ".claude" / "hooks" / "bash_guard.py"
+    other.parent.mkdir(parents=True)
+    other.write_text(BROKEN_HOOK, encoding="utf-8")
+    (d / ".claude" / "settings.json").write_text(
+        _settings_running(f'python3 "{other}"'), encoding="utf-8"
+    )
+    add_driver(write_config(tmp_home, tmp_path), d)
+    code, found = checks()
+    assert code == 1
+    row = found["role driver"]
+    assert row["status"] == "fail", row
+    assert "guard <path>/elsewhere/.claude/hooks/bash_guard.py" in strip_paths(row["detail"])
+    assert "is not green" in strip_paths(row["detail"])
+    assert "selftest: 0/1 ok" in strip_paths(row["detail"])
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        'python3 "$CLAUDE_PROJECT_DIR"/.claude/hooks/bash_guard.py',
+        "python3 ${CLAUDE_PROJECT_DIR}/.claude/hooks/bash_guard.py",
+        "python3 .claude/hooks/bash_guard.py",
+        "python3 {real}",
+    ],
+    ids=["project-dir", "braced-project-dir", "relative", "absolute-elsewhere"],
+)
+def test_doctor_passes_when_the_settings_name_a_real_hook(
+    tmp_home: Path, tmp_path: Path, fake_mode: None, command: str
+) -> None:
+    """The named file is resolved (`$CLAUDE_PROJECT_DIR` and a relative path against
+    the driver directory) and self-tested; a real guard there is green."""
+    d = driver_dir(tmp_path)
+    real = tmp_path / "copy" / ".claude" / "hooks" / "bash_guard.py"
+    real.parent.mkdir(parents=True)
+    shutil.copy(GUARD, real)
+    (d / ".claude" / "settings.json").write_text(
+        _settings_running(command.replace("{real}", str(real))), encoding="utf-8"
+    )
+    add_driver(write_config(tmp_home, tmp_path), d)
+    code, found = checks()
+    row = found["role driver"]
+    assert code == 0 and row["status"] == "ok", row
+    named = "copy" if "{real}" in command else "hands-driver"
+    assert f"guard <path>/{named}/.claude/hooks/bash_guard.py" in strip_paths(row["detail"])
+    assert "self-test green in role mode" in strip_paths(row["detail"])
+
+
+def test_doctor_fails_when_the_hook_the_settings_name_does_not_exist(
+    tmp_home: Path, tmp_path: Path, fake_mode: None
+) -> None:
+    """The default guard exists and is green; the named one is missing: fail."""
+    d = driver_dir(tmp_path)
+    missing = tmp_path / "gone" / ".claude" / "hooks" / "bash_guard.py"
+    (d / ".claude" / "settings.json").write_text(
+        _settings_running(f"python3 {missing}"), encoding="utf-8"
+    )
+    add_driver(write_config(tmp_home, tmp_path), d)
+    code, found = checks()
+    assert code == 1
+    row = found["role driver"]
+    assert row["status"] == "fail", row
+    assert "no guard at <path>/gone/.claude/hooks/bash_guard.py" in strip_paths(row["detail"])
+
+
 def test_a_driver_role_with_a_permission_bypass_fails_doctor(
     tmp_home: Path, tmp_path: Path, fake_mode: None
 ) -> None:

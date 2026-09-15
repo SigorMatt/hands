@@ -18,6 +18,7 @@ import asyncio
 import hashlib
 import json
 import subprocess
+import time
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
@@ -45,8 +46,17 @@ from hands.playbook import (
     playbook_path,
     render,
 )
-from hands.spool import Job, Spool
-from harness import PROJECT, cli, config_body, drive, ok, poll, write_project
+from hands.spool import Job, Spool, now_iso
+from harness import (
+    PROJECT,
+    cli,
+    config_body,
+    drive,
+    ok,
+    poll,
+    running_job,
+    write_project,
+)
 
 DESIGN = Path(__file__).parents[1] / "DESIGN.md"
 EXAMPLE_FIXTURE = Path(__file__).parent / "fixtures" / "playbook_example.toml"
@@ -2461,6 +2471,192 @@ def test_max_consults_counts_from_a_kickoff_seen_before_it_was_renamed(
     spool.create_job(role="builder", context="clear", prompt="Apply kit 2", origin="kit",
                      state="held")
     assert fresh.consults_used(fresh.playbook) == 1
+
+
+# ------------------------------- §29: consult edges (mission 13 U4, REVIEW-12 SF3, SF5)
+
+SUPPRESSED_CONSULT = "hands: a consultation stopped over a paused pipeline"
+
+
+@pytest.mark.parametrize(
+    ("state", "verdict", "reason"),
+    [
+        ("done", "VERDICT: escalate the brief is silent",
+         "the driver escalated: the brief is silent"),
+        ("done", "VERDICT: maybe", "neither resolved nor escalate"),
+        ("done", None, "no VERDICT: line"),
+        ("failed", None, "driver.failed"),
+        ("killed", None, "driver.killed"),
+        ("orphaned", None, "driver.orphaned"),
+        ("limited", None, "driver.limited"),
+    ],
+)
+@pytest.mark.parametrize(
+    "body", [NO_DRIVER_RULES, CARRY_ON, CONSULT_BOOK, None],
+    ids=["no-driver-rules", "carry-on", "stop-rule", "no-playbook"],
+)
+def test_a_consult_stop_over_a_paused_pipeline_is_suppressed_with_its_reason_and_notifies(
+    tmp_home: Path, workdir: Path, body: str | None, state: str, verdict: str | None,
+    reason: str,
+) -> None:
+    """§29 (REVIEW-12 SF3): the engine's consult stops apply whether or not the
+    pipeline is paused; over a paused one the stop is `pipeline.stop_suppressed`
+    carrying the consult reason, and it notifies, once. The pause keeps its reason
+    and no playbook rule fires."""
+    engine, recorder = engine_for(tmp_home, workdir, body, driver=workdir.parent / "d")
+    run(engine.pause())
+    assert [title for title, _ in recorder.notified] == ["hands: the pipeline stopped"]
+    about = finished(engine.spool, verdict="VERDICT: question x")
+    run(engine.on_job(_driver_job(engine.spool, state=state, verdict=verdict, about=about)))
+
+    assert engine.state.paused and engine.state.stop_reason == PAUSE_REASON
+    [suppressed] = [e for e in engine.spool.events() if e.kind == "pipeline.stop_suppressed"]
+    assert reason in strip_paths(suppressed.payload["reason"])
+    assert "§28" in strip_paths(suppressed.payload["reason"])
+    assert suppressed.payload["kept"] == PAUSE_REASON
+    assert suppressed.payload["event"] == f"driver.{state}"
+    titles = [title for title, _ in recorder.notified]
+    assert titles == ["hands: the pipeline stopped", SUPPRESSED_CONSULT], titles
+    assert reason in strip_paths(recorder.notified[-1][1]["reason"])
+    assert len([e for e in engine.spool.events() if e.kind == "stop"]) == 1  # the pause's
+    assert [e for e in engine.spool.events() if e.kind == "playbook.rule"] == []
+    assert recorder.sent == [] and recorder.enqueued == []
+
+
+def test_a_resolved_consultation_over_a_paused_pipeline_files_and_notifies_nothing(
+    tmp_home: Path, workdir: Path
+) -> None:
+    """§10: paused, no rule fires; a resolved consultation is no stop to suppress."""
+    engine, recorder = engine_for(tmp_home, workdir, CARRY_ON, driver=workdir.parent / "d")
+    run(engine.pause())
+    about = finished(engine.spool, verdict="VERDICT: question x")
+    verdict = "VERDICT: resolved sent keep, §27"
+    run(engine.on_job(_driver_job(engine.spool, state="done", verdict=verdict, about=about)))
+    assert [e for e in engine.spool.events() if e.kind == "pipeline.stop_suppressed"] == []
+    assert [title for title, _ in recorder.notified] == ["hands: the pipeline stopped"]
+    assert [e for e in engine.spool.events() if e.kind == "consult.done"]
+
+
+def test_a_non_consult_stop_over_a_paused_pipeline_still_notifies_nobody(
+    tmp_home: Path, workdir: Path
+) -> None:
+    """§10's rule for every other stop is unchanged: suppressed, not notified."""
+    engine, recorder = engine_for(tmp_home, workdir, EXAMPLE)
+    run(engine.pause())
+    run(engine.stop("some other stop"))
+    [suppressed] = [e for e in engine.spool.events() if e.kind == "pipeline.stop_suppressed"]
+    assert suppressed.payload["reason"] == "some other stop"
+    assert [title for title, _ in recorder.notified] == ["hands: the pipeline stopped"]
+
+
+def test_max_consults_counts_from_the_daemon_start_when_no_kickoff_was_seen_since(
+    tmp_home: Path, workdir: Path
+) -> None:
+    """§29 (REVIEW-12 SF5, the reviewer's probe): an older spool with earlier driver
+    jobs, a playbook whose kickoff was renamed before any engine saw the old one,
+    and a daemon restart: the earlier driver jobs do not count. The anchor is the
+    latest of the last kickoff seen, the last kit apply that ran, and daemon start."""
+    driver_dir = workdir.parent / "d"
+    old = engine_for(tmp_home, workdir, None, driver=driver_dir)[0]
+    spool = old.spool
+    about = finished(spool, verdict="VERDICT: question x")
+    old_kickoff = spool.create_job(
+        role="builder", context="clear", prompt="Kick off mission 12", origin="phone"
+    )
+    spool.transition(old_kickoff, "running")
+    spool.transition(old_kickoff, "done")
+    for _ in range(4):  # the earlier mission's consultations, under the old kickoff
+        _driver_job(spool, state="done", verdict="VERDICT: resolved a", about=about)
+
+    engine, _ = engine_for(tmp_home, workdir, CONSULT_BOOK, driver=driver_dir)
+    run(engine._ensure_loaded())
+    assert engine.state.kickoffs == [KICKOFF]  # the old kickoff was never seen
+    assert engine.consults_used(engine.playbook) == 4  # no daemon start: every one counts
+
+    time.sleep(0.01)  # job timestamps are milliseconds
+    engine.daemon_started = now_iso()
+    assert engine.consults_used(engine.playbook) == 0
+    assert engine.pipeline()["consults"] == {"used": 0, "max_consults": 2}
+    _driver_job(spool, state="done", verdict="VERDICT: resolved b", about=about)
+    assert engine.consults_used(engine.playbook) == 1
+
+    # A kickoff after the daemon start is the later anchor.
+    time.sleep(0.01)
+    kickoff = spool.create_job(role="builder", context="clear", prompt=KICKOFF, origin="phone")
+    spool.transition(kickoff, "running")
+    spool.transition(kickoff, "done")
+    assert engine.consults_used(engine.playbook) == 0
+    _driver_job(spool, state="done", verdict="VERDICT: resolved c", about=about)
+    assert engine.consults_used(engine.playbook) == 1
+
+
+def test_end_to_end_a_restarted_daemon_counts_consults_from_its_start(
+    tmp_home: Path, workdir: Path
+) -> None:
+    """The probe over a real daemon: its start is the engine's anchor."""
+    _consult_project(tmp_home, workdir)
+    spool = Spool(tmp_home / ".hands")
+    about = finished(spool, verdict="VERDICT: question x")
+    for _ in range(4):
+        _driver_job(spool, state="done", verdict="VERDICT: resolved a", about=about)
+    time.sleep(0.01)
+
+    async def body(daemon: Daemon) -> None:
+        assert daemon.playbook.daemon_started == daemon.started
+        assert (await ok("pipeline"))["consults"] == {"used": 0, "max_consults": 2}
+
+    drive(body)
+
+
+def test_end_to_end_an_escalation_over_a_paused_pipeline_is_suppressed_and_notified(
+    tmp_home: Path, workdir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """§29: a human pauses while the driver runs; its escalation is filed as
+    `pipeline.stop_suppressed` with the consult reason and reaches the phone once."""
+    driver = tmp_home.parent / "driver"
+    driver.mkdir()
+    write_project(
+        tmp_home,
+        config_body(tmp_home, workdir, extra=f'[roles.driver]\ncwd = "{driver}"').replace(
+            "[server]", '[server]\nntfy_topic = "hands-test"\nntfy_url = "https://ntfy.example"'
+        ),
+    )
+    write_playbook(workdir, NO_DRIVER_RULES)
+    _script(tmp_home, monkeypatch, [
+        QUESTION_RESULT,
+        {"result": "VERDICT: escalate the mission file does not decide it",
+         "exec": ["sleep", "2"]},
+    ])
+    posts = Posts()
+
+    async def body(daemon: Daemon) -> None:
+        first = await ok("send", "--role", "builder", "--context", "clear", KICKOFF)
+        await ok("wait", first["id"])
+        await running_job("driver")
+        await ok("pause")
+        [suppressed] = await _wait_events("pipeline.stop_suppressed", 1)
+        assert "the driver escalated: the mission file does not decide it" in strip_paths(
+            suppressed["payload"]["reason"]
+        )
+        assert suppressed["payload"]["kept"] == PAUSE_REASON
+        [done] = await _events("consult.done")
+        assert done["payload"]["state"] == "done"
+        state = await ok("pipeline")
+        assert state["paused"] and state["stop_reason"] == PAUSE_REASON
+        await daemon.notifier.drain()
+        assert posts.sent.count("hands: the pipeline stopped") == 1  # the pause
+        assert posts.sent.count(SUPPRESSED_CONSULT) == 1
+
+    async def scenario() -> None:
+        daemon = Daemon(load_config(PROJECT))
+        daemon.notifier.post = posts  # before start(): no test may reach a network
+        await daemon.start()
+        try:
+            await asyncio.wait_for(body(daemon), 60)
+        finally:
+            await daemon.stop()
+
+    asyncio.run(scenario())
 
 
 # ---------------------------------------------- §28 end to end, no driver rules

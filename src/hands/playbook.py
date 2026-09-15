@@ -168,6 +168,8 @@ UNPAUSE_ORIGINS = frozenset({"cli", "phone", "kit"})
 
 #: The `stop` reason `hands pause` files (§11, H-007). A human, not a rule.
 PAUSE_REASON = "paused by human"
+#: §29: the notification of an engine consult stop suppressed over a paused pipeline.
+SUPPRESSED_CONSULT_TITLE = "hands: a consultation stopped over a paused pipeline"
 
 TOP_KEYS: tuple[str, ...] = ("version", "series", "limits", "rule")
 LIMIT_KEYS: tuple[str, ...] = ("auto_runs", "max_resumes", "max_consults")
@@ -825,6 +827,9 @@ class PlaybookEngine:
         self.load_error: str | None = None
         self._loaded = False
         self._tasks: set[asyncio.Task[None]] = set()
+        #: §29: when the daemon that owns this engine started (`Daemon.start` sets
+        #: it); `max_consults` also counts from it. None for an engine no daemon owns.
+        self.daemon_started: str | None = None
 
     # ------------------------------------------------------------- loading
 
@@ -923,12 +928,18 @@ class PlaybookEngine:
             log.debug("playbook: %s is not one of §10's events; nothing fires", event)
             return
         await self._ensure_loaded()
-        if self.state.paused:
-            log.info("playbook: paused (%s); %s fires nothing", self.state.paused_by, event)
-            return
         if job is None and payload:
             job = self._job(payload.get("job"))
         enforced = driver_stop(event, job)
+        if self.state.paused:
+            if enforced is not None:
+                # §29: the engine's consult stops apply over a paused pipeline too:
+                # suppressed like any later stop, and notified, so the human learns
+                # the consultation did not resolve. No playbook rule fires (§10).
+                await self.stop(enforced, _payload(event, job), notify_suppressed=True)
+                return
+            log.info("playbook: paused (%s); %s fires nothing", self.state.paused_by, event)
+            return
         book = self.playbook
         if book is None:
             if enforced is not None:  # §28: the engine's stop needs no playbook
@@ -1184,8 +1195,9 @@ class PlaybookEngine:
         one is not another) after the later of the last builder job whose prompt is
         *any* `[series] kickoff` value seen (`PipelineState.kickoffs`, plus the
         loaded file's) and the last kit apply that ran (a builder job of origin
-        `kit` that started), neither a resume. With neither, every driver job in the
-        spool counts: the safe direction is to stop sooner."""
+        `kit` that started), neither a resume. §29: nor before the daemon started
+        (`daemon_started`), whichever of the three is latest. With none of them, every
+        driver job in the spool counts: the safe direction is to stop sooner."""
         jobs = self.spool.list_jobs()
         kickoffs = set(self.state.kickoffs)
         if book is not None and book.kickoff:
@@ -1198,8 +1210,13 @@ class PlaybookEngine:
                 record.origin == KIT_ORIGIN and record.started is not None
             ):
                 start = index + 1
+        since = self.daemon_started
         return sum(
-            1 for record in jobs[start:] if record.role == DRIVER and record.resumed_from is None
+            1
+            for record in jobs[start:]
+            if record.role == DRIVER
+            and record.resumed_from is None
+            and (since is None or record.created >= since)
         )
 
     def _consult_done(self, job: Job) -> None:
@@ -1290,7 +1307,13 @@ class PlaybookEngine:
 
     # ------------------------------------------------------ stop and pause
 
-    async def stop(self, reason: str, payload: dict[str, Any] | None = None) -> None:
+    async def stop(
+        self,
+        reason: str,
+        payload: dict[str, Any] | None = None,
+        *,
+        notify_suppressed: bool = False,
+    ) -> None:
         """§10: pause the pipeline, notify, record the reason (§11's `stop` event).
 
         This is the one `stop()` §10 asks for: every component stops through it —
@@ -1307,13 +1330,16 @@ class PlaybookEngine:
         The kind is in the `pipeline` namespace (H-011, §21) so that a
         `hands wait --for stop,held` is not woken by it; `--for pipeline` is how
         a caller asks for them.
+
+        §29: `notify_suppressed` is the one exception, the engine's consult stop over
+        a paused pipeline: it is suppressed the same way and also notifies, once.
         """
         if self.state.paused:
-            self.spool.append_event(
-                "pipeline.stop_suppressed",
-                {**(payload or {}), "reason": reason, "kept": self.state.stop_reason},
-            )
+            suppressed = {**(payload or {}), "reason": reason, "kept": self.state.stop_reason}
+            self.spool.append_event("pipeline.stop_suppressed", suppressed)
             log.info("playbook: stop suppressed (%s); kept: %s", reason, self.state.stop_reason)
+            if notify_suppressed:
+                self._notify(SUPPRESSED_CONSULT_TITLE, suppressed)
             return
         self.state.paused = True
         self.state.paused_by = "stop"

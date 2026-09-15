@@ -132,7 +132,10 @@ Notes that are easy to get wrong:
   a permission bypass, when the driver directory's `.claude/settings.json` does
   not name the hook (a `PreToolUse` command hook for `Bash` that runs
   `.claude/hooks/bash_guard.py`), and when that hook's `--selftest` is not green
-  run with the role's environment (`HANDS_ROLE=driver`). A missing clone warns.
+  run with the role's environment (`HANDS_ROLE=driver`). The hook self-tested
+  is the file the settings' command names (§29): the first word ending in
+  `.claude/hooks/bash_guard.py`, with `$CLAUDE_PROJECT_DIR` and a relative path
+  read against the driver directory; a named file that does not exist fails. A missing clone warns.
 - **The consult flow** (§27, docs/PLAYBOOK.md "Consult"). A rule `then =
   "consult"` fires on an event, say a builder `VERDICT: question`. handsd starts
   a driver-role job in the driver's cwd, `context: clear`, `origin: playbook`,
@@ -152,11 +155,14 @@ Notes that are easy to get wrong:
   `driver.done|failed|killed|orphaned|limited`. The engine stops and notifies
   for every one of them except a `driver.done` whose verdict is `VERDICT:
   resolved …`, whatever `driver.*` rules the playbook has (§28); a resolved
-  verdict goes to the playbook's rules. A limited driver job is not resumed.
+  verdict goes to the playbook's rules. Over a paused pipeline that stop is
+  filed as `pipeline.stop_suppressed` with the consult reason and still
+  notifies (§29). A limited driver job is not resumed.
   A consult with no `[roles.driver]`, or beyond `[limits] max_consults`
   (default 2), stops and starts no driver job. The count starts at the later
   of the last builder job whose prompt equals any `[series] kickoff` value the
-  pipeline has loaded (kept in `pipeline.json`) and the last kit apply that ran.
+  pipeline has loaded (kept in `pipeline.json`), the last kit apply that ran,
+  and the running daemon's start (§29).
   `hands pipeline` shows `consults <used> of max_consults <n>`.
 - **`[roles.<role>] env`** (§23, H-014) is a table of environment variables for
   that role's `claude -p` jobs, on top of handsd's own environment. Names are
