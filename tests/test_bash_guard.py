@@ -14,6 +14,11 @@ That table ships with the guard, so on its own it can only agree with the guard
 from __future__ import annotations
 
 import importlib.util
+import json
+import os
+import subprocess
+import sys
+import unicodedata
 from pathlib import Path
 from types import ModuleType
 
@@ -546,12 +551,14 @@ REVIEW_11_PROBES: list[tuple[str, bool]] = [
     ("hands show & hands open x", True),
     ("hands send --role builder --context keep '--context=clear' m", False),
     ('hands send --role builder --context keep "--context=clear" m', False),
-    ("hands send --role builder --context keep \\--context=clear m", False),
+    # §30: a backslash is refused before tokenizing, so the escaped spellings
+    # are refused in normal mode too
+    ("hands send --role builder --context keep \\--context=clear m", True),
     ("hands send --role builder --context keep $'--context=clear' m", True),
     ("hands send --role builder --context keep {--context=clear,m}", True),
     ("x=--context=clear; hands send --role builder --context keep $x m", True),
     ("hands send --role builder --context keep '--file' a=b m", False),
-    ("hands send --role builder --context keep \\--file a=b m", False),
+    ("hands send --role builder --context keep \\--file a=b m", True),
     # "to the role named in the consultation": --role other than HANDS_CONSULT_ROLE
     ("hands send --role aux --context keep m", False),
     # and to another project: the CLI accepts --project before and after `send`
@@ -592,45 +599,27 @@ SHELL_DELIVERY_BOTH_MODES: list[tuple[str, bool]] = [
     ("git status & git push", False),
     ("git status & git -C ./repo log --oneline -1", True),
     ("git status |& git push", False),
-    ("git status\ngit push", False),
     ("(git status) && (git push)", False),
     ("git status; (git push)", False),
-    ("echo $(git push)", False),
-    ("echo `git push`", False),
-    ('echo "$(git status; git push)"', False),
-    ('echo "`git push`"', False),
-    ("echo $(echo $(git push))", False),
-    # the backslash-newline the shell deletes before it splits words
-    ("git status \\\n; git push", False),
-    ("git log --oneline -1 \\\n--output=/tmp/x", False),
-    # an escaped or quoted separator is text, not a separator
+    # a quoted separator is text, not a separator
     ("git -C ./repo grep -n 'a;b' origin/main", True),
-    ("git -C ./repo grep -n a\\&b origin/main", True),
-    # unparsable: unbalanced quotes, an unterminated substitution
+    ("git -C ./repo grep -n 'a|b&c(d)' origin/main", True),
+    # unbalanced quotes
     ("git log 'oops", False),
     ('git log "oops', False),
-    ("git log --oneline -1 \\", False),
-    ("echo $(git status", False),
-    ("echo `git status", False),
     # leading assignments, with a command and alone
     ("GIT_PAGER=touch git log", False),
     ("x=1 git status", False),
     ("x=1; git status", False),
     ("x=1", False),
-    # `$'…'` words, anywhere a word can be
-    ("git log $'--output=/tmp/x'", False),
-    ("git log --grep=$'a'", False),
-    # residual expansion characters in git argument position
+    # residual expansion characters in git argument position (unquoted)
     ("git log $x", False),
     ("git log ${x}", False),
-    ('git log "$x"', False),
-    ("git log `echo -1`", False),
     ("git log --grep=a{b,c}", False),
     ("git log -- *.py", False),
     ("git log -- x?", False),
     ("git log -- [ab]", False),
     ("git log HEAD^!", False),
-    ('git log "--grep=\\x"', False),
     ("git log --grep=x=~/y", False),
     # ... and the same characters where the shell does not expand them
     ("git log -- '*.py'", True),
@@ -641,16 +630,8 @@ SHELL_DELIVERY_BOTH_MODES: list[tuple[str, bool]] = [
     ("git -C ./repo rev-parse HEAD^{}", True),
     # the command word itself is what the shell delivers
     ("'git' push", False),
-    ("g\\it push", False),
     ("$SHELL -c 'git push'", False),
     ("$GIT push", False),
-    # writes by redirection that the old pattern let through
-    ("git status 2>probe.txt", False),
-    ("git status &> probe.txt", False),
-    ("git status &>probe.txt", False),
-    ("echo hi 2>probe.txt", False),
-    ("git status 2>/dev/null", True),
-    ("git status 2>&1", True),
 ]
 
 
@@ -761,18 +742,30 @@ def test_the_selftest_runs_role_mode_with_a_consult_role() -> None:
     assert any(ok and cmd.startswith("hands send") for cmd, ok in guard.ROLE_SELFTEST)
 
 
-# --- §29: THE GUARD (review 12 blocker 1, should-fix 2; H-024) ---------------
+# --- §30: THE GUARD'S LANGUAGE (review 13 blocker 1; H-026) -------------------
 #
-# A `#` outside quotes anywhere is refused in both modes, naming its offset:
-# a comment is where an unbalanced quote hides a second command from a
-# tokenizer. "Outside quotes" is bash's quoting (not in single quotes, not in
-# double quotes, not after a backslash), judged in every context the shell
-# parses, so inside `$(…)` and backticks too. A `#` inside a word (`a#b`) is
-# not a bash comment, but §29 says "anywhere", so it is refused as well.
+# The driver's shell is one line. Before any tokenizing the guard refuses a
+# command containing a newline, a carriage return, `<`, `>`, `#`, a backtick,
+# `$(`, `\`, `$'` or any control character, in any position (quoted or not),
+# naming the first offender and its position; `$` and `!` inside double quotes
+# are refused the same way. What remains is words and '…'/"…" quotes. Every
+# probe of reviews 12 and 13 is refused this way in both modes; review 11's
+# are in REVIEW_11_PROBES above.
 REVIEW_12_PROBES: list[str] = [
     "hands show x # it's\nhands go #'",
     "hands show x # it's\nhands send --role builder --context clear m #'",
     "ls # it's\ntouch /tmp/rev12-pwned #'",
+]
+
+# REVIEW-13 blocker 1, verbatim: bash's decoding of
+# CMD=$'ls <<A\nls \'\nA\ntouch /tmp/rev13-me-pwned\nls "\'" <<\'true\'\n"\ntrue'
+# followed by the same shape hiding the role-mode commands the review names.
+REVIEW_13_PROBE = "ls <<A\nls '\nA\ntouch /tmp/rev13-me-pwned\nls \"'\" <<'true'\n\"\ntrue"
+REVIEW_13_PROBES: list[str] = [
+    REVIEW_13_PROBE,
+    "ls <<A\nls '\nA\nhands go\nls \"'\" <<'true'\n\"\ntrue",
+    "ls <<A\nls '\nA\nhands send --role builder --context clear m\nls \"'\" <<'true'\n\"\ntrue",
+    "hands status <<A\nhands show '\nA\nhands go\nhands show \"'\" <<'true'\n\"\ntrue",
 ]
 
 
@@ -782,10 +775,227 @@ def _both_modes(cmd: str, clone: str | None = CLONE) -> list[tuple[str | None, s
 
 
 @pytest.mark.parametrize("cmd", REVIEW_12_PROBES)
-def test_review_12_probe_is_blocked_in_both_modes_naming_the_comment(cmd: str) -> None:
+def test_review_12_probe_is_blocked_in_both_modes_naming_the_hash(cmd: str) -> None:
     for role, reason in _both_modes(cmd):
         assert reason is not None, f"a review 12 probe was allowed ({role}): {cmd!r}"
-        assert f"offset {cmd.index('#')}" in reason, (role, cmd, reason)
+        assert f"a `#` at position {cmd.index('#')}" in reason, (role, cmd, reason)
+
+
+@pytest.mark.parametrize("cmd", REVIEW_13_PROBES)
+def test_review_13_probe_is_blocked_in_both_modes_naming_the_first_angle(cmd: str) -> None:
+    for role, reason in _both_modes(cmd):
+        assert reason is not None, f"a review 13 probe was allowed ({role}): {cmd!r}"
+        assert f"a `<` at position {cmd.index('<')}" in reason, (role, cmd, reason)
+
+
+@pytest.mark.parametrize("cmd", REVIEW_13_PROBES)
+def test_review_13_probe_is_blocked_by_the_hook_in_both_modes(
+    monkeypatch: pytest.MonkeyPatch, cmd: str
+) -> None:
+    monkeypatch.setenv("HANDS_CONSULT_ROLE", "builder")
+    monkeypatch.setenv("HANDS_CLONE", CLONE)
+    assert run_hook(monkeypatch, cmd, None) == 2
+    assert run_hook(monkeypatch, cmd, "driver") == 2
+
+
+def test_the_hook_file_refuses_the_review_13_probe_naming_its_position(tmp_path: Path) -> None:
+    """The shipped file, run as Claude Code runs it: hook JSON on stdin, exit 2,
+    the refusal on stderr naming the first offender and its position."""
+    stdin = json.dumps({"tool_name": "Bash", "tool_input": {"command": REVIEW_13_PROBE}})
+    base = {k: v for k, v in os.environ.items() if not k.startswith("HANDS_")}
+    for extra in ({}, {"HANDS_ROLE": "driver", "HANDS_CONSULT_ROLE": "builder",
+                       "HANDS_CLONE": str(tmp_path)}):
+        done = subprocess.run([sys.executable, str(GUARD)], input=stdin, capture_output=True,
+                              text=True, env={**base, **extra}, timeout=30, check=False)
+        assert done.returncode == 2, (extra, done.stdout, done.stderr)
+        assert "a `<` at position 3" in done.stderr, (extra, done.stderr)
+
+
+def test_the_guards_own_tables_carry_every_review_13_probe() -> None:
+    role, normal = dict(guard.ROLE_SELFTEST), dict(guard.SELFTEST)
+    for cmd in REVIEW_13_PROBES:
+        assert role.get(cmd) is False, f"ROLE_SELFTEST lacks the blocked probe {cmd!r}"
+        assert normal.get(cmd) is False, f"SELFTEST lacks the blocked probe {cmd!r}"
+
+
+#: (label the refusal names, the offending text). The whole list §30 names.
+LANGUAGE_OFFENDERS: list[tuple[str, str]] = [
+    ("a newline", "\n"),
+    ("a carriage return", "\r"),
+    ("a `<`", "<"),
+    ("a `>`", ">"),
+    ("a `#`", "#"),
+    ("a backtick", "`"),
+    ("a `$(`", "$("),
+    ("a backslash", "\\"),
+    ("a `$'`", "$'"),
+]
+
+
+@pytest.mark.parametrize("label,offender", LANGUAGE_OFFENDERS)
+@pytest.mark.parametrize("shape", ["hands show a{}b", "hands show 'a{}b'", 'hands show "a{}b"'])
+def test_each_refused_character_is_refused_quoted_or_not(
+    label: str, offender: str, shape: str
+) -> None:
+    cmd = shape.format(offender)
+    position = cmd.index(offender)
+    for role, reason in _both_modes(cmd):
+        assert reason is not None and f"{label} at position {position}" in reason, (
+            role, cmd, reason)
+
+
+#: Every code point in Unicode's control category (Cc): U+0000–U+001F, U+007F,
+#: U+0080–U+009F. A newline and a carriage return carry their own names.
+CONTROL_CHARACTERS = [chr(c) for c in range(0x110000) if unicodedata.category(chr(c)) == "Cc"]
+
+
+def test_the_control_character_list_is_the_whole_category() -> None:
+    assert len(CONTROL_CHARACTERS) == 65
+    assert "\t" in CONTROL_CHARACTERS and "\x00" in CONTROL_CHARACTERS
+
+
+@pytest.mark.parametrize("char", CONTROL_CHARACTERS, ids=lambda c: f"U+{ord(c):04X}")
+def test_every_control_character_is_refused_naming_its_position(char: str) -> None:
+    label = {"\n": "a newline", "\r": "a carriage return"}.get(
+        char, f"a control character U+{ord(char):04X}")
+    for cmd in (f"hands status{char}", f"hands show 'x{char}'"):
+        for role, reason in _both_modes(cmd):
+            assert reason is not None and f"{label} at position {cmd.index(char)}" in reason, (
+                role, cmd, reason)
+
+
+#: (command, the first offender's label, its position). Review 12 and 13
+#: probes, the commands tables used to allow that use a character §30 refuses,
+#: and the commands tables used to block through the removed comment,
+#: substitution, escape and redirection handling, which the language now
+#: refuses before any of that could run.
+REFUSED_BY_THE_LANGUAGE: list[tuple[str, str, int]] = [
+    # reviews 12 and 13
+    ("hands show x # it's\nhands go #'", "a `#`", 13),
+    ("hands show x # it's\nhands send --role builder --context clear m #'", "a `#`", 13),
+    ("ls # it's\ntouch /tmp/rev12-pwned #'", "a `#`", 3),
+    (REVIEW_13_PROBE, "a `<`", 3),
+    # allowed before §30; each needs a character §30 plainly refuses
+    ('sleep 20; kill -0 "$(pgrep -f handsd)" && echo alive || echo dead', "a `$(`", 19),
+    ("ls probe.txt 2>&1", "a `>`", 14),
+    ("for i in $(seq 1 3); do echo $i; done", "a `$(`", 9),
+    ("git status 2>/dev/null", "a `>`", 12),
+    ('hands send --role builder --context clear --gate "apply kit" "Apply ~/Downloads/k.zip '
+     "(it replaces DESIGN.md), then commit 'plan: kit (v3.1)' and push. Reply: VERDICT: kit "
+     'applied <sha>."', "a `<`", 180),
+    ("hands send --role aux --context clear 'Review commits since abc123; report blockers=0 "
+     "or blockers>0 (count them)'", "a `>`", 97),
+    ('echo "a > b"', "a `>`", 8),
+    ("echo '$(rm -rf x)'", "a `$(`", 6),
+    ('kill -0 "$(jq -r .pid ~/.hands/jobs/0mtxb7ecx.json)" && echo alive', "a `$(`", 9),
+    ("hands send --role builder --context clear --stdin < ~/Downloads/m2-send.txt", "a `<`", 50),
+    ("hands send --role builder --context keep \\--context=clear m", "a backslash", 41),
+    ("hands send --role builder --context keep \\--file a=b m", "a backslash", 41),
+    ("hands send --role builder --context clear 'fix #12'", "a `#`", 47),
+    ("hands send --role builder --context keep 'fix #12'", "a `#`", 46),
+    ('hands send --role builder --context keep "fix #12"', "a `#`", 46),
+    ("hands show x\\#y", "a backslash", 12),
+    ("git -C ./repo log --grep='#12'", "a `#`", 26),
+    ("git -C ./repo grep -n a\\&b origin/main", "a backslash", 23),
+    ("git status 2>&1", "a `>`", 12),
+    ("git -C ./repo log --grep=\\$x\\*\\?\\[a\\]\\{b,c\\}\\!", "a backslash", 25),
+    # blocked before §30 by parsing the language no longer has
+    ("git status\ngit push", "a newline", 10),
+    ("echo $(git push)", "a `$(`", 5),
+    ("echo `git push`", "a backtick", 5),
+    ('echo "$(git status; git push)"', "a `$(`", 6),
+    ('echo "`git push`"', "a backtick", 6),
+    ("echo $(echo $(git push))", "a `$(`", 5),
+    ("git status \\\n; git push", "a backslash", 11),
+    ("git log --oneline -1 \\\n--output=/tmp/x", "a backslash", 21),
+    ("git log --oneline -1 \\", "a backslash", 21),
+    ("echo $(git status", "a `$(`", 5),
+    ("echo `git status", "a backtick", 5),
+    ("git log $'--output=/tmp/x'", "a `$'`", 8),
+    ("git log --grep=$'a'", "a `$'`", 15),
+    ('git log "$x"', "a `$` inside double quotes", 9),
+    ("git log `echo -1`", "a backtick", 8),
+    ('git log "--grep=\\x"', "a backslash", 16),
+    ("g\\it push", "a backslash", 1),
+    ("git status 2>probe.txt", "a `>`", 12),
+    ("git status &> probe.txt", "a `>`", 12),
+    ("git status &>probe.txt", "a `>`", 12),
+    ("echo hi 2>probe.txt", "a `>`", 9),
+    ("hands status # a note", "a `#`", 13),
+    ("git -C ./repo log --oneline -1 # a note", "a `#`", 31),
+    ("hands show a#b", "a `#`", 12),
+    ("hands show x #", "a `#`", 13),
+    ("# only a comment", "a `#`", 0),
+    ("hands show x\n# it's", "a newline", 12),
+    ('hands show "x" #"', "a `#`", 15),
+    ("hands show x $#", "a `#`", 14),
+    ('hands show "$(hands status # it\'s)"', "a `$(`", 12),
+    ("hands show `hands status #`", "a backtick", 11),
+    ("hands show x ; # y", "a `#`", 15),
+    ("hands show 'a#b' c#d", "a `#`", 13),
+    ('hands show "$(hands status # x)"', "a `$(`", 12),
+    ("hands show `hands \\$x #`", "a backtick", 11),
+    ("git -C ./repo log --grep=\\\\$x", "a backslash", 25),
+    ('git -C ./repo log --grep="a`true`"', "a backtick", 27),
+    ('git -C ./repo log --grep="a\\"b"', "a backslash", 27),
+    ('git -C ./repo log --grep="a\\x"', "a backslash", 27),
+    # the first offender is the one named; quotes
+    ("echo a > b # c", "a `>`", 7),
+    ('hands send --role builder --context clear "costs $5"', "a `$` inside double quotes", 49),
+    ('hands send --role builder --context clear "hi!"', "a `!` inside double quotes", 45),
+    ("hands send 'oops", "an unbalanced `'` quote", 11),
+    ('git log "oops', 'an unbalanced `"` quote', 8),
+    ("hands show 'x' \"a$'\"", "a `$'`", 17),
+]
+
+
+@pytest.mark.parametrize("cmd,label,position", REFUSED_BY_THE_LANGUAGE)
+def test_the_language_refuses_naming_the_first_offender_and_its_position(
+    cmd: str, label: str, position: int
+) -> None:
+    offender = {"a newline": "\n", "a backslash": "\\", "a backtick": "`"}.get(label)
+    if offender is None:
+        offender = label.split("`")[1]
+    assert cmd[position:].startswith(offender), (cmd, label, position)
+    for role, reason in _both_modes(cmd):
+        assert reason is not None and f"{label} at position {position}" in reason, (
+            role, cmd, reason)
+
+
+#: What the language still allows: `$` and `!` outside double quotes are not
+#: refused before tokenizing (the §28 rules judge them in `hands`/`git`
+#: arguments), and quoted text without a refused character is text.
+ALLOWED_BY_THE_LANGUAGE: list[tuple[str, bool]] = [
+    ("hands send --role builder --context keep 'costs $5! (a|b; c&d)'", True),
+    ('hands send --role builder --context keep "a*b?[c]{d,e}~ (x|y; z&w)"', True),
+    ("hands send --role builder --context keep 'say \"hi\"'", True),
+    ('hands send --role builder --context keep "it\'s"', True),
+    ("git -C ./repo grep -n -e '$x' origin/main", True),
+    ("hands show $x", False),
+    ("hands show x!", False),
+]
+
+
+@pytest.mark.parametrize("cmd,allowed", ALLOWED_BY_THE_LANGUAGE)
+def test_what_the_language_leaves_to_the_word_rules(cmd: str, allowed: bool) -> None:
+    for role, reason in _both_modes(cmd):
+        assert (reason is None) == allowed, (role, cmd, reason)
+        if reason is not None:
+            assert "position" not in reason, (role, cmd, reason)
+
+
+#: The parsing §30 makes unreachable is gone from the file, not only bypassed.
+REMOVED_FROM_THE_GUARD = ["_scan", "strip_redirect_noise", "strip_quoted", "UnbalancedQuotes",
+                          "SUBSTITUTED", "DOUBLE_QUOTE_LIVE"]
+
+
+def test_the_parsing_the_language_makes_unreachable_is_removed() -> None:
+    for name in REMOVED_FROM_THE_GUARD:
+        assert not hasattr(guard, name), f"the guard still carries {name}"
+    source = GUARD.read_text(encoding="utf-8").lower()
+    assert source.count("heredoc") == 0
+    assert "offset" not in source
+    assert "`" not in guard.RESIDUAL and "\\" not in guard.RESIDUAL
 
 
 @pytest.mark.parametrize("cmd", REVIEW_12_PROBES)
@@ -807,65 +1017,14 @@ def test_the_guards_own_tables_carry_every_review_12_probe() -> None:
     assert guard.SELFTEST_CLONE == CLONE
 
 
-# (command, allowed) in both modes.
-COMMENTS: list[tuple[str, bool]] = [
-    ("hands status # a note", False),
-    ("git -C ./repo log --oneline -1 # a note", False),
-    ("hands show a#b", False),
-    ("hands show x #", False),
-    ("# only a comment", False),
-    ("hands show x\n# it's", False),
-    ('hands show "x" #"', False),
-    ("hands show x $#", False),
-    ('hands show "$(hands status # it\'s)"', False),
-    ("hands show `hands status #`", False),
-    ("hands show x ; # y", False),
-    # quoted or escaped, a `#` is text
-    ("hands send --role builder --context keep 'fix #12'", True),
-    ('hands send --role builder --context keep "fix #12"', True),
-    ("hands show x\\#y", True),
-    ("git -C ./repo log --grep='#12'", True),
-]
-
-
-@pytest.mark.parametrize("cmd,allowed", COMMENTS)
-def test_a_hash_outside_quotes_is_refused_in_both_modes(cmd: str, allowed: bool) -> None:
-    for role, reason in _both_modes(cmd):
-        assert (reason is None) == allowed, (role, cmd, reason)
-        if not allowed:
-            assert "#" in reason and "offset" in reason, (role, cmd, reason)
-
-
-@pytest.mark.parametrize(
-    "cmd,offset",
-    [
-        ("hands status # a note", 13),
-        ("hands show x\n# it's", 13),
-        ("hands show 'a#b' c#d", 18),
-        ('hands show "$(hands status # x)"', 27),
-        # inside backticks `\$` loses its backslash first; the offset is still the
-        # command's own
-        ("hands show `hands \\$x #`", 22),
-    ],
-)
-def test_the_refusal_names_the_offset_of_the_first_unquoted_hash(cmd: str, offset: int) -> None:
-    assert cmd[offset] == "#"
-    for role, reason in _both_modes(cmd):
-        assert reason is not None and f"offset {offset}" in reason, (role, cmd, reason)
-
-
-# H-024 as §29 states it, one clause at a time, for `git` and `hands` argument
-# words in both modes: (clause, command, allowed).
+# H-024 as §29 states it, for what the §30 language leaves: `git` and `hands`
+# argument words in both modes, (clause, command, allowed). There is no
+# backslash clause: a backslash is refused before tokenizing.
 H024_CLAUSES: list[tuple[str, str, bool]] = [
     ("single quotes", "git -C ./repo log --grep='$x*?[a]{b,c}!~'", True),
     ("single quotes", "git -C ./repo log --grep='a'$x", False),
-    ("backslash", "git -C ./repo log --grep=\\$x\\*\\?\\[a\\]\\{b,c\\}\\!", True),
-    ("backslash", "git -C ./repo log --grep=\\\\$x", False),
     ("double quotes", 'git -C ./repo log --grep="a*b?[c]{d,e}~"', True),
     ("double quotes", 'git -C ./repo log --grep="$x"', False),
-    ("double quotes", 'git -C ./repo log --grep="a`true`"', False),
-    ("double quotes", 'git -C ./repo log --grep="a\\"b"', False),
-    ("double quotes", 'git -C ./repo log --grep="a\\x"', False),
     ("double quotes", 'git -C ./repo log --grep="a!b"', False),
     ("braces", "git -C ./repo log HEAD@{1}", True),
     ("braces", "git -C ./repo rev-parse HEAD^{commit}", True),
@@ -895,17 +1054,12 @@ def test_h024_every_clause_has_an_allowed_and_a_refused_example() -> None:
         assert verdicts == {True, False}, clause
 
 
-def test_h024_a_character_after_a_backslash_does_not_count_inside_double_quotes() -> None:
-    """Inside double quotes the backslash itself counts (§29 lists it); the `$` it
-    escapes does not."""
-    reason = guard.check('git log --grep="\\$x"')
-    assert reason is not None and "carries \\ the shell" in reason, reason
-
-
-# §29: role mode pins `git -C` to the role's clone (HANDS_CLONE). Both sides are
-# compared as `os.path.abspath` (normpath joined to the hook's working
-# directory); no tilde is expanded, so a `-C ~/…` equals only a HANDS_CLONE
-# spelled the same. (command, HANDS_CLONE, allowed in role mode)
+# §29, §30: role mode pins `git -C` to the role's clone (HANDS_CLONE). Both
+# sides are compared as `os.path.realpath` (symlinks resolved, joined to the
+# hook's working directory); no tilde is expanded, so a `-C ~/…` equals only a
+# HANDS_CLONE spelled the same. git applies several `-C` one after the other,
+# so role mode refuses a second `-C` (REVIEW-13 should-fix 1). (command,
+# HANDS_CLONE, allowed in role mode)
 ABS_CLONE = "/home/u/hands-driver/hands/repo"
 CLONE_PIN: list[tuple[str, str | None, bool]] = [
     ("git -C /tmp log", ABS_CLONE, False),
@@ -915,6 +1069,9 @@ CLONE_PIN: list[tuple[str, str | None, bool]] = [
     (f"git -C {ABS_CLONE}/.. log", ABS_CLONE, False),
     (f"git -C {ABS_CLONE} -C /tmp log", ABS_CLONE, False),
     (f"git -C /tmp -C {ABS_CLONE} log", ABS_CLONE, False),
+    (f"git -C {ABS_CLONE} -C {ABS_CLONE} log", ABS_CLONE, False),
+    ("git -C repo -C repo log", "./repo", False),
+    ("git -C ./repo -C . log", "./repo", False),
     (f"git -C {ABS_CLONE}x log", ABS_CLONE, False),
     ("git -C ./repo log", "./repo", True),
     ("git -C repo log", "./repo", True),
@@ -968,3 +1125,46 @@ def test_the_hook_takes_the_clone_from_the_environment(monkeypatch: pytest.Monke
     assert run_hook(monkeypatch, f"git -C {ABS_CLONE} log", "driver") == 2
     assert run_hook(monkeypatch, "git status", "driver") == 0
     assert run_hook(monkeypatch, "git -C /tmp log", None) == 0
+
+
+def test_role_mode_refuses_a_second_dash_c_by_name() -> None:
+    reason = guard.check("git -C ./repo -C ./repo log", role="driver", consult_role="builder",
+                         clone=CLONE)
+    assert reason is not None and "second `-C`" in reason, reason
+    assert guard.check("git -C ./repo -C ./repo log") is None
+
+
+def test_role_mode_pins_git_dash_c_by_realpath_through_a_real_symlink(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """REVIEW-13 should-fix 1: with `link -> <evil>/sub` in the clone,
+    `<clone>/link/..` is the clone to `abspath` and `<evil>` to the kernel."""
+    root = tmp_path.resolve()
+    clone = root / "clone"
+    clone.mkdir()
+    subprocess.run(["git", "init", "-q", str(clone)], check=True, timeout=30)
+    evil = root / "evil"
+    (evil / "sub").mkdir(parents=True)
+    (clone / "link").symlink_to(evil / "sub")
+    escape = f"{clone}/link/.."
+    assert os.path.abspath(escape) == str(clone)
+    assert os.path.realpath(escape) == str(evil)
+    role = {"role": "driver", "consult_role": "builder", "clone": str(clone)}
+    assert guard.check(f"git -C {escape} status", **role) is not None
+    assert guard.check(f"git -C {escape}/ status", **role) is not None
+    monkeypatch.chdir(root)
+    assert guard.check("git -C clone/link/.. status", **role) is not None
+    assert guard.check("git -C clone/link/../link/.. status", **role) is not None
+    # the clone itself, and the clone reached through a symlink, still pass
+    assert guard.check(f"git -C {clone} status", **role) is None
+    assert guard.check("git -C clone status", **role) is None
+    alias = root / "alias"
+    alias.symlink_to(clone)
+    assert guard.check(f"git -C {alias} status", **role) is None
+    assert guard.check(f"git -C {clone} status", role="driver", consult_role="builder",
+                       clone=str(alias)) is None
+    # and through the hook, with HANDS_CLONE in the environment
+    monkeypatch.setenv("HANDS_CONSULT_ROLE", "builder")
+    monkeypatch.setenv("HANDS_CLONE", str(clone))
+    assert run_hook(monkeypatch, f"git -C {escape} status", "driver") == 2
+    assert run_hook(monkeypatch, f"git -C {clone} status", "driver") == 0

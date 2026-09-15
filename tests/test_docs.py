@@ -1020,6 +1020,20 @@ def test_the_integration_doc_lists_what_the_no_background_hook_cannot_see() -> N
         assert named in section, f"the blind-spot list does not name {named!r} (§21)"
 
 
+def test_the_integration_doc_states_the_guards_language_in_one_paragraph() -> None:
+    """§30: `docs/INTEGRATION.md` states the guard's language in one paragraph,
+    so a reviewer can attack the definition rather than the parser."""
+    text = (ROOT / "docs" / "INTEGRATION.md").read_text(encoding="utf-8")
+    paragraphs = [" ".join(p.split()) for p in text.split("\n\n")]
+    stated = [p for p in paragraphs if "The guard's language" in p]
+    assert len(stated) == 1, f"expected one paragraph stating the language, found {len(stated)}"
+    for said in ("newline", "carriage return", "control character", "`<`", "`>`", "`#`",
+                 "backtick", "`$(`", "`\\`", "`$'`", "first offender", "position",
+                 "inside double quotes", "`$`", "`!`", "`shlex`", "`;`", "`&&`", "`||`",
+                 "`|`", "`&`", "realpath", "second `-C`", "--prompt-file"):
+        assert said in stated[0], f"the language paragraph does not say {said!r} (§30)"
+
+
 def test_the_driver_bash_guard_selftest_passes() -> None:
     spec = importlib.util.spec_from_file_location(
         "bash_guard", ROOT / "driver" / "hooks" / "bash_guard.py"

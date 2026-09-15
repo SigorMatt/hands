@@ -607,6 +607,25 @@ Fill in the parameter block at the top of `CLAUDE.md`. The driver never
 writes: the deny-list, the Bash guard hook and the push-disabled clone are
 three separate layers, and none of them is prose (§12).
 
+**The guard's language (§30).** The driver's shell is one line of words and
+quotes, and the Bash guard judges nothing else. Before any tokenizing it
+refuses a command containing a newline, a carriage return or any other control
+character, `<`, `>`, `#`, a backtick, `$(`, `\` or `$'`, in any position,
+quoted or not, and inside double quotes a `$` or a `!`; the refusal names the
+first offender and its position, and an unbalanced quote is refused at the
+position where it opened. So there is no redirection, heredoc, comment, escape
+or substitution for a quote to hide a second command behind. What is left is
+words, `'…'` and `"…"`, which `shlex` reads one way only. The command splits
+into segments on `;`, `&&`, `||`, `|`, `&` and parentheses outside quotes, and
+each segment's words are judged by the allowlists: `hands`, read-only git with
+the options §12 lists, and read-only inspection commands (in role mode, §27's
+list alone). A `hands` or `git` argument that still carries an unquoted `$`,
+`*`, `?`, `[`, `!`, a brace word or a `~` after `=` or `:` is refused (§28,
+§29). Text that needs a refused character travels as a file, with `hands send
+--prompt-file`. In role mode a `git -C` value must be the clone after realpath
+on both sides (`HANDS_CLONE` resolved the same way), and a second `-C` is
+refused, because git applies each `-C` relative to the one before.
+
 ## 6. The architect (§14 step 3)
 
 Replace the Claude Project's instruction with `docs/ARCHITECT-INSTRUCTION.md`.

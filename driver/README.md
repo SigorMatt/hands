@@ -42,9 +42,12 @@ Notes:
 - `hands open <job>` is blocked in both layers: it execs an interactive
   `claude --resume` in the role's directory, which is not something a driver
   can drive. Jobs are read with `hands show`, `hands log` and `hands tail`.
-- One honest cost of the guard: it cannot tell a `>` inside `hands put <path>
-  --content "…"` from a redirection, and blocks the call. Content with a `>`
-  in it has to reach the machine another way.
+- One honest cost of the guard: the driver's shell is one line (§30). A `<`,
+  `>`, `#`, backtick, `\`, `$(`, `$'`, newline or other control character is
+  refused wherever it appears, inside quotes too, and so is a `$` or `!`
+  inside double quotes. A prompt that needs one goes as a file (`hands send
+  --prompt-file`); other content with one has to reach the machine another
+  way.
 - The `repo/` clone has its push URL disabled. Even a bug in the driver
   cannot push from it.
 - `hands` must be installed on the laptop first (`uv tool install
