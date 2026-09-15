@@ -152,6 +152,7 @@ def test_every_optional_key_has_a_default(write_config, tmp_home: Path) -> None:
     assert cfg.gates.patterns == DEFAULT_GATE_PATTERNS
     assert cfg.runner.claude == "claude"
     assert cfg.runner.cancel_grace_s == 20
+    assert cfg.runner.pipe_timeout_s == 10  # §29
 
 
 def test_the_kit_keys_of_files_load(write_config, tmp_home: Path) -> None:
@@ -742,11 +743,13 @@ cwd = "~/git/demo"
 [runner]
 claude = "/usr/local/bin/claude"
 cancel_grace_s = 5
+pipe_timeout_s = 2.5
 """
     )
     cfg = load_config("demo")
     assert cfg.runner.claude == "/usr/local/bin/claude"
     assert cfg.runner.cancel_grace_s == 5
+    assert cfg.runner.pipe_timeout_s == 2.5  # §29
 
 
 def test_unknown_role_lookup_raises(write_config) -> None:

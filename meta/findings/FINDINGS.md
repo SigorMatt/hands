@@ -1239,7 +1239,7 @@ Progress (mission 13 U0, 2026-09-15). §28's rule could not hold after the
 reap (H-025); DESIGN v3.12 §29 replaces it with H-025 option (b). This finding
 closes with mission 13 U2, which removes the `HANDS_JOB`-mark-alone rule.
 
-Status: open (closes with mission 13 U2)
+Status: resolved by DESIGN v3.12 (code: mission 13 U2)
 
 ## H-024 — §28's residual-character list, read literally, refuses commands the guard must keep allowing
 

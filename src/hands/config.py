@@ -69,6 +69,7 @@ DEFAULT_MAX_RESUMES = 3  # §10 example; the playbook may override it
 DEFAULT_PLAYBOOK_PATH = "PLAYBOOK.toml"  # §10, relative to roles.builder.cwd
 DEFAULT_CLAUDE = "claude"
 DEFAULT_CANCEL_GRACE_S = 20.0  # §2: SIGINT, wait, SIGTERM
+DEFAULT_PIPE_TIMEOUT_S = 10.0  # §29: how long job end reads claude's pipes after the sweep
 DEFAULT_KIT_DIR = "~/Downloads"  # §26: where a kit sent from the phone lands
 DEFAULT_KIT_MAX_MB = 20  # §26: the largest kit fetched, in MiB
 
@@ -335,6 +336,7 @@ class GatesConfig:
 class RunnerConfig:
     claude: str
     cancel_grace_s: float
+    pipe_timeout_s: float = DEFAULT_PIPE_TIMEOUT_S
 
 
 @dataclass(frozen=True)
@@ -612,7 +614,7 @@ def parse_config(data: dict[str, Any], *, project: str, path: Path) -> Config:
     )
 
     runner_t = _table(data, "runner", path)
-    _check_keys(runner_t, ("claude", "cancel_grace_s"), "[runner]", path)
+    _check_keys(runner_t, ("claude", "cancel_grace_s", "pipe_timeout_s"), "[runner]", path)
     runner = RunnerConfig(
         claude=_str(
             runner_t,
@@ -624,6 +626,9 @@ def parse_config(data: dict[str, Any], *, project: str, path: Path) -> Config:
         ),
         cancel_grace_s=_number(
             runner_t, "cancel_grace_s", DEFAULT_CANCEL_GRACE_S, "[runner]", path
+        ),
+        pipe_timeout_s=_number(
+            runner_t, "pipe_timeout_s", DEFAULT_PIPE_TIMEOUT_S, "[runner]", path
         ),
     )
 

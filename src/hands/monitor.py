@@ -66,6 +66,7 @@ __all__ = [
     "cpu_ticks",
     "descendants_of",
     "group_pids",
+    "proc_stats",
     "pid_list",
 ]
 
@@ -373,6 +374,31 @@ def group_pids(pgid: int, *, proc_root: Path = PROC_ROOT) -> list[int]:
         if len(fields) < 3 or fields[0] in ("Z", "X") or fields[2] != str(pgid):
             continue
         found.append(int(entry.name))
+    return sorted(found)
+
+
+def proc_stats(*, proc_root: Path = PROC_ROOT) -> list[tuple[int, int, int]]:
+    """`(pid, session id, start time)` of every live process, from `/proc/*/stat` (§29).
+
+    Fields 6 and 22: the session id, and the start time in clock ticks since boot.
+    A zombie has exited and is left out, as in `group_pids`.
+    """
+    try:
+        entries = [entry for entry in proc_root.iterdir() if entry.name.isdigit()]
+    except OSError:  # pragma: no cover - no /proc
+        return []
+    found: list[tuple[int, int, int]] = []
+    for entry in entries:
+        text = _read(entry / "stat")
+        if not text or ")" not in text:
+            continue  # it died between the listing and the read
+        fields = text[text.rindex(")") + 1 :].split()
+        if len(fields) < 20 or fields[0] in ("Z", "X"):
+            continue
+        try:
+            found.append((int(entry.name), int(fields[3]), int(fields[19])))
+        except ValueError:  # pragma: no cover - a torn read
+            continue
     return sorted(found)
 
 
@@ -704,18 +730,25 @@ class MonitorSupervisor:
     def orphan_processes(
         self, job: Job, processes: list[dict[str, Any]], isolation: str
     ) -> None:
-        """What was still alive in a job's scope or group after claude exited (§24).
+        """What was still alive of a job after claude exited (§24, §29).
 
         The runner calls this once per job, only with a non-empty list, and kills
-        the processes after it returns. One event, every process's pid and
-        command line in it.
+        the processes marked `killed: true` after it returns; those marked
+        `killed: false` it could not prove the job's and leaves alive. One event,
+        every process's pid, command line and `killed` in it.
         """
         where = "scope" if isolation == "scope" else "process group"
+        killed = sum(1 for proc in processes if proc.get("killed"))
         lines = [
             f"ORPHAN_PROCESSES {job.id} ({job.role}) {len(processes)} process(es) "
-            f"still in the job's {where} after claude exited; they are killed now"
+            f"still alive of the job's {where} after claude exited; {killed} killed now, "
+            f"{len(processes) - killed} left alive (not proven the job's)"
         ]
-        lines += [f"{proc['pid']} {proc['cmdline'] or '(no command line)'}" for proc in processes]
+        lines += [
+            f"{proc['pid']} {proc['cmdline'] or '(no command line)'} "
+            f"({'killed' if proc.get('killed') else 'left alive'})"
+            for proc in processes
+        ]
         self._file(
             job,
             "\n".join(lines),

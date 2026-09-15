@@ -23,6 +23,7 @@ from hands.config import Config, parse_config
 from hands.limits import from_iso
 from hands.monitor import group_pids
 from hands.runner import (
+    DRAIN_S,
     GROUP,
     JOB_ENV,
     MAX_LAST_ARGV,
@@ -30,6 +31,7 @@ from hands.runner import (
     KeepRefused,
     Runner,
     RunnerError,
+    _kill_group,
     extract_verdict,
     is_harness_termination,
     probe_isolation,
@@ -1044,11 +1046,18 @@ def test_a_cancelled_jobs_orphan_is_reported_and_killed(
     async def body() -> None:
         job, task = start(runner, spool, f"FAKE:orphan {pidfile}\nFAKE:block")
         await until(execd, "the orphan to exec")
+        orphan = int(pidfile.read_text())
+        # §29: the orphan is the job's because it started before the last moment
+        # claude was observed alive; the runner's poll is what observes it.
+        await until(
+            lambda: runner._last_seen.get(job.id, 0) > _start_ticks(orphan),
+            "claude to be observed alive after the orphan started",
+        )
         await runner.cancel(job.id)
         finished = await task
         pid = int(pidfile.read_text())
         assert finished.state == "killed"
-        assert seen == [(job.id, [{"pid": pid, "cmdline": "sleep 300"}])]
+        assert seen == [(job.id, [{"pid": pid, "cmdline": "sleep 300", "killed": True}])]
         assert not process_live(pid)
 
     try:
@@ -1138,8 +1147,9 @@ def _vacated_group(job: Job | None) -> subprocess.Popen[bytes]:
 def test_the_last_resort_kills_the_members_of_a_group_whose_leader_was_reaped(
     runner: Runner, spool: Spool
 ) -> None:
-    """No process holds the id and every member descends from the job (it carries
-    the job's `HANDS_JOB`): the group is the job's, whatever start time was recorded."""
+    """No process holds the id; every member is in the session the job's pid led
+    and started before the last moment that pid was observed alive (§29), so each
+    descends from the job and is killed."""
     job = spool.create_job(role="builder", context="clear", prompt="x", origin="cli")
     leader = _vacated_group(job)
     members = group_pids(leader.pid)
@@ -1147,6 +1157,7 @@ def test_the_last_resort_kills_the_members_of_a_group_whose_leader_was_reaped(
     try:
         job.pid = leader.pid
         runner._leader_start = {job.id: 1}
+        runner._last_seen = {job.id: max(_start_ticks(pid) for pid in members) + 1}
         runner._last_resort(job, GROUP)
 
         async def gone() -> None:
@@ -1185,6 +1196,129 @@ def test_a_vacated_group_of_strangers_with_the_jobs_pid_as_its_id_is_left_alone(
     finally:
         for pid in members:
             kill_quietly(pid)
+
+
+def _foreign_session_group(job: Job) -> subprocess.Popen[bytes]:
+    """A leaderless group whose members carry the job's `HANDS_JOB` mark but whose
+    session is not the one the job's pid led: its leader joined a new group in
+    this test's session (`setpgid`, not `setsid`), forked, and was reaped."""
+    leader = subprocess.Popen(
+        ["sh", "-c", "sleep 30 & exit 0"],
+        process_group=0,
+        env={**os.environ, JOB_ENV: job.id},
+    )
+    leader.wait()
+    return leader
+
+
+@pytest.mark.parametrize("path", ["sweep", "kill_group", "last_resort"])
+def test_a_leaderless_marked_group_in_a_foreign_session_is_left_alone(
+    runner: Runner, spool: Spool, path: str
+) -> None:
+    """H-023, §29: the mark is corroboration and never sufficient alone. The group
+    id is the job's pid and every member carries the job's mark, but no member is
+    in the job's session, so nothing is signalled, whatever the last observation
+    says; the sweep reports what it saw with `killed: false`."""
+    job = spool.create_job(role="builder", context="clear", prompt="x", origin="cli")
+    leader = _foreign_session_group(job)
+    members = group_pids(leader.pid)
+    assert members, "the background sleep should still be in the group"
+    assert all(os.getsid(pid) != leader.pid for pid in members)
+    seen: list[object] = []
+    runner.on_orphans = lambda job, processes, isolation: seen.append(processes)
+    try:
+        job.pid = leader.pid
+        runner._leader_start = {job.id: 1}
+        runner._last_seen = {job.id: 2**62}
+        if path == "sweep":
+            reported = [{"pid": pid, "cmdline": "sleep 30", "killed": False} for pid in members]
+            assert asyncio.run(runner._sweep(job, GROUP)) == reported
+            assert seen == [reported]
+        elif path == "kill_group":
+            asyncio.run(_kill_group(leader.pid, 1, last_seen=2**62, grace=0.2))
+        else:
+            runner._last_resort(job, GROUP)
+        time.sleep(0.3)
+        assert all(process_live(pid) for pid in members), "a marked stranger was killed"
+    finally:
+        for pid in members:
+            kill_quietly(pid)
+
+
+@pytest.mark.parametrize(("after", "killed"), [(0, False), (1, True)],
+                         ids=["started-at-the-last-observation", "started-before-it"])
+def test_a_session_member_is_the_jobs_only_if_it_started_before_the_last_observation(
+    runner: Runner, spool: Spool, after: int, killed: bool
+) -> None:
+    """§29's residual, at the unit: the member is in the job's session and carries
+    its mark. Observed alive in a later clock tick than the member's start, the
+    job's pid proves it; observed in the same tick, nothing proves it, and it is
+    left alive and reported `killed: false`. (The observation is set here, not
+    measured: a fork inside a real job's last poll interval is not constructed.)"""
+    job = spool.create_job(role="builder", context="clear", prompt="x", origin="cli")
+    leader = _vacated_group(job)
+    members = group_pids(leader.pid)
+    assert len(members) == 1, "the background sleep should still be in the group"
+    member = members[0]
+    seen: list[object] = []
+    runner.on_orphans = lambda job, processes, isolation: seen.append(processes)
+    try:
+        job.pid = leader.pid
+        runner._leader_start = {job.id: 1}
+        runner._last_seen = {job.id: _start_ticks(member) + after}
+        reported = [{"pid": member, "cmdline": "sleep 30", "killed": killed}]
+        assert asyncio.run(runner._sweep(job, GROUP)) == reported
+        assert seen == [reported]
+        time.sleep(0.3)
+        assert process_live(member) is not killed
+    finally:
+        kill_quietly(member)
+
+
+def test_job_end_is_bounded_by_pipe_timeout_s_when_an_unproven_orphan_holds_the_pipes(
+    tmp_home: Path, workdir: Path, spool: Spool, tmp_path: Path
+) -> None:
+    """§29: the orphan called setsid, so the sweep cannot prove it is the job's and
+    does not kill it; it still holds claude's stdout and stderr. Job end reads
+    them for `runner.pipe_timeout_s` after the sweep and then ends the job anyway,
+    and the orphan is reported `killed: false`."""
+    timeout = 0.3
+    cfg = parse_config(
+        {
+            "roles": {"builder": {"cwd": str(workdir), "model": "opus"}},
+            "runner": {"claude": str(FAKE), "cancel_grace_s": 0.2, "pipe_timeout_s": timeout},
+        },
+        project="demo",
+        path=tmp_home / ".hands" / "demo.toml",
+    )
+    runner = Runner(cfg, spool)
+    pidfile = tmp_path / "orphan.pid"
+    seen: list[tuple[str, list[dict[str, object]]]] = []
+    runner.on_orphans = lambda job, processes, isolation: seen.append((job.id, processes))
+
+    async def body() -> tuple[Job, float]:
+        job = spool.create_job(
+            role="builder",
+            context="clear",
+            prompt=f"FAKE:orphan {pidfile} keep-stdio setsid",
+            origin="cli",
+        )
+        began = time.monotonic()
+        finished = await runner.run(job)
+        return finished, time.monotonic() - began
+
+    try:
+        job, elapsed = asyncio.run(asyncio.wait_for(body(), 30))
+        pid = int(pidfile.read_text())
+        assert job.state == "done"
+        # claude's own start and exit, the drain before the sweep, and the timeout;
+        # far under the orphan's 300 s and the 10 s default.
+        assert elapsed < DRAIN_S + timeout + 5.0, elapsed
+        assert seen == [(job.id, [{"pid": pid, "cmdline": "sleep 300", "killed": False}])]
+        assert process_live(pid), "an orphan the sweep could not prove was killed"
+    finally:
+        if pidfile.exists() and pidfile.read_text():
+            kill_quietly(int(pidfile.read_text()))
 
 
 def test_a_job_runs_with_its_id_in_hands_job(runner: Runner, spool: Spool) -> None:

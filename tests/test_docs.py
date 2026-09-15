@@ -146,7 +146,8 @@ def test_the_playbook_doc_maps_the_mission_8_detectors_to_stop_and_says_the_grou
     for event in ("monitor.task_killed", "monitor.orphan_processes"):
         assert f'on = "{event}" then = "stop"' in prose, f"no stop rule shown for {event}"
     assert "which is weaker" in prose
-    assert "`setsid` has left the group and is not listed or killed" in prose
+    assert "`setsid` has left the group and is never killed" in prose
+    assert "listed with `killed: false` while it carries the job's `HANDS_JOB` mark" in prose
 
 
 def test_both_docs_say_the_task_killed_cause_is_always_unknown() -> None:

@@ -673,9 +673,12 @@ def test_a_double_forked_orphan_is_filed_with_its_command_line_and_killed(
 ) -> None:
     """§24 through a real daemon, runner and fake_claude, in process-group mode.
 
-    The grandchild never calls setsid, so it is still in the job's group when
-    claude exits: that is what the fallback can see. `holding-its-pipes` keeps
-    the job's stdout open as well, so job end cannot wait for EOF to sweep.
+    The grandchild never calls setsid, so it is still in the job's session when
+    claude exits, and claude lingers (`FAKE:sleep`) past the runner's next poll,
+    so the grandchild started before the last moment claude was seen alive: §29's
+    session proof, not the `HANDS_JOB` mark, is what makes it the job's.
+    `holding-its-pipes` keeps the job's stdout open as well, so job end cannot
+    wait for EOF to sweep.
     """
     workdir = tmp_path / "work"
     workdir.mkdir()
@@ -690,7 +693,7 @@ def test_a_double_forked_orphan_is_filed_with_its_command_line_and_killed(
             seen.append(kind),
             dispatch(kind, payload),
         )
-        prompt = f"go\nFAKE:orphan {pidfile}{stdio}"
+        prompt = f"go\nFAKE:orphan {pidfile}{stdio}\nFAKE:sleep 0.5"
         job = await ok("send", "--role", "builder", "--context", "clear", prompt)
         assert (await ok("wait", job["id"]))["state"] == "done"
         pid = int(pidfile.read_text())
@@ -699,8 +702,8 @@ def test_a_double_forked_orphan_is_filed_with_its_command_line_and_killed(
         payload = events[0].payload
         assert (payload["job"], payload["role"]) == (job["id"], "builder")
         assert payload["isolation"] == "group"
-        assert payload["processes"] == [{"pid": pid, "cmdline": "sleep 300"}]
-        assert f"{pid} sleep 300" in payload["block"]
+        assert payload["processes"] == [{"pid": pid, "cmdline": "sleep 300", "killed": True}]
+        assert f"{pid} sleep 300 (killed)" in payload["block"]
         assert not process_live(pid)
         assert seen.count("monitor.orphan_processes") == 1
 

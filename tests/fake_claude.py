@@ -19,12 +19,13 @@ backslash, so a multi-line result fits on one line of a test:
     FAKE:task-killed <task-id> <command>
                            emit a `Bash` tool_use of <command> and the harness's
                            task-killed notice for it (repeatable; see below)
-    FAKE:orphan <pidfile> [keep-stdio]
+    FAKE:orphan <pidfile> [keep-stdio] [setsid]
                            double-fork a `sleep 300` that outlives this process,
-                           without setsid (so it stays in the process group),
-                           and write its pid to <pidfile> once it has exec'd;
-                           its stdio goes to /dev/null unless `keep-stdio`,
-                           which leaves it holding this process's pipes
+                           without setsid (so it stays in the process group)
+                           unless `setsid`, and write its pid to <pidfile> once
+                           it has exec'd; its stdio goes to /dev/null unless
+                           `keep-stdio`, which leaves it holding this process's
+                           pipes
     FAKE:sleep <seconds>   sleep this long after the init event
     FAKE:block             block until SIGINT (exit 130) or SIGTERM (exit 143)
     FAKE:ignore-int        with FAKE:block, ignore SIGINT so only SIGTERM ends it
@@ -207,12 +208,14 @@ def emit_task_killed(session_id: str, task_id: str, command: str) -> None:
 ORPHAN_ARGV = ["sleep", "300"]
 
 
-def double_fork_orphan(pidfile: str, *, keep_stdio: bool) -> None:
+def double_fork_orphan(pidfile: str, *, keep_stdio: bool, setsid: bool = False) -> None:
     """`FAKE:orphan`: a grandchild that outlives this process (DESIGN §24).
 
-    No `setsid`: the grandchild stays in this process's group, which is what the
-    process-group fallback can see. Returns only after the grandchild has exec'd
-    (the close-on-exec pipe reaches EOF), so its command line is already
+    No `setsid` unless asked: the grandchild stays in this process's group and
+    session, which is what the process-group fallback can see. With `setsid` it
+    leaves both, so the sweep cannot prove it descends from the job (§29).
+    Returns only after the grandchild has exec'd (the close-on-exec pipe
+    reaches EOF), so its command line is already
     `sleep 300` when this process emits its result and exits.
     """
     read_end, write_end = os.pipe()  # non-inheritable: closed by exec
@@ -221,6 +224,8 @@ def double_fork_orphan(pidfile: str, *, keep_stdio: bool) -> None:
         os.close(read_end)
         grandchild = os.fork()
         if grandchild == 0:
+            if setsid:
+                os.setsid()
             if not keep_stdio:
                 devnull = os.open(os.devnull, os.O_RDWR)
                 for fd in (0, 1, 2):
@@ -396,7 +401,8 @@ def main(argv: list[str]) -> int:
 
     for spec in directives.get("orphan", []):
         pidfile, _, mode = spec.partition(" ")
-        double_fork_orphan(pidfile, keep_stdio=mode.strip() == "keep-stdio")
+        words = mode.split()
+        double_fork_orphan(pidfile, keep_stdio="keep-stdio" in words, setsid="setsid" in words)
 
     if "sleep" in directives:
         time.sleep(float(one("sleep", "0") or 0))

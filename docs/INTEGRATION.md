@@ -108,6 +108,8 @@ cwd` is optional.
     [runner]
     claude = "claude"                    # default; an absolute path also works
     cancel_grace_s = 20                  # default: SIGINT, wait, SIGTERM (§2)
+    pipe_timeout_s = 10                  # default: job end reads claude's pipes this
+                                         # long after the sweep (§29)
 
 Notes that are easy to get wrong:
 
@@ -564,11 +566,24 @@ scope named `hands-<project>-<job>`; otherwise it starts in a new process group.
 The job's live pid set, which is what `--pids` carries, is the scope's
 `cgroup.procs` or the group's members. When claude exits, anything still in
 that set is filed as one `monitor.orphan_processes` event with each process's
-command line, and then the scope is stopped (`systemctl --user stop`) or the
-group is sent SIGTERM and, two seconds later, SIGKILL. The process group is the
-weaker of the two: a process that calls `setsid` leaves it and is neither
-listed nor killed. `hands doctor` prints an `isolation` row saying which is in
-force; it is information, never a failure.
+command line and `killed`, and then the scope is stopped (`systemctl --user
+stop`) or, in a process group, each process proven the job's is sent SIGTERM
+and, two seconds later, SIGKILL. The process group is the weaker of the two.
+By the time claude is reaped its group has no leader, so the proof is the
+session (§29): a process descends from the job when its session id is the
+job's pid and it started before the last moment claude was observed holding
+that pid; the runner observes that every 50 ms while claude runs. The
+`HANDS_JOB=<job>` mark each job carries is corroboration and never sufficient
+alone. A process that carries the mark but is not proven is listed with
+`killed: false` and left alive: one that called `setsid` (a process that also
+clears its environment is not listed at all), and one forked inside claude's
+last poll interval. That residual is not a bug to report: a fork in the job's
+last 50 ms before exit cannot be proven the job's, so it is left alive and
+reported `killed: false`; stop or kill it yourself. Job end then reads
+claude's pipes for at most `runner.pipe_timeout_s` (default 10 s), so such a
+process holding them cannot stall the job. `hands doctor` prints an
+`isolation` row saying which is in force; it is information, never a
+failure.
 
 `hands status` names whichever monitor is deciding: with `[ops]` set it prints
 the script's path and the three flags hands fills for it; otherwise it prints

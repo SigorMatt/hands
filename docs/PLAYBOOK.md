@@ -118,13 +118,16 @@ waiting on did not finish, so the rule is `stop`:
 
 `monitor.orphan_processes` (DESIGN §24) means processes a role job started were
 still alive after its `claude -p` exited. hands files one event per job, only
-when there were any, listing each process's `pid` and command line
-(`processes`, each line cut to 1024 characters), and then kills them. Where
-`systemd-run --user --scope` works, each job runs in its own transient scope and
-the list is everything left in it, double forks included. Elsewhere each job
-runs in its own process group, which is weaker: a process that called `setsid`
-has left the group and is not listed or killed. `hands doctor` says which one
-is in force. Work the job left running did not finish with it, so the rule is
+when there were any, listing each process's `pid`, command line and `killed`
+(`processes`, each line cut to 1024 characters), and then kills those marked
+`killed: true`. Where `systemd-run --user --scope` works, each job runs in its
+own transient scope and the list is everything left in it, double forks
+included. Elsewhere each job runs in its own process group, which is weaker: a
+process is killed only when it is in the session the job led and started
+before claude was last seen alive (DESIGN §29), so a process that called
+`setsid` has left the group and is never killed; it is listed with `killed:
+false` while it carries the job's `HANDS_JOB` mark. `hands doctor` says which
+one is in force. Work the job left running did not finish with it, so the rule is
 `stop` too:
 
     [[rule]]

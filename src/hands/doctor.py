@@ -607,8 +607,9 @@ def _isolation_check(config: Config) -> Check:
         "process group: `systemd-run --user --scope` could not start a scope here (no "
         "systemd-run, no cgroup v2, or no user manager answering)\neach `claude -p` "
         "starts in a new process group; this is weaker: a process that calls setsid "
-        "leaves the group, so it is not in --pids, not filed as "
-        "monitor.orphan_processes and not killed at job end (§24)",
+        "leaves the group, so it is not in --pids and not killed at job end, and is "
+        "filed as monitor.orphan_processes with killed: false only while it carries "
+        "HANDS_JOB (§24, §29)",
     )
 
 

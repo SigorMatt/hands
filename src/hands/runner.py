@@ -19,7 +19,7 @@ All six flags were checked against the installed binary (claude 2.1.268,
 
 The process runs in handsd's environment plus the role's `spawn_env` (§23):
 `CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS=0` unless `[roles.<r>] env` sets it; and
-`HANDS_JOB=<job id>`, which the post-exit sweep reads (§27).
+`HANDS_JOB=<job id>`, which the post-exit sweep reads as corroboration only (§29).
 
 Each process is isolated per job (§24). When `systemd-run --user --scope` can
 start a scope here, the invocation runs inside a transient user scope named
@@ -28,11 +28,15 @@ start a scope here, the invocation runs inside a transient user scope named
 (`detect_isolation`). The job's live pid set is the scope's `cgroup.procs` or the
 group's members (`live_pids`, the monitor's `--pids`). Once claude has exited,
 whatever is still in that set is handed to `on_orphans` (the daemon files
-`monitor.orphan_processes`) and then killed: the scope is stopped, the group is
-sent SIGTERM and, after `ORPHAN_GRACE_S`, SIGKILL. The group is weaker: a process
-that calls setsid leaves it and is neither seen nor killed, and once claude is
-reaped the group is swept only when every member carries `HANDS_JOB` (§27,
-`_group_is_the_jobs`).
+`monitor.orphan_processes`) and then killed: the scope is stopped; in group mode
+each process proven the job's is sent SIGTERM and, after `ORPHAN_GRACE_S`,
+SIGKILL. Group mode's proof is §29's session proof (`_job_processes`): a live
+process descends from the job when its session id is the job's pid and it started
+before the last moment the job's pid was observed held by claude (`_last_seen`,
+refreshed on every poll of `_until_exit`). `HANDS_JOB` never proves anything; a
+process carrying it that the proof misses (it called setsid, or forked inside
+claude's last poll interval) is reported `killed: false` and left alive, and job
+end reads the pipes it may hold for at most `runner.pipe_timeout_s`.
 
 A job is `done` only when the process ends cleanly with a final `result` event
 of subtype `success` that carries `num_turns`, and stderr never carried the
@@ -69,6 +73,7 @@ from hands.monitor import (
     descendants_of,
     environ_has,
     group_pids,
+    proc_stats,
     start_time,
 )
 from hands.playbook import consult_head
@@ -177,10 +182,12 @@ PROBE_S = 5.0
 SCOPE_STOP_S = 30.0
 #: SIGTERM → this long → SIGKILL, for what is left in a process group (§24).
 ORPHAN_GRACE_S = 2.0
-#: The variable every job runs with, set to its id. A process inherits it from the
-#: job, so a member of the job's process group that carries it descends from the
-#: job (§27, review 10 should-fix 3).
+#: The variable every job runs with, set to its id. §29: corroboration and never
+#: sufficient alone (any process can set it): the sweep reports a process that
+#: carries it but kills only what the session proof shows is the job's (H-023).
 JOB_ENV = "HANDS_JOB"
+#: Clock ticks per second: the unit of `/proc/<pid>/stat`'s start time (field 22).
+CLK_TCK = os.sysconf("SC_CLK_TCK")
 #: Once claude has exited, how long its pipes may stay open before the sweep runs
 #: anyway: an orphan that inherited stdout would otherwise hold the job open.
 DRAIN_S = 1.0
@@ -322,6 +329,13 @@ def detect_isolation() -> str:
 # ------------------------------------------------------------ orphan sweep
 
 
+def boot_ticks() -> int:
+    """Now, in the clock of `/proc/<pid>/stat`'s start time: whole clock ticks since
+    boot (`CLOCK_BOOTTIME`, which Linux has used for that field since 5.3), rounded
+    down as the kernel rounds a start time (§29)."""
+    return time.clock_gettime_ns(time.CLOCK_BOOTTIME) * CLK_TCK // 1_000_000_000
+
+
 def _pid_alive(pid: int) -> bool:
     try:
         os.kill(pid, 0)
@@ -435,6 +449,9 @@ class Runner:
         # at spawn, None when it could not be read: what ties a group kill to
         # the job's own group and not a later one with the same id (§24).
         self._leader_start: dict[str, int | None] = {}
+        # Job id -> `boot_ticks()` when claude was last observed holding its pid
+        # (its pid with the start time above), for the run only (§29).
+        self._last_seen: dict[str, int] = {}
         #: Handed (job, processes, isolation) once claude has exited, when anything
         #: is still alive in its scope or group; each process is {pid, cmdline}. The
         #: daemon passes the monitor's `orphan_processes` (§24). Killed afterwards.
@@ -596,6 +613,7 @@ class Runner:
         job.pid = proc.pid
         if isolation == GROUP:
             self._leader_start[job.id] = start_time(proc.pid)
+            self._observe_alive(job)
         self.spool.save_job(job)
         self._running.setdefault(job.id, asyncio.Event()).set()
 
@@ -610,7 +628,7 @@ class Runner:
                 self._read_stderr(proc, stderr_lines, parsed),
             )
             try:
-                await _until_exit(proc, io)
+                await _until_exit(proc, io, lambda: self._observe_alive(job))
                 if io.done():
                     await io
                     exit_code = await proc.wait()
@@ -621,8 +639,7 @@ class Runner:
                     # orphan that inherited them. Sweep first, so they close.
                     await self._sweep(job, isolation)
                     swept = True
-                    await io
-                    exit_code = await proc.wait()
+                    exit_code = await self._drain(proc, io, job)
             except BaseException:
                 io.cancel()
                 raise
@@ -631,6 +648,7 @@ class Runner:
                 self._last_resort(job, isolation)
             self._isolated.pop(job.id, None)
             self._leader_start.pop(job.id, None)
+            self._last_seen.pop(job.id, None)
             self._close_log(job.id)
             self._procs.pop(job.id, None)
             self._running.pop(job.id, None)
@@ -660,26 +678,50 @@ class Runner:
 
     # ------------------------------------------------------- job end (§24)
 
+    def _observe_alive(self, job: Job) -> None:
+        """Record now as the last moment claude held the job's pid, if it still does (§29).
+
+        The clock is read before `/proc`: claude holds its pid from its fork until
+        it is reaped, so a process that still has claude's start time after the
+        reading held the pid at that reading. Called at spawn, on every poll of
+        `_until_exit` (`_EXIT_POLL_S`), and at the start of the sweep.
+        """
+        leader = self._leader_start.get(job.id)
+        if job.pid is None or leader is None:
+            return
+        now = boot_ticks()
+        if start_time(job.pid) == leader:
+            self._last_seen[job.id] = now
+
     async def _sweep(self, job: Job, isolation: str) -> list[dict[str, Any]]:
-        """Report and kill what is still in the job's scope or group (§24).
+        """Report and kill what is still alive of the job (§24, §29).
 
         Called once claude has exited. Nothing found, nothing reported and
-        nothing signalled. Otherwise `on_orphans` is handed every process with
-        its command line, and then the scope is stopped or the group killed.
+        nothing signalled. Otherwise `on_orphans` is handed every process with its
+        command line and `killed`, and then the scope is stopped, or in group mode
+        every process proven the job's is killed (`_kill_group`). A process that
+        carries the job's `HANDS_JOB` but is not proven is reported `killed:
+        false` and left alive.
         """
         if job.pid is None:  # pragma: no cover - a spawned job always has one
             return []
         unit = unit_name(self.config.project, job.id)
+        leader = self._leader_start.get(job.id)
         if isolation == SCOPE:
             path = await _systemctl(
                 "show", "--property", "ControlGroup", "--value", f"{unit}.scope"
             )
             pids = cgroup_pids(path) if path else []
-        elif self._group_is_the_jobs(job):
-            pids = group_pids(job.pid)
+            processes = [
+                {"pid": pid, "cmdline": cmdline(pid), "killed": True} for pid in pids[:MAX_PIDS]
+            ]
         else:
-            pids = []  # the id was reused, or its members are strangers: not the job's
-        processes = [{"pid": pid, "cmdline": cmdline(pid)} for pid in pids[:MAX_PIDS]]
+            self._observe_alive(job)
+            found = _job_processes(job.pid, leader, self._last_seen.get(job.id), job.id)
+            processes = [
+                {"pid": pid, "cmdline": cmdline(pid), "killed": proven}
+                for pid, _start, proven in found[:MAX_PIDS]
+            ]
         if not processes:
             return []
         log.warning(
@@ -687,7 +729,9 @@ class Runner:
             job.id,
             len(processes),
             isolation,
-            ", ".join(str(proc["pid"]) for proc in processes),
+            ", ".join(
+                f"{proc['pid']}{'' if proc['killed'] else ' (left alive)'}" for proc in processes
+            ),
         )
         hook = self.on_orphans
         if hook is not None:
@@ -697,9 +741,35 @@ class Runner:
                 log.exception("job %s: the orphan reporter failed", job.id)
         if isolation == SCOPE:
             await _systemctl("stop", f"{unit}.scope", timeout=SCOPE_STOP_S)
-        else:
-            await _kill_group(job.pid, self._leader_start.get(job.id), job.id)
+        elif any(proc["killed"] for proc in processes):
+            await _kill_group(job.pid, leader, last_seen=self._last_seen.get(job.id))
         return processes
+
+    async def _drain(
+        self, proc: asyncio.subprocess.Process, io: asyncio.Future[Any], job: Job
+    ) -> int | None:
+        """After the sweep, read claude's pipes for at most `runner.pipe_timeout_s` (§29).
+
+        A process the sweep left alive may still hold them; past the timeout the
+        readers are cancelled and the pipes closed, and claude's exit status, which
+        is already known, is the job's.
+        """
+        timeout = self.config.runner.pipe_timeout_s
+        try:
+            await asyncio.wait_for(io, timeout)
+        except TimeoutError:
+            log.warning(
+                "job %s: claude's pipes are still held %gs after the sweep; ending the job",
+                job.id,
+                timeout,
+            )
+            # asyncio's `wait()` also waits for the pipes, so the transport is
+            # closed here; claude has exited, so closing it signals nothing.
+            transport = getattr(proc, "_transport", None)
+            if transport is not None:
+                transport.close()
+            return proc.returncode
+        return await proc.wait()
 
     def _last_resort(self, job: Job, isolation: str) -> None:
         """The run ended by an exception before its sweep: kill, report nothing."""
@@ -715,18 +785,16 @@ class Runner:
                     stderr=subprocess.DEVNULL,
                     timeout=PROBE_S,
                 )
-        elif self._group_is_the_jobs(job):
-            # Not a membership check: a group with members can be a new session
-            # leader's that took claude's pid after claude was reaped, whether that
-            # leader is alive (review 9 should-fix 1) or reaped too (review 10
-            # should-fix 3). `_group_is_the_jobs` says how the two are told apart.
-            with contextlib.suppress(OSError):
-                os.killpg(job.pid, signal.SIGKILL)
-
-    def _group_is_the_jobs(self, job: Job) -> bool:
-        """Is the process group whose id is `job.pid` still the job's own? (§24)"""
-        assert job.pid is not None
-        return _group_is_the_jobs(job.pid, self._leader_start.get(job.id), job.id)
+            return
+        # Not a membership check: a group with members can be a new session
+        # leader's that took claude's pid after claude was reaped, whether that
+        # leader is alive (review 9 should-fix 1) or reaped too (review 10
+        # should-fix 3); nor the mark (H-023). Only §29's proof selects.
+        self._observe_alive(job)
+        found = _job_processes(job.pid, self._leader_start.get(job.id), self._last_seen.get(job.id))
+        for pid, start, proven in found:
+            if proven:
+                _signal_process(pid, start, signal.SIGKILL)
 
     # -------------------------------------------------------------- internals
 
@@ -968,14 +1036,21 @@ async def _wait(proc: asyncio.subprocess.Process) -> int:
     return await proc.wait()
 
 
-async def _until_exit(proc: asyncio.subprocess.Process, io: asyncio.Future[Any]) -> None:
+async def _until_exit(
+    proc: asyncio.subprocess.Process, io: asyncio.Future[Any], observe: Callable[[], None]
+) -> None:
     """Until the pipes are drained, or claude has exited and `DRAIN_S` has passed.
 
     asyncio's `wait()` also waits for the pipes to close, and an orphan that
     inherited them keeps them open; the exit status itself arrives without them.
+    `observe` is called on every poll: it records claude still holding its pid
+    (§29's last observation), so a fork inside the last `_EXIT_POLL_S` is the
+    residual the sweep cannot prove.
     """
     while not io.done() and proc.returncode is None:
+        observe()
         await asyncio.wait({io}, timeout=_EXIT_POLL_S)
+    observe()
     if not io.done():
         await asyncio.wait({io}, timeout=DRAIN_S)
 
@@ -987,57 +1062,113 @@ def _read_text(path: str) -> str:
         return ""
 
 
-def _group_is_the_jobs(pgid: int, leader_start: int | None, job_id: str) -> bool:
-    """Is process group `pgid` still the job's? (§24, §27; review 9 should-fix 1,
-    review 10 should-fix 3)
+def _job_processes(
+    pgid: int, leader_start: int | None, last_seen: int | None, job_id: str | None = None
+) -> list[tuple[int, int, bool]]:
+    """`(pid, start time, proven)` of every live process that is the job's (§29).
 
     Linux does not hand a pid out again while a process has it as its pid, its
-    process-group id or its session id. The group is the job's in two cases:
+    process-group id or its session id. claude was started as a session leader, so
+    a live process whose session id is the job's pid (`pgid`) is in claude's
+    session, and descends from claude, when the pid was never free since it
+    started: when claude held the pid at a moment after the process started.
+    `proven` is True for a process in that session which
 
-    * its leader (running, or a zombie) holds the pid with the start time recorded
-      at spawn. The group is then in the session claude leads (it was started with
-      a new session), and every member of a session descends from its leader;
-    * no process holds the pid, and every live member carries `HANDS_JOB=<job id>`
-      in the environment it was exec'd with, which only the job's own processes
-      inherit.
+    * started in a clock tick before `last_seen`, the last observation of claude
+      holding the pid (`Runner._observe_alive`), or
+    * was read before claude was seen holding the pid now (its start time equals
+      `leader_start`, read after the scan: the leader is still alive or a zombie).
 
-    It is not the job's when a process with another start time holds the pid (the
-    pid was reused; a start time that could not be read at spawn, None, matches
-    none), when the group is empty, or when no process holds the pid and some
-    member does not carry the mark. That last case is a stranger's session leader
-    that took the pid after claude was reaped, forked, and was reaped in turn; it
-    is also a descendant of the job that exec'd with a cleared environment or whose
-    environment cannot be read, which is then left alive and unreported. Reading
-    the group and signalling it are two steps, not one.
+    Nothing else proves anything. With `job_id`, a process that carries
+    `HANDS_JOB=<job_id>` and is not proven is listed with `proven` False: a
+    process that called setsid, one in a group whose id is the job's pid but whose
+    session is not, or one that forked inside claude's last poll interval (the
+    residual; its start is not before `last_seen`). A process that is neither is a
+    stranger and not listed. A start time that could not be read at spawn (None)
+    proves nothing; the mark is never read without `job_id`.
     """
-    now = start_time(pgid)
-    if now is not None:
-        return now == leader_start
-    marks = [environ_has(pid, JOB_ENV, job_id) for pid in group_pids(pgid)]
-    members = [mark for mark in marks if mark is not None]
-    return bool(members) and all(members)
+    stats = proc_stats()
+    leader_holds = leader_start is not None and start_time(pgid) == leader_start
+    found: list[tuple[int, int, bool]] = []
+    for pid, sid, start in stats:
+        in_session = sid == pgid
+        proven = in_session and (
+            leader_holds or (last_seen is not None and start < last_seen)
+        )
+        if proven:
+            found.append((pid, start, True))
+        elif job_id is not None and environ_has(pid, JOB_ENV, job_id):
+            found.append((pid, start, False))
+    return found
+
+
+def _signal_process(pid: int, start: int, signum: int) -> None:
+    """Signal `pid` only while it is the process that started at `start`. Never raises.
+
+    Where the interpreter has pidfds, the pidfd pins the process first, so the
+    start time read after it cannot belong to a later process with the same pid.
+    Without them (some Python builds lack `os.pidfd_open`) the start time is read
+    and then `kill` is sent: two steps, not one, as the group kill always was.
+    """
+    pidfd_open = getattr(os, "pidfd_open", None)
+    send = getattr(signal, "pidfd_send_signal", None)
+    if pidfd_open is None or send is None:
+        with contextlib.suppress(OSError):
+            if start_time(pid) == start:
+                os.kill(pid, signum)
+        return
+    try:
+        fd = pidfd_open(pid)
+    except OSError:
+        return  # it is gone: nothing is signalled on a guess
+    try:
+        if start_time(pid) == start:
+            send(fd, signum)
+    except OSError:
+        pass
+    finally:
+        os.close(fd)
 
 
 async def _kill_group(
-    pgid: int, leader_start: int | None, job_id: str, grace: float = ORPHAN_GRACE_S
+    pgid: int,
+    leader_start: int | None,
+    *,
+    last_seen: int | None,
+    grace: float = ORPHAN_GRACE_S,
 ) -> None:
-    """SIGTERM the group, wait `grace`, SIGKILL what is left, wait again (§24).
+    """SIGTERM the job's processes, wait `grace`, SIGKILL what is left, wait again.
 
-    Before each signal the group must still be the job's (`_group_is_the_jobs`).
+    §24's group kill, one process at a time: before each signal the processes are
+    read again and only those §29's session proof still shows are the job's
+    (`_job_processes`) are signalled. A member of the group that is not proven
+    (the `HANDS_JOB` mark alone, a foreign session, a fork after `last_seen`) is
+    never signalled.
     """
+    remaining: set[tuple[int, int]] = set()
     for signum in (signal.SIGTERM, signal.SIGKILL):
-        if not _group_is_the_jobs(pgid, leader_start, job_id):
+        targets = [
+            (pid, start) for pid, start, proven in _job_processes(pgid, leader_start, last_seen)
+            if proven
+        ]
+        if not targets:
             return
-        with contextlib.suppress(ProcessLookupError, PermissionError):
-            os.killpg(pgid, signum)
+        for pid, start in targets:
+            _signal_process(pid, start, signum)
         deadline = time.monotonic() + grace
-        while group_pids(pgid):
-            if time.monotonic() >= deadline:
+        while True:
+            live = {(pid, start) for pid, _sid, start in proc_stats()}
+            remaining = set(targets) & live
+            if not remaining or time.monotonic() >= deadline:
                 break
             await asyncio.sleep(0.02)
-        else:
+        if not remaining:
             return
-    log.warning("process group %d still has members after SIGKILL: %s", pgid, group_pids(pgid))
+    log.warning(
+        "job group %d still has processes after SIGKILL: %s",
+        pgid,
+        sorted(pid for pid, _start in remaining),
+    )
 
 
 async def _systemctl(*args: str, timeout: float = PROBE_S) -> str | None:
