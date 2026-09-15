@@ -44,7 +44,13 @@ Base of the mission: 723dbeb (`plan: mission 13 kit (DESIGN v3.12)`).
       `.claude/hooks/bash_guard.py` ($CLAUDE_PROJECT_DIR / relative resolved
       against the driver dir, other `$` fails); max_consults anchor = latest
       of kickoff, kit apply, daemon start (restart mid-mission resets)
-- [ ] U5 Who grace (§29; SF9)
+- [x] U5 Who grace (§29; SF9) 9ca89cf — `[who] grace_s` (default 60,
+      number ≥ 0, unknown keys refused); from the spool's job records
+      (works with handsd down): a job with no `session_id` that ended within
+      the grace (inclusive) excludes each transcript in its role's cwd folder
+      whose first `timestamp` (first 20 lines) lies in [started, ended];
+      boundary tested with an injected clock; a human session begun in that
+      folder during the job is hidden until the grace passes (documented)
 - [ ] U6 Two projects on one laptop (§29)
 - [ ] U7 This repository's playbook (kickoff BUILDER-14)
 - [ ] U8 Final report (meta/FINAL-REPORT-13.md)
