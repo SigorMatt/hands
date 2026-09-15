@@ -19,7 +19,14 @@ Base of the mission: 723dbeb (`plan: mission 13 kit (DESIGN v3.12)`).
       handsd sets HANDS_CLONE on the driver job (<cwd>/repo, else cwd if a
       repo); doctor self-test uses ./repo; REVIEW-12 probes blocked both
       modes; REVIEW-11 normal-mode allowed rows kept
-- [ ] U2 The sweep after the reap (§29; H-025 b; H-023; blocker 3)
+- [x] U2 The sweep after the reap (§29; H-025 b; H-023; blocker 3) ea7f1bc —
+      descent by sid == job pid and start ticks < last-seen-alive ticks
+      (recorded at spawn, each 50 ms poll, sweep start) or cgroup scope;
+      HANDS_JOB mark neither required nor sufficient (mark rule removed,
+      H-023 resolved); per-process signal, every orphan entry carries
+      `killed`; `runner.pipe_timeout_s` default 10; residual in INTEGRATION;
+      two monitor orphan fakes linger 0.5 s and the cancel test waits for an
+      observation after the fork (else the fork is in the residual interval)
 - [ ] U3 Kit transport and kit check (§29; blocker 2; SF1, SF6, SF7)
 - [ ] U4 Consult edges (§29; SF3, SF4, SF5)
 - [ ] U5 Who grace (§29; SF9)
