@@ -58,16 +58,17 @@ then an install (`uv tool install --force`) and a driver-kit refresh.
   review; the driver role is enabled. Mission 15: review 14, the role, its guard, `hands kit file`, the
   playbook mode and auto-approval, escalation conditions — DONE 2026-09-16,
   review 15 found the guard's `for`/`${…}` hole (role mode regressed).
-  Mission 16 (closer): the guard's language finished, review 15, H-030..32.
-  Mission 17: `reply <secret> <text>`
+  Mission 16 (closer): the guard's language finished, review 15, H-030..32
+  — DONE 2026-09-16; review 16 found no guard hole; the driver role is
+  enabled. Mission 17: review 16 (the autonomy path), `reply <secret> <text>`
   on the command topic delivered as a `keep` to the architect's last
   session with its answer on the events topic, and self-hosted ntfy behind
   the Tailscale tunnel (free text about a project no longer crosses a
   public broker). Gate: one hands mission planned on the phone, handed to
   the role at the switch point, and run to a reviewed-clean stop with no
   human action; one escalation answered over `reply`.
-  Requires: a review that finds no hole in the finished language (mission
-  16's), then the driver role and the architect role enabled, and one real
+  Requires: the driver role enabled (done 2026-09-17), the architect role
+  enabled after review 17 finds the autonomy path closed, and one real
   consultation graded by a review.
 - **M5 spanweave integration** — INSTRUCTION PASTE DUE: the spanweave
   Project gets its own copy, parameters filled in.

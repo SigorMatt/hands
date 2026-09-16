@@ -20,7 +20,9 @@ item names the mission it is scheduled for; unscheduled items say so.
 
 ## Mission 15 — DONE 2026-09-16 (review 15: blockers=4; the guard's `for`/`${…}` hole, role mode regressed; driver role disabled again).
 
-## Mission 16 (scheduled 2026-09-16) — the guard's language finished (H-033), review 15, H-030..H-032, task_killed → notify. Spec: DESIGN v3.15 §32.
+## Mission 16 — DONE 2026-09-16 (review 16: blockers=2, neither the guard; driver role enabled 2026-09-17).
+
+## Mission 17 (scheduled 2026-09-17) — review 16 (the autonomy path), `reply`, self-hosted ntfy. Spec: DESIGN v3.16 §33.
 
 - Review 11 blockers 1–5 and should-fix 1–9; the guard rewritten on shlex
   tokens; consult stops in the engine; H-022 resolved. Spec: DESIGN v3.11
@@ -51,7 +53,7 @@ item names the mission it is scheduled for; unscheduled items say so.
    the architect's last session id.
 6. `hands doctor` reports the architect role like the driver role.
 
-## Mission 17 — talking to the architect (decided 2026-09-15; ROADMAP M4c)
+## (specified in DESIGN §33, scheduled as mission 17) talking to the architect (decided 2026-09-15; ROADMAP M4c)
 
 1. `reply <secret> <text>` on `cmd_topic`: delivered as `hands send --role
    architect --context keep` to the architect's last session; its reply's

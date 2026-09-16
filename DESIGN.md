@@ -1,12 +1,13 @@
-# hands — DESIGN v3.15
+# hands — DESIGN v3.16
 
 Machinery that replaces the human relay between the planning brain and the two
 Claude Code roles (builder, aux) on the Ubuntu laptop, and that keeps a series
 moving without a human while everything goes by plan. Working name: `hands`.
 The method it serves is described in WORKING-MODEL.md (agile-skills) and
 OPERATING-MODEL.md (spanweave); hands changes the topology, not the method.
-v3.15 (2026-09-16) folds in the mission 15 review and finishes the guard's
-language; changes are in §32; earlier changes in §31–§17.
+v3.16 (2026-09-17) folds in the mission 16 review (the guard held; the
+autonomy path did not) and specifies `reply` and self-hosted ntfy; changes
+are in §33; earlier changes in §32–§17.
 
 Status: proposal, 2026-09-10. Items marked DECIDED were settled in discussion.
 
@@ -1406,3 +1407,53 @@ direct send to any role whose start is the engine's (`driver`,
 from the harness backgrounding a long foreground command and reaping it;
 the example playbook and this repository's map it to `notify`, and a job
 that ends `failed` is what stops.
+
+---
+
+## 33. Changes from v3.15 (mission 16 review; talking to the architect)
+
+The guard held review 16 (no blocker names it). The driver role is enabled
+as of 2026-09-17; the architect role stays off until this mission's review.
+
+The autonomy path (review 16 blockers 1, 2; should-fix 1, 5):
+- `kit_file` runs `check_kit` on the bytes it stores, against the builder's
+  clone, and refuses a failing kit with the check's output; the engine
+  approves only an apply whose stored `kit_id` records a passing check;
+  a consultation may file at most one kit, and its name must equal the
+  name the architect's `VERDICT: next kit <name>` states, else the apply
+  is denied by the engine and the consultation ends `escalate`.
+- Zip entries are judged by the central directory's names, which are what
+  extraction uses; an entry whose local-header name differs from its
+  central-directory name is refused, as is any name that resolves into
+  `.git/`, `.claude/`, or outside the repository; both the daemon and
+  `kit check` share the one judge.
+- `kit check` on a kit that carries a role-mode playbook judges the
+  playbook's role requirements against the repository's config the way
+  `handsd` will at load, and says so.
+
+Architect mode and doctor (should-fix 2, 3, 4): `cp`/`mv` refuse a target
+that resolves through a symlink to outside `HANDS_KITS`, and `HANDS_KITS`
+itself must not be a symlink; doctor resolves every path it checks and
+fails a role row when the settings disable a hook, switch the matcher, or
+name a different command; the row prints what it verified.
+
+Consult prompt, notifications, sweep text (should-fix 6, 7, 8): the "next
+unmet milestone" is the first roadmap entry whose heading is not marked
+DONE, and a test pins it on a fixture roadmap; daemon start publishes one
+notification even when a queued job starts within the same second; the
+sweep's messages name no cause.
+
+Mission 17, talking to the architect (backlog; ROADMAP M4c):
+- `reply <secret> <text>` on `cmd_topic`: delivered as `hands send --role
+  architect --context keep` to the architect's last session (refused when
+  no session exists or a consultation is running); the reply's text is
+  published on `ntfy_topic` with title `architect`; one job per turn,
+  `origin: phone`; the text is stored verbatim in the job record.
+- The escalation notification carries the architect's last session id and
+  the exact `claude --resume <id>` line for the Code tab route.
+- Self-hosted ntfy: `docs/INTEGRATION.md` describes running ntfy in a
+  container on the laptop with access control (topics require a token),
+  reachable through the Tailscale tunnel; `[notify] ntfy_url` and
+  `[notify] ntfy_token` (sent as a bearer on publish and subscribe); the
+  phone app subscribes with the same token. Free text about a project
+  never crosses a public broker once this is set.
