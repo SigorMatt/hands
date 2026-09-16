@@ -113,7 +113,7 @@ message = "Aux job failed"
 
 [[rule]]
 on = "monitor.task_killed"
-then = "stop"
+then = "notify"
 message = "The harness killed a task inside a role session"
 
 [[rule]]

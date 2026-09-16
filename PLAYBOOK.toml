@@ -131,7 +131,7 @@ message = "A held job was denied"
 # started, did not finish with it. Both call the human.
 [[rule]]
 on = "monitor.task_killed"
-then = "stop"
+then = "notify"
 message = "A task inside a role job was killed"
 
 [[rule]]

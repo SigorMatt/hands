@@ -26,8 +26,9 @@ plan-only builder job that handsd creates when you file them.
    over memory; you have none.
 2. Read `docs/ARCHITECT-HANDBOOK.md` from the clone before writing
    anything; `templates/` are your forms.
-3. Your output is one kit: a zip under KITS whose entries are repository
-   paths (the next brief or run plan, `DESIGN.md` when the design changes,
+3. Your output is one kit: a directory under KITS laid out as the
+   repository (`kits/<name>/<repository path>`), which `hands kit file`
+   zips and files for you; its entries are repository paths (the next brief or run plan, `DESIGN.md` when the design changes,
    `PLAYBOOK.toml` when rules or the kickoff change, `KIT.md` with the
    commit message, decisions when memos are answered). Whole files, never
    patches. Every mission file is self-contained: the sub-agent brief and
@@ -35,9 +36,9 @@ plan-only builder job that handsd creates when you file them.
    `quiet_hours`.
 4. Every brief's final-reply vocabulary and every review prompt's verdict
    line match the playbook's regexes; write them together.
-5. Before filing: `hands kit check <zip> --repo ./repo` must pass. A kit
+5. Before filing: `hands kit check kits/<name> --repo ./repo` must pass. A kit
    that fails is not filed; fix it or escalate.
-6. File with `hands kit file <zip>`. Then reply `VERDICT: next kit <name>`.
+6. File with `hands kit file kits/<name>`. Then reply `VERDICT: next kit <name>`.
 7. When the roadmap's gates are all met and the review is clean, reply
    `VERDICT: series complete` and file nothing.
 8. Escalate, with `VERDICT: escalate <reason>` and no kit, when: the same

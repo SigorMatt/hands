@@ -1,13 +1,12 @@
-# hands — DESIGN v3.14
+# hands — DESIGN v3.15
 
 Machinery that replaces the human relay between the planning brain and the two
 Claude Code roles (builder, aux) on the Ubuntu laptop, and that keeps a series
 moving without a human while everything goes by plan. Working name: `hands`.
 The method it serves is described in WORKING-MODEL.md (agile-skills) and
 OPERATING-MODEL.md (spanweave); hands changes the topology, not the method.
-v3.14 (2026-09-16) folds in the mission 14 review (the guard's command
-table) and specifies mission 15, the architect role; changes are in §31;
-earlier changes in §30–§17.
+v3.15 (2026-09-16) folds in the mission 15 review and finishes the guard's
+language; changes are in §32; earlier changes in §31–§17.
 
 Status: proposal, 2026-09-10. Items marked DECIDED were settled in discussion.
 
@@ -234,7 +233,7 @@ Job record (returned verbatim, stored forever):
     limit             # {category, message, reset_at} when state == limited
     failure_reason    # when failed: harness_terminated | nonzero_exit |
                       # no_final_result | error_result | no_num_turns | spawn_error
-    gate              # {reason, decided_by: cli|driver|phone, decided_at, quote?}
+    gate              # {reason, decided_by: cli|driver|phone|playbook, decided_at, quote?}
     resumed_from      # job id, when this job is an auto-resume
 
 Rules:
@@ -1343,3 +1342,67 @@ Mission 15, the architect role (§8, §10, §11, §26, §27):
   error.
 - `architect/` in the repository: `CLAUDE.md`, `settings.json`, `README.md`
   (the switch-point procedure and the deliverables of the handbook §12).
+
+---
+
+## 32. Changes from v3.14 (mission 15 review; the guard's language, finished)
+
+The guard's language, final (review 15 blocker 1; reviews 11–15):
+- Besides §30's refusals, the guard refuses `$` anywhere, `{` and `}`
+  anywhere, and any of the shell's reserved words appearing as a word
+  (`for while until if then else elif fi do done case esac select function
+  in time coproc ! [[ ]]`), in every mode. What remains is words, `'…'` and
+  `"…"` quotes, and the separators `; && || | &`. There is no expansion,
+  no control flow, no redirection and no comment in that language, so a
+  segment the guard allows can run only a table command with table options.
+- The option tables judge every word, including values, after that rule;
+  a value that is not a plain word is refused (`wc --files0-from=`, `grep
+  -f`, `date --set`, `tail -f` outside `hands log` are not in the tables
+  and are refused by name).
+- Role and architect modes are strict subsets of that language; the
+  driver-role regression is closed by construction. §30's condition stands:
+  the driver role and the architect role are enabled after a review finds
+  no hole in this language. `docs/INTEGRATION.md` states the language in
+  full in one paragraph and lists the tables.
+
+Architect mode (blocker 2; H-030): `unzip` leaves the table; `zip` leaves
+the table; the architect stages a directory `kits/<name>/<repository
+paths>` and files it with `hands kit file <dir>`, which builds the zip
+itself, checks it, and files the held apply (`origin: architect`). `mkdir`,
+`cp`, `mv` remain, every path argument under `HANDS_KITS` and no option that
+names another path. The Write/Edit matcher remains the only way to create
+file content.
+
+Autonomy (blocker 3, should-fix 1, 2, 3): the engine approves a held job
+only when it is an apply hands itself created from a kit filed by the
+architect role (a `kit_id` the daemon minted, checked against the spool),
+never by origin alone, and only when the current playbook is in role mode
+with `autonomous`; a socket client cannot set `origin: architect`. The
+engine's kickoff-after-apply rule fires only for an apply of that kind.
+`next kit` waits for the specific apply the architect filed (its `kit_id`),
+and stops if none is filed within `[series] kit_wait_s` (default 600). The
+architect's budget anchors to the playbook's `[series] name`, and a rename
+is refused unless `[limits] max_architect_consults` is restated.
+
+Config and doctor (blocker 4, should-fix 6): `[series] architect = "role"`
+without `[roles.architect]` is a config error at load, refused by `handsd`
+and by `hands kit check` when the kit carries the playbook; doctor's
+architect row checks the clone's push URL is disabled, `HANDS_KITS` exists
+and is under the cwd, both hook matchers name the guard, and the guard's
+self-test passes in architect mode.
+
+Consult prompt and notifications (should-fix 4, 5, 7): the architect's
+prompt carries the roadmap's next unmet milestone (the first whose gate
+is not marked DONE), not the whole file, plus the file's path; daemon
+start publishes exactly one notification and a test binds the count; the
+guard's role-mode reads are confined to the clone and the spool's own
+paths, and the refusal says so.
+
+H-031: `playbook` is a `decided_by` value (§6). H-032: `Api.send` refuses a
+direct send to any role whose start is the engine's (`driver`,
+`architect`); they are started by `consult` only.
+
+`monitor.task_killed`: the detector cannot tell a reap from a `TaskStop` or
+from the harness backgrounding a long foreground command and reaping it;
+the example playbook and this repository's map it to `notify`, and a job
+that ends `failed` is what stops.
