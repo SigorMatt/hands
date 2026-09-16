@@ -8,6 +8,7 @@ Files under `~/.hands/<project>/` (§29: one spool per project; the root is
     inbox.jsonl         append-only event list
     inbox.acks.jsonl    append-only ack markers, so acking never rewrites history
     pipeline.json       the playbook engine's counters (§10)
+    kits/<kit_id>/      a kit `hands kit file` filed: `<name>.zip` and `kit.json` (§32)
     handsd.sock         the daemon's socket, by default (§13)
 
 The flat layout of missions before §29 kept the same files directly under
@@ -22,6 +23,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import secrets
 import time
 from collections.abc import Callable, Iterable, Sequence
@@ -51,6 +53,7 @@ __all__ = [
     "flat_layout",
     "migrate_flat",
     "new_job_id",
+    "kit_apply_problem",
     "new_kit_id",
     "resolve_kinds",
     "resolve_under_roots",
@@ -113,6 +116,13 @@ ORIGINS = frozenset(
 #: §31: named, because three modules test against it — `Api.kit_file` writes it,
 #: `Api.decide_from_playbook` refuses anything else, and the engine reads it.
 ARCHITECT_ORIGIN = "architect"
+#: §32: where handsd stores a kit the architect role filed, under the spool: one
+#: directory per `kit_id`, outside `HANDS_KITS`, holding `<name>.zip` and the record
+#: `kit.json` — the kit's id, its name, and the architect job it was filed during.
+KITS_DIR = "kits"
+KIT_RECORD = "kit.json"
+#: `new_kit_id`'s shape: 16 lowercase hex digits.
+KIT_ID_RE = re.compile(r"[0-9a-f]{16}")
 
 # §11 event kinds. Closed on purpose: a unit that needs a new kind adds it here,
 # where `hands wait --for <kind>` and the playbook can see it.
@@ -448,6 +458,48 @@ class Spool:
         for directory in (self.root, self.jobs_dir, self.roles_dir):
             directory.mkdir(parents=True, exist_ok=True)
 
+    # ---------------------------------------------------------------- kits
+
+    def kit_dir(self, kit_id: str) -> Path:
+        """`kits/<kit_id>/` (§32); a `kit_id` not of `new_kit_id`'s shape is refused."""
+        if not isinstance(kit_id, str) or not KIT_ID_RE.fullmatch(kit_id):
+            raise SpoolError(f"bad kit_id {kit_id!r}")
+        return self.root / KITS_DIR / kit_id
+
+    def store_kit(self, kit_id: str, *, name: str, data: bytes, consultation: str) -> Path:
+        """§32: keep a filed kit — its zip and its record — and return the zip's path.
+
+        The directory is created new (an existing one is not this kit's), mode 0700;
+        the zip is written and flushed to disk before the record, so a record never
+        names a zip that is not there. `consultation` is the architect job the kit
+        was filed during; the engine reads the record back (`kit_apply_problem`).
+        """
+        directory = self.kit_dir(kit_id)
+        directory.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        directory.mkdir(mode=0o700)
+        path = directory / f"{name}.zip"
+        with path.open("xb") as out:
+            out.write(data)
+            out.flush()
+            os.fsync(out.fileno())
+        record = {"kit_id": kit_id, "name": name, "consultation": consultation}
+        atomic_write(directory / KIT_RECORD, json.dumps(record, sort_keys=True))
+        return path
+
+    def read_kit_record(self, kit_id: str) -> dict[str, Any] | None:
+        """The record `store_kit` wrote for `kit_id`, or None when there is none that
+        reads as one (a bad id, no file, not JSON, a field missing or not a string)."""
+        try:
+            data = json.loads((self.kit_dir(kit_id) / KIT_RECORD).read_text(encoding="utf-8"))
+        except (SpoolError, OSError, ValueError):
+            return None
+        if not isinstance(data, dict):
+            return None
+        keys = ("kit_id", "name", "consultation")
+        if sorted(data) != sorted(keys) or not all(isinstance(data[key], str) for key in keys):
+            return None
+        return data
+
     # ---------------------------------------------------------------- jobs
 
     def job_path(self, job_id: str) -> Path:
@@ -751,3 +803,51 @@ def migrate_flat(hands_dir: str | Path) -> Path | None:
         "spool.migrated", {"from": str(base), "to": str(target), "moved": moved}
     )
     return target
+
+
+# ------------------------------------------------------------ §32: filed kits
+
+
+def kit_apply_problem(spool: Spool, job: Job) -> str | None:
+    """Why `job` is not an apply hands itself filed from a kit the architect role
+    filed, or None when it is one (§32).
+
+    The engine's approval (`PlaybookEngine`), `Api.decide_from_playbook` and the
+    engine's kickoff rule all ask this, so "never by origin alone" is said once. It
+    is one when it is a builder job of origin `architect` whose gate is `apply
+    <name>`, whose `kit_id` has `new_kit_id`'s shape, whose record `kits/<kit_id>/
+    kit.json` names that id and that `<name>`, whose `<name>.zip` is stored beside
+    it, whose record names an architect job in the spool as the consultation it was
+    filed during, and no other job carries that `kit_id`. It judges the record, not
+    the job's state: the caller asks for `held` or `done`.
+    """
+    if job.origin != ARCHITECT_ORIGIN:
+        return f"its origin is {job.origin!r}, not {ARCHITECT_ORIGIN!r}"
+    if job.role != "builder":
+        return f"it is a {job.role} job, and a kit's apply is the builder's"
+    reason = job.gate.get("reason") if isinstance(job.gate, dict) else None
+    if not isinstance(reason, str) or not reason.startswith("apply "):
+        return "its gate is not a kit's `apply <name>`"
+    name = reason[len("apply "):]
+    if job.kit_id is None:
+        return "it carries no kit_id"
+    if not KIT_ID_RE.fullmatch(job.kit_id):
+        return f"its kit_id {job.kit_id!r} is not one handsd mints"
+    record = spool.read_kit_record(job.kit_id)
+    if record is None:
+        return f"handsd holds no record of kit_id {job.kit_id}"
+    if record["kit_id"] != job.kit_id or record["name"] != name:
+        return f"kit_id {job.kit_id} was filed as kit {record['name']!r}, not {name!r}"
+    if not (spool.kit_dir(job.kit_id) / f"{name}.zip").is_file():
+        return f"the zip of kit_id {job.kit_id} is not stored"
+    try:
+        during = spool.load_job(record["consultation"])
+    except SpoolError:
+        return f"kit_id {job.kit_id} names no job it was filed during"
+    if during.role != "architect":  # the role, `hands.config.ARCHITECT_ROLE`
+        return f"kit_id {job.kit_id} was filed during a {during.role} job, not the architect's"
+    others = [other.id for other in spool.list_jobs()
+              if other.kit_id == job.kit_id and other.id != job.id]
+    if others:
+        return f"kit_id {job.kit_id} is carried by another job too ({', '.join(others)})"
+    return None

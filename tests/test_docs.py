@@ -1634,3 +1634,67 @@ def test_the_handbook_section_12_onboards_the_architect_role() -> None:
     assert rules
     copied = [line for line in rules if line in section]
     assert not copied, "handbook §12 copies architect/CLAUDE.md:\n" + "\n".join(copied)
+
+
+# ------------------------------------- autonomy and origins (§32; mission 16 U3)
+
+
+def test_the_integration_doc_says_the_send_refusals_of_section_32() -> None:
+    """H-032 and blocker 3, in the doc's words: both consulted roles are refused a
+    direct send, and no socket client sets `origin: architect`. The stale sentence
+    that the architect send is "not refused today" is gone."""
+    from hands.config import CONSULT_ROLES
+
+    assert CONSULT_ROLES == ("driver", "architect")
+    section = flattened(integration().split(ARCHITECT_SECTION, 1)[1].split("\n## ", 1)[0])
+    for said in (
+        "`hands send --role architect` is refused as `--role driver` is (finding H-032, §32)",
+        "A socket client cannot set `origin: architect` (`hands send` refuses it, naming §32)",
+    ):
+        assert said in section, f"the architect section does not say {said!r}"
+    assert "not refused today" not in flattened(integration())
+
+
+def test_the_docs_say_what_the_engine_approves_and_when_the_kickoff_fires() -> None:
+    """§32: the approval is for an apply hands filed from a kit the architect role
+    filed during a consultation (a daemon-minted `kit_id` checked against the spool),
+    never by origin alone; the kickoff follows only that apply, approved by the
+    engine. Both docs say it; neither still says "a held apply of `origin: architect`
+    is approved" as if the origin were the condition."""
+    series = playbook_doc("## The series and its kickoff (`[series]`)")
+    section = flattened(integration().split(ARCHITECT_SECTION, 1)[1].split("\n## ", 1)[0])
+    for where, text in (("docs/PLAYBOOK.md [series]", series), ("INTEGRATION", section)):
+        for said in ("never by origin alone", "`kit_id`", "checked against the spool"):
+            assert said in text, f"{where} does not say {said!r}"
+    kickoff = playbook_doc("## The series and its kickoff (`[series]`)")
+    assert "fires only for that apply" in kickoff
+    for stale in (
+        "a **held** apply of `origin: architect` — the job `hands kit file` files — is approved",
+        "a held apply of `origin: architect` is approved by the engine itself",
+    ):
+        assert flattened(stale) not in flattened(integration()), stale
+        doc = flattened((ROOT / "docs" / "PLAYBOOK.md").read_text(encoding="utf-8"))
+        assert flattened(stale) not in doc, stale
+
+
+def test_the_playbook_doc_says_kit_wait_s_and_the_rename_rule() -> None:
+    """§32's two new rules, with the default from the code: `next kit` waits for its
+    kit by `kit_id` up to `kit_wait_s`, and a series rename restates the budget."""
+    from hands.playbook import DEFAULT_KIT_WAIT_S
+
+    series = playbook_doc("## The series and its kickoff (`[series]`)")
+    assert f"`kit_wait_s` (default {DEFAULT_KIT_WAIT_S})" in series
+    consult = playbook_doc('## Consult (`then = "consult"`, DESIGN §27, §31)')
+    for said in ("`kit_wait_s`", "under the name the verdict gives"):
+        assert said in consult, f"the consult section does not say {said!r}"
+    for said in ("a rename", "restated", "max_architect_consults"):
+        assert said in consult, f"the consult section does not say {said!r}"
+
+
+@pytest.mark.parametrize("path", TEMPLATES, ids=lambda path: path.name)
+def test_each_templates_architect_block_carries_kit_wait_s(path: Path) -> None:
+    from hands.playbook import DEFAULT_KIT_WAIT_S, parse_playbook
+
+    text, _blocks = uncommented(path.read_text(encoding="utf-8"))
+    assert "kit_wait_s" in text
+    assert parse_playbook(text, path=path).kit_wait_s == DEFAULT_KIT_WAIT_S

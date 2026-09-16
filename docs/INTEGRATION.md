@@ -281,10 +281,11 @@ Notes that are easy to get wrong:
 - **Who decided a gate** (§6, §8, §31). A decided job's `gate.decided_by` is one
   of `cli` (`hands approve|deny` at the laptop), `driver` (`--human-confirmed`
   with the human's quote), `phone` (the ntfy command channel, below) or
-  `playbook` — the engine releasing a held apply of `origin: architect` under a
-  playbook that sets `[series] architect = "role"` and `autonomous = true`,
-  whose gate reason names the standing approval it acted on (§31; §6's record
-  line lists the first three, finding H-031).
+  `playbook` — the engine releasing a held apply hands filed from a kit the
+  architect role filed (a `kit_id` handsd minted, §32) under a playbook that
+  sets `[series] architect = "role"` and `autonomous = true`, whose gate reason
+  names the standing approval it acted on (§31; §6's record line lists the
+  first three, finding H-031).
 - **An empty string is refused at load, for every optional key** (§20): `""` or
   blanks only is neither the key's absent meaning nor a usable value — an empty
   `ops.monitor_cmd` would have made the *ops directory* the monitor script. The
@@ -751,9 +752,9 @@ directory the role may write to. `permission_flags` must be empty, as for the
 driver: a `[roles.architect]` carrying one does not load, so `settings.json`
 and the hook are the law. handsd starts the role through a playbook `consult`
 action and nothing else does: no playbook `send` can name it (a send's role is
-`builder` or `aux`), and neither the phone's `go` nor its buttons reach it.
-Unlike `--role driver`, a `hands send --role architect` at the laptop is not
-refused today (finding H-032).
+`builder` or `aux`), and neither the phone's `go` nor its buttons reach it. A
+`hands send --role architect` is refused as `--role driver` is (finding H-032,
+§32): the refusal names §32 and the command exits non-zero.
 
 Architect mode is the driver's read-only table plus `hands kit check` and
 `hands kit file`, and `mkdir -p`, `cp -r` and `mv` only with every path
@@ -795,9 +796,9 @@ the check), mints the `kit_id`, records it on the job, and files the held apply
 the phone's `kit` files, `origin: architect`, whose prompt names that zip. The
 phone's `kit` apply records a `kit_id` handsd mints too. What the tests prove is
 that command against a real daemon socket with the fake `claude`; a real
-architect session filing a kit that a builder then applies **is not proven**,
-and review 15's other blockers (the engine's approval, the config check) are
-later units of mission 16. Until a review finds them closed, run `[series]
+architect session filing a kit that a builder then applies **is not proven**;
+the engine's approval of such a kit is described below (§32, mission 16 U3), and
+the config check is a later unit of mission 16. Until a review finds them closed, run `[series]
 architect = "role"` as an experiment, not as the way a series is driven.
 
 **The switch point.** The role takes over from the phone architect at the fully
@@ -812,10 +813,19 @@ the next kit sets `architect = "phone"`. One architect at a time.
 
 **`[series] architect` and `autonomous`.** `architect = "role"` says which
 architect this series has; `autonomous = true` says the engine may release what
-that architect files. With both set, a held apply of `origin: architect` is
-approved by the engine itself (`decided_by: playbook`, the fourth value the gate
-record carries) and `[series] kickoff` is sent when the apply replies `VERDICT:
-kit applied` — a rule the engine adds, which no playbook writes. Read that
+that architect files. With both set, the engine approves a held job itself
+(`decided_by: playbook`, the fourth value the gate record carries) only when it
+is an apply hands filed from a kit the architect role filed (§32): the builder
+apply `hands kit file` files, whose `kit_id` handsd minted and checked against
+the spool — the stored zip and its record naming the kit and the consultation
+it was filed during — never by origin alone. A socket client cannot set `origin:
+architect` (`hands send` refuses it, naming §32), handsd takes `hands kit file`
+only while an architect consultation runs or the engine waits for its `next
+kit`, and any other hold stays held for you. `[series] kickoff` is sent when
+that apply, approved by the engine, replies `VERDICT: kit applied` — a rule the
+engine adds, which no playbook writes. What this cannot tell apart is another
+process of your user calling the socket during a consultation from the
+architect's own `hands kit file`. Read that
 plainly before you turn it on: **the human who approves an `autonomous`
 playbook is approving every apply the architect files under it.** The playbook
 is itself a gated kit apply, so that approval is a real one, made once; it is
@@ -826,8 +836,10 @@ a config error, named in the stop and in `hands doctor`.
 
 **When it escalates.** The architect's reply begins with exactly one of
 `VERDICT: next kit <name>`, `VERDICT: series complete` or `VERDICT: escalate
-<reason>`. `next kit` waits for the apply it filed (and stops if it filed
-none); the other two stop the pipeline and notify. `architect.*` is not an
+<reason>`. `next kit` waits for the apply it filed during that consultation,
+by its `kit_id` and under the verdict's name, for up to `[series] kit_wait_s`
+(default 600) — and stops if none is filed; the other two stop the pipeline
+and notify. `architect.*` is not an
 event a playbook can match: the engine reads the verdict itself. An
 escalation's stop reason carries the architect's own reason, its session id and
 the line that re-opens it — `claude --resume <id>` — so the phone tells you the
@@ -839,7 +851,9 @@ in a row, judged by the architect) and `escalate_on = ["blocker-unanswered",
 "milestone-missing", "budget-exhausted"]`. hands can see only the last of them:
 `[limits] max_architect_consults` (default 12) counts the architect
 consultations of a series, and the engine stops with `budget-exhausted` itself
-when they are spent. The consultation is fired by a `consult` rule on
+when they are spent. The series is `[series] name`: a role-mode playbook that
+renames it is refused unless it restates `max_architect_consults` in its
+`[limits]`, so a kit cannot reset the count by renaming the series alone. The consultation is fired by a `consult` rule on
 `aux.done` with `role = "architect"` — the review outcome, and no other event
 (docs/PLAYBOOK.md, "Consult").
 

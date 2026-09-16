@@ -279,6 +279,51 @@ def test_send_refuses_the_driver_role_which_only_a_consult_starts(
     drive(body)
 
 
+def test_send_refuses_every_role_whose_start_is_the_engines(
+    tmp_home: Path, workdir: Path
+) -> None:
+    """H-032, §32: "`Api.send` refuses a direct send to any role whose start is the
+    engine's (`driver`, `architect`); they are started by `consult` only". The CLI
+    exits non-zero with a message naming §32, and nothing is filed."""
+    from hands.api import ApiError
+    from hands.config import CONSULT_ROLES
+
+    assert CONSULT_ROLES == ("driver", "architect")
+    extra = "".join(f'\n[roles.{role}]\ncwd = "{workdir}"\n' for role in CONSULT_ROLES)
+    write_project(tmp_home, config_body(tmp_home, workdir, extra=extra))
+
+    async def body(daemon: Daemon) -> None:
+        for role in CONSULT_ROLES:
+            code, out, err = await cli("send", "--role", role, "--context", "clear", "x")
+            assert code != 0, out
+            for word in ("§32", "consult", role):
+                assert word in strip_paths(err), err
+            with pytest.raises(ApiError):
+                await daemon.api.send(role=role, context="clear", prompt="x")
+        assert not Spool(tmp_home / ".hands" / PROJECT).list_jobs()
+
+    drive(body)
+
+
+def test_no_socket_client_sets_origin_architect(project: str) -> None:
+    """§32: "a socket client cannot set `origin: architect`" — the origin marks the
+    apply handsd files for the architect role's kit, and only `kit_file` sets it."""
+    from hands.cli import call
+
+    async def body(daemon: Daemon) -> None:
+        params = {"role": "builder", "context": "clear", "prompt": "x", "origin": "architect"}
+        with pytest.raises(Exception) as caught:
+            await asyncio.to_thread(call, daemon.socket_path, "send", params, project=PROJECT)
+        for word in ("§32", "origin", "kit file"):
+            assert word in strip_paths(str(caught.value)), caught.value
+        assert daemon.spool.list_jobs() == []
+        # Every other origin a client may name is still taken as it was.
+        job = await daemon.api.send(role="aux", context="clear", prompt="x", origin="phone")
+        assert job["origin"] == "phone"
+
+    drive(body)
+
+
 def test_send_reads_the_prompt_from_stdin(project: str) -> None:
     async def body(daemon: Daemon) -> None:
         out, err = io.StringIO(), io.StringIO()

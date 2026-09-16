@@ -341,7 +341,9 @@ under; read it there rather than here. What changes for you:
 - **One verdict line, and it is read by the engine, not by a rule.** Reply with
   exactly one of `VERDICT: next kit <name>`, `VERDICT: series complete` or
   `VERDICT: escalate <reason>`. File the kit *before* you reply `next kit`:
-  hands waits for the apply and stops if there is none.
+  hands waits for the apply of the kit you name — filed during this
+  consultation — for up to `[series] kit_wait_s` (default 600), and stops if
+  none is filed.
 - **When to escalate.** The conditions are written into the playbook:
   `gate_failures` (the same roadmap gate failing that many times in a row),
   `blocker-unanswered`, `milestone-missing`, and `budget-exhausted` — the

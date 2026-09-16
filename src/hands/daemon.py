@@ -136,9 +136,10 @@ class Daemon:
             enqueue=self._enqueue_resume,
             limits=self.limits,
             notify=self.notifier.notify,
-            # §31: the engine's own gate authority, for one case — a held apply of
-            # origin `architect` under an autonomous playbook. The method is not a
-            # command of §4, so no socket client can reach it.
+            # §31, §32: the engine's own gate authority, for one case — a held apply
+            # hands filed from a kit the architect role filed, under an autonomous
+            # playbook. The method is not a command of §4, so no socket client can
+            # reach it.
             approve=self.api.decide_from_playbook,
         )
         #: §24's command channel: on only when `[notify] cmd_topic` is set, which
@@ -389,6 +390,14 @@ class Daemon:
         if gate is None:
             self._admit(job)
         return job
+
+    def running(self, role: str) -> str | None:
+        """The id of the job this daemon's worker is running for `role`, or None.
+
+        §32: `Api.kit_file` asks it for the architect — a kit is accepted during a
+        consultation, and this in-memory slot, not a spool record anyone could
+        write, is what says one is running."""
+        return self._running.get(role)
 
     def _check_depth(self, role: str) -> None:
         depth = self.config.role(role).queue_depth

@@ -49,6 +49,7 @@ import hashlib
 import inspect
 import json
 import logging
+import math
 import os
 import re
 import subprocess
@@ -60,7 +61,15 @@ from typing import Any
 
 from hands.config import ARCHITECT_ROLE, CONSULT_ROLES, Config
 from hands.limits import LimitManager
-from hands.spool import ARCHITECT_ORIGIN, Job, Spool, SpoolError, atomic_write, now_iso
+from hands.spool import (
+    ARCHITECT_ORIGIN,
+    Job,
+    Spool,
+    SpoolError,
+    atomic_write,
+    kit_apply_problem,
+    now_iso,
+)
 
 __all__ = [
     "ACTIONS",
@@ -77,6 +86,7 @@ __all__ = [
     "ConsultAnchor",
     "DEFAULT_ARCHITECT_MODE",
     "DEFAULT_GATE_FAILURES",
+    "DEFAULT_KIT_WAIT_S",
     "DEFAULT_MAX_ARCHITECT_CONSULTS",
     "DEFAULT_MAX_CONSULTS",
     "DRIVER_VERDICTS",
@@ -186,6 +196,9 @@ ESCALATE_ON: tuple[str, ...] = ("blocker-unanswered", "milestone-missing", "budg
 DEFAULT_GATE_FAILURES = 2
 #: §31: `[limits] max_architect_consults` per series (default 12).
 DEFAULT_MAX_ARCHITECT_CONSULTS = 12
+#: §32: `[series] kit_wait_s`, the seconds `VERDICT: next kit <name>` waits for its
+#: kit to be filed before the pipeline stops (default 600).
+DEFAULT_KIT_WAIT_S = 600
 #: §31: the second role a `consult` starts — for one consultation on a review
 #: outcome, with no memory of the last one (the branch carries that).
 ARCHITECT = ARCHITECT_ROLE
@@ -263,7 +276,8 @@ LIMIT_KEYS: tuple[str, ...] = (
 #: goes when the table is used — TOML cannot hold `series = "…"` beside a
 #: `[series]` table (H-019).
 #: §31 adds the series' mode (`architect`, `autonomous`) and its escalation
-#: conditions (`gate_failures`, `escalate_on`), all refused at load like the rest.
+#: conditions (`gate_failures`, `escalate_on`), all refused at load like the rest;
+#: §32 adds `kit_wait_s`.
 SERIES_KEYS: tuple[str, ...] = (
     "name",
     "kickoff",
@@ -271,6 +285,7 @@ SERIES_KEYS: tuple[str, ...] = (
     "autonomous",
     "gate_failures",
     "escalate_on",
+    "kit_wait_s",  # §32
 )
 #: §11 (§25, decision 2026-09-12): the retired `[limits]` key, refused by name.
 RETIRED_LIMIT = "quiet_hours"
@@ -294,6 +309,11 @@ class PlaybookError(Exception):
 
 class PlaybookNotCommitted(PlaybookError):
     """The file on disk is not the committed copy (§10, §25): dirty or untracked."""
+
+
+class PlaybookSeriesRenamed(PlaybookError):
+    """§32: the loaded playbook names another series than the one the architect's
+    budget counts for, and does not restate `[limits] max_architect_consults`."""
 
 
 class PlaybookConfigError(PlaybookError):
@@ -509,6 +529,11 @@ class Playbook:
     escalate_on: tuple[str, ...] = ()
     #: §31: consultations of the architect role this series may start.
     max_architect_consults: int = DEFAULT_MAX_ARCHITECT_CONSULTS
+    #: §32: whether `[limits]` writes `max_architect_consults` out — "restated" —
+    #: which a playbook that renames the series must (`PlaybookEngine._load`).
+    architect_consults_restated: bool = False
+    #: §32: how long `VERDICT: next kit <name>` waits for its kit to be filed.
+    kit_wait_s: float = DEFAULT_KIT_WAIT_S
 
     @property
     def architect_is_autonomous(self) -> bool:
@@ -706,6 +731,8 @@ def parse_playbook(text: str, *, path: Path) -> Playbook:
         gate_failures=series["gate_failures"],
         escalate_on=series["escalate_on"],
         max_architect_consults=architect_consults,
+        architect_consults_restated="max_architect_consults" in limits,
+        kit_wait_s=series["kit_wait_s"],
     )
 
 
@@ -724,6 +751,7 @@ def _series(value: Any, path: Path) -> dict[str, Any]:
         "autonomous": False,
         "gate_failures": DEFAULT_GATE_FAILURES,
         "escalate_on": (),
+        "kit_wait_s": DEFAULT_KIT_WAIT_S,
     }
     if value is None:
         return series
@@ -789,6 +817,20 @@ def _series(value: Any, path: Path) -> dict[str, Any]:
                 f"which §31 does not; the conditions are: {', '.join(ESCALATE_ON)}"
             )
         series["escalate_on"] = tuple(conditions)
+
+    if "kit_wait_s" in value:
+        wait = value["kit_wait_s"]
+        if (
+            isinstance(wait, bool)
+            or not isinstance(wait, int | float)
+            or not math.isfinite(wait)
+            or wait <= 0
+        ):
+            raise PlaybookError(
+                f"{path}: [series] kit_wait_s must be a positive number of seconds — how long "
+                f"`VERDICT: next kit <name>` waits for its kit to be filed (§32), got {wait!r}"
+            )
+        series["kit_wait_s"] = wait
 
     return series
 
@@ -1140,8 +1182,11 @@ class PlaybookEngine:
       patterns exactly as a human's send does;
     * `enqueue` — the daemon's queue, for a `resume`, which §6 does not re-gate;
     * `approve` — `Api.decide_from_playbook`, §31's fourth gate authority, used
-      for one thing only: a held apply of origin `architect` under a playbook that
-      sets `[series] architect = "role"` and `autonomous = true`.
+      for one thing only: a held apply hands filed from a kit the architect role
+      filed (§32, `kit_apply_problem`) under a playbook that sets `[series]
+      architect = "role"` and `autonomous = true`;
+    * `sleep` — an attribute, `asyncio.sleep` by default: §32's `kit_wait_s` is
+      waited through it, so a test never waits one out (as `LimitManager.sleep`).
     """
 
     def __init__(
@@ -1177,6 +1222,12 @@ class PlaybookEngine:
         self.load_error: str | None = None
         self._loaded = False
         self._tasks: set[asyncio.Task[None]] = set()
+        #: §32: `kit_wait_s` is waited through this, so a test never waits one out.
+        self.sleep: Callable[[float], Awaitable[None]] = asyncio.sleep
+        #: §32: architect job id → (the kit name its `next kit` named, the wait's
+        #: task), for each `next kit` whose kit was not filed when the job ended.
+        #: In memory: a daemon restart forgets a wait (see `_architect_end`).
+        self._kit_waits: dict[str, tuple[str, asyncio.Task[None]]] = {}
 
     def daemon_start(self, started: str) -> None:
         """§29, §30: the daemon that owns this engine started at `started`.
@@ -1223,6 +1274,8 @@ class PlaybookEngine:
             if book is not None:
                 # §31: the one check that needs the playbook *and* the config.
                 check_series_roles(book, self.config)
+                # §32: and the one that needs the playbook *and* the pipeline's state.
+                self._check_series_rename(book)
         except PlaybookError as exc:
             self.playbook = None
             self.load_error = str(exc)
@@ -1233,6 +1286,8 @@ class PlaybookEngine:
                 what = "is not the committed copy"
             elif isinstance(exc, PlaybookConfigError):
                 what = "does not agree with this project's configuration"
+            elif isinstance(exc, PlaybookSeriesRenamed):
+                what = "renames the series without restating the architect's budget"
             else:
                 what = "cannot be read"
             await self.stop(
@@ -1261,10 +1316,38 @@ class PlaybookEngine:
             # §10 lets the playbook set §6's counter; §6 is the one that counts.
             self.limits.max_resumes = book.max_resumes
 
+    def _check_series_rename(self, book: Playbook) -> None:
+        """§32: "a rename is refused unless `[limits] max_architect_consults` is
+        restated". A rename is a loaded playbook in role mode (`architect = "role"`,
+        the mode whose architect the budget counts) whose `[series] name` is not the
+        one the anchor counts for (a name given or taken away included); restated is
+        the key written in that playbook's `[limits]`, whatever its value. Refused,
+        the anchor does not move, so the count goes on where it was. A phone-mode
+        playbook starts no architect and neither moves the anchor nor is refused."""
+        anchor = self.state.series_since
+        if (
+            book.architect != "role"
+            or anchor is None
+            or anchor.series == book.series
+            or book.architect_consults_restated
+        ):
+            return
+        raise PlaybookSeriesRenamed(
+            f"{book.path} names the series {book.series!r}, and the architect's budget counts "
+            f"for the series {anchor.series!r}: a rename is refused unless [limits] "
+            "max_architect_consults is restated in the playbook that renames it (§32)"
+        )
+
     def _anchor_series(self, book: Playbook) -> None:
         """§31: `max_architect_consults` counts per series, so the count needs a
         series to count for. The anchor is taken the first time a playbook loads and
-        moved only when the loaded playbook names another series (`SeriesAnchor`)."""
+        moved only when the loaded playbook names another series (`SeriesAnchor`).
+
+        §32: only a role-mode playbook takes or moves it — the budget is the architect
+        role's — and it moves on a rename only when `_check_series_rename` let the
+        playbook load, that is when the budget was restated."""
+        if book.architect != "role":
+            return
         anchor = self.state.series_since
         if anchor is not None and anchor.series == book.series:
             return
@@ -1361,7 +1444,7 @@ class PlaybookEngine:
         *,
         enforced: str | None = None,
     ) -> None:
-        candidates = self._engine_rules(book, event) + book.rules_for(event)
+        candidates = self._engine_rules(book, event, job) + book.rules_for(event)
         if enforced is not None:
             # §28: the playbook cannot remove this stop. A first matching `stop`
             # rule is the stop, with its message; any other rule does not fire.
@@ -1398,7 +1481,7 @@ class PlaybookEngine:
 
         await self._fire(chosen, event, job, match)
 
-    def _engine_rules(self, book: Playbook, event: str) -> list[Rule]:
+    def _engine_rules(self, book: Playbook, event: str, job: Job | None) -> list[Rule]:
         """§31: "a `builder.done` rule the engine adds, not the playbook".
 
         In role mode with `autonomous`, the engine behaves as if a `builder.done`
@@ -1416,8 +1499,15 @@ class PlaybookEngine:
         rule starts: the phone did not send it, the engine did. It therefore does
         not clear a stop (`UNPAUSE_ORIGINS`), and it anchors `max_consults` as any
         kickoff-prompted builder job does (`consults_used`).
+
+        §32: "the engine's kickoff-after-apply rule fires only for an apply of that
+        kind" — a job `kit_apply_problem` accepts, whose gate the engine itself
+        approved (`decided_by: playbook`). Any other `builder.done`, a `hands send`
+        replying `VERDICT: kit applied` among them, meets the playbook's rules only.
         """
         if event != "builder.done" or not book.architect_is_autonomous:
+            return []
+        if job is None or not self._engine_applied_kit(job):
             return []
         if book.kickoff is None:
             # Refused here rather than rendered into an empty prompt: §10 stops
@@ -1446,6 +1536,15 @@ class PlaybookEngine:
             )
         ]
 
+    def _engine_applied_kit(self, job: Job) -> bool:
+        """§32: an apply hands filed from the architect's kit, released by the engine."""
+        gate = job.gate if isinstance(job.gate, dict) else {}
+        return (
+            gate.get("decided_by") == ORIGIN
+            and gate.get("decision") == "approved"
+            and kit_apply_problem(self.spool, job) is None
+        )
+
     async def _approve_architect_hold(self, book: Playbook, job: Job | None) -> bool:
         """§31: release a held apply the architect filed, `decided_by: playbook`.
 
@@ -1458,8 +1557,17 @@ class PlaybookEngine:
         A paused pipeline approves nothing: §10 says a paused pipeline fires
         nothing, and this is the pipeline acting. The human being asked about the
         stop is the human who would decide the hold anyway.
+
+        §32: "never by origin alone". A hold of origin `architect` that is not an
+        apply hands filed from a kit the architect role filed (`kit_apply_problem`)
+        is not the engine's either, and takes that same path: held for a human, and
+        with no `job.held` rule the pipeline stops. The reason is logged.
         """
         if job is None or job.origin != ARCHITECT_ORIGIN or not book.architect_is_autonomous:
+            return False
+        problem = kit_apply_problem(self.spool, job)
+        if problem is not None:
+            log.warning("playbook: job.held: %s is not approved (%s; §32)", job.id, problem)
             return False
         where = _payload("job.held", job)
         if self.approve is None:  # pragma: no cover - wired by the daemon and the tests
@@ -1822,6 +1930,16 @@ class PlaybookEngine:
         other end. No playbook rule fires either way — `architect.*` is not one of
         §10's events — so this is the whole of the follow-up.
 
+        §32: "`next kit` waits for the specific apply the architect filed (its
+        `kit_id`), and stops if none is filed within `[series] kit_wait_s`". The
+        apply is the one `kit_apply_problem` accepts whose record names this job as
+        its consultation and whose name is the verdict's `<name>` (`architect/
+        CLAUDE.md`: file `kits/<name>`, reply `next kit <name>`). Filed before the
+        job ended, there is nothing to wait for. Otherwise the engine waits
+        `kit_wait_s` (`_wait_for_kit`) — `Api.kit_file` accepts that kit meanwhile
+        (`kit_wait`) — and stops if it is still not filed. The wait is in memory:
+        a daemon that restarts during it forgets it, and no stop follows.
+
         §29's rule for a consultation's stop over a paused pipeline applies here as
         it does to the driver's: suppressed like any later stop, and notified, so the
         human learns the consultation did not resolve.
@@ -1829,15 +1947,62 @@ class PlaybookEngine:
         await self._ensure_loaded()
         event = f"{ARCHITECT}.{job.state}"
         reason = self._architect_stop(event, job)
-        if reason is None:
-            log.info("playbook: %s — %s; waiting for the apply it filed (§31)",
-                     event, job.verdict)
+        if reason is not None:
+            await self.stop(reason, _payload(event, job), notify_suppressed=True)
             return
+        kit = _NEXT_KIT_RE.match(job.verdict or "")
+        assert kit is not None  # `_architect_stop` answers None for `next kit` only
+        name = kit.group("name")
+        if self._kit_filed_for(job, name) is not None:
+            log.info("playbook: %s — %s; its kit is filed (§32)", event, job.verdict)
+            return
+        seconds = self.playbook.kit_wait_s if self.playbook is not None else DEFAULT_KIT_WAIT_S
+        log.info("playbook: %s — %s; waiting up to %ss for kit %r (§32)",
+                 event, job.verdict, seconds, name)
+        task = asyncio.create_task(
+            self._wait_for_kit(event, job, name, seconds), name=f"hands-kit-wait-{job.id}"
+        )
+        self._kit_waits[job.id] = (name, task)
+        self._tasks.add(task)
+        task.add_done_callback(self._tasks.discard)
+
+    async def _wait_for_kit(self, event: str, job: Job, name: str, seconds: float) -> None:
+        """§32: wait `kit_wait_s` for the kit `next kit <name>` named; stop without it."""
+        try:
+            await self.sleep(seconds)
+        finally:
+            entry = self._kit_waits.get(job.id)
+            if entry is not None and entry[1] is asyncio.current_task():
+                del self._kit_waits[job.id]
+        if self._kit_filed_for(job, name) is not None:
+            return
+        reason = (
+            f"{event}: the architect replied {job.verdict!r} and no apply of kit {name!r} was "
+            f"filed for its consultation (job {job.id}) within [series] kit_wait_s = "
+            f"{seconds} (§32)"
+        )
         await self.stop(reason, _payload(event, job), notify_suppressed=True)
 
+    def kit_wait(self) -> tuple[str, str] | None:
+        """§32: the architect job whose `next kit` the engine is waiting for, and the
+        kit name it waits for — the latest such wait — or None. `Api.kit_file`
+        accepts a kit of that name, filed for that consultation, meanwhile."""
+        for job_id, (name, task) in reversed(list(self._kit_waits.items())):
+            if not task.done():
+                return job_id, name
+        return None
+
+    def kit_filed(self, consultation: str) -> None:
+        """§32: `Api.kit_file` filed a kit during `consultation`. A wait for it ends
+        here — the kit the wait would have found is filed — so no second kit is
+        accepted for it and no timer outlives it."""
+        entry = self._kit_waits.pop(consultation, None)
+        if entry is not None and entry[1] is not asyncio.current_task():
+            entry[1].cancel()
+
     def _architect_stop(self, event: str, job: Job) -> str | None:
-        """The stop reason §31 gives this architect end, or None for a `next kit`
-        whose apply is in the spool."""
+        """The stop reason §31 gives this architect end, or None for a `next kit`,
+        whose kit is waited for (§32)."""
         if job.state in CONSULT_STOP_STATES:
             return (
                 f"{event}: the consultation's architect job ended {job.state}, and a "
@@ -1855,39 +2020,27 @@ class PlaybookEngine:
         if escalated is not None:
             reason = escalated.group("reason") or "(no reason given)"
             return f"{event}: the architect escalated: {reason} — {_resume_line(job)} (§31)"
-        kit = _NEXT_KIT_RE.match(verdict)
-        if kit is not None:
-            if self._filed_apply(job) is None:
-                # §31 has `next kit` "wait for the apply the architect filed". With no
-                # such apply there is nothing to wait for, and waiting silently would
-                # stall the series with nobody told — which is what §10 stops for.
-                return (
-                    f"{event}: the architect replied {verdict!r} and filed no apply during "
-                    f"the consultation (no job of origin {ARCHITECT_ORIGIN!r} after job "
-                    f"{job.id}), so there is nothing to wait for (§31)"
-                )
-            return None
+        if _NEXT_KIT_RE.match(verdict) is not None:
+            return None  # §32: the wait for its kit is `_architect_end`'s
         shown = " | ".join(ARCHITECT_VERDICTS)
         return (
             f"{event}: the architect's verdict {verdict!r} is none of {shown}, "
             "so it stops (§31)"
         )
 
-    def _filed_apply(self, job: Job) -> Job | None:
-        """The apply the architect filed during this consultation, if it filed one.
-
-        `hands kit file` files a held builder job of origin `architect` (§31), so it
-        is in the spool after the architect's own job — by position, since two jobs
-        can share a millisecond.
-        """
-        jobs = self.spool.list_jobs()
-        for index, record in enumerate(jobs):
-            if record.id != job.id:
+    def _kit_filed_for(self, job: Job, name: str) -> Job | None:
+        """§32: the apply of kit `name` filed during the consultation `job`, if any —
+        a job `kit_apply_problem` accepts whose record names `job` and `name`. A job
+        of origin `architect` that is not such an apply (no kit_id, another name,
+        another consultation) is not it, whatever its state."""
+        for record in self.spool.list_jobs():
+            if record.kit_id is None or record.origin != ARCHITECT_ORIGIN:
                 continue
-            for later in jobs[index + 1 :]:
-                if later.origin == ARCHITECT_ORIGIN:
-                    return later
-            return None
+            kit = self.spool.read_kit_record(record.kit_id)
+            if kit is None or kit["consultation"] != job.id or kit["name"] != name:
+                continue
+            if kit_apply_problem(self.spool, record) is None:
+                return record
         return None
 
     async def _act_notify(
@@ -2175,10 +2328,12 @@ class PlaybookEngine:
             await asyncio.gather(*pending, return_exceptions=True)
 
     def cancel_all(self) -> None:
-        """Drop every event still being decided — the daemon is going down (§3)."""
+        """Drop every event still being decided — the daemon is going down (§3) —
+        and every `next kit` wait (§32), which is one of those tasks."""
         for task in list(self._tasks):
             task.cancel()
         self._tasks.clear()
+        self._kit_waits.clear()
 
 
 async def _await(outcome: Any) -> None:  # pragma: no cover - U8's seam may be async

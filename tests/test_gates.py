@@ -221,17 +221,30 @@ def test_no_cli_flag_claims_the_playbooks_authority(human_confirmed: bool) -> No
     assert set(Api.COMMANDS).isdisjoint({"decide_from_playbook", "decide_from_phone"})
 
 
-def test_the_playbook_decider_releases_the_architects_hold(project: str) -> None:
+def test_the_playbook_decider_releases_the_architects_hold(tmp_home: Path, workdir: Path) -> None:
     """The record a `decided_by: playbook` approval leaves: §8's fields, the
     reason §31 gives it, and no quote. The end-to-end path is in
-    tests/test_playbook.py; this pins the table row itself."""
+    tests/test_playbook.py; this pins the table row itself — over the one job §32
+    gives it: the held apply `kit_file` filed during an architect consultation."""
+    import base64
+    import io
+    import zipfile
+
+    from harness import architect_table, close_consultation, open_consultation
+
+    (tmp_home / ".hands" / f"{PROJECT}.toml").write_text(
+        config_body(tmp_home, workdir, extra=architect_table(tmp_home))
+    )
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        archive.writestr("meta/BUILDER-16-PROMPT.md", "# m16\n")
+    data = base64.b64encode(buffer.getvalue()).decode()
 
     async def body(daemon: Daemon) -> None:
-        job = await daemon.api.send(
-            role="builder", context="clear", prompt="Apply the kit.",
-            gate="apply m16", origin="architect",
-        )
-        assert job["state"] == "held"
+        consulting = open_consultation(daemon)
+        job = await daemon.api.kit_file(name="m16", zip=data)
+        close_consultation(daemon, consulting)
+        assert job["state"] == "held" and job["origin"] == "architect" and job["kit_id"]
         decided = await daemon.api.decide_from_playbook(job["id"], reason="because §31")
         gate = decided["gate"]
         assert gate["decision"] == "approved"
@@ -241,6 +254,26 @@ def test_the_playbook_decider_releases_the_architects_hold(project: str) -> None
         assert decided["state"] in {"queued", "running", "done"}
         kinds = [event["kind"] for event in (await ok("inbox"))["events"]]
         assert "gate.decided" in kinds
+
+    drive(body)
+
+
+def test_the_playbook_decider_refuses_an_architect_origin_hold_with_no_filed_kit(
+    project: str,
+) -> None:
+    """§32: never by origin alone. A held job of origin `architect` that `kit_file`
+    did not file (here put straight into the spool) is refused, naming §32."""
+    from hands.gates import new_gate
+
+    async def body(daemon: Daemon) -> None:
+        job = daemon.spool.create_job(
+            role="builder", context="clear", prompt="Apply the kit.", origin="architect",
+            state="held", gate=new_gate(kind="send", reason="apply m16"),
+        )
+        with pytest.raises(ApiError) as caught:
+            await daemon.api.decide_from_playbook(job.id)
+        assert "§32" in strip_paths(str(caught.value))
+        assert (await ok("result", job.id))["state"] == "held"
 
     drive(body)
 

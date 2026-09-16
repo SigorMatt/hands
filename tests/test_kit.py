@@ -1636,7 +1636,14 @@ def test_kit_file_files_a_held_apply_with_a_daemon_minted_kit_id(
     zip stored under the spool where the architect's writes cannot reach."""
     import asyncio
 
-    from harness import config_body, drive, write_project
+    from harness import (
+        architect_table,
+        close_consultation,
+        config_body,
+        drive,
+        open_consultation,
+        write_project,
+    )
 
     workdir = write_tree(
         tmp_path / "work", {"PLAYBOOK.toml": PLAYBOOK, "meta/REVIEW-PROTOCOL.md": PROTOCOL}
@@ -1652,15 +1659,21 @@ def test_kit_file_files_a_held_apply_with_a_daemon_minted_kit_id(
     kit = write_tree(
         kits_dir / "mission-16-kit", {**good_kit(), "KIT.md": "plan: mission 16 kit\n"}
     )
-    write_project(tmp_home, config_body(tmp_home, workdir))
+    write_project(tmp_home, config_body(tmp_home, workdir, extra=architect_table(tmp_home)))
     answers: dict[str, object] = {}
 
     async def body(daemon) -> None:
+        consulting = open_consultation(daemon)  # §32: a kit is filed during one
+        answers["consultation"] = consulting.id
         answers["failing"] = await asyncio.to_thread(run_file, failing, "--json")
-        answers["jobs_after_failing"] = len(daemon.spool.list_jobs())
+        answers["jobs_after_failing"] = len(daemon.spool.list_jobs()) - 1
         answers["passing"] = await asyncio.to_thread(run_file, kit, "--json")
         answers["events"] = [event.kind for event in daemon.spool.unacked()]
         answers["spool"] = daemon.spool.root
+        answers["record"] = daemon.spool.read_kit_record(
+            json.loads(answers["passing"][1])["job"]["kit_id"]  # type: ignore[index]
+        )
+        close_consultation(daemon, consulting)
 
     drive(body)
     code, out, err = answers["failing"]  # type: ignore[misc]
@@ -1684,6 +1697,10 @@ def test_kit_file_files_a_held_apply_with_a_daemon_minted_kit_id(
     assert on_disk["kit_id"] == kit_id and on_disk["origin"] == "architect"
     stored = spool / "kits" / kit_id / "mission-16-kit.zip"
     assert stored.read_bytes() == kit_mod.build_zip(kit)
+    # §32: the record the engine checks an approval against, naming the consultation.
+    assert answers["record"] == {
+        "kit_id": kit_id, "name": "mission-16-kit", "consultation": answers["consultation"],
+    }
     assert not any(kits_dir.glob("*.zip")), "the zip is the daemon's, not under HANDS_KITS"
     with zipfile.ZipFile(stored) as archive:
         names = sorted(archive.namelist())
@@ -1707,10 +1724,17 @@ def test_the_daemon_refuses_a_kit_id_from_the_client_and_a_bad_kit(
     import base64
 
     from hands.cli import call
-    from harness import config_body, drive, write_project
+    from harness import (
+        architect_table,
+        close_consultation,
+        config_body,
+        drive,
+        open_consultation,
+        write_project,
+    )
 
     workdir = write_tree(tmp_path / "work", {"PLAYBOOK.toml": PLAYBOOK})
-    write_project(tmp_home, config_body(tmp_home, workdir))
+    write_project(tmp_home, config_body(tmp_home, workdir, extra=architect_table(tmp_home)))
     socket_path = tmp_home / ".hands" / "handsd.sock"
     good = base64.b64encode(kit_mod.build_zip(write_tree(tmp_path / "m16", good_kit()))).decode()
     bad_zip = io.BytesIO()
@@ -1727,6 +1751,7 @@ def test_the_daemon_refuses_a_kit_id_from_the_client_and_a_bad_kit(
         raise AssertionError(f"{method} {sorted(params)} was not refused")
 
     async def body(daemon) -> None:
+        consulting = open_consultation(daemon)  # so each refusal is for its own reason
         for method, params in (
             ("kit_file", {"name": "m16", "zip": good, "kit_id": "forged"}),
             ("send", {"role": "builder", "context": "clear", "prompt": "x", "kit_id": "forged"}),
@@ -1736,7 +1761,8 @@ def test_the_daemon_refuses_a_kit_id_from_the_client_and_a_bad_kit(
             ("file_apply", {"plan": {}, "origin": "architect", "kit_id": "forged"}),
         ):
             await asyncio.to_thread(refused, method, params)
-        answers["jobs"] = daemon.spool.list_jobs()
+        close_consultation(daemon, consulting)
+        answers["jobs"] = [job for job in daemon.spool.list_jobs() if job.role != "architect"]
         answers["kits"] = sorted((daemon.spool.root / "kits").glob("*/*")) if (
             daemon.spool.root / "kits").exists() else []
 
@@ -1748,6 +1774,44 @@ def test_the_daemon_refuses_a_kit_id_from_the_client_and_a_bad_kit(
     assert "kit_id" in strip_paths(refusals[0]), refusals
     assert "kit_id" in strip_paths(refusals[1]), refusals
     assert "no method 'file_apply'" in strip_paths(refusals[5]), refusals
+
+
+@pytest.mark.parametrize("configured", [True, False], ids=["no consultation", "no role"])
+def test_kit_file_is_refused_when_no_architect_consultation_is_open(
+    tmp_home: Path, tmp_path: Path, configured: bool
+) -> None:
+    """§32: the engine approves "a kit filed by the architect role", so the daemon
+    accepts `kit_file` only while an architect consultation is running (or the engine
+    waits for its `next kit`), and links the kit to it. Outside one, a same-user
+    socket client's zip is refused, naming §32, and nothing is stored or filed."""
+    import asyncio
+    import base64
+
+    from hands.cli import call
+    from harness import architect_table, config_body, drive, write_project
+
+    workdir = write_tree(tmp_path / "work", {"PLAYBOOK.toml": PLAYBOOK})
+    extra = architect_table(tmp_home) if configured else ""
+    write_project(tmp_home, config_body(tmp_home, workdir, extra=extra))
+    socket_path = tmp_home / ".hands" / "handsd.sock"
+    good = base64.b64encode(kit_mod.build_zip(write_tree(tmp_path / "m16", good_kit()))).decode()
+    answers: dict[str, object] = {}
+
+    async def body(daemon) -> None:
+        try:
+            await asyncio.to_thread(
+                call, socket_path, "kit_file", {"name": "m16", "zip": good}
+            )
+        except Exception as exc:  # the client's refusal of an error answer
+            answers["refused"] = str(exc)
+        answers["jobs"] = daemon.spool.list_jobs()
+        answers["kits"] = list((daemon.spool.root / "kits").glob("*")) if (
+            daemon.spool.root / "kits").exists() else []
+
+    drive(body)
+    said = strip_paths(str(answers.get("refused")))
+    assert "§32" in strip_paths(said) and "architect" in strip_paths(said), said
+    assert answers["jobs"] == [] and answers["kits"] == []
 
 
 def test_the_phone_and_the_architect_file_one_apply_with_two_origins() -> None:

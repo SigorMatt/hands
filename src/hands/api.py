@@ -29,6 +29,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from hands import __version__, files, gates
+from hands.config import ARCHITECT_ROLE, CONSULT_ROLES
 from hands.doctor import report as doctor_report
 from hands.doctor import run_checks as doctor_checks
 from hands.kit import KIT_NAME_RE, Apply, KitError, apply_from_zip, apply_params, home_shown
@@ -41,6 +42,7 @@ from hands.spool import (
     Event,
     Job,
     SpoolError,
+    kit_apply_problem,
     new_kit_id,
     resolve_kinds,
 )
@@ -108,10 +110,6 @@ _SUMMARY_FIELDS = (
 _PROMPT_LINE_CHARS = 120
 #: §26's `kit_max_mb` is in MiB.
 _MIB = 1024 * 1024
-#: §32: where handsd stores the zip `hands kit file` built, under the spool: one
-#: directory per `kit_id`, outside `HANDS_KITS`, so nothing the architect's guard
-#: lets it write can change the bytes after they were checked and filed.
-KITS_DIR = "kits"
 
 
 def job_summary(job: Job) -> dict[str, Any]:
@@ -166,8 +164,16 @@ class Api:
         """Queue a prompt for a role (§4, §6). Returns the job record.
 
         No `kit_id` parameter: that id is minted by handsd for an apply it files
-        itself (`file_apply`, §32), so no socket client can put one on a job.
+        itself (`file_apply`, §32), so no socket client can put one on a job. And
+        no `origin: architect`: §32, "a socket client cannot set `origin:
+        architect`" — only `kit_file` files an architect-origin job.
         """
+        if origin == ARCHITECT_ORIGIN:
+            raise ApiError(
+                f"origin {ARCHITECT_ORIGIN!r} is handsd's own: it marks the apply handsd files "
+                "for a kit the architect role filed with `hands kit file`, and a socket client "
+                "cannot set it (§32)"
+            )
         return await self._send(
             role=role,
             context=context,
@@ -193,12 +199,13 @@ class Api:
         if role not in self.config.roles:
             known = ", ".join(sorted(self.config.roles))
             raise ApiError(f"unknown role {role!r}; this project configures: {known}")
-        if role == "driver":
+        if role in CONSULT_ROLES:
             # §27: the driver role is "started by `handsd` only through a `consult`
             # action" — not by a send from the CLI, the phone or a playbook rule.
+            # H-032, §32: so is the architect, "started by `consult` only".
             raise ApiError(
-                "the driver role is started by handsd only through a playbook `consult` "
-                "action (§27); `hands send --role driver` is refused"
+                f"the {role} role is started by handsd only through a playbook `consult` "
+                f"action (§27, §32); `hands send --role {role}` is refused"
             )
         if context not in ("clear", "keep"):
             raise ApiError(f"--context must be clear or keep, got {context!r}")
@@ -263,9 +270,18 @@ class Api:
         `name` is the kit directory's name and `zip` the base64 of the zip the
         client built from that directory and checked against the role's clone.
         handsd mints the `kit_id`, stores the bytes at
-        `<spool>/kits/<kit_id>/<name>.zip`, lists them with the phone's
-        `apply_from_zip` against the builder's cwd, and files the held apply
-        with `origin: architect`. A refusal files nothing and keeps nothing.
+        `<spool>/kits/<kit_id>/<name>.zip` with the record `kit.json` naming the
+        consultation, lists them with the phone's `apply_from_zip` against the
+        builder's cwd, and files the held apply with `origin: architect`. A refusal
+        files nothing and keeps nothing.
+
+        §32: the engine approves "a kit filed by the architect role", so a kit is
+        accepted only during an architect consultation — while an architect job is
+        running (`Daemon.running`), or while the engine waits for the kit that
+        consultation's `VERDICT: next kit <name>` named (`PlaybookEngine.kit_wait`),
+        and then only under that name — and the record links the kit to it. What
+        this cannot tell apart is a same-user process calling the socket during a
+        consultation from the architect's own `hands kit file`.
         """
         if not isinstance(name, str) or not KIT_NAME_RE.fullmatch(name):
             raise ApiError(f"kit_file: the kit name must match {KIT_NAME_RE.pattern}")
@@ -283,19 +299,25 @@ class Api:
             )
         if "builder" not in self.config.roles:
             raise ApiError("kit_file: this project configures no builder to apply a kit")
+        consultation = self._consultation_for(name)
         kit_id = new_kit_id()
-        directory = self.spool.root / KITS_DIR / kit_id
-        path = directory / f"{name}.zip"
+        directory = self.spool.kit_dir(kit_id)
         try:
-            await asyncio.to_thread(directory.mkdir, mode=0o700, parents=True)
-        except OSError as exc:  # an existing directory included: it is not this kit's
+            path = await asyncio.to_thread(
+                self.spool.store_kit, kit_id, name=name, data=data, consultation=consultation
+            )
+        except FileExistsError as exc:  # an existing directory: it is not this kit's
+            raise ApiError(f"kit_file: the kit could not be stored ({type(exc).__name__})") from exc
+        except OSError as exc:
+            shutil.rmtree(directory, ignore_errors=True)
             raise ApiError(f"kit_file: the kit could not be stored ({type(exc).__name__})") from exc
         try:
-            await asyncio.to_thread(_store_kit, path, data)
             plan = await asyncio.to_thread(
                 apply_from_zip, path, self.config.role("builder").cwd, home_shown(path)
             )
-            return await self.file_apply(plan, ARCHITECT_ORIGIN, kit_id)
+            job = await self.file_apply(plan, ARCHITECT_ORIGIN, kit_id)
+            self.daemon.playbook.kit_filed(consultation)
+            return job
         except OSError as exc:
             shutil.rmtree(directory, ignore_errors=True)
             raise ApiError(f"kit_file: the kit could not be stored ({type(exc).__name__})") from exc
@@ -305,6 +327,33 @@ class Api:
         except ApiError:
             shutil.rmtree(directory, ignore_errors=True)
             raise
+
+    def _consultation_for(self, name: str) -> str:
+        """§32: the architect consultation a kit named `name` is filed during, by job
+        id, or `ApiError` when there is none open for it."""
+        if ARCHITECT_ROLE not in self.config.roles:
+            raise ApiError(
+                "kit_file: this project configures no [roles.architect], and a kit is filed "
+                "by the architect role during its consultation (§32)"
+            )
+        running = self.daemon.running(ARCHITECT_ROLE)
+        if running is not None:
+            return running
+        waiting = self.daemon.playbook.kit_wait()
+        if waiting is None:
+            raise ApiError(
+                "kit_file: no architect consultation is open — a kit is filed by the "
+                "architect role while handsd runs its consultation, or while the engine "
+                "waits for the kit its `VERDICT: next kit <name>` named ([series] "
+                "kit_wait_s) (§32)"
+            )
+        consultation, expected = waiting
+        if name != expected:
+            raise ApiError(
+                f"kit_file: the engine waits for kit {expected!r}, which the architect's "
+                f"`VERDICT: next kit {expected}` named, not {name!r} (§32)"
+            )
+        return consultation
 
     def _write_files(self, specs: list[str]) -> list[dict[str, Any]]:
         try:
@@ -727,6 +776,14 @@ class Api:
                 f"authority over a held apply of origin {ARCHITECT_ORIGIN!r} and nothing "
                 "else; §8's table decides this one"
             )
+        problem = kit_apply_problem(self.spool, record)
+        if problem is not None:
+            # §32: "never by origin alone".
+            raise ApiError(
+                f"job {record.id} is not an apply handsd filed from a kit the architect role "
+                f"filed ({problem}): §32 gives the playbook no authority over it; §8's table "
+                "decides this one"
+            )
         if record.state != "held":
             raise ApiError(
                 f"job {record.id} is {record.state}, not held; the playbook releases holds "
@@ -942,14 +999,6 @@ class Api:
         except SpoolError as exc:
             raise ApiError(str(exc)) from exc
 
-
-
-def _store_kit(path: Path, data: bytes) -> None:
-    """Write a kit's zip to a new file, flushed to disk."""
-    with path.open("xb") as out:
-        out.write(data)
-        out.flush()
-        os.fsync(out.fileno())
 
 
 def _since_cutoff(since: str | None) -> str | None:

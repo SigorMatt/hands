@@ -28,6 +28,7 @@ import pytest
 
 import hands.runner as hands_runner
 from conftest import commit_file, strip_paths
+from hands.api import ApiError
 from hands.cli import _pipeline_block
 from hands.config import Config, load_config, parse_config
 from hands.daemon import Daemon
@@ -61,9 +62,10 @@ from hands.playbook import (
     playbook_path,
     render,
 )
-from hands.spool import Job, Spool, now_iso
+from hands.spool import Job, Spool, new_kit_id, now_iso
 from harness import (
     PROJECT,
+    architect_table,
     cli,
     config_body,
     drive,
@@ -3078,6 +3080,59 @@ def held_apply(spool: Spool, *, origin: str = "architect", name: str = "m16") ->
     )
 
 
+def consultation(spool: Spool, *, state: str = "running", verdict: str | None = None) -> Job:
+    """An architect job, the consultation a kit is filed during (§31, §32)."""
+    job = spool.create_job(
+        role=ARCHITECT, context="clear", prompt="hands consult: aux.done on job 0 (role aux)\n",
+        origin="playbook",
+    )
+    job = spool.transition(job, "running", session_id="sess-arch-1")
+    if state == "running":
+        return job
+    return spool.transition(job, state, verdict=verdict, result=verdict)
+
+
+def filed_kit(
+    spool: Spool, *, name: str = "m16", during: Job | None = None, **job: Any
+) -> Job:
+    """§32: a kit's held apply exactly as `Api.kit_file` leaves it — the zip and its
+    record stored under `kits/<kit_id>/` by `Spool.store_kit`, naming the
+    consultation it was filed during, and the held builder job carrying the kit_id."""
+    from hands.gates import new_gate
+
+    during = during if during is not None else consultation(spool)
+    kit_id = new_kit_id()
+    spool.store_kit(kit_id, name=name, data=b"PK\x05\x06" + bytes(18), consultation=during.id)
+    fields: dict[str, Any] = {
+        "role": "builder",
+        "context": "clear",
+        "prompt": "Apply the kit.",
+        "origin": "architect",
+        "state": "held",
+        "gate": new_gate(kind="send", reason=f"apply {name}"),
+        "kit_id": kit_id,
+        **job,
+    }
+    return spool.create_job(**fields)
+
+
+def applied_kit(
+    spool: Spool, *, verdict: str = "VERDICT: kit applied abc1234", decided_by: str = "playbook",
+    **kw: Any,
+) -> Job:
+    """A filed kit's apply that was approved (by the engine, unless `decided_by`
+    says otherwise) and ran to `done` with `verdict`."""
+    from hands.gates import decide
+
+    job = filed_kit(spool, **kw)
+    assert job.gate is not None
+    gate = decide(job.gate, decision="approved", decided_by=decided_by, reason="r",
+                  quote="q" if decided_by == "driver" else None)
+    spool.transition(job, "queued", gate=gate)
+    spool.transition(job, "running")
+    return spool.transition(job, "done", verdict=verdict, result=verdict)
+
+
 # ---- the keys (§31, refused at load)
 
 
@@ -3215,7 +3270,7 @@ def test_only_a_role_mode_autonomous_playbook_approves_the_architects_hold(
     tmp_home: Path, workdir: Path, body: str, approved: bool
 ) -> None:
     engine, recorder = engine_for(tmp_home, workdir, body, architect=workdir)
-    job = held_apply(engine.spool)
+    job = filed_kit(engine.spool)
     run(engine.on_event("job.held", job=job))
     assert [call["job"] for call in recorder.approved] == ([job.id] if approved else [])
     if approved:
@@ -3247,7 +3302,7 @@ def test_a_held_architect_apply_under_a_paused_pipeline_is_not_approved(
     pipeline acting. The hold waits for the human who is already being asked."""
     engine, recorder = engine_for(tmp_home, workdir, AUTONOMOUS, architect=workdir)
     run(engine.pause())
-    job = held_apply(engine.spool)
+    job = filed_kit(engine.spool)
     run(engine.on_event("job.held", job=job))
     assert recorder.approved == []
 
@@ -3255,10 +3310,147 @@ def test_a_held_architect_apply_under_a_paused_pipeline_is_not_approved(
 def test_an_approval_the_api_refuses_stops_the_pipeline(tmp_home: Path, workdir: Path) -> None:
     engine, recorder = engine_for(tmp_home, workdir, AUTONOMOUS, architect=workdir)
     recorder.refuse_approve = "the builder queue is full"
-    job = held_apply(engine.spool)
+    job = filed_kit(engine.spool)
     run(engine.on_event("job.held", job=job))
     assert engine.state.paused
     assert "the builder queue is full" in strip_paths(engine.state.stop_reason or "")
+
+
+# ---- §32: the approval is for an apply hands filed from the architect's kit
+
+
+def _forged(spool: Spool, case: str) -> Job:
+    """An architect-origin hold that is *not* an apply hands filed from a kit the
+    architect role filed, one way per case (REVIEW-15 blocker 3)."""
+    from hands.gates import new_gate
+
+    if case == "no kit_id":
+        return held_apply(spool)
+    if case == "a kit_id handsd never recorded":
+        return spool.create_job(
+            role="builder", context="clear", prompt="Apply it.", origin="architect",
+            state="held", gate=new_gate(kind="send", reason="apply m16"), kit_id=new_kit_id(),
+        )
+    if case == "a malformed kit_id":
+        return spool.create_job(
+            role="builder", context="clear", prompt="Apply it.", origin="architect",
+            state="held", gate=new_gate(kind="send", reason="apply m16"), kit_id="../forged",
+        )
+    if case == "not an apply gate":
+        return filed_kit(
+            spool, gate=new_gate(kind="send", reason="the prompt matches the gate pattern "
+                                 "'gh pr create' (§8)"),
+        )
+    if case == "the gate names another kit":
+        return filed_kit(spool, gate=new_gate(kind="send", reason="apply other"))
+    if case == "the zip is gone":
+        job = filed_kit(spool)
+        assert job.kit_id is not None
+        (spool.kit_dir(job.kit_id) / "m16.zip").unlink()
+        return job
+    if case == "filed during no architect job":
+        aux = finished(spool, role="aux")
+        return filed_kit(spool, during=aux)
+    if case == "a second job carries the kit_id":
+        first = filed_kit(spool)
+        return spool.create_job(
+            role="builder", context="clear", prompt="Apply it.", origin="architect",
+            state="held", gate=new_gate(kind="send", reason="apply m16"), kit_id=first.kit_id,
+        )
+    if case == "not a builder job":
+        return filed_kit(spool, role="aux")
+    raise AssertionError(case)
+
+
+FORGED = [
+    "no kit_id",
+    "a kit_id handsd never recorded",
+    "a malformed kit_id",
+    "not an apply gate",
+    "the gate names another kit",
+    "the zip is gone",
+    "filed during no architect job",
+    "a second job carries the kit_id",
+    "not a builder job",
+]
+
+
+@pytest.mark.parametrize("case", FORGED)
+def test_an_architect_origin_hold_that_is_not_a_filed_kit_is_not_approved(
+    tmp_home: Path, workdir: Path, case: str
+) -> None:
+    """§32: "only when it is an apply hands itself created from a kit filed by the
+    architect role (a `kit_id` the daemon minted, checked against the spool), never
+    by origin alone". Refused, the hold takes today's path: no shipped playbook has a
+    `job.held` rule, so the pipeline stops and the human decides the hold."""
+    engine, recorder = engine_for(tmp_home, workdir, AUTONOMOUS, architect=workdir)
+    job = _forged(engine.spool, case)
+    run(engine.on_event("job.held", job=job))
+    assert recorder.approved == [], case
+    assert engine.spool.load_job(job.id).state == "held"
+    assert engine.state.paused, "the refused hold is a stop, as any hold without a rule is"
+
+
+def test_the_kit_check_accepts_a_filed_kit_and_names_every_forgery(
+    tmp_home: Path, workdir: Path
+) -> None:
+    from hands.spool import kit_apply_problem
+
+    engine, _recorder = engine_for(tmp_home, workdir, AUTONOMOUS, architect=workdir)
+    job = filed_kit(engine.spool)
+    assert kit_apply_problem(engine.spool, job) is None
+    for case in FORGED:
+        assert kit_apply_problem(engine.spool, _forged(engine.spool, case)), case
+
+
+# ---- §32: the kickoff follows only the engine's own approved kit apply
+
+
+@pytest.mark.parametrize(
+    "case", ["cli send", "architect origin, no kit", "a kit a human approved"]
+)
+def test_kit_applied_from_anything_but_the_engines_kit_apply_fires_no_kickoff(
+    tmp_home: Path, workdir: Path, case: str
+) -> None:
+    """REVIEW-15 should-fix 1, the reviewer's probe: a plain `hands send` job (origin
+    `cli`) replying `VERDICT: kit applied deadbee` fired `rule: -1`. The engine's rule
+    is for an apply hands filed from the architect's kit and the engine approved;
+    anything else meets the playbook's own rules, here its `notify`."""
+    engine, recorder = engine_for(tmp_home, workdir, AUTONOMOUS, architect=workdir)
+    verdict = "VERDICT: kit applied deadbee"
+    if case == "cli send":
+        job = finished(engine.spool, verdict=verdict, origin="cli")
+    elif case == "architect origin, no kit":
+        job = finished(engine.spool, verdict=verdict, origin="architect")
+    else:
+        job = applied_kit(engine.spool, verdict=verdict, decided_by="cli")
+    run(engine.on_event("builder.done", job=job))
+    assert recorder.sent == [], case
+    assert [title for title, _ in recorder.notified] == [
+        "hands: Kit applied; the next kickoff is the driver's"
+    ]
+    assert engine.state.last_rule is not None and engine.state.last_rule["rule"] == 0
+
+
+# ---- §32: `[series] kit_wait_s`
+
+
+def test_kit_wait_s_defaults_to_600_and_loads(workdir: Path) -> None:
+    from hands.playbook import DEFAULT_KIT_WAIT_S, SERIES_KEYS
+
+    assert DEFAULT_KIT_WAIT_S == 600
+    assert SERIES_KEYS.count("kit_wait_s") == 1
+    assert parse_playbook(AUTONOMOUS, path=workdir / "PLAYBOOK.toml").kit_wait_s == 600
+    for value, loaded in (("30", 30), ("0.5", 0.5)):
+        book = parse_playbook(series_body(kit_wait_s=value), path=workdir / "PLAYBOOK.toml")
+        assert book.kit_wait_s == loaded
+
+
+@pytest.mark.parametrize("value", ["0", "-1", "true", '"600"', "nan", "inf"])
+def test_kit_wait_s_must_be_a_positive_number(workdir: Path, value: str) -> None:
+    with pytest.raises(PlaybookError) as caught:
+        parse_playbook(series_body(kit_wait_s=value), path=workdir / "PLAYBOOK.toml")
+    assert "kit_wait_s must be" in strip_paths(str(caught.value)), caught.value
 
 
 # ---- the kickoff the engine adds after `VERDICT: kit applied` (§31)
@@ -3269,7 +3461,7 @@ def test_the_engine_sends_the_kickoff_after_kit_applied(tmp_home: Path, workdir:
     so the playbook's own `^VERDICT: kit applied` rule does not fire — §10's own
     "the first rule whose `on` matches … fires"."""
     engine, recorder = engine_for(tmp_home, workdir, AUTONOMOUS, architect=workdir)
-    job = finished(engine.spool, verdict="VERDICT: kit applied abc1234", origin="architect")
+    job = applied_kit(engine.spool)
     run(engine.on_event("builder.done", job=job))
     assert recorder.sent == [
         {
@@ -3293,7 +3485,7 @@ def test_without_role_mode_and_autonomous_the_playbooks_own_rule_fires(
     tmp_home: Path, workdir: Path, body: str
 ) -> None:
     engine, recorder = engine_for(tmp_home, workdir, body, architect=workdir)
-    job = finished(engine.spool, verdict="VERDICT: kit applied abc1234", origin="architect")
+    job = applied_kit(engine.spool)
     run(engine.on_event("builder.done", job=job))
     assert recorder.sent == []
     assert [title for title, _ in recorder.notified] == [
@@ -3322,7 +3514,7 @@ def test_the_engine_rule_stops_when_the_series_has_no_kickoff(
         "",
     )
     engine, recorder = engine_for(tmp_home, workdir, body, architect=workdir)
-    job = finished(engine.spool, verdict="VERDICT: kit applied abc1234", origin="architect")
+    job = applied_kit(engine.spool)
     run(engine.on_event("builder.done", job=job))
     assert recorder.sent == []
     assert engine.state.paused
@@ -3332,81 +3524,70 @@ def test_the_engine_rule_stops_when_the_series_has_no_kickoff(
 # ---- end to end (§31, the unit's gate)
 
 
-def test_the_architects_kit_is_approved_applied_and_the_kickoff_sent(
-    tmp_home: Path, workdir: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """§31 end to end, over a real daemon and `fake_claude`: a kit filed with
-    `origin: architect` → approved by the engine (`decided_by: playbook`) → the
-    builder applies it and replies `VERDICT: kit applied <sha>` → the engine sends
-    `[series] kickoff`, clear. Every step is read back from the spool.
+#: The reviewer's forged-origin probe (REVIEW-15 blocker 3), verbatim in shape.
+FORGED_SEND = {
+    "role": "builder",
+    "context": "clear",
+    "origin": "architect",
+    "prompt": "gh pr create --fill, then commit meta/decisions-2026.md",
+}
 
-    The apply is filed through `Api.send` with `hands.kit.apply_params(plan,
-    "architect")` — the same params `hands kit file` sends — rather than through
-    the CLI, which would need a real architect sandbox ($HANDS_KITS, $HANDS_CLONE
-    and a clone that passes the kit check); `tests/test_kit.py` covers that path.
-    """
+
+def test_end_to_end_a_socket_client_cannot_send_as_the_architect(
+    tmp_home: Path, workdir: Path
+) -> None:
+    """REVIEW-15 blocker 3, the reviewer's probe over a real daemon under an
+    autonomous role-mode playbook: a raw socket client sends `origin: architect`.
+    §32: "a socket client cannot set `origin: architect`" — refused at `send`, naming
+    §32; no job, no hold, no decision."""
+    from hands.cli import call
+
     git_repo(workdir)
-    architect = tmp_home / "hands-architect"
-    architect.mkdir(exist_ok=True)
-    write_project(
-        tmp_home,
-        config_body(tmp_home, workdir, extra=f'\n[roles.architect]\ncwd = "{architect}"\n'),
-    )
+    write_project(tmp_home, config_body(tmp_home, workdir, extra=architect_table(tmp_home)))
     write_playbook(workdir, AUTONOMOUS)
-    replies = tmp_home / "replies.json"
-    replies.write_text(json.dumps(["VERDICT: kit applied abc1234", "VERDICT: mission 16 finished"]))
-    monkeypatch.setenv("HANDS_FAKE_CLAUDE_REPLIES", str(replies))
-    plan = Apply(
-        name="mission-16-kit",
-        replaces=[],
-        adds=["meta/BUILDER-16-PROMPT.md"],
-        commit_message="plan: mission 16 kit",
-        kit_md=None,
-        prompt="Apply ~/kits/mission-16-kit.zip. Reply with one line: VERDICT: kit applied <sha>.",
-    )
+    socket_path = tmp_home / ".hands" / "handsd.sock"
 
     async def body(daemon: Daemon) -> None:
-        filed = await daemon.api.send(**apply_params(plan, "architect"))
-        assert filed["state"] == "held" and filed["origin"] == "architect"
-        state = await wait_for_stop()
+        with pytest.raises(Exception) as caught:
+            await asyncio.to_thread(call, socket_path, "send", FORGED_SEND, project=PROJECT)
+        said = strip_paths(str(caught.value))
+        assert "§32" in strip_paths(said) and "architect" in strip_paths(said), said
+        with pytest.raises(ApiError):
+            await daemon.api.send(**FORGED_SEND)
+        assert daemon.spool.list_jobs() == []
+        assert not [e for e in daemon.spool.events() if e.kind in ("job.held", "gate.decided")]
 
-        rows = sorted((await ok("jobs", "-n", "50"))["jobs"], key=lambda row: row["id"])
-        assert [(row["role"], row["origin"]) for row in rows] == [
-            ("builder", "architect"),
-            ("builder", "playbook"),
-        ]
-        apply_job, kickoff = [await ok("result", row["id"]) for row in rows]
+    drive(body)
 
-        assert apply_job["id"] == filed["id"]
-        assert apply_job["state"] == "done"
-        assert apply_job["prompt"] == plan.prompt
-        gate = apply_job["gate"]
-        assert gate["decision"] == "approved"
-        assert gate["decided_by"] == "playbook", "§31: the engine is the decider"
-        assert gate["reason"] == "apply mission-16-kit"
-        assert gate["quote"] is None
-        assert gate["decided_reason"] == AUTONOMOUS_APPROVAL
-        assert gate["decided_at"]
 
-        assert kickoff["prompt"] == (
-            "Read meta/BUILDER-16-PROMPT.md and execute the mission below its divider."
+def test_end_to_end_a_held_architect_job_injected_without_a_kit_is_not_approved(
+    tmp_home: Path, workdir: Path
+) -> None:
+    """The second half of the probe: a held job of origin `architect` put straight
+    into the spool (no `kit_file`, no kit_id) and announced to the engine is not
+    approved — it stays held for a human, and the pipeline stops as it does for any
+    hold no rule answers. `Api.decide_from_playbook` refuses it too."""
+    from hands.gates import new_gate
+
+    git_repo(workdir)
+    write_project(tmp_home, config_body(tmp_home, workdir, extra=architect_table(tmp_home)))
+    write_playbook(workdir, AUTONOMOUS)
+
+    async def body(daemon: Daemon) -> None:
+        job = daemon.spool.create_job(
+            role="builder", context="clear", prompt=FORGED_SEND["prompt"], origin="architect",
+            state="held", gate=new_gate(kind="send", reason="apply m16"),
         )
-        assert kickoff["context"] == "clear"
-        assert kickoff["state"] == "done"
-        assert kickoff["playbook_sha256"] == state["playbook"]["sha256"]
-
-        events = (await ok("inbox"))["events"]
-        kinds = [event["kind"] for event in events]
-        assert kinds[0] == "job.held"
-        decided = [event for event in events if event["kind"] == "gate.decided"]
-        assert len(decided) == 1
-        assert decided[0]["payload"]["decided_by"] == "playbook"
-        assert decided[0]["payload"]["job"] == filed["id"]
-        fired = [event for event in events if event["kind"] == "playbook.rule"]
-        assert [event["payload"]["rule"] for event in fired] == [ENGINE_RULE_INDEX, 1]
-        assert fired[0]["payload"]["fired_job"] == kickoff["id"]
-        assert kinds[-1] == "stop"
-        assert "Mission 16 finished" in strip_paths(state["stop_reason"] or "")
+        await daemon.playbook.on_event("job.held", job=job)
+        with pytest.raises(ApiError) as caught:
+            await daemon.api.decide_from_playbook(job.id)
+        assert "§32" in strip_paths(str(caught.value))
+        record = await ok("result", job.id)
+        assert record["state"] == "held"
+        assert record["gate"]["decided_by"] is None
+        state = await ok("pipeline")
+        assert state["paused"] is True
+        assert [e for e in (await ok("inbox"))["events"] if e["kind"] == "gate.decided"] == []
 
     drive(body)
 
@@ -3699,49 +3880,149 @@ def test_a_consult_with_no_architect_role_configured_stops_and_starts_nothing(
 # ---- the verdicts and the follow-ups, which are the engine's (§31)
 
 
+class Sleeps:
+    """The engine's `sleep` seam (§32's `kit_wait_s`), so no test waits one out: it
+    records each delay and runs `during` (the world changing while the engine
+    waits) before it returns."""
+
+    def __init__(self, during: Callable[[], Any] | None = None) -> None:
+        self.delays: list[float] = []
+        self.during = during
+
+    async def __call__(self, delay: float) -> None:
+        self.delays.append(delay)
+        if self.during is not None:
+            outcome = self.during()
+            if asyncio.iscoroutine(outcome):
+                await outcome
+
+
+def end_consultation(engine: PlaybookEngine, job: Job) -> None:
+    """The architect's end, and whatever wait it starts, decided to the last task."""
+
+    async def go() -> None:
+        await engine.on_job(job)
+        await engine.drain()
+
+    run(go())
+
+
 def test_next_kit_waits_for_the_apply_the_architect_filed(
     tmp_home: Path, workdir: Path
 ) -> None:
-    """§31: "`next kit` waits for the apply the architect filed" — the engine does
-    nothing more, and the held (or approved) apply carries the series."""
+    """§31: "`next kit` waits for the apply the architect filed" — §32: the specific
+    apply, by its `kit_id`, filed during that consultation under the name the verdict
+    gives. Filed before the end, there is nothing to wait for and nothing to stop."""
     engine, recorder = architect_engine(tmp_home, workdir)
-    review = reviewed(engine.spool)
-    review_job = review
-    architect = engine.spool.create_job(
-        role=ARCHITECT,
-        context="clear",
-        prompt=f"hands consult: aux.done on job {review_job.id} (role aux)\n",
-        origin="playbook",
-    )
-    engine.spool.transition(architect, "running", session_id="sess-arch-1")
-    held_apply(engine.spool, name="mission-17-kit")  # filed during the consultation
+    engine.sleep = sleeps = Sleeps()
+    architect = consultation(engine.spool)
+    filed_kit(engine.spool, name="mission-17-kit", during=architect)
     architect = engine.spool.transition(
         architect, "done", verdict="VERDICT: next kit mission-17-kit",
         result="VERDICT: next kit mission-17-kit",
     )
 
-    run(engine.on_job(architect))
+    end_consultation(engine, architect)
     assert not engine.state.paused, engine.state.stop_reason
+    assert sleeps.delays == [], "the kit was filed: nothing to wait for"
     assert recorder.enqueued == [] and recorder.sent == []
     assert [title for title, _ in recorder.notified] == []
 
 
-def test_next_kit_with_no_apply_filed_stops_rather_than_stall_the_series(
+@pytest.mark.parametrize(
+    "case",
+    [
+        "nothing filed",
+        "an earlier kit",
+        "a done aux job of origin architect",
+        "a denied apply of another name",
+        "a kit of another name",
+        "an architect-origin hold with no kit_id",
+    ],
+)
+def test_next_kit_stops_when_its_kit_is_not_filed_within_kit_wait_s(
+    tmp_home: Path, workdir: Path, case: str
+) -> None:
+    """REVIEW-15 should-fix 2, the reviewer's probes among them: a done `aux` job of
+    origin `architect` and a denied apply named `bar` satisfied `next kit foo`. §32:
+    nothing but the kit filed during the consultation under the verdict's name does,
+    and when none is filed within `[series] kit_wait_s` (default 600) the pipeline
+    stops, naming the key."""
+    engine, recorder = architect_engine(tmp_home, workdir)
+    engine.sleep = sleeps = Sleeps()
+    spool = engine.spool
+    if case == "an earlier kit":
+        filed_kit(spool, name="foo")  # during another consultation
+    architect = consultation(spool)
+    if case == "a done aux job of origin architect":
+        finished(spool, role="aux", origin="architect", verdict="VERDICT: x")
+    elif case == "a denied apply of another name":
+        bar = filed_kit(spool, name="bar", during=architect)
+        spool.transition(bar, "denied")
+    elif case == "a kit of another name":
+        filed_kit(spool, name="bar", during=architect)
+    elif case == "an architect-origin hold with no kit_id":
+        held_apply(spool, name="foo")
+    architect = spool.transition(
+        architect, "done", verdict="VERDICT: next kit foo", result="VERDICT: next kit foo"
+    )
+
+    end_consultation(engine, architect)
+    assert sleeps.delays == [600], case
+    assert engine.state.paused, case
+    said = strip_paths(engine.state.stop_reason or "")
+    for word in ("kit_wait_s", "600", "next kit foo", architect.id):
+        assert word in strip_paths(said), (word, said)
+    assert [title for title, _ in recorder.notified] == ["hands: the pipeline stopped"]
+
+
+def test_a_kit_filed_while_the_engine_waits_satisfies_next_kit(
     tmp_home: Path, workdir: Path
 ) -> None:
-    """An architect that claims a kit it did not file would stall the series in
-    silence: there is nothing to wait for, so §10's default applies and it stops."""
-    engine, recorder = architect_engine(tmp_home, workdir)
-    review = reviewed(engine.spool)
-    held_apply(engine.spool, name="an-earlier-kit")  # before the consultation: not this one
-    architect = _architect_job(
-        engine.spool, verdict="VERDICT: next kit mission-17-kit", about=review
-    )
-    run(engine.on_job(architect))
-    said = engine.state.stop_reason or ""
-    assert engine.state.paused
-    assert "filed no apply" in strip_paths(said), said
-    assert "next kit mission-17-kit" in strip_paths(said), said
+    """§32: the architect's job may end before its apply is filed. The engine waits
+    `kit_wait_s` (here the playbook's 30) and names the consultation and the kit it
+    waits for (`kit_wait`, what `Api.kit_file` asks); a kit filed in that time is
+    the one, and nothing stops."""
+    body = ARCHITECT_BOOK.replace('architect = "role"', 'architect = "role"\nkit_wait_s = 30')
+    engine, recorder = architect_engine(tmp_home, workdir, body)
+    architect = consultation(engine.spool, state="done", verdict="VERDICT: next kit m18")
+    seen: list[Any] = []
+
+    def during() -> None:
+        seen.append(engine.kit_wait())
+        filed_kit(engine.spool, name="m18", during=architect)
+
+    engine.sleep = sleeps = Sleeps(during)
+    end_consultation(engine, architect)
+    assert sleeps.delays == [30]
+    assert seen == [(architect.id, "m18")]
+    assert not engine.state.paused, engine.state.stop_reason
+    assert engine.kit_wait() is None, "the wait ended"
+
+
+def test_a_filed_kit_ends_the_wait_it_answers(tmp_home: Path, workdir: Path) -> None:
+    """`kit_filed` is how `Api.kit_file` tells the engine: the wait is dropped, so a
+    second kit for the same `next kit` is not accepted and no timer outlives it."""
+    engine, _recorder = architect_engine(tmp_home, workdir)
+    architect = consultation(engine.spool, state="done", verdict="VERDICT: next kit m18")
+    gate = asyncio.Event()
+
+    async def blocked(delay: float) -> None:
+        await gate.wait()
+
+    engine.sleep = blocked
+
+    async def go() -> None:
+        await engine.on_job(architect)
+        await asyncio.sleep(0)
+        assert engine.kit_wait() == (architect.id, "m18")
+        filed_kit(engine.spool, name="m18", during=architect)
+        engine.kit_filed(architect.id)
+        assert engine.kit_wait() is None
+        await engine.drain()
+
+    run(go())
+    assert not engine.state.paused, engine.state.stop_reason
 
 
 def test_series_complete_stops_with_that_reason(tmp_home: Path, workdir: Path) -> None:
@@ -3913,6 +4194,68 @@ def test_the_series_anchor_is_persisted_and_read_back(tmp_home: Path, workdir: P
     assert reread == anchor
 
 
+# ---- §32: the budget anchors to `[series] name`; a rename restates the budget
+
+#: ARCHITECT_BOOK without `[limits] max_architect_consults`: the key is not restated.
+UNSTATED = ARCHITECT_BOOK.replace("[limits]\nmax_architect_consults = 12\n", "")
+
+
+def test_a_series_rename_that_does_not_restate_the_budget_is_refused(
+    tmp_home: Path, workdir: Path
+) -> None:
+    """REVIEW-15 should-fix 3, the reviewer's probe m17 → m18 → m17: the rename to m18
+    does not restate `max_architect_consults`, so the engine refuses the playbook
+    (a stop naming the key), the anchor stays m17, and m17 again counts on from 2."""
+    assert UNSTATED != ARCHITECT_BOOK and UNSTATED.count("max_architect_consults") == 0
+    engine, recorder = architect_engine(tmp_home, workdir)
+    spool = engine.spool
+    review = reviewed(spool)
+    run(engine.on_job(review))  # loads m17, which anchors the series
+    for _ in range(2):
+        _architect_job(spool, verdict="VERDICT: series complete", about=review)
+    assert engine.architect_consults_used() == 2
+    consulted = len(recorder.enqueued)
+
+    commit_file(workdir, "PLAYBOOK.toml", UNSTATED.replace('name = "m17"', 'name = "m18"'))
+    engine._loaded = False
+    run(engine.on_job(reviewed(spool)))
+    assert engine.state.paused
+    said = engine.state.stop_reason or ""
+    for word in ("m17", "m18", "max_architect_consults", "§32"):
+        assert word in strip_paths(said), (word, said)
+    assert engine.playbook is None
+    assert len(recorder.enqueued) == consulted, "a refused playbook consulted nobody"
+    assert engine.state.series_since is not None and engine.state.series_since.series == "m17"
+    assert engine.architect_consults_used() == 2
+
+    commit_file(workdir, "PLAYBOOK.toml", UNSTATED)  # back to m17: not a rename
+    engine._loaded = False
+    engine.state.paused = False
+    engine.state.stop_reason = None
+    run(engine._load())
+    assert engine.playbook is not None and engine.playbook.series == "m17"
+    assert engine.architect_consults_used() == 2, "m17 → m18 → m17 reset the count"
+
+
+def test_a_series_rename_that_restates_the_budget_moves_the_anchor(
+    tmp_home: Path, workdir: Path
+) -> None:
+    """"Restated" is the key written in the new playbook's `[limits]` table, whatever
+    its value: explicit, where the default would be implicit."""
+    engine, _recorder = architect_engine(tmp_home, workdir, UNSTATED)
+    run(engine._load())
+    _architect_job(engine.spool, verdict="VERDICT: series complete", about=reviewed(engine.spool))
+    assert engine.architect_consults_used() == 1
+    assert engine.playbook is not None and not engine.playbook.architect_consults_restated
+    commit_file(workdir, "PLAYBOOK.toml", ARCHITECT_BOOK.replace('name = "m17"', 'name = "m18"'))
+    engine._loaded = False
+    run(engine._load())
+    assert not engine.state.paused, engine.state.stop_reason
+    assert engine.playbook is not None and engine.playbook.architect_consults_restated
+    assert engine.state.series_since is not None and engine.state.series_since.series == "m18"
+    assert engine.architect_consults_used() == 0
+
+
 # ---- end to end, one test per verdict (§31, the unit's gate)
 
 #: The e2e playbook: §31's series, with the kickoff line carrying the reply the
@@ -3922,28 +4265,23 @@ E2E_BOOK = ARCHITECT_BOOK.replace(
     ARCHITECT_KICKOFF, f"{ARCHITECT_KICKOFF}\\nFAKE:result VERDICT: mission 17 finished"
 )
 
-#: What the scripted architect runs in place of `hands kit file <dir>`: a `send`
-#: with the apply's params, `origin: architect`, over the same socket — mission
-#: 15's route. Since §32 the real command files through the daemon's `kit_file`,
-#: which mints a `kit_id` (`tests/test_kit.py` drives it); this send carries none.
-#: The apply prompt carries the builder's reply.
+#: What the scripted architect runs in place of `hands kit file <dir>`: the call
+#: that command makes once its client-side check passes — the daemon's `kit_file`
+#: with the kit's name and the zip's bytes, over the same socket (§32). The daemon
+#: mints the kit_id, stores the zip, and files the held apply of origin architect.
 FILE_APPLY = """
-import sys
+import base64, io, sys, zipfile
 from hands.cli import call
-from hands.kit import Apply, apply_params
-plan = Apply(
-    name="mission-17-kit",
-    replaces=[],
-    adds=["meta/BUILDER-17-PROMPT.md"],
-    commit_message="plan: mission 17 kit",
-    kit_md=None,
-    prompt="Apply the kit the architect filed.\\nFAKE:result VERDICT: kit applied abc1234",
-)
-call(sys.argv[1], "send", apply_params(plan, "architect"), project=sys.argv[2])
+buffer = io.BytesIO()
+with zipfile.ZipFile(buffer, "w") as archive:
+    archive.writestr("meta/BUILDER-17-PROMPT.md", "# mission 17\\n")
+    archive.writestr("KIT.md", "plan: mission 17 kit\\n")
+params = {"name": sys.argv[3], "zip": base64.b64encode(buffer.getvalue()).decode()}
+call(sys.argv[1], "kit_file", params, project=sys.argv[2])
 """
 
 
-def file_apply_argv(tmp_home: Path) -> list[str]:
+def file_apply_argv(tmp_home: Path, name: str = "mission-17-kit") -> list[str]:
     import sys
 
     return [
@@ -3952,6 +4290,7 @@ def file_apply_argv(tmp_home: Path) -> list[str]:
         FILE_APPLY,
         str(tmp_home / ".hands" / "handsd.sock"),
         PROJECT,
+        name,
     ]
 
 
@@ -4004,7 +4343,10 @@ def test_end_to_end_next_kit_waits_for_the_apply_the_architect_filed(
     script(
         tmp_home,
         monkeypatch,
-        [{"result": "VERDICT: next kit mission-17-kit", "exec": file_apply_argv(tmp_home)}],
+        [
+            {"result": "VERDICT: next kit mission-17-kit", "exec": file_apply_argv(tmp_home)},
+            "VERDICT: kit applied abc1234",  # the builder's reply to the apply prompt
+        ],
     )
 
     async def body(daemon: Daemon) -> None:
@@ -4029,10 +4371,28 @@ def test_end_to_end_next_kit_waits_for_the_apply_the_architect_filed(
         assert REVIEW_SHOULD_FIX in strip_paths(architect["prompt"])
         assert ROADMAP_TEXT in strip_paths(architect["prompt"])
         assert ARCHITECT_INSTRUCTION in strip_paths(architect["prompt"])
-        assert apply_job["gate"]["decided_by"] == "playbook"
-        assert apply_job["gate"]["decided_reason"] == AUTONOMOUS_APPROVAL
+        # §32: the apply hands filed from the architect's kit — a kit_id handsd
+        # minted, its zip and record stored under the spool naming this consultation.
+        kit_id = apply_job["kit_id"]
+        assert isinstance(kit_id, str) and len(kit_id) == 16, kit_id
+        assert daemon.spool.read_kit_record(kit_id) == {
+            "kit_id": kit_id, "name": "mission-17-kit", "consultation": architect["id"],
+        }
+        assert (daemon.spool.kit_dir(kit_id) / "mission-17-kit.zip").is_file()
+        assert apply_job["created"] > architect["started"]
+        gate = apply_job["gate"]
+        assert gate["reason"] == "apply mission-17-kit"
+        assert gate["decision"] == "approved" and gate["decided_at"]
+        assert gate["decided_by"] == "playbook", "§31: the engine is the decider"
+        assert gate["decided_reason"] == AUTONOMOUS_APPROVAL
+        assert gate["quote"] is None
         assert apply_job["verdict"] == "VERDICT: kit applied abc1234"
         assert kickoff["prompt"].startswith(ARCHITECT_KICKOFF)
+        decided = await _events("gate.decided")
+        assert [event["payload"]["job"] for event in decided] == [apply_job["id"]]
+        fired = [event["payload"] for event in await _events("playbook.rule")
+                 if event["payload"].get("rule") == ENGINE_RULE_INDEX]
+        assert [payload["fired_job"] for payload in fired] == [kickoff["id"]]
         assert state["stop_reason"] == "Mission 17 finished"  # not the architect's end
 
         [sent] = await _events("consult.sent")
@@ -4047,6 +4407,88 @@ def test_end_to_end_next_kit_waits_for_the_apply_the_architect_filed(
         lines = (workdir / "meta" / "journal.md").read_text(encoding="utf-8").splitlines()
         assert len(lines) == 1
         assert architect["id"] in strip_paths(lines[0])
+
+    drive(body)
+
+
+def test_end_to_end_next_kit_stops_when_no_kit_is_filed_within_kit_wait_s(
+    tmp_home: Path, workdir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """§32: the architect replies `next kit` and files nothing. The engine waits
+    `[series] kit_wait_s` (the default 600, through its `sleep` seam, so the test does
+    not) and stops, naming the key; `kit_file` is refused once the wait is over."""
+    architect_project(tmp_home, workdir)
+    script(tmp_home, monkeypatch, ["VERDICT: next kit mission-17-kit"])
+
+    async def body(daemon: Daemon) -> None:
+        delays: list[float] = []
+
+        async def sleep(delay: float) -> None:
+            delays.append(delay)
+
+        daemon.playbook.sleep = sleep
+        review = await ok("send", "--role", "aux", "--context", "clear", fake_result(REVIEW))
+        await ok("wait", review["id"])
+        state = await wait_for_stop()
+
+        assert delays == [600]
+        for word in ("kit_wait_s", "next kit mission-17-kit"):
+            assert word in strip_paths(state["stop_reason"]), state["stop_reason"]
+        rows = (await ok("jobs", "-n", "50"))["jobs"]
+        assert sorted(row["role"] for row in rows) == [ARCHITECT, "aux"]
+        with pytest.raises(ApiError) as caught:
+            await daemon.api.kit_file(name="mission-17-kit", zip="UEsFBgAAAAAAAAAAAAAAAAAAAAAAAA==")
+        assert "§32" in strip_paths(str(caught.value))
+
+    drive(body)
+
+
+def test_end_to_end_a_kit_filed_after_the_architect_ended_is_waited_for(
+    tmp_home: Path, workdir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """§32: the architect's job may end before its apply is filed. Filed during the
+    wait, the kit is the one `next kit` named: approved by the engine, applied, and
+    the kickoff follows."""
+    architect_project(tmp_home, workdir)
+    script(tmp_home, monkeypatch, ["VERDICT: next kit mission-17-kit",
+                                   "VERDICT: kit applied abc1234"])
+
+    async def body(daemon: Daemon) -> None:
+        import base64
+        import io
+        import zipfile
+
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, "w") as archive:
+            archive.writestr("meta/BUILDER-17-PROMPT.md", "# mission 17\n")
+        data = base64.b64encode(buffer.getvalue()).decode()
+        filed: list[dict[str, Any]] = []
+
+        async def sleep(delay: float) -> None:
+            with pytest.raises(ApiError) as caught:  # not the kit `next kit` named
+                await daemon.api.kit_file(name="another-kit", zip=data)
+            assert "mission-17-kit" in strip_paths(str(caught.value))
+            filed.append(await daemon.api.kit_file(name="mission-17-kit", zip=data))
+
+        daemon.playbook.sleep = sleep
+        review = await ok("send", "--role", "aux", "--context", "clear", fake_result(REVIEW))
+        await ok("wait", review["id"])
+        state = await wait_for_stop()
+
+        assert state["stop_reason"] == "Mission 17 finished", state["stop_reason"]
+        [apply_row] = filed
+        apply_job = await ok("result", apply_row["id"])
+        assert apply_job["gate"]["decided_by"] == "playbook"
+        assert apply_job["verdict"] == "VERDICT: kit applied abc1234"
+        rows = sorted((await ok("jobs", "-n", "50"))["jobs"], key=lambda row: row["id"])
+        assert [(row["role"], row["origin"]) for row in rows] == [
+            ("aux", "cli"),
+            (ARCHITECT, "playbook"),
+            ("builder", "architect"),
+            ("builder", "playbook"),
+        ]
+        record = daemon.spool.read_kit_record(apply_job["kit_id"])
+        assert record is not None and record["consultation"] == rows[1]["id"]
 
     drive(body)
 

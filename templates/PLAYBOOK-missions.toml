@@ -19,6 +19,7 @@ kickoff = "Read meta/BUILDER-N-PROMPT.md and execute the mission below its divid
 # autonomous = true
 # gate_failures = 2
 # escalate_on = ["blocker-unanswered", "milestone-missing", "budget-exhausted"]
+# kit_wait_s = 600               # seconds `next kit` waits for its kit (§32)
 # <<< architect
 
 [limits]

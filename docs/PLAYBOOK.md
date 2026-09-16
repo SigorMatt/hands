@@ -71,6 +71,7 @@ Unknown keys are refused, at the top level, in `[series]`, in `[limits]` and in 
     autonomous = false           # optional; default false
     gate_failures = 2            # optional; default 2
     escalate_on = ["blocker-unanswered", "milestone-missing", "budget-exhausted"]
+    kit_wait_s = 600             # optional; default 600 (§32)
 
 `kickoff` is the series' fixed kickoff line (DESIGN §26). `go <secret>` on the
 phone's `cmd_topic` sends exactly that line to the builder as a `clear` send,
@@ -82,8 +83,8 @@ checked again once the playbook is read), when there is no playbook (or it
 cannot be loaded), and when the playbook has no `kickoff`.
 
 The table's keys are `name`, `kickoff`, `architect`, `autonomous`,
-`gate_failures` and `escalate_on`; the last four are §31's and are described
-below. The series' name goes in the table as `name` when the table is used. TOML does
+`gate_failures`, `escalate_on` and `kit_wait_s`; the four after `kickoff` are
+§31's and `kit_wait_s` is §32's, all described below. The series' name goes in the table as `name` when the table is used. TOML does
 not allow `series = "<name>"` and a `[series]` table in the same file: the
 parser refuses the second definition, so the playbook is refused as not valid
 TOML. The top-level string still loads in a file with no table (the example
@@ -105,17 +106,30 @@ playbook that sets `role` while the config has **no `[roles.architect]`** is a
 config error, named when the engine loads the file and by `hands doctor`.
 
 `autonomous` (default `false`) says the engine may release what that architect
-files. With `architect = "role"` and `autonomous = true`:
+files. With `architect = "role"` and `autonomous = true` (DESIGN §32):
 
-- a **held** apply of `origin: architect` — the job `hands kit file` files — is
-  approved by the engine (`decided_by: playbook`), whose gate reason names the
-  approval it is acting on;
-- `[series] kickoff` is sent to the builder when that apply replies `VERDICT:
-  kit applied`.
+- the engine approves a held job (`decided_by: playbook`, with a gate reason
+  naming the approval it is acting on) only when it is an apply hands itself
+  filed from a kit the architect role filed with `hands kit file` during its
+  consultation: a builder job of origin `architect`, gate `apply <name>`, whose
+  `kit_id` handsd minted and checked against the spool — the zip and its record
+  under `~/.hands/<project>/kits/<kit_id>/`, naming that kit and the architect
+  job it was filed during, and no other job carrying the id — never by origin
+  alone. Any other hold (no or unknown `kit_id`, a gate that is not the kit's
+  apply) stays held for a human, and with no `job.held` rule the pipeline stops.
+  A socket client cannot set `origin: architect` (`hands send` refuses it), and
+  handsd accepts `hands kit file` only while an architect consultation is
+  running or the engine waits for its `next kit`;
+- `[series] kickoff` is sent to the builder when that apply, approved by the
+  engine, replies `VERDICT: kit applied`.
 
 Say it in the human's words before turning it on: **the human who approves an
 `autonomous` playbook is approving every apply the architect files under it.**
 The playbook is itself a gated apply, so that approval is a real one, made once.
+
+`kit_wait_s` (default 600) is how many seconds `VERDICT: next kit <name>` waits
+for its kit to be filed before the pipeline stops (see `consult` below); a
+positive number, refused at load otherwise.
 
 `gate_failures` (default 2) is the number of times the same roadmap gate may
 fail in a row before the architect escalates, and `escalate_on` is the closed
@@ -143,7 +157,10 @@ promises will run; a playbook's own `^VERDICT: kit applied` rule (a `notify`, in
 both templates) does not fire while autonomy is on, and the inbox records the
 rule that did as `rule: -1`. The kickoff job's origin is `playbook`, like every
 other job a rule starts, so it does not clear a stop. With `autonomous` set and
-no `[series] kickoff` to send, the engine stops and says so.
+no `[series] kickoff` to send, the engine stops and says so. The rule fires only
+for that apply — one hands filed from the architect's kit and the engine itself
+approved (DESIGN §32); any other `builder.done` replying `VERDICT: kit applied`,
+a `hands send` job's among them, meets the file's own rules.
 
 ## Events (`on`)
 
@@ -373,16 +390,27 @@ review, file it, or escalate" — and the three lines the reply may begin with:
     VERDICT: escalate <reason>
 
 The engine reads that verdict itself; no rule matches it, because `architect.*`
-is not an event. `VERDICT: next kit <name>` waits for the apply the architect
-filed with `hands kit file` during the consultation, and stops when it filed
-none. `VERDICT: series complete` stops with that reason. `VERDICT: escalate
+is not an event. `VERDICT: next kit <name>` waits for the specific apply the
+architect filed with `hands kit file kits/<name>` during that consultation — by
+its `kit_id`, under the name the verdict gives (DESIGN §32). Filed before the
+architect's job ended, there is nothing more to wait for. Otherwise the engine
+waits `kit_wait_s` (in `[series]`, default 600), accepting that kit meanwhile, and
+stops, naming the key, if none is filed; a job of origin `architect` that is
+not that apply (an `aux` job, an apply of another name) does not answer it. The
+wait is kept in memory: a daemon restarted during it forgets it. `VERDICT: series complete` stops with that reason. `VERDICT: escalate
 <reason>` stops and notifies with the reason, the architect's session id and the
 `claude --resume <id>` line. An unrecognised or missing verdict, and an
 architect job that ends `failed`, `killed`, `orphaned` or `limited`, stop too.
 
 The budget is `max_architect_consults` (default 12) in `[limits]`, counted
 **per series** — from the anchor written when the playbook loaded, not per mission as
-the driver's `max_consults` is. When it is spent the engine stops by itself,
+the driver's `max_consults` is. The series is `[series] name` (DESIGN §32): a
+role-mode playbook that names another series than the anchor's — a rename — is
+refused when the engine loads it (the pipeline stops, naming
+`max_architect_consults`) unless its `[limits]` table writes
+`max_architect_consults` out explicitly, whatever the value: the budget
+restated. A refused rename leaves the anchor, so going back to the old name
+counts on from where it was. When it is spent the engine stops by itself,
 naming `budget-exhausted`, which is why that one condition of `escalate_on` is
 hands' and the other two are the architect's judgement. `hands pipeline` prints
 `architect <used> of max_architect_consults <n>` while the series is in role

@@ -17,6 +17,7 @@ from typing import Any
 from hands.cli import main
 from hands.config import load_config
 from hands.daemon import Daemon
+from hands.spool import Job
 
 FAKE = Path(__file__).with_name("fake_claude.py")
 PROJECT = "demo"
@@ -101,3 +102,35 @@ def drive(body: Callable[[Daemon], Awaitable[None]]) -> None:
             await daemon.stop()
 
     asyncio.run(scenario())
+
+
+# ------------------------------------------------ the architect's consultation (§32)
+
+#: The first line every consultation prompt carries (`playbook.consult_head`).
+CONSULT_HEAD = "hands consult: aux.done on job 0 (role aux)\n"
+
+
+def architect_table(home: Path) -> str:
+    """`[roles.architect]`, for `config_body(extra=...)`: the role `kit_file` needs."""
+    cwd = home.parent / "hands-architect"
+    cwd.mkdir(exist_ok=True)
+    return f'\n[roles.architect]\ncwd = "{cwd}"\n'
+
+
+def open_consultation(daemon: Daemon) -> Job:
+    """An architect consultation in progress, as the daemon holds one while its
+    worker runs it: the job `running` in the spool and in the role's running slot.
+    §32: `kit_file` is accepted only then (or while the engine waits for `next kit`).
+    Close it with `close_consultation` before the daemon stops, or the daemon will
+    try to signal a process that does not exist."""
+    job = daemon.spool.create_job(
+        role="architect", context="clear", prompt=CONSULT_HEAD, origin="playbook"
+    )
+    job = daemon.spool.transition(job, "running")
+    daemon._running["architect"] = job.id
+    return job
+
+
+def close_consultation(daemon: Daemon, job: Job) -> Job:
+    daemon._running["architect"] = None
+    return daemon.spool.transition(job.id, "done")
