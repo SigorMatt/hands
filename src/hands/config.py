@@ -21,6 +21,7 @@ __all__ = [
     "ARCHITECT_ROLE",
     "BG_WAIT_CEILING_ENV",
     "CLONE_ENV",
+    "CONSULT_ROLES",
     "CONSULT_ROLE_ENV",
     "DEFAULT_GATE_PATTERNS",
     "DEFAULT_ROLE_ENV",
@@ -107,6 +108,10 @@ ARCHITECT_ROLE = "architect"
 #: §27, §31: the roles handsd starts headless, each with its own guard mode and
 #: no permission bypass — `settings.json` and the hook are the law.
 GUARDED_ROLES: tuple[str, ...] = (DRIVER_ROLE, ARCHITECT_ROLE)
+#: §27, §31: the roles a playbook `consult` starts, for one consultation each. They
+#: are here, and not in `hands.playbook`, because `hands.limits` needs them too and
+#: the playbook engine already imports the limit manager.
+CONSULT_ROLES: tuple[str, ...] = (DRIVER_ROLE, ARCHITECT_ROLE)
 #: A name `[roles.<r>] env` may set: what a POSIX shell accepts as a variable name.
 _ENV_NAME_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 

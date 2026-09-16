@@ -590,6 +590,12 @@ def _pipeline_block(result: dict[str, Any]) -> str:
         lines.append(
             f"  consults {consults.get('used')} of max_consults {consults.get('max_consults')}"
         )
+    architect = result.get("architect_consults") or {}
+    if architect and book.get("architect") == "role":  # §31: per series, in role mode
+        lines.append(
+            f"  architect {architect.get('used')} of max_architect_consults "
+            f"{architect.get('max_architect_consults')}"
+        )
     rule = result.get("last_rule")
     if rule:
         fired = f" -> job {rule['fired_job']}" if rule.get("fired_job") else ""

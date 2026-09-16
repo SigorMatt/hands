@@ -58,15 +58,22 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from hands.config import ARCHITECT_ROLE, Config
+from hands.config import ARCHITECT_ROLE, CONSULT_ROLES, Config
 from hands.limits import LimitManager
 from hands.spool import ARCHITECT_ORIGIN, Job, Spool, SpoolError, atomic_write, now_iso
 
 __all__ = [
     "ACTIONS",
+    "ARCHITECT",
+    "ARCHITECT_INSTRUCTION",
     "ARCHITECT_MODES",
+    "ARCHITECT_VERDICTS",
     "AUTONOMOUS_APPROVAL",
+    "CONSULT_EVENTS",
     "CONSULT_QUESTION",
+    "CONSULT_ROLES",
+    "CONSULT_STOP_STATES",
+    "ArchitectBrief",
     "ConsultAnchor",
     "DEFAULT_ARCHITECT_MODE",
     "DEFAULT_GATE_FAILURES",
@@ -79,6 +86,7 @@ __all__ = [
     "LIMIT_KEYS",
     "SERIES_KEYS",
     "PAUSE_REASON",
+    "ROADMAP",
     "EVENTS",
     "JOB_PLACEHOLDERS",
     "ORIGIN",
@@ -91,12 +99,14 @@ __all__ = [
     "PlaybookError",
     "PlaybookNotCommitted",
     "Rule",
+    "SeriesAnchor",
     "check_series_roles",
     "load_playbook",
     "parse_playbook",
     "playbook_path",
     "consult_head",
     "consult_prompt",
+    "review_sections",
     "render",
     "run_number",
 ]
@@ -151,9 +161,11 @@ _CONSULT_HEAD_RE = re.compile(
     r"\Ahands consult: (?P<event>\S+) on job (?P<job>\S+) \(role (?P<role>\S+)\)$",
     re.MULTILINE,
 )
-#: §28: the driver job's end states that stop whatever the playbook says; and the
-#: two verdicts of §27 read from a `driver.done`: only `resolved` goes to the rules.
-DRIVER_STOP_STATES: tuple[str, ...] = ("failed", "killed", "orphaned", "limited")
+#: §28, §31: the consultation job's end states that stop whatever the playbook
+#: says — a consultation that does not end in a verdict has not resolved. Shared
+#: by both consulted roles; §28 wrote it for the driver.
+CONSULT_STOP_STATES: tuple[str, ...] = ("failed", "killed", "orphaned", "limited")
+#: The two verdicts of §27 read from a `driver.done`: only `resolved` goes to the rules.
 _RESOLVED_RE = re.compile(r"\AVERDICT: resolved \S")
 _ESCALATE_RE = re.compile(r"\AVERDICT: escalate(?:\s+(?P<reason>.*))?\Z")
 #: §27, §28: the origin of the held apply handsd files for a kit; one that ran is a
@@ -174,6 +186,34 @@ ESCALATE_ON: tuple[str, ...] = ("blocker-unanswered", "milestone-missing", "budg
 DEFAULT_GATE_FAILURES = 2
 #: §31: `[limits] max_architect_consults` per series (default 12).
 DEFAULT_MAX_ARCHITECT_CONSULTS = 12
+#: §31: the second role a `consult` starts — for one consultation on a review
+#: outcome, with no memory of the last one (the branch carries that).
+ARCHITECT = ARCHITECT_ROLE
+#: §31: the instruction the architect's consult prompt carries, verbatim.
+ARCHITECT_INSTRUCTION = "write the next kit from ROADMAP and the review, file it, or escalate"
+#: §31: the first line of the architect's reply is exactly one of these. `next kit`
+#: waits for the apply it filed; the other two stop, with their reasons.
+ARCHITECT_VERDICTS: tuple[str, ...] = (
+    "VERDICT: next kit <name>",
+    "VERDICT: series complete",
+    "VERDICT: escalate <reason>",
+)
+_NEXT_KIT_RE = re.compile(r"\AVERDICT: next kit\s+(?P<name>\S.*?)\s*\Z")
+_SERIES_COMPLETE_RE = re.compile(r"\AVERDICT: series complete\s*\Z")
+#: §31: the roadmap the architect writes the next kit from, read from the builder's
+#: cwd like the playbook — a repository file, so it is the branch's own roadmap.
+ROADMAP = Path("meta") / "ROADMAP.md"
+#: §31: the two sections of the review the prompt carries verbatim, as headings.
+REVIEW_SECTIONS: tuple[str, ...] = ("Blockers", "Should-fix")
+#: §27, §31: the events each consulted role may be consulted on, refused at load and
+#: never when the rule fires. The driver's is every event but its own — §27 leaves
+#: "which events consult" to the playbook and only the driver's own ends would have
+#: it consult itself. The architect's is the review outcome §31 names, and one only:
+#: its prompt is written out of a review.
+CONSULT_EVENTS: dict[str, tuple[str, ...]] = {
+    DRIVER: tuple(event for event in EVENTS if not event.startswith(f"{DRIVER}.")),
+    ARCHITECT: ("aux.done",),
+}
 #: §31: the reply the engine's own `builder.done` rule matches. It is the verdict
 #: line the apply prompt asks for (`hands.kit.APPLY_VERDICT`), anchored.
 KIT_APPLIED = r"^VERDICT: kit applied"
@@ -638,6 +678,18 @@ def parse_playbook(text: str, *, path: Path) -> Playbook:
         _rule(index, table, path, auto_runs=tuple(auto_runs))
         for index, table in enumerate(raw_rules)
     )
+    # §31: a rule that consults the architect needs the series to be in role mode.
+    # Both halves are in this file, so this is the earliest place that sees both —
+    # earlier than the engine's cross-check against `[roles.architect]`, which
+    # cannot be made here because the roles live in another file (`check_series_roles`).
+    if series["architect"] != "role":
+        for rule in rules:
+            if rule.then == "consult" and rule.role == ARCHITECT:
+                raise PlaybookError(
+                    f"{path}: rule {rule.index} consults the architect role and [series] "
+                    f'architect is "{series["architect"]}" (§31): set architect = "role" '
+                    "for the series, or take the rule out"
+                )
 
     return Playbook(
         path=path,
@@ -813,23 +865,34 @@ def _rule(index: int, table: dict[str, Any], path: Path, *, auto_runs: tuple[int
     elif then == "notify" and not message:
         raise PlaybookError(f"{where}: a notify needs a message")
     elif then == "consult":
-        # §27: hands writes the driver's prompt, to a fresh driver session.
-        if on.startswith(f"{DRIVER}."):
+        # §27, §31: hands writes the consulted role's prompt, to a fresh session.
+        if role is not None and role not in CONSULT_ROLES:
             raise PlaybookError(
-                f"{where}: a consult on {on} would consult the driver about itself"
+                f"{where}: a consult's role is {' or '.join(CONSULT_ROLES)} (§27, §31), "
+                f"got {role!r}"
             )
+        role = role or DRIVER
         if prompt is not None:
             raise PlaybookError(
-                f"{where}: a consult takes no prompt: hands writes the driver's prompt (§27)"
+                f"{where}: a consult takes no prompt: hands writes the {role}'s prompt "
+                "(§27, §31)"
             )
-        if role is not None and role != DRIVER:
-            raise PlaybookError(f"{where}: a consult's role is driver, got {role!r}")
+        if on not in CONSULT_EVENTS[role]:
+            if role == DRIVER:
+                # The only events a driver consult is refused on are its own.
+                raise PlaybookError(
+                    f"{where}: a consult on {on} would consult the driver about itself"
+                )
+            raise PlaybookError(
+                f'{where}: a consult with role = "{ARCHITECT}" is on the review outcome '
+                f"§31 names ({', '.join(CONSULT_EVENTS[ARCHITECT])}), got {on}"
+            )
         if context is not None and context != "clear":
             raise PlaybookError(
-                f"{where}: a consult starts a fresh driver session: context is clear, "
+                f"{where}: a consult starts a fresh {role} session: context is clear, "
                 f"got {context!r}"
             )
-        role, context = DRIVER, "clear"
+        context = "clear"
 
     group_names = tuple(verdict.groupindex) if verdict is not None else ()
     for name, text in (("prompt", prompt), ("message", message)):
@@ -950,6 +1013,48 @@ class ConsultAnchor:
         return cls(daemon_start=started, job=job if isinstance(job, str) else None)
 
 
+@dataclass(frozen=True)
+class SeriesAnchor:
+    """Where `max_architect_consults` starts counting (§31): per *series*.
+
+    `max_consults` is per mission and counts from the last kickoff (§27); the
+    architect's budget is per series, and a series outlives many missions. What
+    identifies a series is `[series] name` — §10 puts the playbook on the series
+    branch and deletes it at series close, and H-019 made `name` where the series'
+    name lives — so the anchor is dropped the first time the engine loads a
+    playbook naming another series.
+
+    `job` is the last job in the spool at that moment and is what the count reads:
+    the architect jobs *after* it are this series'. Position, not time, because two
+    jobs can share a millisecond. `at` is when the anchor was taken, kept so a human
+    reading `pipeline.json` can see it. A spool whose `pipeline.json` is deleted has
+    no anchor and the next load makes one, which restarts the count — the same
+    caveat `ConsultAnchor` carries.
+    """
+
+    series: str | None
+    at: str
+    job: str | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"series": self.series, "at": self.at, "job": self.job}
+
+    @classmethod
+    def from_data(cls, data: Any) -> SeriesAnchor | None:
+        if not isinstance(data, dict):
+            return None
+        at = data.get("at")
+        if not isinstance(at, str) or not at:
+            return None
+        series = data.get("series")
+        job = data.get("job")
+        return cls(
+            series=series if isinstance(series, str) else None,
+            at=at,
+            job=job if isinstance(job, str) else None,
+        )
+
+
 @dataclass
 class PipelineState:
     """What `hands pipeline` reports and a restart must not forget (§4, §10).
@@ -976,6 +1081,10 @@ class PipelineState:
     #: set by the first daemon start that finds none (`PlaybookEngine.daemon_start`)
     #: and never moved by a later one.
     consults_since: ConsultAnchor | None = None
+    #: §31: the series `max_architect_consults` counts for, and the job it counts
+    #: from (`SeriesAnchor`). Set by the engine's load, moved only when the loaded
+    #: playbook names another series.
+    series_since: SeriesAnchor | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -989,6 +1098,9 @@ class PipelineState:
             "kickoffs": list(self.kickoffs),
             "consults_since": (
                 self.consults_since.to_dict() if self.consults_since is not None else None
+            ),
+            "series_since": (
+                self.series_since.to_dict() if self.series_since is not None else None
             ),
         }
 
@@ -1011,6 +1123,7 @@ class PipelineState:
             auto_runs_used=list(data.get("auto_runs_used") or []),
             kickoffs=[item for item in data.get("kickoffs") or [] if isinstance(item, str)],
             consults_since=ConsultAnchor.from_data(data.get("consults_since")),
+            series_since=SeriesAnchor.from_data(data.get("series_since")),
         )
 
 
@@ -1129,6 +1242,8 @@ class PlaybookEngine:
             return
         self.load_error = None
         self.playbook = book
+        if book is not None:
+            self._anchor_series(book)
         if book is not None and book.kickoff is not None:
             kickoff = book.kickoff.strip()
             if kickoff not in self.state.kickoffs:  # §28: seen in the pipeline's history
@@ -1146,6 +1261,21 @@ class PlaybookEngine:
             # §10 lets the playbook set §6's counter; §6 is the one that counts.
             self.limits.max_resumes = book.max_resumes
 
+    def _anchor_series(self, book: Playbook) -> None:
+        """§31: `max_architect_consults` counts per series, so the count needs a
+        series to count for. The anchor is taken the first time a playbook loads and
+        moved only when the loaded playbook names another series (`SeriesAnchor`)."""
+        anchor = self.state.series_since
+        if anchor is not None and anchor.series == book.series:
+            return
+        jobs = self.spool.list_jobs()
+        self.state.series_since = SeriesAnchor(
+            series=book.series, at=now_iso(), job=jobs[-1].id if jobs else None
+        )
+        log.info("playbook: the series is %r; the architect's budget counts from here",
+                 book.series)
+        self._save()
+
     @property
     def max_resumes(self) -> int:
         if self.playbook is not None and self.playbook.max_resumes is not None:
@@ -1159,11 +1289,19 @@ class PlaybookEngine:
     async def on_job(self, job: Job) -> None:
         """A terminal job (§6) as one of §10's events, if it is one.
 
-        A driver job's end is also the end of a consultation (§27): it is filed
-        before the event is decided, so a paused pipeline still records it.
+        A consulted role's job end is also the end of a consultation (§27, §31): it
+        is filed before the event is decided, so a paused pipeline still records it.
+
+        §31: the architect's end goes no further than this engine. `architect.*` is
+        not one of §10's events — no rule may name one — because §31 writes the
+        whole follow-up itself: `next kit` waits for the apply the architect filed,
+        `series complete` and `escalate` stop, and so does every other end.
         """
-        if job.role == DRIVER:
+        if job.role in CONSULT_ROLES:
             self._consult_done(job)
+        if job.role == ARCHITECT:
+            await self._architect_end(job)
+            return
         await self.on_event(f"{job.role}.{job.state}", job=job)
 
     def dispatch(self, event: str, *, payload: dict[str, Any] | None = None) -> None:
@@ -1478,16 +1616,19 @@ class PlaybookEngine:
         self._fired(rule, event, job, fired_job=resumed.id, prompt=prompt)
 
     async def _act_consult(self, rule: Rule, event: str, job: Job | None) -> None:
-        """§27: start a driver-role job that carries the event, the job record and
-        the role's last reply — or stop, when there is no driver, no job, or the
-        mission has used its `[limits] max_consults`."""
+        """§27, §31: start a job of the consulted role carrying the prompt hands
+        writes — or stop, when that role is not configured, the event carries no job,
+        or the budget is spent (`[limits] max_consults` per mission for the driver,
+        `max_architect_consults` per series for the architect)."""
         book = self.playbook
         assert book is not None
+        role = rule.role or DRIVER
         where = _payload(event, job, rule=rule.index)
-        if DRIVER not in self.config.roles:
+        if role not in self.config.roles:
+            section = "§31" if role == ARCHITECT else "§27"
             await self.stop(
                 f"{event}: rule {rule.index} is a consult and this project configures no "
-                "[roles.driver] (§27)",
+                f"[roles.{role}] ({section})",
                 where,
             )
             return
@@ -1498,19 +1639,37 @@ class PlaybookEngine:
                 where,
             )
             return
-        used = self.consults_used(book)
-        if used >= book.max_consults:
-            await self.stop(
-                f"{event}: rule {rule.index} would start consultation {used + 1} of this "
-                f"mission and [limits] max_consults is {book.max_consults} (§27)",
-                {**where, "consults": used, "max_consults": book.max_consults},
+        if role == ARCHITECT:
+            used, budget = self.architect_consults_used(), book.max_architect_consults
+            if used >= budget:
+                # §31: "the engine stops on the budget one itself". The other two
+                # conditions of `escalate_on` are the architect's judgement, stated
+                # in its escalate reason; this one is the only one hands can see.
+                await self.stop(
+                    f"{event}: rule {rule.index} would start consultation {used + 1} of this "
+                    f"series and [limits] max_architect_consults is {budget} (§31): the "
+                    "series' consult budget is exhausted (budget-exhausted)",
+                    {**where, "consults": used, "max_consults": budget, "consulted": role},
+                )
+                return
+            prompt = consult_prompt(
+                event, job, role=role, brief=self.architect_brief(book, used + 1)
             )
-            return
+        else:
+            used, budget = self.consults_used(book), book.max_consults
+            if used >= budget:
+                await self.stop(
+                    f"{event}: rule {rule.index} would start consultation {used + 1} of this "
+                    f"mission and [limits] max_consults is {budget} (§27)",
+                    {**where, "consults": used, "max_consults": budget},
+                )
+                return
+            prompt = consult_prompt(event, job, role=role)
         try:
             started = await self.enqueue(
-                role=DRIVER,
+                role=role,
                 context="clear",
-                prompt=consult_prompt(event, job),
+                prompt=prompt,
                 origin=ORIGIN,
                 playbook_sha256=book.sha256,
             )
@@ -1518,7 +1677,7 @@ class PlaybookEngine:
             raise
         except Exception as exc:
             await self.stop(
-                f"{event}: rule {rule.index} could not start the driver: {exc}", where
+                f"{event}: rule {rule.index} could not start the {role}: {exc}", where
             )
             return
         self.spool.append_event(
@@ -1527,14 +1686,62 @@ class PlaybookEngine:
                 "job": started.id,
                 "about": job.id,
                 "role": job.role,
+                "consulted": role,
                 "event": event,
                 "verdict": job.verdict,
                 "rule": rule.index,
                 "consults": used + 1,
-                "max_consults": book.max_consults,
+                "max_consults": budget,
             },
         )
         self._fired(rule, event, job, fired_job=started.id)
+
+    def architect_brief(self, book: Playbook, consults: int) -> ArchitectBrief:
+        """§31: the roadmap and the series' conditions the architect's prompt carries.
+
+        The roadmap is `meta/ROADMAP.md` under the builder's cwd — a repository file,
+        read like the playbook, so it is the series branch's own roadmap. §31 asks for
+        "the roadmap's next milestone"; the whole file goes in, because hands does not
+        parse roadmaps and carrying it whole cannot pick the wrong milestone. A file
+        that cannot be read says so and does not stop the consultation: the architect
+        reads the branch from its own clone (`architect/CLAUDE.md` rule 1).
+        """
+        path = self.config.role("builder").cwd / ROADMAP
+        try:
+            roadmap = path.read_text(encoding="utf-8")
+        except OSError as exc:
+            roadmap = f"[hands: {ROADMAP} could not be read: {exc}; read it from your clone]"
+        return ArchitectBrief(
+            roadmap=roadmap,
+            roadmap_path=str(ROADMAP),
+            consults=consults,
+            max_consults=book.max_architect_consults,
+            gate_failures=book.gate_failures,
+            escalate_on=book.escalate_on,
+        )
+
+    def architect_consults_used(self) -> int:
+        """§31: the architect consultations of this *series* — architect jobs (a §6
+        resume of one is not another) after the series' anchor (`SeriesAnchor`).
+
+        It takes no playbook, where `consults_used` does: the series it counts for is
+        the anchor's, written when that playbook loaded. With no anchor, every
+        architect job in the spool counts: the safe direction is to stop sooner, as
+        `consults_used` has it.
+        """
+        jobs = self.spool.list_jobs()
+        anchor = self.state.series_since
+        start = 0
+        if anchor is not None and anchor.job is not None:
+            for index, record in enumerate(jobs):
+                if record.id == anchor.job:
+                    start = index + 1
+                    break
+        return sum(
+            1
+            for record in jobs[start:]
+            if record.role == ARCHITECT and record.resumed_from is None
+        )
 
     def consults_used(self, book: Playbook | None) -> int:
         """§27, §28: the consultations of this mission — driver jobs (a §6 resume of
@@ -1582,13 +1789,14 @@ class PlaybookEngine:
         said = job.verdict if job.verdict is not None else "no VERDICT: line"
         journal = self.config.role("builder").cwd / JOURNAL
         line = (
-            f"{now_iso()}  consult {job.id} ({job.state}) on {event} of {role} job {about}: "
-            f"{said}"
+            f"{now_iso()}  consult {job.id} ({job.role} {job.state}) on {event} of {role} "
+            f"job {about}: {said}"
         )
         payload: dict[str, Any] = {
             "job": job.id,
             "about": about,
             "role": role,
+            "consulted": job.role,
             "event": event,
             "state": job.state,
             "verdict": job.verdict,
@@ -1602,6 +1810,85 @@ class PlaybookEngine:
             log.warning("playbook: cannot append to %s: %s", journal, exc)
             payload["journal_error"] = str(exc)
         self.spool.append_event("consult.done", payload)
+
+    # ------------------------------------------ the architect's follow-up (§31)
+
+    async def _architect_end(self, job: Job) -> None:
+        """§31: what follows an architect consultation, which is the engine's own.
+
+        `next kit` waits for the apply the architect filed: the engine does nothing
+        more, and the held (under `autonomous`, approved) apply carries the series.
+        `series complete` and `escalate` stop with their reasons, as does every
+        other end. No playbook rule fires either way — `architect.*` is not one of
+        §10's events — so this is the whole of the follow-up.
+
+        §29's rule for a consultation's stop over a paused pipeline applies here as
+        it does to the driver's: suppressed like any later stop, and notified, so the
+        human learns the consultation did not resolve.
+        """
+        await self._ensure_loaded()
+        event = f"{ARCHITECT}.{job.state}"
+        reason = self._architect_stop(event, job)
+        if reason is None:
+            log.info("playbook: %s — %s; waiting for the apply it filed (§31)",
+                     event, job.verdict)
+            return
+        await self.stop(reason, _payload(event, job), notify_suppressed=True)
+
+    def _architect_stop(self, event: str, job: Job) -> str | None:
+        """The stop reason §31 gives this architect end, or None for a `next kit`
+        whose apply is in the spool."""
+        if job.state in CONSULT_STOP_STATES:
+            return (
+                f"{event}: the consultation's architect job ended {job.state}, and a "
+                "consultation that does not end in a verdict stops (§31)"
+            )
+        verdict = job.verdict
+        if verdict is None:
+            return f"{event}: the architect's reply has no VERDICT: line, so it stops (§31)"
+        if _SERIES_COMPLETE_RE.match(verdict):
+            return (
+                f"{event}: the architect replied series complete: the roadmap's gates are "
+                "met and there is no next kit, so the pipeline stops (§31)"
+            )
+        escalated = _ESCALATE_RE.match(verdict)
+        if escalated is not None:
+            reason = escalated.group("reason") or "(no reason given)"
+            return f"{event}: the architect escalated: {reason} — {_resume_line(job)} (§31)"
+        kit = _NEXT_KIT_RE.match(verdict)
+        if kit is not None:
+            if self._filed_apply(job) is None:
+                # §31 has `next kit` "wait for the apply the architect filed". With no
+                # such apply there is nothing to wait for, and waiting silently would
+                # stall the series with nobody told — which is what §10 stops for.
+                return (
+                    f"{event}: the architect replied {verdict!r} and filed no apply during "
+                    f"the consultation (no job of origin {ARCHITECT_ORIGIN!r} after job "
+                    f"{job.id}), so there is nothing to wait for (§31)"
+                )
+            return None
+        shown = " | ".join(ARCHITECT_VERDICTS)
+        return (
+            f"{event}: the architect's verdict {verdict!r} is none of {shown}, "
+            "so it stops (§31)"
+        )
+
+    def _filed_apply(self, job: Job) -> Job | None:
+        """The apply the architect filed during this consultation, if it filed one.
+
+        `hands kit file` files a held builder job of origin `architect` (§31), so it
+        is in the spool after the architect's own job — by position, since two jobs
+        can share a millisecond.
+        """
+        jobs = self.spool.list_jobs()
+        for index, record in enumerate(jobs):
+            if record.id != job.id:
+                continue
+            for later in jobs[index + 1 :]:
+                if later.origin == ARCHITECT_ORIGIN:
+                    return later
+            return None
+        return None
 
     async def _act_notify(
         self, rule: Rule, event: str, job: Job | None, groups: dict[str, str]
@@ -1808,6 +2095,14 @@ class PlaybookEngine:
                 "used": self.consults_used(book),
                 "max_consults": book.max_consults if book else DEFAULT_MAX_CONSULTS,
             },
+            # §31: the architect's budget is another counter, per series, so it is
+            # another row rather than a second meaning for `consults`.
+            "architect_consults": {
+                "used": self.architect_consults_used(),
+                "max_architect_consults": (
+                    book.max_architect_consults if book else DEFAULT_MAX_ARCHITECT_CONSULTS
+                ),
+            },
             "last_rule": self._shown_last_rule(book),
         }
 
@@ -1911,7 +2206,7 @@ def driver_stop(event: str, job: Job | None) -> str | None:
     role, _, state = event.partition(".")
     if role != DRIVER:
         return None
-    if state in DRIVER_STOP_STATES:
+    if state in CONSULT_STOP_STATES:
         return (
             f"{event}: the consultation's driver job ended {state}, and a consultation "
             "that does not end resolved stops (§27, §28)"
@@ -1931,6 +2226,20 @@ def driver_stop(event: str, job: Job | None) -> str | None:
     )
 
 
+def _resume_line(job: Job) -> str:
+    """§31, `architect/README.md` "When it escalates": the architect's session id and
+    the one line that re-opens it, or a plain statement that there is none."""
+    if not job.session_id:
+        return (
+            f"job {job.id} recorded no session id, so there is no `claude --resume` line "
+            "to continue it with"
+        )
+    return (
+        f"session {job.session_id}; continue it in the architect's directory with "
+        f"`claude --resume {job.session_id}`"
+    )
+
+
 def consult_head(prompt: str) -> dict[str, str] | None:
     """The consult prompt's first line read back — `event`, `job`, and `role`, the
     role the consultation names (§27, §28) — or None for a prompt that is not one."""
@@ -1938,16 +2247,45 @@ def consult_head(prompt: str) -> dict[str, str] | None:
     return None if head is None else head.groupdict()
 
 
-def consult_prompt(event: str, job: Job) -> str:
-    """§27: what a `consult` sends the driver role — the event, the job record
-    (id, role, state, verdict) and the role's last reply, verbatim, with the
-    question and the two VERDICT lines the reply must begin with."""
+@dataclass(frozen=True)
+class ArchitectBrief:
+    """§31: what an architect consultation carries besides the event and the review.
+
+    The engine builds it (`PlaybookEngine.architect_brief`): the roadmap is a file
+    under the builder's cwd, and the rest is the playbook's `[series]` and
+    `[limits]`. Its defaults are what a caller with no engine gets — an empty
+    roadmap and §31's own numbers — so the prompt is one shape either way.
+    """
+
+    roadmap: str = ""
+    roadmap_path: str = str(ROADMAP)
+    consults: int = 1
+    max_consults: int = DEFAULT_MAX_ARCHITECT_CONSULTS
+    gate_failures: int = DEFAULT_GATE_FAILURES
+    escalate_on: tuple[str, ...] = ()
+
+
+def consult_prompt(
+    event: str, job: Job, *, role: str = DRIVER, brief: ArchitectBrief | None = None
+) -> str:
+    """What a `consult` sends the role it names — the prompt hands writes itself.
+
+    §27's driver prompt and §31's architect prompt share their first line (the one
+    `consult_head` reads back) and the record of the event; what follows differs,
+    because the two roles are asked different questions. `brief` is the architect's
+    other half (the roadmap and the series' conditions), which only the engine can
+    build: it reads a repository file and the playbook's limits.
+    """
+    if role == ARCHITECT:
+        return _architect_prompt(event, job, brief)
+    return _driver_prompt(event, job)
+
+
+def _record(event: str, job: Job) -> str:
+    """The head line every consult prompt begins with, and the job record (§27)."""
     verdict = job.verdict if job.verdict is not None else "(none: the reply has no VERDICT: line)"
-    result = job.result if job.result is not None else ""
     return (
         f"hands consult: {event} on job {job.id} (role {job.role})\n"
-        "\n"
-        "handsd started you as the driver role to resolve one consultation (DESIGN §27).\n"
         "\n"
         f"Event: {event}\n"
         f"Job: {job.id}\n"
@@ -1955,6 +2293,20 @@ def consult_prompt(event: str, job: Job) -> str:
         f"State: {job.state}\n"
         f"Verdict: {verdict}\n"
         f"The full record: hands show {job.id}\n"
+    )
+
+
+def _driver_prompt(event: str, job: Job) -> str:
+    """§27: the event, the job record and the role's last reply, verbatim, with the
+    question and the two VERDICT lines the reply must begin with."""
+    head, _, record = _record(event, job).partition("\n\n")
+    result = job.result if job.result is not None else ""
+    return (
+        f"{head}\n"
+        "\n"
+        "handsd started you as the driver role to resolve one consultation (DESIGN §27).\n"
+        "\n"
+        f"{record}"
         "\n"
         "The role's last reply (the job's result), verbatim between the markers:\n"
         "----- BEGIN REPLY -----\n"
@@ -1969,6 +2321,107 @@ def consult_prompt(event: str, job: Job) -> str:
         "\n"
         + "".join(f"    {line}\n" for line in DRIVER_VERDICTS)
     )
+
+
+def _architect_prompt(event: str, job: Job, brief: ArchitectBrief | None) -> str:
+    """§31: the event, the review's verdict line and its Blockers and Should-fix
+    sections verbatim, the roadmap file, and the instruction.
+
+    The escalation conditions of `[series]` are here too: §31 has the architect
+    judge two of them and `architect/CLAUDE.md` rule 8 says handsd tells it when
+    the consult budget is exhausted, so they are data this prompt carries.
+    """
+    brief = brief if brief is not None else ArchitectBrief()
+    conditions = ", ".join(brief.escalate_on) or "none written into [series]"
+    head, _, record = _record(event, job).partition("\n\n")
+    return (
+        f"{head}\n"
+        "\n"
+        "handsd started you as the architect role for one consultation (DESIGN §31).\n"
+        "\n"
+        f"{record}"
+        "\n"
+        f"The review's verdict line and its {_and_sections()} sections, verbatim between "
+        "the markers:\n"
+        "----- BEGIN REVIEW -----\n"
+        f"{review_sections(job.result, job.verdict)}\n"
+        "----- END REVIEW -----\n"
+        "\n"
+        f"The roadmap ({brief.roadmap_path}), verbatim between the markers:\n"
+        "----- BEGIN ROADMAP -----\n"
+        f"{brief.roadmap}\n"
+        "----- END ROADMAP -----\n"
+        "\n"
+        "The escalation conditions of this series ([series], §31):\n"
+        f"    gate_failures = {brief.gate_failures} (the same roadmap gate failing that many "
+        "times in a row)\n"
+        f"    escalate_on = {conditions}\n"
+        f"    this is consultation {brief.consults} of {brief.max_consults} "
+        "([limits] max_architect_consults); when the budget is exhausted handsd stops the "
+        "series itself, naming budget-exhausted\n"
+        "\n"
+        f"The instruction: {ARCHITECT_INSTRUCTION}.\n"
+        "File a kit with `hands kit file <zip>` before you reply `VERDICT: next kit <name>`: "
+        "handsd waits for the apply that filing makes, and stops when there is none.\n"
+        "\n"
+        "Your reply's first line is exactly one of:\n"
+        "\n"
+        + "".join(f"    {line}\n" for line in ARCHITECT_VERDICTS)
+    )
+
+
+def _and_sections() -> str:
+    return " and ".join(f"`## {name}`" for name in REVIEW_SECTIONS)
+
+
+def review_sections(result: str | None, verdict: str | None) -> str:
+    """§31: the review's verdict line and its `## Blockers` and `## Should-fix`
+    sections, verbatim — or the whole reply when a heading is missing.
+
+    A review is markdown and its headings are the reviewer's to write, so hands
+    cannot be sure of them. Failing soft is the safe direction: the architect is
+    asked to answer a review, and a prompt carrying *nothing* of it would be
+    answered anyway. A section runs from its heading to the next heading of the
+    same or a shallower level (`## Notes` ends `## Should-fix`; a `### …` inside
+    it does not).
+    """
+    text = result if result else ""
+    lines = text.splitlines()
+    found = [(name, _section(lines, name)) for name in REVIEW_SECTIONS]
+    missing = [name for name, block in found if block is None]
+    head = verdict if verdict else "(the reply has no VERDICT: line)"
+    if missing:
+        return (
+            f"{head}\n\n"
+            f"[hands: no `## {'` or `## '.join(missing)}` heading in this reply, so the whole "
+            "of it is here]\n\n"
+            f"{text}"
+        )
+    return "\n\n".join([head] + [block for _name, block in found if block is not None])
+
+
+_SECTION_RE = re.compile(r"\A(?P<hashes>#{1,6})\s+(?P<name>.+?)\s*:?\s*\Z")
+
+
+def _section(lines: list[str], name: str) -> str | None:
+    """The markdown section headed `name`, verbatim, or None when there is none."""
+    wanted = name.lower()
+    start: int | None = None
+    level = 0
+    for index, line in enumerate(lines):
+        found = _SECTION_RE.match(line)
+        if found is None:
+            continue
+        heading = found.group("name").strip().lower()
+        if start is None:
+            if heading == wanted or heading.startswith(f"{wanted} "):
+                start, level = index, len(found.group("hashes"))
+            continue
+        if len(found.group("hashes")) <= level:
+            return "\n".join(lines[start:index]).rstrip() + "\n"
+    if start is None:
+        return None
+    return "\n".join(lines[start:]).rstrip() + "\n"
 
 
 def _payload(event: str, job: Job | None, **extra: Any) -> dict[str, Any]:

@@ -39,7 +39,7 @@ from typing import Any
 
 from hands import __version__
 from hands.api import Api, ApiError, job_summary
-from hands.config import DRIVER_ROLE, Config, ConfigError, load_config, resolve_project
+from hands.config import CONSULT_ROLES, Config, ConfigError, load_config, resolve_project
 from hands.limits import LimitManager
 from hands.monitor import MonitorSupervisor
 from hands.notify import Notifier
@@ -185,7 +185,7 @@ class Daemon:
         for job in orphans:
             log.warning("job %s was running with no process; marked orphaned", job.id)
         for job in orphans:
-            await self._consultation_ended(job)  # §28: `driver.orphaned` stops
+            await self._consultation_ended(job)  # §28, §31: an orphaned consultation stops
 
         self._bind_guard()
         self._server = await asyncio.start_unix_server(
@@ -492,10 +492,10 @@ class Daemon:
             await self._announce()
 
     async def _consultation_ended(self, job: Job) -> None:
-        """§28: a driver job that ended outside the worker's run (never spawned,
-        cancelled while queued, orphaned by a dead daemon) is still the end of its
-        consultation, so the engine hears it. Other roles' such ends are unchanged."""
-        if job.role != DRIVER_ROLE:
+        """§28, §31: a consulted role's job that ended outside the worker's run (never
+        spawned, cancelled while queued, orphaned by a dead daemon) is still the end of
+        its consultation, so the engine hears it. Other roles' such ends are unchanged."""
+        if job.role not in CONSULT_ROLES:
             return
         try:
             await self.playbook.on_job(job)
@@ -653,7 +653,7 @@ class Daemon:
                 "job.killed",
                 {"job": job.id, "role": job.role, "state": "killed", "reason": reason},
             )
-            await self._consultation_ended(killed)  # §28: a driver job cancelled queued
+            await self._consultation_ended(killed)  # §28: a consultation cancelled queued
             await self._announce()
             return killed
 

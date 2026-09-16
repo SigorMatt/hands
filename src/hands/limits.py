@@ -41,7 +41,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from hands.config import DRIVER_ROLE, Config
+from hands.config import CONSULT_ROLES, Config
 from hands.notify import PAIR_SPACING_S
 from hands.spool import Job, Spool
 
@@ -355,9 +355,9 @@ class LimitManager:
                 self.spool.update_role(job.role, consecutive_resumes=0)
             return
         if job.state == "limited":
-            if job.role == DRIVER_ROLE:
-                # §28: a consultation that ends limited has ended; the engine stops
-                # and notifies. A resume would run the driver after the stop.
+            if job.role in CONSULT_ROLES:
+                # §28, §31: a consultation that ends limited has ended; the engine
+                # stops and notifies. A resume would run the role after the stop.
                 return
             await self.on_limited(job)
 
@@ -410,7 +410,7 @@ class LimitManager:
         limited: dict[str, Job] = {}
         for job in self.spool.list_jobs():  # oldest id first
             newest[job.role] = job
-            if job.state == "limited" and job.role != DRIVER_ROLE:  # §28
+            if job.state == "limited" and job.role not in CONSULT_ROLES:  # §28, §31
                 limited[job.role] = job
         return [job for role, job in limited.items() if newest[role].id == job.id]
 

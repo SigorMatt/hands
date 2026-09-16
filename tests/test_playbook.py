@@ -35,8 +35,13 @@ from hands.gates import DECIDERS
 from hands.kit import Apply, apply_params
 from hands.playbook import (
     ACTIONS,
+    ARCHITECT,
+    ARCHITECT_INSTRUCTION,
+    ARCHITECT_VERDICTS,
     AUTONOMOUS_APPROVAL,
+    CONSULT_EVENTS,
     CONSULT_QUESTION,
+    CONSULT_ROLES,
     DEFAULT_MAX_ARCHITECT_CONSULTS,
     DRIVER_VERDICTS,
     ENGINE_RULE_INDEX,
@@ -44,6 +49,7 @@ from hands.playbook import (
     EVENTS,
     JOB_PLACEHOLDERS,
     LIMIT_KEYS,
+    ROADMAP,
     PipelineState,
     PlaceholderError,
     PlaybookEngine,
@@ -576,9 +582,10 @@ BAD_PLAYBOOKS: list[tuple[str, str, str]] = [
     # §27 (mission 11 U5): `consult` builds its own prompt for the driver role.
     ("consult with a prompt", 'version = 1\n[[rule]]\non = "builder.done"\n'
      'then = "consult"\nprompt = "x"',
-     "a consult takes no prompt: hands writes the driver's prompt (§27)"),
+     "a consult takes no prompt: hands writes the driver's prompt (§27, §31)"),
     ("consult to another role", 'version = 1\n[[rule]]\non = "builder.done"\n'
-     'then = "consult"\nrole = "aux"', "a consult's role is driver, got 'aux'"),
+     'then = "consult"\nrole = "aux"',
+     "a consult's role is driver or architect (§27, §31), got 'aux'"),
     ("consult with keep", 'version = 1\n[[rule]]\non = "builder.done"\n'
      'then = "consult"\ncontext = "keep"',
      "a consult starts a fresh driver session: context is clear, got 'keep'"),
@@ -2914,7 +2921,7 @@ def test_end_to_end_a_driver_job_that_cannot_spawn_files_consult_done_and_stops(
         done = await _stopped_consultation("killed", "driver.killed")
         assert done["payload"]["about"] == first["id"]
         lines = (workdir / "meta" / "journal.md").read_text(encoding="utf-8").splitlines()
-        assert len(lines) == 1 and "(killed)" in strip_paths(lines[0])
+        assert len(lines) == 1 and "(driver killed)" in strip_paths(lines[0])
 
     drive(body)
 
@@ -3427,3 +3434,707 @@ def test_a_playbook_that_sets_autonomous_arrives_as_a_gated_apply() -> None:
     for origin in ("kit", "architect"):
         assert apply_params(plan, origin)["gate"] == "apply m16"
     assert DECIDERS["playbook"].available and not DECIDERS["playbook"].requires_quote
+
+
+# ------------------------------------------ §31: the architect consultation (U5)
+
+#: The reviewer's reply in the shape the review protocol fixes — the verdict line
+#: first, then the sections `meta/reviews/REVIEW-14.md` carries. `## Notes` is here
+#: so that a test can prove the prompt carries the two sections §31 names and not
+#: the whole reply.
+REVIEW_VERDICT = "VERDICT: review mission 16 blockers=1 should-fix=1"
+REVIEW_BLOCKERS = """## Blockers
+
+1. **The kickoff names a brief the branch lacks (U2 `abc1234`).**
+   - Why. `[series] kickoff` reads a file no commit on the branch adds.
+"""
+REVIEW_SHOULD_FIX = """## Should-fix
+
+1. The journal line does not name the role that was consulted.
+"""
+REVIEW_NOTES = """## Notes
+
+The reviewer re-ran both probes at the tip; neither is a blocker.
+"""
+REVIEW = (
+    f"{REVIEW_VERDICT}\n\nBase `abc1234`, tip `def5678`.\n\n"
+    f"{REVIEW_BLOCKERS}\n{REVIEW_SHOULD_FIX}\n{REVIEW_NOTES}"
+)
+
+#: `meta/ROADMAP.md` under the builder's cwd, which the consult prompt carries whole.
+ROADMAP_TEXT = """# ROADMAP
+
+- **M4c The architect role** — missions 15 and 16. DONE.
+- **M5 spanweave integration** — the next milestone; gate: two runs merged.
+"""
+
+ARCHITECT_KICKOFF = "Read meta/BUILDER-17-PROMPT.md and execute the mission below its divider."
+
+#: §31's series: the architect role, autonomous, consulted on the review outcome.
+ARCHITECT_BOOK = f"""version = 1
+
+[series]
+name = "m17"
+kickoff = "{ARCHITECT_KICKOFF}"
+architect = "role"
+autonomous = true
+gate_failures = 2
+escalate_on = ["blocker-unanswered", "milestone-missing", "budget-exhausted"]
+
+[limits]
+max_architect_consults = 12
+
+[[rule]]
+on = "aux.done"
+verdict = '^VERDICT: review mission (?P<n>\\d+)'
+then = "consult"
+role = "architect"
+
+[[rule]]
+on = "builder.done"
+verdict = '^VERDICT: mission (?P<n>\\d+) finished'
+then = "stop"
+message = "Mission {{n}} finished"
+"""
+
+
+def architect_dir(tmp_home: Path) -> Path:
+    d = tmp_home.parent / "hands-architect"
+    d.mkdir(exist_ok=True)
+    return d
+
+
+def architect_engine(
+    tmp_home: Path,
+    workdir: Path,
+    body: str = ARCHITECT_BOOK,
+    *,
+    roadmap: str | None = ROADMAP_TEXT,
+) -> tuple[PlaybookEngine, Recorder]:
+    if roadmap is not None:
+        path = workdir / ROADMAP
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(roadmap, encoding="utf-8")
+    return engine_for(tmp_home, workdir, body, architect=architect_dir(tmp_home))
+
+
+def reviewed(spool: Spool, result: str = REVIEW) -> Job:
+    """The aux job a review outcome is (§10's `aux.done`)."""
+    job = spool.create_job(role="aux", context="clear", prompt="Review it", origin="playbook")
+    spool.transition(job, "running")
+    return spool.transition(
+        job, "done", verdict=result.splitlines()[0], result=result
+    )
+
+
+def _architect_job(
+    spool: Spool,
+    *,
+    state: str = "done",
+    verdict: str | None,
+    about: Job,
+    session_id: str | None = "sess-arch-1",
+) -> Job:
+    job = spool.create_job(
+        role=ARCHITECT,
+        context="clear",
+        prompt=f"hands consult: aux.done on job {about.id} (role aux)\n",
+        origin="playbook",
+    )
+    spool.transition(job, "running", session_id=session_id)
+    return spool.transition(job, state, verdict=verdict, result=verdict)
+
+
+# ---- the rule: `consult` with `role = "architect"` (§27, §31)
+
+
+def test_a_consult_may_name_the_architect_on_a_review_outcome(workdir: Path) -> None:
+    book = parse_playbook(ARCHITECT_BOOK, path=workdir / "PLAYBOOK.toml")
+    [rule] = [rule for rule in book.rules if rule.then == "consult"]
+    assert rule.role == ARCHITECT
+    assert rule.on == "aux.done"
+    assert rule.context == "clear"  # §27: a consultation is a fresh session
+    assert CONSULT_ROLES == ("driver", ARCHITECT)
+    # Each role's events are explicit, and the driver's are exactly today's.
+    assert CONSULT_EVENTS[ARCHITECT] == ("aux.done",)
+    assert CONSULT_EVENTS["driver"] == tuple(
+        event for event in EVENTS if not event.startswith("driver.")
+    )
+
+
+@pytest.mark.parametrize(
+    ("body", "because"),
+    [
+        (
+            'version = 1\n[series]\narchitect = "role"\n[[rule]]\non = "builder.done"\n'
+            'then = "consult"\nrole = "architect"',
+            "aux.done",
+        ),
+        (
+            'version = 1\n[[rule]]\non = "aux.done"\nthen = "consult"\nrole = "architect"',
+            '[series] architect is "phone"',
+        ),
+        (
+            'version = 1\n[[rule]]\non = "architect.done"\nthen = "stop"',
+            "on must be one of",
+        ),
+    ],
+    ids=["architect on a builder verdict", "architect rule in phone mode", "an architect event"],
+)
+def test_the_architect_consult_is_refused_at_load_not_when_it_fires(
+    workdir: Path, body: str, because: str
+) -> None:
+    """§10's discipline: refused when the playbook is loaded. The mode and the rule
+    are both in the playbook file, so the earliest place that sees both is the load."""
+    with pytest.raises(PlaybookError) as caught:
+        parse_playbook(body, path=workdir / "PLAYBOOK.toml")
+    assert because in strip_paths(str(caught.value)), caught.value
+
+
+def test_the_architect_events_are_not_playbook_events(tmp_home: Path, workdir: Path) -> None:
+    """§31 puts the follow-up in the engine, so no rule fires on an architect end:
+    `EVENTS` stays the closed list it is today, without the architect's states."""
+    ends = {f"{ARCHITECT}.{state}" for state in ("done", "failed", "killed", "orphaned")}
+    assert set(EVENTS).isdisjoint(ends | {f"{ARCHITECT}.limited"})
+    assert CONSULT_EVENTS[ARCHITECT] == ("aux.done",)
+
+
+# ---- the prompt (§31: the event, the review's sections, the roadmap, the instruction)
+
+
+def test_the_architect_prompt_carries_the_event_the_review_the_roadmap_and_the_instruction(
+    tmp_home: Path, workdir: Path
+) -> None:
+    engine, recorder = architect_engine(tmp_home, workdir)
+    review = reviewed(engine.spool)
+
+    run(engine.on_job(review))
+
+    assert not engine.state.paused, engine.state.stop_reason
+    assert recorder.sent == []
+    [call] = recorder.enqueued
+    assert call["role"] == ARCHITECT
+    assert call["context"] == "clear"
+    assert call["origin"] == "playbook"
+    assert call["playbook_sha256"] == engine.playbook.sha256  # type: ignore[union-attr]
+    prompt = call["prompt"]
+    # the event
+    assert prompt.startswith(f"hands consult: aux.done on job {review.id} (role aux)\n")
+    # the review's verdict line and its two sections, verbatim
+    assert REVIEW_VERDICT in strip_paths(prompt)
+    assert REVIEW_BLOCKERS in strip_paths(prompt)
+    assert REVIEW_SHOULD_FIX in strip_paths(prompt)
+    assert REVIEW_NOTES not in strip_paths(prompt), "§31 names two sections, not the reply"
+    # the roadmap file, whole, named by the path it was read from
+    assert ROADMAP_TEXT in strip_paths(prompt)
+    assert str(ROADMAP) in strip_paths(prompt)
+    # the instruction and the vocabulary, verbatim
+    assert ARCHITECT_INSTRUCTION in strip_paths(prompt)
+    assert ARCHITECT_INSTRUCTION == (
+        "write the next kit from ROADMAP and the review, file it, or escalate"
+    )
+    assert ARCHITECT_VERDICTS == (
+        "VERDICT: next kit <name>",
+        "VERDICT: series complete",
+        "VERDICT: escalate <reason>",
+    )
+    for line in ARCHITECT_VERDICTS:
+        assert line in strip_paths(prompt)
+    # the conditions the architect judges, and the budget handsd tells it about
+    assert "gate_failures = 2" in strip_paths(prompt)
+    for condition in ESCALATE_ON:
+        assert condition in strip_paths(prompt)
+    assert "consultation 1 of 12" in strip_paths(prompt)
+    [sent] = [event for event in engine.spool.events() if event.kind == "consult.sent"]
+    assert sent.payload["consulted"] == ARCHITECT
+    assert sent.payload["about"] == review.id
+    assert sent.payload["event"] == "aux.done"
+    assert sent.payload["consults"] == 1
+    assert sent.payload["max_consults"] == 12
+
+
+def test_a_review_whose_headings_are_missing_is_carried_whole(
+    tmp_home: Path, workdir: Path
+) -> None:
+    """Fail soft: a reply hands cannot find the headings in is carried entire,
+    never silently emptied, and the prompt says which heading was not found."""
+    engine, recorder = architect_engine(tmp_home, workdir)
+    reply = f"{REVIEW_VERDICT}\n\n## Findings\n\nOne finding, in a heading of its own.\n"
+    run(engine.on_job(reviewed(engine.spool, reply)))
+    prompt = recorder.enqueued[0]["prompt"]
+    assert reply in strip_paths(prompt)
+    assert "Blockers" in strip_paths(prompt)  # the headings it looked for, named
+    assert "Should-fix" in strip_paths(prompt)
+
+
+def test_a_roadmap_hands_cannot_read_is_said_and_does_not_stop_the_consultation(
+    tmp_home: Path, workdir: Path
+) -> None:
+    engine, recorder = architect_engine(tmp_home, workdir, roadmap=None)
+    run(engine.on_job(reviewed(engine.spool)))
+    assert not engine.state.paused, engine.state.stop_reason
+    prompt = recorder.enqueued[0]["prompt"]
+    assert str(ROADMAP) in strip_paths(prompt)
+    assert "could not be read" in strip_paths(prompt)
+
+
+def test_a_consult_with_no_architect_role_configured_stops_and_starts_nothing(
+    tmp_home: Path, workdir: Path
+) -> None:
+    engine, recorder = engine_for(tmp_home, workdir, ARCHITECT_BOOK)
+    run(engine.on_job(reviewed(engine.spool)))
+    assert recorder.enqueued == []
+    assert engine.state.paused
+    assert "[roles.architect]" in strip_paths(engine.state.stop_reason or "")
+
+
+# ---- the verdicts and the follow-ups, which are the engine's (§31)
+
+
+def test_next_kit_waits_for_the_apply_the_architect_filed(
+    tmp_home: Path, workdir: Path
+) -> None:
+    """§31: "`next kit` waits for the apply the architect filed" — the engine does
+    nothing more, and the held (or approved) apply carries the series."""
+    engine, recorder = architect_engine(tmp_home, workdir)
+    review = reviewed(engine.spool)
+    review_job = review
+    architect = engine.spool.create_job(
+        role=ARCHITECT,
+        context="clear",
+        prompt=f"hands consult: aux.done on job {review_job.id} (role aux)\n",
+        origin="playbook",
+    )
+    engine.spool.transition(architect, "running", session_id="sess-arch-1")
+    held_apply(engine.spool, name="mission-17-kit")  # filed during the consultation
+    architect = engine.spool.transition(
+        architect, "done", verdict="VERDICT: next kit mission-17-kit",
+        result="VERDICT: next kit mission-17-kit",
+    )
+
+    run(engine.on_job(architect))
+    assert not engine.state.paused, engine.state.stop_reason
+    assert recorder.enqueued == [] and recorder.sent == []
+    assert [title for title, _ in recorder.notified] == []
+
+
+def test_next_kit_with_no_apply_filed_stops_rather_than_stall_the_series(
+    tmp_home: Path, workdir: Path
+) -> None:
+    """An architect that claims a kit it did not file would stall the series in
+    silence: there is nothing to wait for, so §10's default applies and it stops."""
+    engine, recorder = architect_engine(tmp_home, workdir)
+    review = reviewed(engine.spool)
+    held_apply(engine.spool, name="an-earlier-kit")  # before the consultation: not this one
+    architect = _architect_job(
+        engine.spool, verdict="VERDICT: next kit mission-17-kit", about=review
+    )
+    run(engine.on_job(architect))
+    said = engine.state.stop_reason or ""
+    assert engine.state.paused
+    assert "filed no apply" in strip_paths(said), said
+    assert "next kit mission-17-kit" in strip_paths(said), said
+
+
+def test_series_complete_stops_with_that_reason(tmp_home: Path, workdir: Path) -> None:
+    engine, recorder = architect_engine(tmp_home, workdir)
+    review = reviewed(engine.spool)
+    architect = _architect_job(engine.spool, verdict="VERDICT: series complete", about=review)
+    run(engine.on_job(architect))
+    assert engine.state.paused
+    said = engine.state.stop_reason or ""
+    assert "series complete" in strip_paths(said), said
+    assert [title for title, _ in recorder.notified] == ["hands: the pipeline stopped"]
+
+
+def test_escalate_stops_and_notifies_with_the_reason_the_session_and_the_resume_line(
+    tmp_home: Path, workdir: Path
+) -> None:
+    """§31, and `architect/README.md`'s "When it escalates": the notification names
+    the condition, the architect's session id and the `claude --resume` line."""
+    engine, recorder = architect_engine(tmp_home, workdir)
+    review = reviewed(engine.spool)
+    reason = "milestone-missing: the roadmap has no milestone after M5"
+    architect = _architect_job(
+        engine.spool, verdict=f"VERDICT: escalate {reason}", about=review, session_id="sess-9"
+    )
+    run(engine.on_job(architect))
+    assert engine.state.paused
+    [(title, payload)] = recorder.notified
+    assert title == "hands: the pipeline stopped"
+    said = payload["reason"]
+    assert reason in strip_paths(said), said
+    assert "sess-9" in strip_paths(said), said
+    assert "claude --resume sess-9" in strip_paths(said), said
+
+
+def test_an_escalation_with_no_session_id_says_so(tmp_home: Path, workdir: Path) -> None:
+    engine, recorder = architect_engine(tmp_home, workdir)
+    review = reviewed(engine.spool)
+    architect = _architect_job(
+        engine.spool, verdict="VERDICT: escalate budget-exhausted", about=review, session_id=None
+    )
+    run(engine.on_job(architect))
+    said = engine.state.stop_reason or ""
+    assert "no session id" in strip_paths(said), said
+    assert "no `claude --resume` line" in strip_paths(said), said
+
+
+@pytest.mark.parametrize(
+    ("state", "verdict", "because"),
+    [
+        ("done", "VERDICT: maybe next kit", "is none of"),
+        ("done", None, "has no VERDICT: line"),
+        ("failed", None, "ended failed"),
+        ("killed", None, "ended killed"),
+        ("orphaned", None, "ended orphaned"),
+        ("limited", None, "ended limited"),
+    ],
+)
+def test_every_other_architect_end_stops_and_notifies(
+    tmp_home: Path, workdir: Path, state: str, verdict: str | None, because: str
+) -> None:
+    engine, recorder = architect_engine(tmp_home, workdir)
+    review = reviewed(engine.spool)
+    architect = _architect_job(engine.spool, state=state, verdict=verdict, about=review)
+    run(engine.on_job(architect))
+    assert engine.state.paused
+    assert because in strip_paths(engine.state.stop_reason or "")
+    assert [title for title, _ in recorder.notified] == ["hands: the pipeline stopped"]
+
+
+def test_an_architect_consultation_files_consult_done_and_one_journal_line(
+    tmp_home: Path, workdir: Path
+) -> None:
+    """§27: "every consultation is an inbox event and a `meta/journal.md` line" —
+    the architect's as much as the driver's."""
+    engine, _recorder = architect_engine(tmp_home, workdir)
+    review = reviewed(engine.spool)
+    architect = _architect_job(engine.spool, verdict="VERDICT: series complete", about=review)
+    run(engine.on_job(architect))
+    [done] = [event for event in engine.spool.events() if event.kind == "consult.done"]
+    assert done.payload["job"] == architect.id
+    assert done.payload["about"] == review.id
+    assert done.payload["consulted"] == ARCHITECT
+    assert done.payload["state"] == "done"
+    assert done.payload["verdict"] == "VERDICT: series complete"
+    lines = (workdir / "meta" / "journal.md").read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 1
+    assert architect.id in strip_paths(lines[0])
+    assert review.id in strip_paths(lines[0])
+    assert ARCHITECT in strip_paths(lines[0])
+
+
+# ---- `[limits] max_architect_consults`, per series, and `budget-exhausted` (§31)
+
+
+def test_the_budget_is_the_engines_own_stop(tmp_home: Path, workdir: Path) -> None:
+    """§31: "the engine stops on the budget one itself". `escalate_on`'s other two
+    conditions are the architect's judgement, stated in its escalate reason."""
+    body = ARCHITECT_BOOK.replace("max_architect_consults = 12", "max_architect_consults = 1")
+    engine, recorder = architect_engine(tmp_home, workdir, body)
+    first = reviewed(engine.spool)
+    run(engine.on_job(first))
+    assert len(recorder.enqueued) == 1
+    _architect_job(engine.spool, verdict="VERDICT: series complete", about=first)
+    engine.state.paused = False  # the `series complete` stop is not what is tested here
+    engine.state.stop_reason = None
+
+    run(engine.on_job(reviewed(engine.spool)))
+
+    assert len(recorder.enqueued) == 1, "a consult beyond the budget started an architect job"
+    assert engine.state.paused
+    said = engine.state.stop_reason or ""
+    assert "max_architect_consults is 1" in strip_paths(said), said
+    assert "budget-exhausted" in strip_paths(said), said
+
+
+def test_the_architect_budget_is_counted_per_series_not_per_mission(
+    tmp_home: Path, workdir: Path
+) -> None:
+    """The series is `[series] name`: a kickoff does not restart the count (that is
+    `max_consults`, per mission), and a playbook that names another series does."""
+    engine, recorder = architect_engine(tmp_home, workdir)
+    spool = engine.spool
+    review = reviewed(spool)
+    run(engine.on_job(review))  # loads the playbook, which anchors the series
+    for _ in range(2):
+        _architect_job(spool, verdict="VERDICT: series complete", about=review)
+    kickoff = spool.create_job(
+        role="builder", context="clear", prompt=ARCHITECT_KICKOFF, origin="phone"
+    )
+    spool.transition(kickoff, "running")
+    spool.transition(kickoff, "done")
+    assert engine.pipeline()["architect_consults"] == {
+        "used": 2,
+        "max_architect_consults": 12,
+    }
+
+    commit_file(workdir, "PLAYBOOK.toml", ARCHITECT_BOOK.replace('name = "m17"', 'name = "m18"'))
+    engine._loaded = False
+    run(engine.on_job(reviewed(spool)))
+    assert engine.pipeline()["architect_consults"]["used"] == 0
+    assert engine.state.series_since is not None
+    assert engine.state.series_since.series == "m18"
+
+
+def test_the_pipeline_shows_the_architects_budget_only_in_role_mode(
+    tmp_home: Path, workdir: Path
+) -> None:
+    """The human's view of the series budget until `hands doctor` gets its row: a
+    line for a series whose architect is the role, and nothing for one that is not."""
+    engine, _recorder = architect_engine(tmp_home, workdir)
+    review = reviewed(engine.spool)
+    run(engine.on_job(review))  # loads the playbook, which anchors the series
+    _architect_job(engine.spool, verdict="VERDICT: series complete", about=review)
+    assert "architect 1 of max_architect_consults 12" in strip_paths(
+        _pipeline_block(engine.pipeline())
+    )
+    phone, _r = engine_for(tmp_home, workdir, PHONE_MODE)
+    assert "max_architect_consults" not in strip_paths(_pipeline_block(phone.pipeline()))
+
+
+def test_the_series_anchor_is_persisted_and_read_back(tmp_home: Path, workdir: Path) -> None:
+    engine, _recorder = architect_engine(tmp_home, workdir)
+    run(engine.on_job(reviewed(engine.spool)))
+    anchor = engine.state.series_since
+    assert anchor is not None and anchor.series == "m17" and anchor.at
+    data = json.loads((engine.spool.root / "pipeline.json").read_text(encoding="utf-8"))
+    assert data["series_since"]["series"] == "m17"
+    reread = PipelineState.from_dict(data).series_since
+    assert reread == anchor
+
+
+# ---- end to end, one test per verdict (§31, the unit's gate)
+
+#: The e2e playbook: §31's series, with the kickoff line carrying the reply the
+#: builder gives it, so only the architect's own reply comes from the scripted queue
+#: (`fake_claude` prefers a `FAKE:` directive and leaves the queue where it was).
+E2E_BOOK = ARCHITECT_BOOK.replace(
+    ARCHITECT_KICKOFF, f"{ARCHITECT_KICKOFF}\\nFAKE:result VERDICT: mission 17 finished"
+)
+
+#: What the scripted architect runs in place of `hands kit file <zip>`: the client
+#: half of `hands.kit.file_run` — the same `send` params, `origin: architect`, over
+#: the same socket — without the sandbox its check needs (`tests/test_kit.py` drives
+#: the real command). The apply prompt carries the builder's reply.
+FILE_APPLY = """
+import sys
+from hands.cli import call
+from hands.kit import Apply, apply_params
+plan = Apply(
+    name="mission-17-kit",
+    replaces=[],
+    adds=["meta/BUILDER-17-PROMPT.md"],
+    commit_message="plan: mission 17 kit",
+    kit_md=None,
+    prompt="Apply the kit the architect filed.\\nFAKE:result VERDICT: kit applied abc1234",
+)
+call(sys.argv[1], "send", apply_params(plan, "architect"), project=sys.argv[2])
+"""
+
+
+def file_apply_argv(tmp_home: Path) -> list[str]:
+    import sys
+
+    return [
+        sys.executable,
+        "-c",
+        FILE_APPLY,
+        str(tmp_home / ".hands" / "handsd.sock"),
+        PROJECT,
+    ]
+
+
+def fake_result(text: str) -> str:
+    """A prompt that makes `fake_claude` reply `text` verbatim, however many lines."""
+    return "FAKE:result " + text.replace("\\", "\\\\").replace("\n", "\\n")
+
+
+class TextPosts:
+    """`Posts`, keeping the message body too: §31's escalation is about what it says."""
+
+    def __init__(self) -> None:
+        self.sent: list[tuple[str, str]] = []
+
+    async def __call__(self, url: str, *, title: str, message: str) -> int:
+        self.sent.append((title, message))
+        return 200
+
+
+def architect_project(tmp_home: Path, workdir: Path, *, book: str = E2E_BOOK,
+                      ntfy: bool = False) -> Path:
+    """§31's project: the architect role configured, its playbook committed, and the
+    roadmap the consult prompt reads on the branch."""
+    architect = architect_dir(tmp_home)
+    body = config_body(tmp_home, workdir, extra=f'\n[roles.architect]\ncwd = "{architect}"\n')
+    if ntfy:
+        body = body.replace(
+            "[server]", '[server]\nntfy_topic = "hands-test"\nntfy_url = "https://ntfy.example"'
+        )
+    write_project(tmp_home, body)
+    write_playbook(workdir, book)
+    (workdir / ROADMAP).parent.mkdir(parents=True, exist_ok=True)
+    (workdir / ROADMAP).write_text(ROADMAP_TEXT, encoding="utf-8")
+    return architect
+
+
+def script(tmp_home: Path, monkeypatch: pytest.MonkeyPatch, replies: list[Any]) -> None:
+    path = tmp_home / "replies.json"
+    path.write_text(json.dumps(replies))
+    monkeypatch.setenv("HANDS_FAKE_CLAUDE_REPLIES", str(path))
+
+
+def test_end_to_end_next_kit_waits_for_the_apply_the_architect_filed(
+    tmp_home: Path, workdir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """(a) review → consult the architect → it files an apply and replies `VERDICT:
+    next kit <name>` → the engine waits: the apply it filed is approved
+    (`decided_by: playbook`), applied, and the kickoff follows it."""
+    architect_project(tmp_home, workdir)
+    script(
+        tmp_home,
+        monkeypatch,
+        [{"result": "VERDICT: next kit mission-17-kit", "exec": file_apply_argv(tmp_home)}],
+    )
+
+    async def body(daemon: Daemon) -> None:
+        review = await ok("send", "--role", "aux", "--context", "clear", fake_result(REVIEW))
+        await ok("wait", review["id"])
+        state = await wait_for_stop()
+
+        rows = sorted((await ok("jobs", "-n", "50"))["jobs"], key=lambda row: row["id"])
+        assert [(row["role"], row["origin"]) for row in rows] == [
+            ("aux", "cli"),
+            (ARCHITECT, "playbook"),
+            ("builder", "architect"),  # the apply `hands kit file` files
+            ("builder", "playbook"),  # the kickoff the engine sends after it
+        ]
+        _reviewer, architect, apply_job, kickoff = [
+            await ok("result", row["id"]) for row in rows
+        ]
+        assert architect["context"] == "clear"
+        assert architect["result"] == "VERDICT: next kit mission-17-kit"
+        assert REVIEW_VERDICT in strip_paths(architect["prompt"])
+        assert REVIEW_BLOCKERS in strip_paths(architect["prompt"])
+        assert REVIEW_SHOULD_FIX in strip_paths(architect["prompt"])
+        assert ROADMAP_TEXT in strip_paths(architect["prompt"])
+        assert ARCHITECT_INSTRUCTION in strip_paths(architect["prompt"])
+        assert apply_job["gate"]["decided_by"] == "playbook"
+        assert apply_job["gate"]["decided_reason"] == AUTONOMOUS_APPROVAL
+        assert apply_job["verdict"] == "VERDICT: kit applied abc1234"
+        assert kickoff["prompt"].startswith(ARCHITECT_KICKOFF)
+        assert state["stop_reason"] == "Mission 17 finished"  # not the architect's end
+
+        [sent] = await _events("consult.sent")
+        [done] = await _events("consult.done")
+        assert sent["payload"]["consulted"] == ARCHITECT
+        assert sent["payload"]["about"] == rows[0]["id"]
+        assert sent["payload"]["consults"] == 1
+        assert sent["payload"]["max_consults"] == 12
+        assert done["payload"]["job"] == architect["id"]
+        assert done["payload"]["verdict"] == "VERDICT: next kit mission-17-kit"
+        assert state["architect_consults"] == {"used": 1, "max_architect_consults": 12}
+        lines = (workdir / "meta" / "journal.md").read_text(encoding="utf-8").splitlines()
+        assert len(lines) == 1
+        assert architect["id"] in strip_paths(lines[0])
+
+    drive(body)
+
+
+def test_end_to_end_series_complete_stops_with_that_reason(
+    tmp_home: Path, workdir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """(b) review → consult → `VERDICT: series complete` → the pipeline stops, and
+    no kit, no kickoff and no further job follow."""
+    architect_project(tmp_home, workdir)
+    script(tmp_home, monkeypatch, ["VERDICT: series complete"])
+
+    async def body(daemon: Daemon) -> None:
+        review = await ok("send", "--role", "aux", "--context", "clear", fake_result(REVIEW))
+        await ok("wait", review["id"])
+        state = await wait_for_stop()
+
+        assert "series complete" in strip_paths(state["stop_reason"])
+        rows = sorted((await ok("jobs", "-n", "50"))["jobs"], key=lambda row: row["id"])
+        assert [(row["role"], row["origin"]) for row in rows] == [
+            ("aux", "cli"),
+            (ARCHITECT, "playbook"),
+        ]
+        [done] = await _events("consult.done")
+        assert done["payload"]["verdict"] == "VERDICT: series complete"
+        assert done["payload"]["state"] == "done"
+        assert [event["kind"] for event in (await ok("inbox"))["events"]][-1] == "stop"
+
+    drive(body)
+
+
+def test_end_to_end_escalate_notifies_with_the_reason_the_session_and_the_resume_line(
+    tmp_home: Path, workdir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """(c) review → consult → `VERDICT: escalate <reason>` → stop, and the
+    notification names the reason, the architect's session id and `claude --resume`."""
+    architect_project(tmp_home, workdir, ntfy=True)
+    reason = "blocker-unanswered: blocker 2 asks a design question the plan does not answer"
+    script(tmp_home, monkeypatch, [f"FAKE:session sess-e2e-9\nVERDICT: escalate {reason}"])
+    posts = TextPosts()
+
+    async def scenario() -> None:
+        daemon = Daemon(load_config(PROJECT))
+        daemon.notifier.post = posts  # before start(): no test may reach a network
+        await daemon.start()
+        try:
+            await asyncio.wait_for(body(daemon), 60)
+        finally:
+            await daemon.stop()
+
+    async def body(daemon: Daemon) -> None:
+        review = await ok("send", "--role", "aux", "--context", "clear", fake_result(REVIEW))
+        await ok("wait", review["id"])
+        state = await wait_for_stop()
+        await daemon.notifier.drain()
+
+        [row] = [r for r in (await ok("jobs", "-n", "50"))["jobs"] if r["role"] == ARCHITECT]
+        architect = await ok("result", row["id"])
+        session = architect["session_id"]
+        assert session
+        assert reason in strip_paths(state["stop_reason"])
+        stops = [message for title, message in posts.sent if title == "hands: the pipeline stopped"]
+        assert len(stops) == 1
+        assert reason in strip_paths(stops[0])
+        assert session in strip_paths(stops[0])
+        assert f"claude --resume {session}" in strip_paths(stops[0])
+
+    asyncio.run(scenario())
+
+
+def test_end_to_end_the_engine_stops_itself_when_the_series_budget_is_exhausted(
+    tmp_home: Path, workdir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """(d) `[limits] max_architect_consults = 1`: the first review is consulted, the
+    second is not — §31's `budget-exhausted` is the one condition the engine judges."""
+    book = E2E_BOOK.replace("max_architect_consults = 12", "max_architect_consults = 1")
+    architect_project(tmp_home, workdir, book=book)
+    script(tmp_home, monkeypatch, ["VERDICT: series complete", "VERDICT: series complete"])
+
+    async def body(daemon: Daemon) -> None:
+        first = await ok("send", "--role", "aux", "--context", "clear", fake_result(REVIEW))
+        await ok("wait", first["id"])
+        await wait_for_stop()
+        await _wait_events("consult.done", 1)
+        assert (await ok("resume"))["paused"] is False
+
+        second = await ok("send", "--role", "aux", "--context", "clear", fake_result(REVIEW))
+        await ok("wait", second["id"])
+        state = await wait_for_stop()
+
+        assert "budget-exhausted" in strip_paths(state["stop_reason"])
+        assert "max_architect_consults is 1" in strip_paths(state["stop_reason"])
+        architects = [
+            row for row in (await ok("jobs", "-n", "50"))["jobs"] if row["role"] == ARCHITECT
+        ]
+        assert len(architects) == 1, "a consultation beyond the budget started a job"
+        assert len(await _events("consult.sent")) == 1
+        assert state["architect_consults"] == {"used": 1, "max_architect_consults": 1}
+
+    drive(body)
