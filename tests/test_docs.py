@@ -1210,9 +1210,11 @@ def test_the_integration_doc_says_doctor_judges_every_bash_hook() -> None:
 
 def test_the_integration_doc_states_the_limit_pair_as_it_is_implemented() -> None:
     """§31 (review 14 should-fix 2): "the limit pair is documented as it is
-    implemented". `job.held` is the only inbox kind that publishes, so a limit
-    reaches the phone only through a playbook `notify` rule — no shipped playbook
-    has one — and the resume reaches it by no route: `EVENTS` names no resume."""
+    implemented". `job.held` is the only inbox kind the daemon's listener publishes
+    (and `stop`, which `PlaybookEngine.stop` publishes itself; the test below binds
+    both), so a limit reaches the phone only through a playbook `notify` rule — no
+    shipped playbook has one — and the resume reaches it by no route: `EVENTS`
+    names no resume."""
     assert set(NOTIFY_KINDS) == {"job.held"}
     assert "builder.limited" in EVENTS and "driver.limited" in EVENTS
     assert not [event for event in EVENTS if "resume" in event]
@@ -1228,12 +1230,153 @@ def test_the_integration_doc_states_the_limit_pair_as_it_is_implemented() -> Non
     text = flattened((ROOT / "docs" / "INTEGRATION.md").read_text(encoding="utf-8"))
     for said in (
         "A limit and its resume are not such a pair.",
-        "`job.held` is the only inbox event kind hands publishes",
+        "the inbox event kinds hands publishes by itself are `stop` and `job.held`",
         "no playbook hands ships has one",
         "there is no `resume` event a rule can name",
         "orders the scheduler",
     ):
         assert said in text, f"docs/INTEGRATION.md does not say {said!r} (§31)"
+
+
+def test_the_inbox_kinds_hands_publishes_by_itself_are_stop_and_job_held(
+    tmp_home: Path, tmp_path: Path
+) -> None:
+    """§32 (review 15 should-fix 5): INTEGRATION.md said "`job.held` is the only inbox
+    event kind hands publishes by itself", and `stop` is always published. The doc's
+    sentence, bound to behaviour: over one daemon (not started, so nothing else
+    publishes), every inbox kind the spool writes is appended, and what reaches the
+    publisher is exactly one `job.held` and one `stop`."""
+    import asyncio
+
+    from hands.config import load_config
+    from hands.daemon import Daemon
+    from hands.spool import EVENT_KINDS
+
+    work = tmp_path / "work"
+    work.mkdir()
+    (tmp_home / ".hands" / "demo.toml").write_text(
+        f'[server]\nntfy_topic = "hands-docs"\n\n[roles.builder]\ncwd = "{work}"\n',
+        encoding="utf-8",
+    )
+    text = flattened((ROOT / "docs" / "INTEGRATION.md").read_text(encoding="utf-8"))
+    assert "the inbox event kinds hands publishes by itself are `stop` and `job.held`" in text
+    assert "`job.held` is the only inbox event kind" not in text
+
+    sent: list[str] = []
+
+    async def post(url: str, *, title: str, message: str, **_: object) -> int:
+        sent.append(title)
+        return 200
+
+    async def scenario() -> None:
+        daemon = Daemon(load_config("demo"))
+        daemon.notifier.post = post
+        for kind in sorted(EVENT_KINDS - {"stop"}):
+            daemon.spool.append_event(kind, {"job": "0"})
+        await daemon.playbook.stop("the docs test stops it", {})
+        await daemon.notifier.drain()
+
+    asyncio.run(scenario())
+    assert sorted(sent) == ["hands: a job is held for a human", "hands: the pipeline stopped"]
+
+
+def test_the_start_notification_doc_says_one_and_folds_what_the_start_raised() -> None:
+    """§32: "daemon start publishes exactly one notification" — the count is bound by
+    tests/test_phone.py::test_a_daemon_start_publishes_exactly_one_notification over
+    a plain start, held jobs, and orphaned driver and architect consultations."""
+    text = flattened((ROOT / "docs" / "INTEGRATION.md").read_text(encoding="utf-8"))
+    for said in (
+        "A daemon start publishes exactly one notification, `hands: handsd started`",
+        "is folded into its message",
+    ):
+        assert said in text, f"docs/INTEGRATION.md does not say {said!r} (§32)"
+
+
+#: §32 (review 15 blocker 4): a committed playbook in role mode, autonomous.
+ROLE_BOOK = 'version = 1\n\n[series]\nname = "m17"\narchitect = "role"\nautonomous = true\n'
+
+
+def test_the_docs_config_error_claims_are_what_handsd_doctor_the_engine_and_kit_check_do(
+    tmp_home: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """§32 (review 15 blocker 4): docs/INTEGRATION.md and docs/PLAYBOOK.md say a
+    playbook with `architect = "role"` and no `[roles.architect]` is refused by
+    handsd, fails doctor's playbook row, stops the engine, and fails `kit check` on
+    a kit that carries it. The pin was a fragment of the sentence, and the doctor
+    clause was false. Each clause is run here: the reviewer's repro, one project."""
+    import asyncio
+    import io
+
+    from conftest import commit_file
+    from hands.cli import main
+    from hands.config import load_config
+    from hands.daemon import Daemon, DaemonError
+    from hands.doctor import run_checks
+    from hands.playbook import PlaybookEngine
+
+    monkeypatch.delenv("HANDS_PROJECT", raising=False)
+    integration = flattened((ROOT / "docs" / "INTEGRATION.md").read_text(encoding="utf-8"))
+    for said in (
+        "`handsd` refuses to start on it, naming both files",
+        "`hands doctor` fails its playbook row with it",
+        "the engine stops on it",
+        "`hands kit check` fails its playbook check on a kit that carries such a playbook",
+    ):
+        assert said in integration, f"docs/INTEGRATION.md does not say {said!r} (§32)"
+    playbook = flattened((ROOT / "docs" / "PLAYBOOK.md").read_text(encoding="utf-8"))
+    for said in (
+        "`handsd` refuses to start on it",
+        "`hands doctor` fails its playbook row",
+        "the engine stops when it loads the file",
+        "`hands kit check` fails a kit that carries it",
+    ):
+        assert said in playbook, f"docs/PLAYBOOK.md does not say {said!r} (§32)"
+
+    work = tmp_path / "work"
+    (tmp_home / ".hands" / "demo.toml").write_text(
+        f'[server]\nsocket = "{tmp_home}/.hands/handsd.sock"\n\n'
+        f'[roles.builder]\ncwd = "{work}"\n',
+        encoding="utf-8",
+    )
+    commit_file(work, "PLAYBOOK.toml", ROLE_BOOK)
+    config = load_config("demo")
+
+    # handsd refuses, naming both files
+    with pytest.raises(DaemonError) as refused:
+        asyncio.run(Daemon(config).start())
+    assert "PLAYBOOK.toml" in str(refused.value) and "demo.toml" in str(refused.value)
+
+    # doctor's playbook row fails
+    [row] = [check for check in run_checks(config) if check.name == "playbook"]
+    assert row.status == "fail" and "[roles.architect]" in row.detail, row
+
+    # the engine stops on it when it loads the file
+    async def no_send(**_: object) -> dict[str, object]:
+        raise AssertionError("nothing is sent")
+
+    engine = PlaybookEngine(config, Daemon(config).spool, send=no_send, enqueue=no_send)
+    asyncio.run(engine.on_job_start(engine.spool.create_job(
+        role="builder", context="clear", prompt="p", origin="cli"
+    )))
+    assert engine.state.paused and "[roles.architect]" in (engine.state.stop_reason or "")
+
+    # kit check fails a kit that carries it
+    kit = tmp_path / "kit"
+    brief = (
+        "# BUILDER-17-PROMPT\n\nKickoff line:\n\n    Read meta/BUILDER-17-PROMPT.md.\n\n"
+        "Your final reply begins with `VERDICT: mission 17 finished`.\n"
+    )
+    book = ROLE_BOOK + 'kickoff = "Read meta/BUILDER-17-PROMPT.md."\n'
+    (kit / "meta").mkdir(parents=True)
+    (kit / "meta" / "BUILDER-17-PROMPT.md").write_text(brief, encoding="utf-8")
+    (kit / "PLAYBOOK.toml").write_text(book, encoding="utf-8")
+    out = io.StringIO()
+    code = main(["kit", "check", str(kit), "--repo", str(work)], stdout=out, stderr=io.StringIO())
+    [line] = [
+        text for text in out.getvalue().splitlines() if text.split(":")[0].endswith(" playbook")
+    ]
+    assert code == 1 and line.startswith("FAIL playbook"), out.getvalue()
+    assert "[roles.architect]" in line and "demo.toml" in line, line
 
 
 def test_the_integration_doc_says_paired_notifications_are_spaced() -> None:

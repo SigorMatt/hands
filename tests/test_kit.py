@@ -1852,3 +1852,82 @@ def test_kit_file_says_who_releases_the_hold_not_that_a_human_decides_it(
     assert "(gate: apply m16, origin: architect, kit_id: 0123456789abcdef)" in strip_paths(text)
     for said in ("hands approve", "the engine", "autonomous"):
         assert said in strip_paths(text), f"the filed line does not say {said!r}: {text}"
+
+
+# ------------------ §32 (review 15 blocker 4): the kit's series against this config
+
+ROLE_PLAYBOOK = PLAYBOOK.replace(
+    'name = "demo-missions"\n', 'name = "demo-missions"\narchitect = "role"\n'
+)
+
+
+def _config(tmp_home: Path, tmp_path: Path, *, architect: bool) -> Path:
+    body = f'[roles.builder]\ncwd = "{tmp_path}"\n'
+    if architect:
+        (tmp_path / "hands-architect").mkdir(exist_ok=True)
+        body += f'\n[roles.architect]\ncwd = "{tmp_path / "hands-architect"}"\n'
+    path = tmp_home / ".hands" / "demo.toml"
+    path.write_text(body, encoding="utf-8")
+    return path
+
+
+def test_a_kit_playbook_in_role_mode_fails_against_a_config_without_roles_architect(
+    tmp_home: Path, tmp_path: Path, repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """§32: "refused … by `hands kit check` when the kit carries the playbook". The
+    config is the one `hands` resolves as every command does (`--project`,
+    `$HANDS_PROJECT`, the only config); the refusal names both files."""
+    monkeypatch.delenv("HANDS_PROJECT", raising=False)
+    _config(tmp_home, tmp_path, architect=False)
+    kit = write_tree(tmp_path / "k", {**good_kit(), "PLAYBOOK.toml": ROLE_PLAYBOOK})
+    code, out, _ = run_check(kit, repo)
+    failed = strip_paths(assert_failed_only(code, out, "playbook"))
+    assert "PLAYBOOK.toml" in strip_paths(failed) and "demo.toml" in strip_paths(failed), failed
+    assert '[series] architect = "role"' in strip_paths(failed), failed
+    assert "[roles.architect]" in strip_paths(failed), failed
+    # named explicitly, the same
+    code, out, _ = run_check(kit, repo, "--project", "demo")
+    assert "[roles.architect]" in strip_paths(assert_failed_only(code, out, "playbook"))
+
+
+def test_a_kit_playbook_in_role_mode_passes_against_a_config_with_roles_architect(
+    tmp_home: Path, tmp_path: Path, repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("HANDS_PROJECT", raising=False)
+    _config(tmp_home, tmp_path, architect=True)
+    kit = write_tree(tmp_path / "k", {**good_kit(), "PLAYBOOK.toml": ROLE_PLAYBOOK})
+    code, out, _ = run_check(kit, repo)
+    assert code == 0, out
+    assert "[roles.architect]" in strip_paths(line(out, "playbook")), out
+
+
+def test_a_kit_playbook_in_role_mode_with_no_config_to_judge_passes_and_says_so(
+    tmp_home: Path, tmp_path: Path, repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Where no hands config resolves — the phone architect's sandbox, where only
+    hands is installed — there is no `[roles.architect]` to judge against: the check
+    passes and its line says it could not judge, and why."""
+    monkeypatch.delenv("HANDS_PROJECT", raising=False)
+    kit = write_tree(tmp_path / "k", {**good_kit(), "PLAYBOOK.toml": ROLE_PLAYBOOK})
+    code, out, _ = run_check(kit, repo)
+    assert code == 0, out
+    said = strip_paths(line(out, "playbook"))
+    assert said.startswith("PASS"), said
+    assert "not judged against [roles.architect]" in strip_paths(said), said
+    assert "no project config" in strip_paths(said), said
+
+
+def test_a_kit_playbook_in_phone_mode_does_not_look_for_a_config(
+    tmp_path: Path, repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Only a role-mode playbook is judged against a config, so `kit check` of any
+    other kit stays what §26 made it: no config read, wherever it runs."""
+    from hands import config as config_mod
+
+    monkeypatch.setattr(
+        config_mod, "load_config", lambda *a, **k: pytest.fail("a config was read")
+    )
+    kit = write_tree(tmp_path / "k", good_kit())
+    code, out, _ = run_check(kit, repo)
+    assert code == 0, out
+    assert "[roles.architect]" not in strip_paths(line(out, "playbook"))

@@ -220,7 +220,16 @@ Notes that are easy to get wrong:
   first, and fails if any one of them is not the guard — a second Bash hook
   beside the real one is a second answer to the same tool call. A `PreToolUse`
   entry for other tools (the architect's `Write|Edit|MultiEdit` hook) is not a
-  Bash hook and is not judged. A missing clone warns.
+  Bash hook and is not judged. A missing clone warns. Since §32 (review 15
+  should-fix 6) the row also fails when a hook under a `Bash` matcher is not a
+  command hook (`type: prompt`, say), when `permissions.defaultMode` is
+  `"bypassPermissions"` or an `allow` entry names `Bash`, `Write`, `Edit` or
+  `MultiEdit` bare or as `Tool(*)`, and when the clone's push URL is not
+  disabled: every URL `git -C <clone> remote get-url --push --all origin`
+  prints must be a plain word with no `/`, `\`, `:` or `@` that names nothing in
+  the clone, as `no_push` is. An unset push URL (git prints the fetch URL), a
+  clone git cannot read and a missing `origin` fail; other remotes are not
+  read.
 - **The consult flow** (§27, docs/PLAYBOOK.md "Consult"). A rule `then =
   "consult"` fires on an event, say a builder `VERDICT: question`. handsd starts
   a driver-role job in the driver's cwd, `context: clear`, `origin: playbook`,
@@ -392,9 +401,15 @@ would sort arbitrarily on the phone, and the second one reads as the answer to
 the first. Nothing else waits: an unrelated notification is never delayed (§11),
 and no notification queues behind another.
 
+A daemon start publishes exactly one notification, `hands: handsd started`
+(§32). The jobs still held are listed in it, and anything the start itself
+raises before it — the stop an orphaned consultation's end makes, when a daemon
+died with a driver or architect job running — is folded into its message, title
+and reason, rather than published a few milliseconds ahead of it.
+
 A limit and its resume are not such a pair. Both are events you read with
-`hands inbox` (`limit`, `resume`), but `job.held` is the only inbox event kind
-hands publishes by itself. A limit reaches your phone only when the playbook in
+`hands inbox` (`limit`, `resume`), and neither is published: the inbox event
+kinds hands publishes by itself are `stop` and `job.held`. A limit reaches your phone only when the playbook in
 force has a `notify` rule on `builder.limited` or `driver.limited`, and no
 playbook hands ships has one; the resume reaches it by no route at all, because
 there is no `resume` event a rule can name. What the 1.1 s does here is not a
@@ -771,12 +786,17 @@ writes nothing at all.
 `hands doctor` prints a `role architect` row beside the `role driver` one: the
 cwd, the clone, the kits directory, the settings, the write matcher, the
 guard's self-test run in architect mode, and the mode itself. It fails on a
-permission bypass, on a settings file whose `Bash` hook or whose
+permission bypass (`permission_flags`, `permissions.defaultMode:
+"bypassPermissions"`, or an `allow` entry naming `Bash`, `Write`, `Edit` or
+`MultiEdit` bare or as `Tool(*)`), on a settings file whose `Bash` hook or whose
 `Write|Edit|MultiEdit` hook is not the guard (the write hook must be exactly
-`python3 <path to .claude/hooks/bash_guard.py> --write`, and all three tools
-must be judged), and on a guard whose `--selftest` is not green; a missing
-clone or a missing kits directory warns, since `HANDS_KITS` names the
-directory whether or not it exists.
+`python3 <path to .claude/hooks/bash_guard.py> --write`, all three tools must be
+judged, every hook under either matcher must be a command hook, and both
+matchers must run the same guard file), on a guard whose `--selftest` is not
+green run with `HANDS_ROLE=architect` and `HANDS_KITS` set, on a clone whose
+push URL is not disabled (the driver row's rule, above), and on a kits
+directory that is missing or does not resolve under the architect's cwd
+(§32); a missing clone warns.
 
 **Directory kits (finding H-030, resolved by DESIGN v3.15 §32; code: mission 16
 U2).** Under §31 the architect's `zip` could store entries only under
@@ -798,7 +818,7 @@ phone's `kit` apply records a `kit_id` handsd mints too. What the tests prove is
 that command against a real daemon socket with the fake `claude`; a real
 architect session filing a kit that a builder then applies **is not proven**;
 the engine's approval of such a kit is described below (§32, mission 16 U3), and
-the config check is a later unit of mission 16. Until a review finds them closed, run `[series]
+the config check below is mission 16 U4. Until a review finds them closed, run `[series]
 architect = "role"` as an experiment, not as the way a series is driven.
 
 **The switch point.** The role takes over from the phone architect at the fully
@@ -832,7 +852,13 @@ is itself a gated kit apply, so that approval is a real one, made once; it is
 the standing approval for every apply that follows, and nothing else stands
 between a kit and the branch but `hands kit check` and the cold review. A
 playbook with `architect = "role"` and no `[roles.architect]` in the config is
-a config error, named in the stop and in `hands doctor`.
+a config error (§32): `handsd` refuses to start on it, naming both files; `hands
+doctor` fails its playbook row with it; the engine stops on it if the playbook
+changes under a running daemon; and `hands kit check` fails its playbook check
+on a kit that carries such a playbook, judged against the config `hands`
+resolves (`--project`, `$HANDS_PROJECT`, the only config) — where none resolves,
+as in the phone architect's sandbox, the check passes and says it could not
+judge.
 
 **When it escalates.** The architect's reply begins with exactly one of
 `VERDICT: next kit <name>`, `VERDICT: series complete` or `VERDICT: escalate

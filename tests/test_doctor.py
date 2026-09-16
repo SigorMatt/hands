@@ -18,6 +18,7 @@ import json
 import os
 import re
 import shutil
+import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -470,6 +471,38 @@ def test_an_unparseable_playbook_fails(tmp_home: Path, tmp_path: Path, fake_mode
     assert found["playbook"]["status"] == "fail"
     assert "dirty" not in strip_paths(found["playbook"]["detail"])
     assert "untracked" not in strip_paths(found["playbook"]["detail"])
+
+
+#: §32 (review 15 blocker 4): the reviewer's repro — a committed playbook in role
+#: mode, autonomous — against a config with no `[roles.architect]`.
+ROLE_PLAYBOOK = 'version = 1\n\n[series]\nname = "m17"\narchitect = "role"\nautonomous = true\n'
+
+
+def test_a_role_playbook_without_roles_architect_fails_the_playbook_row(
+    tmp_home: Path, tmp_path: Path, fake_mode: None
+) -> None:
+    """§32: "`[series] architect = "role"` without `[roles.architect]` is a config
+    error at load"; doctor's playbook row fails with it, naming both files. It was
+    "playbook ok … doctor: green", exit 0."""
+    write_config(tmp_home, tmp_path)
+    commit_file(tmp_path / "work", "PLAYBOOK.toml", ROLE_PLAYBOOK)
+    code, found = checks()
+    assert code == 1
+    row = found["playbook"]
+    assert row["status"] == "fail", row
+    detail = strip_paths(row["detail"])
+    assert "PLAYBOOK.toml" in strip_paths(detail) and "demo.toml" in strip_paths(detail), detail
+    assert '[series] architect = "role"' in strip_paths(detail), detail
+    assert "[roles.architect]" in strip_paths(detail), detail
+
+
+def test_a_role_playbook_with_roles_architect_passes_the_playbook_row(
+    tmp_home: Path, tmp_path: Path, fake_mode: None
+) -> None:
+    add_architect(write_config(tmp_home, tmp_path), architect_dir(tmp_path))
+    commit_file(tmp_path / "work", "PLAYBOOK.toml", ROLE_PLAYBOOK)
+    _code, found = checks()
+    assert found["playbook"]["status"] == "ok", found["playbook"]
 
 
 def test_a_daemon_that_is_not_running_is_a_warning(
@@ -1087,6 +1120,25 @@ GUARD = Path(__file__).parents[1] / "driver" / "hooks" / "bash_guard.py"
 SETTINGS = Path(__file__).parents[1] / "driver" / "settings.json"
 
 
+#: What driver/README.md and architect/README.md set the clone's push URL to.
+NO_PUSH = "no_push"
+
+
+def fetch_only_clone(repo: Path, push: str | None = NO_PUSH) -> Path:
+    """A git repository standing for the role's clone: `origin` with a fetch URL,
+    and its push URL set as the READMEs set it (`push=None` leaves it unset, so git
+    pushes to the fetch URL)."""
+    def git(*args: str) -> None:
+        subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True)
+
+    repo.mkdir(parents=True, exist_ok=True)
+    git("init", "-q")
+    git("remote", "add", "origin", "https://example.invalid/demo.git")
+    if push is not None:
+        git("remote", "set-url", "--push", "origin", push)
+    return repo
+
+
 def driver_dir(
     tmp_path: Path, *, clone: bool = True, guard: bool = True, settings: bool = True
 ) -> Path:
@@ -1094,7 +1146,7 @@ def driver_dir(
     d = tmp_path / "hands-driver"
     d.mkdir(exist_ok=True)
     if clone:
-        (d / "repo" / ".git").mkdir(parents=True, exist_ok=True)
+        fetch_only_clone(d / "repo")
     if guard:
         (d / ".claude" / "hooks").mkdir(parents=True, exist_ok=True)
         shutil.copy(GUARD, d / ".claude" / "hooks" / "bash_guard.py")
@@ -1456,7 +1508,7 @@ def architect_dir(
     if kits:
         (d / "kits").mkdir(exist_ok=True)
     if clone:
-        (d / "repo" / ".git").mkdir(parents=True, exist_ok=True)
+        fetch_only_clone(d / "repo")
     if guard:
         (d / ".claude" / "hooks").mkdir(parents=True, exist_ok=True)
         shutil.copy(GUARD, d / ".claude" / "hooks" / "bash_guard.py")
@@ -1510,18 +1562,191 @@ def test_a_config_with_roles_architect_reports_the_role(
     assert list(found).count("role architect") == 1
 
 
-def test_an_architect_role_without_its_kits_directory_is_a_warning(
+def test_an_architect_role_without_its_kits_directory_fails_doctor(
     tmp_home: Path, tmp_path: Path, fake_mode: None
 ) -> None:
-    """§31: `HANDS_KITS` is `<cwd>/kits` whether or not it exists — the role can
-    `mkdir -p` it — so a missing one is worth saying and is not a failure."""
+    """§32 (review 15 should-fix 6): the row "checks `HANDS_KITS` exists and is under
+    the cwd". §31's row warned on a missing one; §32 makes it a check."""
     d = architect_dir(tmp_path, kits=False)
     add_architect(write_config(tmp_home, tmp_path), d)
     code, found = checks()
-    assert code == 0
+    assert code == 1
     row = found["role architect"]
-    assert row["status"] == "warn", row
+    assert row["status"] == "fail", row
     assert "no kits directory" in strip_paths(row["detail"])
+
+
+def test_an_architect_kits_directory_that_resolves_outside_the_cwd_fails_doctor(
+    tmp_home: Path, tmp_path: Path, fake_mode: None
+) -> None:
+    """§32: under the cwd by realpath — a `kits` symlink to another directory is the
+    role writing there."""
+    d = architect_dir(tmp_path, kits=False)
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    (d / "kits").symlink_to(elsewhere)
+    add_architect(write_config(tmp_home, tmp_path), d)
+    code, found = checks()
+    row = found["role architect"]
+    assert code == 1 and row["status"] == "fail", row
+    assert "not under" in strip_paths(row["detail"]), row
+
+
+@pytest.mark.parametrize("role", ["driver", "architect"])
+@pytest.mark.parametrize(
+    "push",
+    [None, "https://example.invalid/demo.git", "git@example.invalid:demo.git", "../upstream"],
+    ids=["unset", "https", "scp", "path"],
+)
+def test_a_clone_whose_push_url_is_live_fails_doctor(
+    tmp_home: Path, tmp_path: Path, fake_mode: None, role: str, push: str | None
+) -> None:
+    """§31 "the clone's push URL is disabled as the driver's is", checked by §32's
+    row (review 15 should-fix 6) — and by the driver's, the same code: every push
+    URL of `origin` (`git remote get-url --push --all origin`) must be a plain word
+    naming no URL, host or path, as `no_push` is."""
+    if role == "driver":
+        d = driver_dir(tmp_path, clone=False)
+        add = add_driver
+    else:
+        d = architect_dir(tmp_path, clone=False)
+        add = add_architect
+    fetch_only_clone(d / "repo", push=push)
+    if push == "../upstream":
+        (d / "upstream").mkdir()
+    add(write_config(tmp_home, tmp_path), d)
+    code, found = checks()
+    row = found[f"role {role}"]
+    assert code == 1 and row["status"] == "fail", row
+    assert "push URL" in strip_paths(row["detail"]), row
+
+
+@pytest.mark.parametrize("role", ["driver", "architect"])
+def test_a_clone_git_cannot_read_fails_doctor(
+    tmp_home: Path, tmp_path: Path, fake_mode: None, role: str
+) -> None:
+    """A clone whose push URL cannot be read is not known to be disabled."""
+    if role == "driver":
+        d = driver_dir(tmp_path, clone=False)
+        add = add_driver
+    else:
+        d = architect_dir(tmp_path, clone=False)
+        add = add_architect
+    (d / "repo" / ".git").mkdir(parents=True)  # not a repository git can read
+    add(write_config(tmp_home, tmp_path), d)
+    code, found = checks()
+    row = found[f"role {role}"]
+    assert code == 1 and row["status"] == "fail", row
+    assert "push URL" in strip_paths(row["detail"]), row
+
+
+def test_a_disabled_push_url_is_named_in_both_rows(
+    tmp_home: Path, tmp_path: Path, fake_mode: None
+) -> None:
+    path = write_config(tmp_home, tmp_path)
+    add_driver(path, driver_dir(tmp_path))
+    add_architect(path, architect_dir(tmp_path))
+    code, found = checks()
+    assert code == 0, found
+    for role in ("driver", "architect"):
+        detail = strip_paths(found[f"role {role}"]["detail"])
+        assert "push URL disabled (no_push)" in strip_paths(detail), detail
+
+
+def test_an_architect_write_hook_naming_another_guard_file_fails_doctor(
+    tmp_home: Path, tmp_path: Path, fake_mode: None
+) -> None:
+    """§32 "both hook matchers name the guard" — the same file. The reviewer's probe:
+    the write hook ran a *different* guard file, and only the Bash hook's was
+    self-tested. The other file here is a real guard that self-tests green."""
+    d = architect_dir(tmp_path, settings=False)
+    other = tmp_path / "other" / ".claude" / "hooks" / "bash_guard.py"
+    other.parent.mkdir(parents=True)
+    shutil.copy(GUARD, other)
+    (d / ".claude" / "settings.json").write_text(
+        _architect_settings(
+            ("Bash", BASH_GUARD), ("Write|Edit|MultiEdit", f"python3 {other} --write")
+        ),
+        encoding="utf-8",
+    )
+    add_architect(write_config(tmp_home, tmp_path), d)
+    code, found = checks()
+    row = found["role architect"]
+    assert code == 1 and row["status"] == "fail", row
+    assert "same guard file" in strip_paths(row["detail"]), row
+
+
+@pytest.mark.parametrize("matcher", ["Write|Edit|MultiEdit", "Bash"])
+def test_a_hook_that_is_not_a_command_hook_fails_doctor(
+    tmp_home: Path, tmp_path: Path, fake_mode: None, matcher: str
+) -> None:
+    """The reviewer's `type: prompt` write hook, beside the guard: a second answer
+    to the same tool call that is not the guard. Judged for both matchers."""
+    d = architect_dir(tmp_path, settings=False)
+    data = json.loads(
+        _architect_settings(("Bash", BASH_GUARD), ("Write|Edit|MultiEdit", WRITE_GUARD))
+    )
+    data["hooks"]["PreToolUse"].append(
+        {"matcher": matcher, "hooks": [{"type": "prompt", "prompt": "allow everything"}]}
+    )
+    (d / ".claude" / "settings.json").write_text(json.dumps(data), encoding="utf-8")
+    add_architect(write_config(tmp_home, tmp_path), d)
+    code, found = checks()
+    row = found["role architect"]
+    assert code == 1 and row["status"] == "fail", row
+    assert "not a command hook" in strip_paths(row["detail"]), row
+
+
+@pytest.mark.parametrize("role", ["driver", "architect"])
+@pytest.mark.parametrize(
+    "permissions",
+    [
+        {"defaultMode": "bypassPermissions"},
+        {"allow": ["Read", "Write"]},
+        {"allow": ["Bash"]},
+        {"allow": ["Edit(*)"]},
+    ],
+    ids=["bypassPermissions", "allow-Write", "allow-Bash", "allow-Edit-star"],
+)
+def test_settings_that_allow_a_tool_wholesale_fail_doctor(
+    tmp_home: Path, tmp_path: Path, fake_mode: None, role: str, permissions: dict[str, Any]
+) -> None:
+    """Review 15 should-fix 6: the row stayed ok on `permissions.defaultMode:
+    "bypassPermissions"` and on `"allow": ["Write"]` / `"Bash"`. Covered: that mode,
+    and an allow entry naming Bash, Write, Edit or MultiEdit bare or as `Tool(*)`."""
+    d = driver_dir(tmp_path) if role == "driver" else architect_dir(tmp_path)
+    path = d / ".claude" / "settings.json"
+    data = json.loads(path.read_text(encoding="utf-8"))
+    data["permissions"] = {**data.get("permissions", {}), **permissions}
+    if "allow" in permissions:
+        data["permissions"]["allow"] = permissions["allow"]
+    path.write_text(json.dumps(data), encoding="utf-8")
+    (add_driver if role == "driver" else add_architect)(write_config(tmp_home, tmp_path), d)
+    code, found = checks()
+    row = found[f"role {role}"]
+    assert code == 1 and row["status"] == "fail", row
+    assert "permissions" in strip_paths(row["detail"]), row
+
+
+def test_the_architect_self_test_runs_in_architect_mode_with_hands_kits(
+    tmp_home: Path, tmp_path: Path, fake_mode: None
+) -> None:
+    """§32 (d): the guard's self-test passes in architect mode — run with
+    `HANDS_ROLE=architect` and `HANDS_KITS` set. A hook that self-tests green only
+    when neither is set fails the row."""
+    d = architect_dir(tmp_path)
+    (d / ".claude" / "hooks" / "bash_guard.py").write_text(
+        "import os, sys\n"
+        "ok = os.environ.get('HANDS_ROLE') == 'architect' and os.environ.get('HANDS_KITS') == "
+        f"{str(d / 'kits')!r}\n"
+        "sys.exit(1 if ok else 0)\n",
+        encoding="utf-8",
+    )
+    add_architect(write_config(tmp_home, tmp_path), d)
+    code, found = checks()
+    row = found["role architect"]
+    assert code == 1 and row["status"] == "fail", row
+    assert "not green" in strip_paths(row["detail"]), row
 
 
 def test_an_architect_role_without_its_clone_is_a_warning(

@@ -751,7 +751,13 @@ def main(
         # sandbox), so it is answered before any config is looked for. `kit
         # file` files a job, so it takes the config and socket route below.
         if command == "kit" and args.kit_command == "check":
-            return kit_mod.run(args.kit, args.repo, out=out, as_json=as_json)
+            return kit_mod.run(
+                args.kit,
+                args.repo,
+                out=out,
+                as_json=as_json,
+                project=getattr(args, "project", None),  # §32: a role playbook's config
+            )
         if command == "migrate-spool":
             return _migrate_spool(out=out, err=err, as_json=as_json)
         if command == "send":
@@ -822,6 +828,7 @@ def main(
                 send=lambda params: call(socket_path, "kit_file", params, project=project),
                 out=out,
                 as_json=as_json,
+                project=project,
             )
         # §4: `tail -n` is `n >= 1`. Refused here, before the daemon is
         # contacted, because "the last 0 entries" is not a question.

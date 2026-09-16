@@ -232,6 +232,9 @@ class Notifier:
         #: test can replace `hands.notify.http_post` wholesale.
         self.post = post
         self._tasks: set[asyncio.Task[None]] = set()
+        #: §32: while not None, `notify` keeps what it is asked to publish here
+        #: instead (`hold`, `release`) — the daemon's start folds it into its one.
+        self._held: list[Notification] | None = None
 
     # ------------------------------------------------------------- the seam
 
@@ -251,8 +254,24 @@ class Notifier:
         note = Notification(
             title=title, message=_message(payload), payload=payload, actions=actions
         )
+        if self._held is not None:
+            self._held.append(note)
+            return
         if self._has_topic(note):
             self._spawn(self._publish(note), "hands-notify")
+
+    def hold(self) -> None:
+        """§32: from now until `release`, `notify` publishes nothing and keeps each
+        notification instead. Only the daemon's start holds: "daemon start publishes
+        exactly one notification", so what the start itself raises — the stop an
+        orphaned consultation's end makes — is folded into that one."""
+        self._held = []
+
+    def release(self) -> list[Notification]:
+        """§32: end a `hold`, and hand back what `notify` kept during it, in order.
+        Nothing kept is published by this call; the caller decides."""
+        held, self._held = self._held or [], None
+        return held
 
     async def answer(self, title: str, message: str) -> bool:
         """A reply to a phone command (§24's `status`), published now.

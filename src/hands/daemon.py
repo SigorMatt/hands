@@ -44,7 +44,7 @@ from hands.limits import LimitManager
 from hands.monitor import MonitorSupervisor
 from hands.notify import Notifier
 from hands.phone import PhoneChannel
-from hands.playbook import PlaybookEngine
+from hands.playbook import PlaybookEngine, series_roles_problem
 from hands.runner import LINE_LIMIT, Runner, RunnerError, reconcile_orphans
 from hands.spool import TERMINAL_STATES, Event, Job, Spool, flat_layout, now_iso
 
@@ -181,7 +181,31 @@ class Daemon:
     # ------------------------------------------------------------- lifecycle
 
     async def start(self) -> None:
-        """Reconcile orphans, bind the socket, start the role workers (§3)."""
+        """Reconcile orphans, bind the socket, start the role workers (§3).
+
+        §32 (review 15 should-fix 5): a start publishes exactly one notification,
+        `hands: handsd started`. The notifier is held from here to that publish, and
+        whatever the start raised meanwhile — the stop an orphaned consultation's
+        end makes, and anything else the engine or the inbox would publish — is
+        folded into its message, title and body. A start that fails publishes what
+        was held as it would have been published, since there is no start
+        notification to fold it into.
+        """
+        # §32 (review 15 blocker 4): `[series] architect = "role"` without
+        # `[roles.architect]` is a config error at load, so handsd refuses to start on
+        # it — before an orphan is reconciled, a socket bound or anything published.
+        problem = series_roles_problem(self.config)
+        if problem is not None:
+            raise DaemonError(f"refusing to start: {problem}")
+        self.notifier.hold()
+        try:
+            await self._start()
+        except BaseException:
+            for note in self.notifier.release():
+                self.notifier.notify(note.title, note.payload, actions=note.actions)
+            raise
+
+    async def _start(self) -> None:
         orphans = reconcile_orphans(self.spool)
         for job in orphans:
             log.warning("job %s was running with no process; marked orphaned", job.id)
@@ -220,9 +244,20 @@ class Daemon:
                 "\nA restart leaves no live buttons: decide with `hands approve <job>` "
                 "or `hands deny <job>`, or with the secret on the command topic."
             )
+        # §32: the one publish of a start; what the start raised is folded into it.
+        folded = self.notifier.release()
+        if folded:
+            message += f"\nWhile starting, handsd raised {len(folded)} more notification(s):"
+            for note in folded:
+                message += f"\n{note.title}: {note.message}"
         self.notifier.notify(  # §11: daemon start is one of the four notifications
             "hands: handsd started",
-            {"message": message, "pid": os.getpid(), "held": still_held},
+            {
+                "message": message,
+                "pid": os.getpid(),
+                "held": still_held,
+                "folded": [note.title for note in folded],
+            },
         )
         log.info(
             "handsd %s listening on %s (project %s)",

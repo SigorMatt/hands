@@ -62,7 +62,13 @@ from hands.config import (
     driver_clone,
 )
 from hands.kit import named_paths
-from hands.playbook import PlaybookError, load_playbook, playbook_path
+from hands.playbook import (
+    GIT_ENV_CLEARED,
+    PlaybookError,
+    check_series_roles,
+    load_playbook,
+    playbook_path,
+)
 from hands.runner import build_argv
 from hands.spool import SpoolError, resolve_under_roots
 
@@ -96,6 +102,11 @@ GUARD_INTERPRETER = "python3"
 #: three tools; doctor asks that each of them be judged, however it is spelled.
 WRITE_FLAG = "--write"
 WRITE_TOOLS: tuple[str, ...] = ("Write", "Edit", "MultiEdit")
+#: §31, §32: the push URL driver/README.md and architect/README.md give the clone.
+NO_PUSH = "no_push"
+#: §32 (review 15 should-fix 6): tools a settings file must not allow wholesale —
+#: bare, or as `Tool(*)` — in a guarded role's directory.
+WHOLESALE_TOOLS: tuple[str, ...] = ("Bash", "Write", "Edit", "MultiEdit")
 #: §30: a hook command containing any of these (outside the two
 #: `$CLAUDE_PROJECT_DIR` spellings) is more than `python3 <guard>` to a shell.
 _HOOK_SHELL_CHARS = frozenset(";&|<>`()\\*?[]{}!~#$\n\r")
@@ -481,6 +492,10 @@ def _driver_check(config: Config) -> Check:
     found = driver_clone(role.cwd)  # §29: the same path the job gets as HANDS_CLONE
     if found is not None:
         clone = f"clone {found}"
+        push, disabled = _push_disabled(found)  # §32: the architect's check, the same code
+        clone += f"\n{push}"
+        if not disabled:
+            failures.append(push)
     else:
         clone = f"no clone: neither {role.cwd / 'repo'} nor {role.cwd} is a git repository"
         warnings.append(clone)
@@ -495,6 +510,12 @@ def _driver_check(config: Config) -> Check:
             "driver/settings.json again (§28)"
         )
         failures.append(settings)
+    wholesale = _settings_allow_wholesale(settings_path)  # §32
+    if wholesale is not None:
+        settings += (
+            f"\nsettings {settings_path}: {wholesale}; copy driver/settings.json again"
+        )
+        failures.append(wholesale)
 
     # §29: the self-test runs on the file the settings name, not on a default path;
     # only when they name none is the default the one reported.
@@ -522,16 +543,22 @@ def _architect_check(config: Config) -> Check:
     Written as closely to `_driver_check` as the difference allows, and reads the
     same way in the report. Two things the driver has no equivalent of:
 
-    - `kits/` beside the clone. The runner sets `HANDS_KITS` to `<cwd>/kits`
-      whether or not it exists (the role may `mkdir -p` it), so a missing one
-      warns and never fails — but a human who never made it has not finished
-      `architect/README.md`, and the row says so.
+    - `kits/` beside the clone. The runner sets `HANDS_KITS` to `<cwd>/kits`;
+      §32 (review 15 should-fix 6) has the row check that it exists and resolves
+      under the cwd, so a missing one, or one that is a link to elsewhere, fails.
     - a **second** `PreToolUse` matcher: `Write|Edit|MultiEdit` running the guard
       with `--write` (§31). It is judged with the rigour U2 gave the Bash hook —
       every entry that selects a writing tool must run exactly `python3 <guard>
       --write`, and each of `Write`, `Edit` and `MultiEdit` must be selected by
       one of them — because a write hook that is not the guard is the architect
       writing wherever it likes, which is the whole of what confines the role.
+
+    §32 adds, to both this row and the driver's where they share code: the clone's
+    push URL is disabled (`_push_disabled`); every hook under either matcher is a
+    command hook (`_not_a_command_hook`); no permission setting allows a guarded
+    tool wholesale (`_settings_allow_wholesale`); and here, both matchers run the
+    same guard file, the one self-tested with `HANDS_ROLE=architect` and
+    `HANDS_KITS` set.
     """
     name = f"role {ARCHITECT_ROLE}"
     role = config.roles.get(ARCHITECT_ROLE)
@@ -557,21 +584,33 @@ def _architect_check(config: Config) -> Check:
     found = driver_clone(role.cwd)  # §31: the same path the job gets as HANDS_CLONE
     if found is not None:
         clone = f"clone {found}"
+        push, disabled = _push_disabled(found)  # §32 (a)
+        clone += f"\n{push}"
+        if not disabled:
+            failures.append(push)
     else:
         clone = f"no clone: neither {role.cwd / 'repo'} nor {role.cwd} is a git repository"
         warnings.append(clone)
 
     # The runner's own expression (`hands.runner.job_env`), so the row names the
-    # path the job really gets as `HANDS_KITS`.
+    # path the job really gets as `HANDS_KITS`. §32 (b): it exists, and is under
+    # the cwd once both are resolved.
     kits_dir = role.cwd / "kits"
-    if kits_dir.is_dir():
-        kits = f"kits {kits_dir}"
-    else:
+    if not kits_dir.is_dir():
         kits = (
-            f"no kits directory at {kits_dir}: {KITS_ENV} still names it and the role may "
-            "`mkdir -p` it, but nothing has been written there yet (architect/README.md)"
+            f"no kits directory at {kits_dir}: {KITS_ENV} names it, and §32 asks that it "
+            "exist under the cwd; `mkdir -p` it (architect/README.md)"
         )
-        warnings.append(kits)
+        failures.append(kits)
+    elif not _under_realpath(kits_dir, role.cwd):
+        kits = (
+            f"kits {kits_dir} resolves to {os.path.realpath(kits_dir)}, not under "
+            f"{os.path.realpath(role.cwd)}: {KITS_ENV} must be a directory under the "
+            "role's cwd (§32)"
+        )
+        failures.append(kits)
+    else:
+        kits = f"kits {kits_dir}"
 
     settings_path = role.cwd / ".claude" / "settings.json"
     named, problem = _settings_name_the_guard(settings_path, role.cwd)
@@ -583,8 +622,25 @@ def _architect_check(config: Config) -> Check:
             "architect/settings.json again (§31)"
         )
         failures.append(settings)
+    wholesale = _settings_allow_wholesale(settings_path)  # §32
+    if wholesale is not None:
+        settings += (
+            f"\nsettings {settings_path}: {wholesale}; copy architect/settings.json again"
+        )
+        failures.append(wholesale)
 
-    _write_named, write_problem = _settings_name_the_write_guard(settings_path, role.cwd)
+    write_named, write_problem = _settings_name_the_write_guard(settings_path, role.cwd)
+    if (
+        write_problem is None
+        and named is not None
+        and write_named is not None
+        and os.path.realpath(named) != os.path.realpath(write_named)
+    ):
+        # §32 (c): both matchers name *the* guard — one file, the one self-tested.
+        write_problem = (
+            f"the Bash hook runs {named} and the write hook runs {write_named}: both must "
+            "run the same guard file"
+        )
     if write_problem is None:
         write = f"write matcher: {', '.join(WRITE_TOOLS)} run the guard with {WRITE_FLAG}"
     else:
@@ -681,12 +737,9 @@ def _settings_name_the_guard(path: Path, cwd: Path) -> tuple[Path | None, str | 
         if not isinstance(entry, dict) or not _matches_bash(entry.get("matcher")):
             continue
         for hook in entry.get("hooks") or []:
-            if not (
-                isinstance(hook, dict)
-                and hook.get("type") == "command"
-                and isinstance(hook.get("command"), str)
-            ):
-                continue
+            other = _not_a_command_hook(hook)
+            if other is not None:
+                return None, other
             command: str = hook["command"]
             named = _guard_command_path(command, cwd)
             if named is None:
@@ -700,6 +753,10 @@ def _settings_name_the_guard(path: Path, cwd: Path) -> tuple[Path | None, str | 
         )
     if not guards:
         return None, f"no PreToolUse command hook for Bash runs {GUARD_HOOK}"
+    if len({os.path.realpath(guard) for guard in guards}) > 1:
+        return None, (
+            "the PreToolUse Bash hooks run more than one guard file (§32: the same guard file)"
+        )
     return guards[0], None
 
 
@@ -730,12 +787,9 @@ def _settings_name_the_write_guard(path: Path, cwd: Path) -> tuple[Path | None, 
         if not selects:
             continue
         for hook in entry.get("hooks") or []:
-            if not (
-                isinstance(hook, dict)
-                and hook.get("type") == "command"
-                and isinstance(hook.get("command"), str)
-            ):
-                continue
+            other = _not_a_command_hook(hook)
+            if other is not None:
+                return None, other
             command: str = hook["command"]
             named = _guard_command_path(command, cwd, flag=WRITE_FLAG)
             if named is None:
@@ -750,7 +804,97 @@ def _settings_name_the_write_guard(path: Path, cwd: Path) -> tuple[Path | None, 
         return None, (
             f"no PreToolUse command hook for {', '.join(missing)} runs {GUARD_HOOK} {WRITE_FLAG}"
         )
+    if len({os.path.realpath(guard) for guard in guards}) > 1:
+        return None, "the write hooks run more than one guard file (§32: the same guard file)"
     return guards[0], None
+
+
+def _not_a_command_hook(hook: Any) -> str | None:
+    """§32 (review 15 should-fix 6): a hook under a matcher the guard judges that is
+    not a command hook (`type: prompt`, `http`, none) is a second answer to the same
+    tool call, and not the guard's; why, or None for a command hook."""
+    if (
+        isinstance(hook, dict)
+        and hook.get("type") == "command"
+        and isinstance(hook.get("command"), str)
+    ):
+        return None
+    kind = hook.get("type") if isinstance(hook, dict) else None
+    return (
+        f"a {kind!r} hook is not a command hook running the guard: every hook under a "
+        "matcher the guard judges must be the guard (§32)"
+    )
+
+
+def _settings_allow_wholesale(path: Path) -> str | None:
+    """§32 (review 15 should-fix 6): the permission settings that let a guarded role
+    past its settings wholesale — `permissions.defaultMode: "bypassPermissions"`, or
+    an allow entry naming one of `WHOLESALE_TOOLS` bare or as `Tool(*)` — why, or
+    None. Only these shapes: a narrower allow (`Bash(git log:*)`) is the settings'
+    own business, and the guard still judges every call."""
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None  # `_pretooluse` has already said so
+    permissions = data.get("permissions") if isinstance(data, dict) else None
+    if not isinstance(permissions, dict):
+        return None
+    if permissions.get("defaultMode") == "bypassPermissions":
+        return 'permissions.defaultMode is "bypassPermissions" (§32)'
+    wholesale = set(WHOLESALE_TOOLS) | {f"{tool}(*)" for tool in WHOLESALE_TOOLS}
+    for entry in permissions.get("allow") or []:
+        if isinstance(entry, str) and entry.strip() in wholesale:
+            return f"permissions.allow names {entry!r}, allowing the tool wholesale (§32)"
+    return None
+
+
+def _push_disabled(clone: Path) -> tuple[str, bool]:
+    """§31, §32 (review 15 should-fix 6): the clone's push URL is disabled, as
+    driver/README.md and architect/README.md set it (`git remote set-url --push
+    origin no_push`). The row's line, and whether it is.
+
+    Disabled means `git -C <clone> remote get-url --push --all origin` (insteadOf
+    and pushInsteadOf expanded by git) answers, and every URL it prints is a plain
+    word — no `/`, `\\`, `:` or `@`, so no URL, host or path — that names nothing
+    in the clone's directory. An unset push URL prints the fetch URL, which is not
+    such a word. Git not answering, or no `origin`, is not known to be disabled.
+    Other remotes are not read."""
+    env = {name: value for name, value in os.environ.items() if name not in GIT_ENV_CLEARED}
+    fix = f"set it with `git -C {clone} remote set-url --push origin {NO_PUSH}` (§31, §32)"
+    try:
+        proc = subprocess.run(
+            ["git", "-C", str(clone), "remote", "get-url", "--push", "--all", "origin"],
+            env=env,
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            timeout=PROBE_S,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        return f"push URL of origin not known to be disabled (git: {exc}): {fix}", False
+    if proc.returncode != 0:
+        said = _tail(proc.stderr, 1) or f"exit {proc.returncode}"
+        return (
+            f"push URL of origin not known to be disabled (`git remote get-url --push "
+            f"origin`: {said}): {fix}",
+            False,
+        )
+    urls = [line.strip() for line in proc.stdout.splitlines() if line.strip()]
+    live = [
+        url for url in urls
+        if any(char in url for char in "/\\:@") or (clone / url).exists()
+    ]  # fmt: skip
+    if not urls or live:
+        shown = ", ".join(live or urls) or "(none)"
+        return f"push URL of origin is live ({shown}): {fix}", False
+    return f"push URL disabled ({', '.join(urls)})", True
+
+
+def _under_realpath(path: Path, root: Path) -> bool:
+    """`path` is `root` or below it once both are resolved (§32)."""
+    real, base = os.path.realpath(path), os.path.realpath(root)
+    return real == base or real.startswith(base.rstrip(os.sep) + os.sep)
 
 
 def _pretooluse(path: Path) -> tuple[list[Any] | None, str | None]:
@@ -921,10 +1065,17 @@ def _playbook_check(config: Config) -> Check:
 
     §25: nor is a dirty or untracked one — the row fails with the refusal, which
     says `dirty` or `untracked` and names both sha256s; `ok` means committed.
+
+    §32 (review 15 blocker 4): nor is one this config cannot honour — `[series]
+    architect = "role"` without `[roles.architect]` fails the row with the config
+    error `check_series_roles` raises, which names both files (and handsd refuses to
+    start on it).
     """
     path = playbook_path(config)
     try:
         book = load_playbook(path, cwd=config.role("builder").cwd)
+        if book is not None:
+            check_series_roles(book, config)
     except PlaybookError as exc:
         return Check("playbook", FAIL, str(exc))
     if book is None:

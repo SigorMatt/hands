@@ -112,6 +112,7 @@ __all__ = [
     "SeriesAnchor",
     "check_series_roles",
     "load_playbook",
+    "next_milestone",
     "parse_playbook",
     "playbook_path",
     "consult_head",
@@ -119,6 +120,7 @@ __all__ = [
     "review_sections",
     "render",
     "run_number",
+    "series_roles_problem",
 ]
 
 log = logging.getLogger("hands.playbook")
@@ -213,9 +215,15 @@ ARCHITECT_VERDICTS: tuple[str, ...] = (
 )
 _NEXT_KIT_RE = re.compile(r"\AVERDICT: next kit\s+(?P<name>\S.*?)\s*\Z")
 _SERIES_COMPLETE_RE = re.compile(r"\AVERDICT: series complete\s*\Z")
-#: §31: the roadmap the architect writes the next kit from, read from the builder's
-#: cwd like the playbook — a repository file, so it is the branch's own roadmap.
+#: §31: the roadmap the architect writes the next kit from, under the builder's cwd.
+#: §32: read as the playbook is — the committed file (`git show HEAD:./<path>`), so it
+#: is the branch's own roadmap and never an uncommitted edit.
 ROADMAP = Path("meta") / "ROADMAP.md"
+#: §32: a milestone of the roadmap is a top-level list item whose text begins with
+#: a bold `M` (`- **M4c The architect role** — …`), running over the indented lines
+#: that follow it. It is marked DONE when the word `DONE` is on its first line.
+_MILESTONE_RE = re.compile(r"- \*\*M")
+_DONE_RE = re.compile(r"\bDONE\b")
 #: §31: the two sections of the review the prompt carries verbatim, as headings.
 REVIEW_SECTIONS: tuple[str, ...] = ("Blockers", "Should-fix")
 #: §27, §31: the events each consulted role may be consulted on, refused at load and
@@ -323,7 +331,9 @@ class PlaybookConfigError(PlaybookError):
     `~/.hands/<project>.toml`; only where the two meet can a `[series] architect
     = "role"` be checked against `[roles.architect]`. That is `check_series_roles`,
     called from the engine's own load — so the pipeline stops rather than fire a
-    rule under a playbook whose architect this laptop does not configure.
+    rule under a playbook whose architect this laptop does not configure — and, §32,
+    from `handsd`'s start (`series_roles_problem`), `hands doctor`'s playbook row
+    and `hands kit check` on a kit that carries the playbook.
     """
 
 
@@ -633,6 +643,71 @@ def _check_committed(path: Path, raw: bytes, cwd: Path) -> None:
         )
 
 
+@dataclass(frozen=True)
+class Milestones:
+    """§32: what `next_milestone` read from a roadmap: the first unmet milestone,
+    verbatim (None when there is none), and how many milestones it read."""
+
+    milestone: str | None
+    count: int
+
+
+def next_milestone(text: str) -> Milestones:
+    """§32: the roadmap's next unmet milestone — "the first whose gate is not marked
+    DONE" — read from the roadmap's own shape.
+
+    A milestone is a line beginning `- **M` (a top-level list item whose bold title
+    starts with `M`, `- **M4c The architect role** — …`) with the indented lines
+    that follow it; a blank line or any line that is not indented ends it. It is
+    marked DONE when the word `DONE` is on its first line — a `DONE` further down
+    an entry is a sub-mission's, not the milestone's. The first milestone not so
+    marked is returned verbatim; with none unmet, or none at all, `milestone` is
+    None and `count` tells the two apart.
+    """
+    entries: list[list[str]] = []
+    current: list[str] | None = None
+    for line in text.splitlines():
+        if _MILESTONE_RE.match(line):
+            current = [line]
+            entries.append(current)
+        elif current is not None and line[:1] in (" ", "\t") and line.strip():
+            current.append(line)
+        else:
+            current = None
+    for entry in entries:
+        if not _DONE_RE.search(entry[0]):
+            return Milestones("\n".join(entry), len(entries))
+    return Milestones(None, len(entries))
+
+
+def _committed_text(path: Path, cwd: Path) -> str:
+    """§32: the committed copy of the file at `path`, as `git show HEAD:./<path>` in
+    `cwd` gives it (git's environment cleared as for the playbook, §26), decoded as
+    UTF-8; a `PlaybookError` saying why when there is none to read."""
+    spec = "HEAD:./" + Path(os.path.relpath(path, cwd)).as_posix()
+    env = {name: value for name, value in os.environ.items() if name not in GIT_ENV_CLEARED}
+    try:
+        proc = subprocess.run(
+            ["git", "-c", "core.autocrlf=false", "show", spec],
+            cwd=cwd,
+            env=env,
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            timeout=GIT_SHOW_TIMEOUT_S,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise PlaybookError(f"`git show {spec}` in {cwd}: {exc}") from exc
+    if proc.returncode != 0:
+        lines = proc.stderr.decode("utf-8", errors="replace").strip().splitlines()
+        said = lines[0] if lines else f"exit {proc.returncode}"
+        raise PlaybookError(f"no committed copy (`git show {spec}` in {cwd}: {said})")
+    try:
+        return proc.stdout.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise PlaybookError(f"the committed copy is not valid UTF-8: {exc}") from exc
+
+
 def _lf(data: bytes) -> bytes:
     """`data` with every CRLF read as LF (§26)."""
     return data.replace(b"\r\n", b"\n")
@@ -852,6 +927,26 @@ def check_series_roles(book: Playbook, config: Config) -> None:
         f"[roles.architect] (§31): add the role's table (cwd = the architect's "
         f'directory), or set [series] architect = "phone"'
     )
+
+
+def series_roles_problem(config: Config) -> str | None:
+    """§32 (review 15 blocker 4): the config error `check_series_roles` names for the
+    playbook this project would load now — the committed file at `playbook_path` —
+    or None. `handsd` refuses to start on it.
+
+    Only that error: a playbook that is missing, dirty, untracked or unparseable is
+    not this check's to judge, and is None here — the engine stops on it when it
+    loads, as §10 says, and `hands doctor` fails its row.
+    """
+    try:
+        book = load_playbook(playbook_path(config), cwd=config.role("builder").cwd)
+        if book is not None:
+            check_series_roles(book, config)
+    except PlaybookConfigError as exc:
+        return str(exc)
+    except PlaybookError:
+        return None
+    return None
 
 
 def _rule(index: int, table: dict[str, Any], path: Path, *, auto_runs: tuple[int, ...]) -> Rule:
@@ -1805,20 +1900,36 @@ class PlaybookEngine:
         self._fired(rule, event, job, fired_job=started.id)
 
     def architect_brief(self, book: Playbook, consults: int) -> ArchitectBrief:
-        """§31: the roadmap and the series' conditions the architect's prompt carries.
+        """§31, §32: the roadmap's next unmet milestone and the series' conditions the
+        architect's prompt carries.
 
-        The roadmap is `meta/ROADMAP.md` under the builder's cwd — a repository file,
-        read like the playbook, so it is the series branch's own roadmap. §31 asks for
-        "the roadmap's next milestone"; the whole file goes in, because hands does not
-        parse roadmaps and carrying it whole cannot pick the wrong milestone. A file
-        that cannot be read says so and does not stop the consultation: the architect
-        reads the branch from its own clone (`architect/CLAUDE.md` rule 1).
+        The roadmap is `meta/ROADMAP.md` under the builder's cwd, read as the playbook
+        is read: the committed copy, `git show HEAD:./meta/ROADMAP.md` (§10), so an
+        uncommitted edit is never what the architect is told (review 15 should-fix 4).
+        Of it the prompt carries the next unmet milestone (`next_milestone`) and the
+        file's path, not the whole file. A roadmap that cannot be read — not committed,
+        not UTF-8, git not answering — says so and does not stop the consultation: the
+        architect reads the branch from its own clone (`architect/CLAUDE.md` rule 1).
         """
-        path = self.config.role("builder").cwd / ROADMAP
+        cwd = self.config.role("builder").cwd
         try:
-            roadmap = path.read_text(encoding="utf-8")
-        except OSError as exc:
+            text = _committed_text(cwd / ROADMAP, cwd)
+        except PlaybookError as exc:
             roadmap = f"[hands: {ROADMAP} could not be read: {exc}; read it from your clone]"
+        else:
+            found = next_milestone(text)
+            if found.milestone is not None:
+                roadmap = found.milestone
+            elif found.count:
+                roadmap = (
+                    f"[hands: every milestone in {ROADMAP} ({found.count}) is marked DONE; "
+                    "none is unmet]"
+                )
+            else:
+                roadmap = (
+                    f"[hands: found no milestone in {ROADMAP} (a top-level line beginning "
+                    "`- **M`); read the file from your clone]"
+                )
         return ArchitectBrief(
             roadmap=roadmap,
             roadmap_path=str(ROADMAP),
@@ -2406,8 +2517,9 @@ def consult_head(prompt: str) -> dict[str, str] | None:
 class ArchitectBrief:
     """§31: what an architect consultation carries besides the event and the review.
 
-    The engine builds it (`PlaybookEngine.architect_brief`): the roadmap is a file
-    under the builder's cwd, and the rest is the playbook's `[series]` and
+    The engine builds it (`PlaybookEngine.architect_brief`): `roadmap` is the next
+    unmet milestone of the committed roadmap under the builder's cwd, or hands'
+    note of why there is none (§32), and the rest is the playbook's `[series]` and
     `[limits]`. Its defaults are what a caller with no engine gets — an empty
     roadmap and §31's own numbers — so the prompt is one shape either way.
     """
@@ -2480,7 +2592,8 @@ def _driver_prompt(event: str, job: Job) -> str:
 
 def _architect_prompt(event: str, job: Job, brief: ArchitectBrief | None) -> str:
     """§31: the event, the review's verdict line and its Blockers and Should-fix
-    sections verbatim, the roadmap file, and the instruction.
+    sections verbatim, the roadmap's next unmet milestone (§32) with the roadmap's
+    path, and the instruction.
 
     The escalation conditions of `[series]` are here too: §31 has the architect
     judge two of them and `architect/CLAUDE.md` rule 8 says handsd tells it when
@@ -2502,10 +2615,12 @@ def _architect_prompt(event: str, job: Job, brief: ArchitectBrief | None) -> str
         f"{review_sections(job.result, job.verdict)}\n"
         "----- END REVIEW -----\n"
         "\n"
-        f"The roadmap ({brief.roadmap_path}), verbatim between the markers:\n"
-        "----- BEGIN ROADMAP -----\n"
+        f"The roadmap is {brief.roadmap_path}; read it whole from your clone. Its next "
+        f"unmet milestone — the first milestone in {brief.roadmap_path} whose first line "
+        "is not marked DONE — verbatim between the markers:\n"
+        "----- BEGIN MILESTONE -----\n"
         f"{brief.roadmap}\n"
-        "----- END ROADMAP -----\n"
+        "----- END MILESTONE -----\n"
         "\n"
         "The escalation conditions of this series ([series], §31):\n"
         f"    gate_failures = {brief.gate_failures} (the same roadmap gate failing that many "

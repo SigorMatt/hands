@@ -1499,3 +1499,78 @@ def test_status_says_stall_detection_is_off_at_zero_minutes(tmp_home: Path, work
         assert "no progress and no liveness" not in strip_paths(out)
 
     drive(body)
+
+
+# --------------------- §32 (review 15 blocker 4): the series' roles, checked at start
+
+#: The reviewer's repro: a committed playbook in role mode, autonomous, and a config
+#: with no `[roles.architect]`.
+ROLE_BOOK = """version = 1
+
+[series]
+name = "m17"
+architect = "role"
+autonomous = true
+"""
+
+
+def _role_book_project(tmp_home: Path, workdir: Path, *, architect: bool) -> None:
+    from conftest import commit_file
+
+    extra = ""
+    if architect:
+        cwd = tmp_home.parent / "hands-architect"
+        cwd.mkdir(exist_ok=True)
+        extra = f'\n[roles.architect]\ncwd = "{cwd}"\n'
+    write_project(tmp_home, config_body(tmp_home, workdir, extra=extra))
+    commit_file(workdir, "PLAYBOOK.toml", ROLE_BOOK)
+
+
+def test_a_daemon_refuses_to_start_on_a_role_playbook_without_roles_architect(
+    tmp_home: Path, workdir: Path
+) -> None:
+    """§32: "`[series] architect = "role"` without `[roles.architect]` is a config
+    error at load, refused by `handsd`". The refusal names both files, and nothing
+    is bound: the socket is not there to answer `hands pipeline` loaded=true."""
+    _role_book_project(tmp_home, workdir, architect=False)
+    daemon = Daemon(load_config(PROJECT))
+
+    async def start() -> None:
+        await daemon.start()
+
+    with pytest.raises(daemon_mod.DaemonError) as refused:
+        asyncio.run(start())
+    said = strip_paths(str(refused.value))
+    assert "PLAYBOOK.toml" in strip_paths(said) and f"{PROJECT}.toml" in strip_paths(said), said
+    assert '[series] architect = "role"' in strip_paths(said), said
+    assert "[roles.architect]" in strip_paths(said), said
+    assert not daemon.socket_path.exists()
+
+
+def test_handsd_exits_1_naming_both_files_on_a_role_playbook_without_roles_architect(
+    tmp_home: Path, workdir: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _role_book_project(tmp_home, workdir, architect=False)
+    # A safety net for the red run: were handsd to start, it would wait for a signal.
+    timer = threading.Timer(10.0, lambda: os.kill(os.getpid(), 15))
+    timer.start()
+    try:
+        code = daemon_mod.main(["--project", PROJECT])
+    finally:
+        timer.cancel()
+    assert code == 1
+    err = strip_paths(capsys.readouterr().err)
+    assert err.startswith("handsd: "), err
+    assert "PLAYBOOK.toml" in strip_paths(err)
+    assert f"{PROJECT}.toml" in strip_paths(err)
+    assert "[roles.architect]" in strip_paths(err)
+
+
+def test_a_role_playbook_with_roles_architect_starts(tmp_home: Path, workdir: Path) -> None:
+    _role_book_project(tmp_home, workdir, architect=True)
+
+    async def body(daemon: Daemon) -> None:
+        state = await ok("pipeline")
+        assert state["paused"] is False, state
+
+    drive(body)

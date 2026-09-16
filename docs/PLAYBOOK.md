@@ -103,7 +103,10 @@ series has. The phone architect is the human's chat Project, which emits a kit
 the human carries to the laptop; `role` is the headless architect handsd starts
 itself (`[roles.architect]`, docs/INTEGRATION.md "The architect role"). A
 playbook that sets `role` while the config has **no `[roles.architect]`** is a
-config error, named when the engine loads the file and by `hands doctor`.
+config error (DESIGN §32): `handsd` refuses to start on it, `hands doctor` fails
+its playbook row, the engine stops when it loads the file, and `hands kit check`
+fails a kit that carries it — against the config `hands` resolves, and where
+none resolves the check passes and says it could not judge.
 
 `autonomous` (default `false`) says the engine may release what that architect
 files. With `architect = "role"` and `autonomous = true` (DESIGN §32):
@@ -380,10 +383,17 @@ handsd starts an architect job in the architect's directory, `context: clear`,
 and `consult.done` the same way. The prompt hands writes has four parts: the
 event and the job record; the review's `VERDICT:` line and its `## Blockers` and
 `## Should-fix` sections verbatim (the whole reply when a heading is missing);
-`meta/ROADMAP.md` from the builder's cwd, verbatim; and the series' escalation
-conditions (`gate_failures`, `escalate_on`, and which consultation of the budget
-this is). Then the instruction — "write the next kit from ROADMAP and the
-review, file it, or escalate" — and the three lines the reply may begin with:
+the roadmap's path and its next unmet milestone, verbatim (DESIGN §32); and the
+series' escalation conditions (`gate_failures`, `escalate_on`, and which
+consultation of the budget this is). Then the instruction — "write the next kit from ROADMAP and the
+review, file it, or escalate" — and the three lines the reply may begin with.
+The roadmap is `meta/ROADMAP.md` under the builder's cwd, read as the playbook
+is, from the committed file (`git show HEAD:./meta/ROADMAP.md`), never an
+uncommitted edit. A milestone is a top-level line beginning `- **M` with the
+indented lines under it; it is marked DONE when the word `DONE` is on its first
+line, and the next unmet milestone is the first that is not. With every
+milestone marked DONE, or none found, or no committed file, the prompt says so
+instead, and the consultation goes ahead:
 
     VERDICT: next kit <name>
     VERDICT: series complete

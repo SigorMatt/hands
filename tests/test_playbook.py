@@ -58,6 +58,7 @@ from hands.playbook import (
     check_series_roles,
     consult_prompt,
     load_playbook,
+    next_milestone,
     parse_playbook,
     playbook_path,
     render,
@@ -3650,11 +3651,14 @@ REVIEW = (
     f"{REVIEW_BLOCKERS}\n{REVIEW_SHOULD_FIX}\n{REVIEW_NOTES}"
 )
 
-#: `meta/ROADMAP.md` under the builder's cwd, which the consult prompt carries whole.
-ROADMAP_TEXT = """# ROADMAP
+#: `meta/ROADMAP.md` under the builder's cwd: the consult prompt carries its next
+#: unmet milestone (§32), `M5`, and not the milestone marked DONE before it.
+ROADMAP_DONE = "- **M4c The architect role** — missions 15 and 16. DONE."
+ROADMAP_NEXT = "- **M5 spanweave integration** — the next milestone; gate: two runs merged."
+ROADMAP_TEXT = f"""# ROADMAP
 
-- **M4c The architect role** — missions 15 and 16. DONE.
-- **M5 spanweave integration** — the next milestone; gate: two runs merged.
+{ROADMAP_DONE}
+{ROADMAP_NEXT}
 """
 
 ARCHITECT_KICKOFF = "Read meta/BUILDER-17-PROMPT.md and execute the mission below its divider."
@@ -3700,11 +3704,11 @@ def architect_engine(
     *,
     roadmap: str | None = ROADMAP_TEXT,
 ) -> tuple[PlaybookEngine, Recorder]:
+    engine = engine_for(tmp_home, workdir, body, architect=architect_dir(tmp_home))
     if roadmap is not None:
-        path = workdir / ROADMAP
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(roadmap, encoding="utf-8")
-    return engine_for(tmp_home, workdir, body, architect=architect_dir(tmp_home))
+        # §32: the roadmap is read as the playbook is, from the committed file.
+        commit_file(workdir, str(ROADMAP), roadmap)
+    return engine
 
 
 def reviewed(spool: Spool, result: str = REVIEW) -> Job:
@@ -3814,8 +3818,9 @@ def test_the_architect_prompt_carries_the_event_the_review_the_roadmap_and_the_i
     assert REVIEW_BLOCKERS in strip_paths(prompt)
     assert REVIEW_SHOULD_FIX in strip_paths(prompt)
     assert REVIEW_NOTES not in strip_paths(prompt), "§31 names two sections, not the reply"
-    # the roadmap file, whole, named by the path it was read from
-    assert ROADMAP_TEXT in strip_paths(prompt)
+    # §32: the roadmap's next unmet milestone, not the whole file, and the file's path
+    assert ROADMAP_NEXT in strip_paths(prompt)
+    assert ROADMAP_DONE not in strip_paths(prompt)
     assert str(ROADMAP) in strip_paths(prompt)
     # the instruction and the vocabulary, verbatim
     assert ARCHITECT_INSTRUCTION in strip_paths(prompt)
@@ -3865,6 +3870,103 @@ def test_a_roadmap_hands_cannot_read_is_said_and_does_not_stop_the_consultation(
     prompt = recorder.enqueued[0]["prompt"]
     assert str(ROADMAP) in strip_paths(prompt)
     assert "could not be read" in strip_paths(prompt)
+
+
+# ---- §32 (review 15 should-fix 4): the roadmap's next unmet milestone, not the file
+
+#: A roadmap in the shape `meta/ROADMAP.md` has: a preamble, then one top-level
+#: `- **M… Title** — …` item per milestone, wrapped onto indented lines.
+ROADMAP_WRAPPED = """# ROADMAP
+
+Milestones are gated by a clean cold review. A DONE here is not a milestone.
+
+- **M1 Core** — DONE 2026-09-11 (mission 1). Dispatch, gates,
+  playbook, limits.
+- **M2 Shakeout** — mission 2. A run chained into a cold review;
+  mission 2a DONE, and its gate is not marked on the first line.
+  Gate: ntfy proven.
+- **M3 Hardening** — DONE 2026-09-12: reviews find claims.
+- **M4 Detectors** — mission 8. Gate: clean review.
+
+## Notes
+
+- **M5 After a heading** — still a milestone line, and not DONE either.
+"""
+
+
+def test_the_next_milestone_is_the_first_whose_first_line_is_not_marked_done() -> None:
+    """§32: "the first whose gate is not marked DONE". A milestone is a top-level
+    list item beginning `- **M`, running over its indented continuation lines; it
+    is marked DONE when the word `DONE` is on its first line. M2's continuation says
+    DONE of a sub-mission, which is not its mark."""
+    found = next_milestone(ROADMAP_WRAPPED)
+    assert found.milestone == (
+        "- **M2 Shakeout** — mission 2. A run chained into a cold review;\n"
+        "  mission 2a DONE, and its gate is not marked on the first line.\n"
+        "  Gate: ntfy proven."
+    )
+    assert found.count == 5
+
+
+def test_the_architect_prompt_carries_only_the_next_unmet_milestone(
+    tmp_home: Path, workdir: Path
+) -> None:
+    engine, recorder = architect_engine(tmp_home, workdir, roadmap=ROADMAP_WRAPPED)
+    run(engine.on_job(reviewed(engine.spool)))
+    prompt = strip_paths(recorder.enqueued[0]["prompt"])
+    assert "- **M2 Shakeout** — mission 2." in strip_paths(prompt)
+    assert "  Gate: ntfy proven." in strip_paths(prompt)
+    for other in ("**M1 Core**", "**M3 Hardening**", "**M4 Detectors**", "Milestones are gated"):
+        assert other not in strip_paths(prompt), other
+    assert f"first milestone in {ROADMAP} whose first line is not marked DONE" in prompt
+
+
+def test_a_roadmap_whose_milestones_are_all_done_says_so(tmp_home: Path, workdir: Path) -> None:
+    roadmap = "# ROADMAP\n\n- **M1 Core** — DONE.\n- **M2 Shakeout** — DONE 2026-09-11.\n"
+    engine, recorder = architect_engine(tmp_home, workdir, roadmap=roadmap)
+    run(engine.on_job(reviewed(engine.spool)))
+    assert not engine.state.paused, engine.state.stop_reason
+    prompt = strip_paths(recorder.enqueued[0]["prompt"])
+    assert f"every milestone in {ROADMAP} (2) is marked DONE" in prompt
+    assert "**M1 Core**" not in strip_paths(prompt)
+
+
+def test_a_roadmap_with_no_milestone_hands_can_read_says_so(
+    tmp_home: Path, workdir: Path
+) -> None:
+    roadmap = "# ROADMAP\n\n1. Core — DONE.\n2. Shakeout.\n"
+    engine, recorder = architect_engine(tmp_home, workdir, roadmap=roadmap)
+    run(engine.on_job(reviewed(engine.spool)))
+    assert not engine.state.paused, engine.state.stop_reason
+    prompt = strip_paths(recorder.enqueued[0]["prompt"])
+    assert f"no milestone in {ROADMAP}" in prompt
+    assert "- **M" in strip_paths(prompt)  # the shape it looked for, named
+    assert "Shakeout" not in strip_paths(prompt)
+
+
+def test_the_roadmap_is_the_committed_file_not_the_working_tree(
+    tmp_home: Path, workdir: Path
+) -> None:
+    """§32 (review 15 should-fix 4): the playbook loads only the committed file, and
+    the roadmap is read the same way — the working tree's edit is not what the
+    branch carries, so it is not what the architect is told."""
+    engine, recorder = architect_engine(tmp_home, workdir)
+    (workdir / ROADMAP).write_text("# ROADMAP\n\n- **M9 Uncommitted** — next.\n")
+    run(engine.on_job(reviewed(engine.spool)))
+    prompt = strip_paths(recorder.enqueued[0]["prompt"])
+    assert ROADMAP_NEXT in strip_paths(prompt)
+    assert "M9 Uncommitted" not in strip_paths(prompt)
+
+
+def test_an_untracked_roadmap_is_one_hands_cannot_read(tmp_home: Path, workdir: Path) -> None:
+    engine, recorder = architect_engine(tmp_home, workdir, roadmap=None)
+    (workdir / ROADMAP).parent.mkdir(parents=True, exist_ok=True)
+    (workdir / ROADMAP).write_text(ROADMAP_TEXT, encoding="utf-8")
+    run(engine.on_job(reviewed(engine.spool)))
+    assert not engine.state.paused, engine.state.stop_reason
+    prompt = strip_paths(recorder.enqueued[0]["prompt"])
+    assert "could not be read" in strip_paths(prompt)
+    assert ROADMAP_NEXT not in strip_paths(prompt)
 
 
 def test_a_consult_with_no_architect_role_configured_stops_and_starts_nothing(
@@ -4322,8 +4424,7 @@ def architect_project(tmp_home: Path, workdir: Path, *, book: str = E2E_BOOK,
         )
     write_project(tmp_home, body)
     write_playbook(workdir, book)
-    (workdir / ROADMAP).parent.mkdir(parents=True, exist_ok=True)
-    (workdir / ROADMAP).write_text(ROADMAP_TEXT, encoding="utf-8")
+    commit_file(workdir, str(ROADMAP), ROADMAP_TEXT)  # §32: read as committed
     return architect
 
 
@@ -4369,7 +4470,7 @@ def test_end_to_end_next_kit_waits_for_the_apply_the_architect_filed(
         assert REVIEW_VERDICT in strip_paths(architect["prompt"])
         assert REVIEW_BLOCKERS in strip_paths(architect["prompt"])
         assert REVIEW_SHOULD_FIX in strip_paths(architect["prompt"])
-        assert ROADMAP_TEXT in strip_paths(architect["prompt"])
+        assert ROADMAP_NEXT in strip_paths(architect["prompt"])
         assert ARCHITECT_INSTRUCTION in strip_paths(architect["prompt"])
         # §32: the apply hands filed from the architect's kit — a kit_id handsd
         # minted, its zip and record stored under the spool naming this consultation.

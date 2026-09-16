@@ -463,6 +463,79 @@ def test_a_daemon_start_publishes_one_notification_listing_the_re_minted_held_jo
     phone_drive(second)
 
 
+@pytest.mark.parametrize(
+    "present",
+    [
+        (),
+        ("held",),
+        ("driver",),
+        ("architect",),
+        ("held", "driver", "architect"),
+    ],
+    ids=["plain", "held", "orphaned-driver", "orphaned-architect", "all-three"],
+)
+def test_a_daemon_start_publishes_exactly_one_notification(
+    tmp_home: Path, workdir: Path, present: tuple[str, ...]
+) -> None:
+    """§32 (review 15 should-fix 5): "daemon start publishes exactly one notification
+    and a test binds the count". The reviewer's case was an orphaned consult driver
+    job: its consultation's end stopped the pipeline inside the start, and `hands:
+    the pipeline stopped` was published 7 ms before `hands: handsd started`. The stop
+    is folded into the one start notification, whose message carries its reason.
+
+    Each case is a spool a dead daemon left: nothing, a held job, an orphaned
+    consult driver job, an orphaned architect job, and all three at once."""
+    from hands.playbook import consult_prompt
+    from hands.spool import Spool
+
+    driver = tmp_home.parent / "driver"
+    architect = tmp_home.parent / "hands-architect"
+    driver.mkdir(exist_ok=True)
+    architect.mkdir(exist_ok=True)
+    extra = f'{NOTIFY}\n[roles.driver]\ncwd = "{driver}"\n'
+    extra += f'\n[roles.architect]\ncwd = "{architect}"\n'
+    config = config_body(tmp_home, workdir, extra=extra)
+    (tmp_home / ".hands" / f"{PROJECT}.toml").write_text(config)
+    commit_file(workdir, "PLAYBOOK.toml", "version = 1\n")
+    spool = Spool(tmp_home / ".hands" / PROJECT)
+    held_ids: list[str] = []
+    if "held" in present:
+        job = spool.create_job(
+            role="aux", context="clear", prompt="FAKE:result ok", origin="cli", state="held"
+        )
+        held_ids.append(job.id)
+    about = spool.create_job(role="builder", context="clear", prompt="p", origin="cli")
+    spool.transition(about, "running")
+    about = spool.transition(about, "done", verdict="VERDICT: question x", result="x")
+    for role in ("driver", "architect"):
+        if role in present:
+            orphan = spool.create_job(
+                role=role, context="clear", prompt=consult_prompt("builder.done", about),
+                origin="playbook",
+            )
+            spool.transition(orphan, "running")  # no pid: its process is gone
+
+    async def body(daemon: Daemon, fake: FakeNtfy) -> None:
+        posts = daemon.notifier.post
+        await daemon.notifier.drain()
+        await asyncio.sleep(0.2)  # anything the start scheduled has had its turn
+        await daemon.notifier.drain()
+        titles = [item["title"] for item in posts.sent]
+        assert titles == ["hands: handsd started"], posts.sent
+        message = strip_paths(posts.sent[0]["message"])
+        for job in held_ids:
+            assert job in strip_paths(message)
+        if "driver" in present or "architect" in present:
+            stopped = (await ok("pipeline"))["stop_reason"]
+            assert stopped and "orphaned" in strip_paths(stopped)
+            assert "hands: the pipeline stopped" in strip_paths(message), message
+            assert strip_paths(stopped) in message, message
+        else:
+            assert "the pipeline stopped" not in strip_paths(message), message
+
+    phone_drive(body)
+
+
 def test_a_restart_without_held_jobs_re_sends_nothing(project: str) -> None:
     async def first(daemon: Daemon, fake: FakeNtfy) -> None:
         job = await held()

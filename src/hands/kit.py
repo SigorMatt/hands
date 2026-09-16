@@ -37,6 +37,10 @@ The checks, in order (docs/ARCHITECT-HANDBOOK.md §11 says the same):
   `quiet_hours` — without the HEAD comparison, because a kit is by definition
   not yet committed. A kit's playbook must also carry a `[series] kickoff` equal
   to the brief's kickoff line; the repo's is not compared (§26 compares a kit's).
+  §32: a kit's playbook that sets `[series] architect = "role"` fails when the
+  config `hands` resolves (`--project`, `$HANDS_PROJECT`, the only config) has no
+  `[roles.architect]`; with no config to resolve it passes and the line says it
+  was not judged. No config is read for any other kit.
 * `brief` — the kit carries exactly one brief, `meta/BUILDER-<N>-PROMPT.md`
   (missions form) or `WORKPLAN.md` (runs form); its kickoff line is the first
   indented line after "Kickoff line"; its final-reply vocabulary is the
@@ -95,12 +99,15 @@ from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from typing import Any, TextIO
 
+import hands.config as config_mod
 from hands.config import CLONE_ENV, KITS_ENV
 from hands.playbook import (
     DRIVER_VERDICTS,
     GIT_ENV_CLEARED,
     Playbook,
+    PlaybookConfigError,
     PlaybookError,
+    check_series_roles,
     parse_playbook,
 )
 
@@ -591,8 +598,36 @@ def _load(text: bytes | str, name: str) -> Playbook:
     return parse_playbook(decoded, path=Path(name))
 
 
+def _series_roles(book: Playbook, name: str, project: str | None) -> tuple[bool, str]:
+    """§32 (review 15 blocker 4): a kit's playbook in role mode against this laptop's
+    config. Whether it passes, and what the playbook line says of it: the refusal
+    (`check_series_roles`' message, naming both files), or the clause a passing line
+    ends with — judged, or why it could not be.
+
+    The config is the one every `hands` command resolves (`--project`,
+    `$HANDS_PROJECT`, the only `~/.hands/*.toml`), and it is looked for only for a
+    playbook that sets `architect = "role"`: `kit check` of any other kit reads no
+    config (§26). Where none resolves — the phone architect's sandbox, where only
+    hands is installed — there is nothing to judge against; the check passes and
+    says so, rather than fail every role-mode kit written there."""
+    if book.architect != "role":
+        return True, ""
+    try:
+        config = config_mod.load_config(config_mod.resolve_project(project))
+    except config_mod.ConfigError as exc:
+        return True, (
+            '; its [series] architect = "role" is not judged against [roles.architect]: '
+            f"no hands config resolves here ({exc})"
+        )
+    try:
+        check_series_roles(book, config)
+    except PlaybookConfigError as exc:
+        return False, f"the kit's {name} loads, and is a config error here: {exc}"
+    return True, f'; its [series] architect = "role" has [roles.architect] in {config.path}'
+
+
 def _check_playbook(
-    kit: _Kit, repo: Path, kickoff: str | None
+    kit: _Kit, repo: Path, kickoff: str | None, project: str | None = None
 ) -> tuple[Check, Playbook | None]:
     carried = [name for name in PLAYBOOK_PATHS if name in kit.files]
     if len(carried) > 1:
@@ -618,9 +653,12 @@ def _check_playbook(
                 f"the brief's kickoff line {kickoff!r}"
             )
             return Check("playbook", False, reason), book
+        roles_ok, said = _series_roles(book, name, project)
+        if not roles_ok:
+            return Check("playbook", False, said), book
         reason = (
             f"the kit's {name} loads, sets no quiet_hours, and its [series] kickoff "
-            "equals the brief's kickoff line"
+            "equals the brief's kickoff line" + said
         )
         return Check("playbook", True, reason), book
     present = [name for name in PLAYBOOK_PATHS if (repo / name).is_file()]
@@ -1108,12 +1146,14 @@ def kit_md_note(plan: Apply) -> str:
     return shape + f"this kit carries no {KIT_MD}, so the message is '{plan.commit_message}'"
 
 
-def check_kit(path: Path, repo: Path) -> Report:
+def check_kit(path: Path, repo: Path, *, project: str | None = None) -> Report:
+    """Every check of a kit against `repo`. `project` names the config a kit's
+    role-mode playbook is judged against (§32), resolved as `hands` resolves one."""
     kit = _read_kit(path)
     brief_check, brief_name, brief_text = _find_brief(kit)
     kickoff = kickoff_line(brief_text) if brief_text is not None else None
     literals = final_reply_literals(brief_text) if brief_text is not None else None
-    playbook_check, book = _check_playbook(kit, repo, kickoff)
+    playbook_check, book = _check_playbook(kit, repo, kickoff, project)
     review = _review_vocabulary(book, kit, repo)
     checks = [
         _check_paths(kit, repo),
@@ -1166,12 +1206,14 @@ def git_toplevel(cwd: Path) -> Path:
     return Path(proc.stdout.strip())
 
 
-def run(kit: str, repo: str | None, *, out: TextIO, as_json: bool) -> int:
+def run(
+    kit: str, repo: str | None, *, out: TextIO, as_json: bool, project: str | None = None
+) -> int:
     """`hands kit check <zip|dir> [--repo path]`: exit 0 only when every check passes."""
     root = Path(repo).expanduser() if repo else git_toplevel(Path.cwd())
     if not root.is_dir():
         raise KitError(f"--repo {root} is not a directory")
-    report = check_kit(Path(kit).expanduser(), root)
+    report = check_kit(Path(kit).expanduser(), root, project=project)
     if as_json:
         print(json.dumps(report.to_dict(), sort_keys=True), file=out)
         return 0 if report.ok else 1
@@ -1353,6 +1395,7 @@ def file_run(
     send: Callable[[dict[str, Any]], dict[str, Any]],
     out: TextIO,
     as_json: bool,
+    project: str | None = None,
 ) -> int:
     """`hands kit file <dir>`: build the zip, check it here, then have handsd file it (§32).
 
@@ -1370,7 +1413,7 @@ def file_run(
     with tempfile.TemporaryDirectory(prefix="hands-kit-") as scratch:
         built = Path(scratch) / f"{root.name}.zip"
         built.write_bytes(data)
-        report = check_kit(built, clone)
+        report = check_kit(built, clone, project=project)
     report.kit = root
     failed = [check for check in report.checks if not check.ok]
     if failed:
