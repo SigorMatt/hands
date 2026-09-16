@@ -65,6 +65,7 @@ from hands.spool import Job, Spool, SpoolError, atomic_write, now_iso
 __all__ = [
     "ACTIONS",
     "CONSULT_QUESTION",
+    "ConsultAnchor",
     "DEFAULT_MAX_CONSULTS",
     "DRIVER_VERDICTS",
     "PAUSE_REASON",
@@ -733,6 +734,48 @@ def _opt_str(table: dict[str, Any], key: str, where: str) -> str | None:
 # ------------------------------------------------------------ pipeline state
 
 
+@dataclass(frozen=True)
+class ConsultAnchor:
+    """Where `max_consults` starts counting, and what that was derived from (§31).
+
+    §30 persisted the anchor as a bare timestamp, which read as more than it was.
+    Review 14 should-fix 5 asked for both fields on disk: `daemon_start` is the
+    `started` of the daemon that first found no anchor — the only field the count
+    reads — and `job` is the last job in the spool at that moment, so a human can
+    see which side of the anchor a job falls on without guessing from timestamps.
+
+    What this does *not* change, said plainly because it was undisclosed before:
+    a `pipeline.json` that was unreadable at start keeps its in-memory anchor and
+    any later `_save()` (a pause, a stop) writes that anchor over the file; and a
+    deleted or rotated `pipeline.json` has no anchor, so the next daemon start
+    becomes one and the count restarts from there. Both remain true.
+    """
+
+    daemon_start: str
+    job: str | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"daemon_start": self.daemon_start, "job": self.job}
+
+    @classmethod
+    def from_data(cls, data: Any) -> ConsultAnchor | None:
+        """The anchor a `pipeline.json` carries, or None when it carries none.
+
+        A file written before §31 holds the bare timestamp string; it is read as a
+        daemon start with no job rather than being dropped, which would restart
+        the count on the first start after an upgrade.
+        """
+        if isinstance(data, str):
+            return cls(daemon_start=data) if data else None
+        if not isinstance(data, dict):
+            return None
+        started = data.get("daemon_start")
+        if not isinstance(started, str) or not started:
+            return None
+        job = data.get("job")
+        return cls(daemon_start=started, job=job if isinstance(job, str) else None)
+
+
 @dataclass
 class PipelineState:
     """What `hands pipeline` reports and a restart must not forget (§4, §10).
@@ -754,10 +797,11 @@ class PipelineState:
     #: §28: every `[series] kickoff` value a loaded playbook has carried, in the
     #: order first seen; `max_consults` counts from a job whose prompt is any.
     kickoffs: list[str] = field(default_factory=list)
-    #: §29, §30: the daemon start `max_consults` also counts from, persisted so a
-    #: restart mid-mission keeps the count; set by the first daemon start that finds
-    #: none (`PlaybookEngine.daemon_start`) and never moved by a later one.
-    consults_since: str | None = None
+    #: §29, §30, §31: the daemon start `max_consults` also counts from, with the
+    #: job it was derived from, persisted so a restart mid-mission keeps the count;
+    #: set by the first daemon start that finds none (`PlaybookEngine.daemon_start`)
+    #: and never moved by a later one.
+    consults_since: ConsultAnchor | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -769,7 +813,9 @@ class PipelineState:
             "last_rule_sha256": self.last_rule_sha256,
             "auto_runs_used": list(self.auto_runs_used),
             "kickoffs": list(self.kickoffs),
-            "consults_since": self.consults_since,
+            "consults_since": (
+                self.consults_since.to_dict() if self.consults_since is not None else None
+            ),
         }
 
     @classmethod
@@ -790,7 +836,7 @@ class PipelineState:
             last_rule_sha256=sha if isinstance(sha, str) else None,
             auto_runs_used=list(data.get("auto_runs_used") or []),
             kickoffs=[item for item in data.get("kickoffs") or [] if isinstance(item, str)],
-            consults_since=since if isinstance(since := data.get("consults_since"), str) else None,
+            consults_since=ConsultAnchor.from_data(data.get("consults_since")),
         )
 
 
@@ -842,11 +888,15 @@ class PlaybookEngine:
 
         That start is `max_consults`' daemon-start anchor only when `pipeline.json`
         persists none; a persisted anchor wins, so a restart mid-mission does not
-        reset the count (REVIEW-13 should-fix 5). The first start is persisted.
+        reset the count (REVIEW-13 should-fix 5). The first start is persisted,
+        with the last job in the spool at that moment (§31; `ConsultAnchor`).
         """
         if self.state.consults_since is not None:
             return
-        self.state.consults_since = started
+        jobs = self.spool.list_jobs()
+        self.state.consults_since = ConsultAnchor(
+            daemon_start=started, job=jobs[-1].id if jobs else None
+        )
         if not self._state_unreadable:
             self._save()
 
@@ -1214,10 +1264,11 @@ class PlaybookEngine:
         one is not another) after the later of the last builder job whose prompt is
         *any* `[series] kickoff` value seen (`PipelineState.kickoffs`, plus the
         loaded file's) and the last kit apply that ran (a builder job of origin
-        `kit` that started), neither a resume. §29, §30: nor before the persisted
-        daemon-start anchor (`PipelineState.consults_since`, the first daemon start
-        that found none), whichever of the three is latest. With none of them, every
-        driver job in the spool counts: the safe direction is to stop sooner."""
+        `kit` that started), neither a resume. §29, §30, §31: nor before the
+        persisted daemon-start anchor (`PipelineState.consults_since.daemon_start`,
+        the first daemon start that found none), whichever of the three is latest.
+        With none of them, every driver job in the spool counts: the safe direction
+        is to stop sooner."""
         jobs = self.spool.list_jobs()
         kickoffs = set(self.state.kickoffs)
         if book is not None and book.kickoff:
@@ -1230,7 +1281,9 @@ class PlaybookEngine:
                 record.origin == KIT_ORIGIN and record.started is not None
             ):
                 start = index + 1
-        since = self.state.consults_since
+        # §31: only the anchor's daemon start filters; its `job` is provenance.
+        anchor = self.state.consults_since
+        since = anchor.daemon_start if anchor is not None else None
         return sum(
             1
             for record in jobs[start:]

@@ -733,6 +733,12 @@ def main(
             project = resolve_project(getattr(args, "project", None))
             config = load_config(project)
         except ConfigError as exc:
+            if project is None and _project_named(args):
+                # §31 (review 14 should-fix 4): the name was given and refused, so
+                # neither fallback below applies — `who` must not render some other
+                # project and `doctor` has no config to explain. The command line
+                # is what is wrong, and it is reported as any refusal is.
+                raise
             names = list_projects() if project is None else []
             if command == "who" and not args.daemon and names:
                 # §29: `hands who` shows every project's daemon as a root, so with
@@ -812,6 +818,18 @@ def main(
         return 1
     print(json.dumps(result, sort_keys=True) if as_json else _render(command, result), file=out)
     return exit_code(command, result)
+
+
+def _project_named(args: argparse.Namespace) -> bool:
+    """Was a project named at all — by `--project` or by `$HANDS_PROJECT`? (§31)
+
+    Named and empty is still named: `resolve_project` refuses it, and this says
+    so, which is how the caller tells that refusal from "which project do you
+    mean?" with several configs and none named.
+    """
+    if getattr(args, "project", None) is not None:
+        return True
+    return os.environ.get("HANDS_PROJECT") is not None
 
 
 def _first_loadable(names: Sequence[str]) -> Config:

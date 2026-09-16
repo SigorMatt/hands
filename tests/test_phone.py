@@ -378,14 +378,16 @@ def test_the_nonce_dies_with_the_daemon(project: str) -> None:
     phone_drive(second)
 
 
-def test_a_restart_re_sends_each_held_job_with_a_fresh_nonce(project: str) -> None:
-    """§25: "nonces are re-minted for every job still `held` and their
-    notifications re-sent with fresh buttons" (FINAL-REPORT-8 §5 item 5).
+def test_a_restart_re_mints_every_held_jobs_nonce_and_kills_the_old_buttons(
+    project: str,
+) -> None:
+    """§25 as §31 amends it: "nonces are re-minted for every job still `held`",
+    but the notification is no longer re-sent per job (review 14 should-fix 1).
 
-    Two daemons over the same spool, each through `Daemon.start()`. The first
-    leaves two jobs held, one approved (decided, then done) and one never gated
-    (done). The second publishes one held notification per held job, with
-    buttons whose nonce is new; the old nonce is refused, the new one decides.
+    Two daemons over the same spool. The first leaves two jobs held, one approved
+    (decided, then done) and one never gated (done). The second has a fresh nonce
+    in memory for each held job and for nothing else; the dead daemon's button
+    decides nothing, and the secret still does.
     """
     kept: dict[str, Any] = {}
 
@@ -400,37 +402,61 @@ def test_a_restart_re_sends_each_held_job_with_a_fresh_nonce(project: str) -> No
             assert (await ok("wait", job))["state"] == "done"
 
     async def second(daemon: Daemon, fake: FakeNtfy) -> None:
-        posts = daemon.notifier.post
         await daemon.notifier.drain()
-        resent = posts.titled("held")
-        buttons = {
-            action["body"].split()[1]: action["body"].split()[2]
-            for item in resent
-            for action in item.get("actions") or []
-        }
-        assert len(resent) == 2, posts.sent  # one publish per held job, none for the others
-        assert set(buttons) == set(kept["held"])
-        for item in resent:
-            assert item["url"] == f"{NTFY}/{EVENTS_TOPIC}"
-            assert [a["label"] for a in item["actions"]] == ["Approve", "Deny"]
-            assert SECRET not in strip_paths(json.dumps(item))  # §24: never the secret
+        assert daemon.phone is not None
+        assert set(daemon.phone.nonces) == set(kept["held"])  # none for the others
+        minted = dict(daemon.phone.nonces)
         for job in kept["held"]:
-            assert buttons[job] != kept["old"][job]
-            assert daemon.phone is not None and daemon.phone.nonces[job] == buttons[job]
+            assert minted[job] != kept["old"][job]
+        for item in daemon.notifier.post.sent:
+            assert SECRET not in strip_paths(json.dumps(item))  # §24: never the secret
+            for value in minted.values():
+                assert value not in strip_paths(json.dumps(item))  # nor a live nonce
 
         one, two = kept["held"]
-        await say(daemon, fake, f"approve {one} {kept['old'][one]}")  # the old button
+        await say(daemon, fake, f"approve {one} {kept['old'][one]}")  # the dead button
         assert await state(one) == "held"
-        await say(daemon, fake, f"approve {one} {buttons[one]}")  # the re-sent button
+        await say(daemon, fake, f"approve {one} {minted[one]}")  # this daemon's nonce
         record = await ok("show", one)
         assert record["gate"]["decision"] == "approved"
         assert record["gate"]["decided_by"] == "phone"
-        assert daemon.phone is not None and daemon.phone.nonces.get(one) is None
-        await say(daemon, fake, f"deny {two} {buttons[one]}")  # bound to its own job
-        assert await state(two) == "held"
-        await say(daemon, fake, f"deny {two} {buttons[two]}")
+        assert daemon.phone.nonces.get(one) is None
+        await say(daemon, fake, f"deny {two} {SECRET}")  # the secret still decides
         assert (await ok("show", two))["gate"]["decided_by"] == "phone"
         assert await state(two) == "denied"
+
+    phone_drive(first)
+    phone_drive(second)
+
+
+def test_a_daemon_start_publishes_one_notification_listing_the_re_minted_held_jobs(
+    project: str,
+) -> None:
+    """§31 (review 14 should-fix 1): "daemon start publishes one notification, and
+    re-minted held jobs are listed inside it rather than each published".
+
+    Two daemons over one spool. The first leaves two jobs held. The second
+    publishes exactly one notification at start — `hands: handsd started`, naming
+    both held ids — and no `job.held` and no buttons. The nonces are still
+    re-minted, so the buttons of the dead daemon are dead."""
+    kept: dict[str, Any] = {}
+
+    async def first(daemon: Daemon, fake: FakeNtfy) -> None:
+        one, two = await held(), await held()
+        kept["held"] = sorted([one["id"], two["id"]])
+        kept["old"] = {job: await nonce_for(daemon, job) for job in kept["held"]}
+
+    async def second(daemon: Daemon, fake: FakeNtfy) -> None:
+        posts = daemon.notifier.post
+        await daemon.notifier.drain()
+        assert posts.titled("held") == [], posts.sent
+        assert [item.get("actions") for item in posts.sent] == [None] * len(posts.sent)
+        (started,) = posts.titled("started")
+        for job in kept["held"]:
+            assert job in strip_paths(started["message"]), started
+            assert daemon.phone is not None
+            assert daemon.phone.nonces[job] not in (None, kept["old"][job])
+        assert len(posts.sent) == 1, posts.sent
 
     phone_drive(first)
     phone_drive(second)
@@ -1905,6 +1931,67 @@ def test_a_kit_receipt_and_its_held_apply_are_spaced_for_ntfys_timestamps(
             f"publish {KIT_TITLE}",
             f"sleep {PAIR_SPACING_S}",
             f"publish {held_title}",
+        ], order
+
+    phone_drive(body, Timed())
+
+
+def test_the_ordinary_kit_with_no_kit_md_spaces_all_three_of_its_publishes(
+    kit_project: str, workdir: Path, downloads: Path, kit_server: KitServer
+) -> None:
+    """§31 (review 14 blocker 2): "the 1.1 s spacing applies on every branch that
+    publishes the kit pair, with a test that binds it to the ordinary branch".
+
+    A kit with no `KIT.md` is the ordinary case (`kit.py`'s `default_why`), and it
+    publishes three times for one cause: the receipt, the `job.held` of the apply,
+    and the answer explaining the default commit message. Each consecutive pair is
+    `PAIR_SPACING_S` apart, so ntfy's per-second stamps order all three.
+
+    The held notification is recorded where the daemon hands it over
+    (`Notifier.notify`, which spawns its POST and returns), because that is the
+    moment the spacing is measured from; the other two are awaited POSTs."""
+    (workdir / "meta").mkdir()
+    (workdir / "meta" / "REVIEW-PROTOCOL.md").write_text("the old protocol\n")
+    held_title = daemon_mod.NOTIFY_KINDS["job.held"]
+    order: list[str] = []
+
+    class Timed(Recorder):
+        async def __call__(self, url: str, **kwargs: Any) -> int:
+            order.append(f"post {kwargs['title']}")
+            return await super().__call__(url, **kwargs)
+
+    async def body(daemon: Daemon, fake: FakeNtfy) -> None:
+        assert daemon.phone is not None
+
+        async def sleep(seconds: float) -> None:
+            order.append(f"sleep {seconds}")
+            await asyncio.sleep(0)
+
+        daemon.phone.sleep = sleep
+        handed = daemon.notifier.notify
+
+        def notify(title: str, *args: Any, **kwargs: Any) -> None:
+            order.append(f"hand over {title}")
+            handed(title, *args, **kwargs)
+
+        daemon.notifier.notify = notify  # type: ignore[method-assign]
+        zipped = kit_zip(good_entries(None))  # no KIT.md: the ordinary branch
+        (row,) = await kit_jobs(daemon, fake, kit_server.attach("mission-11.zip", zipped))
+        assert await state(row["id"]) == "held"
+        # The third publish exists on this branch, and it is the default-message answer.
+        notices = [
+            answer["message"] for answer in kit_answers(daemon)
+            if not answer["message"].startswith("kit received ")
+        ]  # fmt: skip
+        assert len(notices) == 1 and notices[0].startswith("apply mission-11: ")
+        wanted = (f"post {KIT_TITLE}", f"hand over {held_title}")
+        kept = [item for item in order if item.startswith("sleep ") or item in wanted]
+        assert kept == [
+            f"post {KIT_TITLE}",
+            f"sleep {PAIR_SPACING_S}",
+            f"hand over {held_title}",
+            f"sleep {PAIR_SPACING_S}",
+            f"post {KIT_TITLE}",
         ], order
 
     phone_drive(body, Timed())

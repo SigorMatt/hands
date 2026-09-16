@@ -204,42 +204,49 @@ class Daemon:
         await self.limits.reschedule_pending()
         if self.phone is not None:
             self.phone.start()
+        # §31 (review 14 should-fix 1): the nonces are re-minted first, so the one
+        # notification below can list the jobs they belong to.
+        still_held = self._remint_held()
+        message = f"{self.config.project} on {self.socket_path}"
+        if still_held:
+            message += (
+                f"\n{len(still_held)} job(s) still held for a human: "
+                f"{', '.join(still_held)}"
+                "\nA restart leaves no live buttons: decide with `hands approve <job>` "
+                "or `hands deny <job>`, or with the secret on the command topic."
+            )
         self.notifier.notify(  # §11: daemon start is one of the four notifications
             "hands: handsd started",
-            {"message": f"{self.config.project} on {self.socket_path}", "pid": os.getpid()},
+            {"message": message, "pid": os.getpid(), "held": still_held},
         )
-        self._renotify_held()
         log.info(
             "handsd %s listening on %s (project %s)",
             __version__, self.socket_path, self.config.project,
         )
 
-    def _renotify_held(self) -> None:
-        """§25: after a restart, every job still `held` gets fresh phone buttons.
+    def _remint_held(self) -> list[str]:
+        """Every job still `held` at this start, by id, its phone nonce re-minted.
 
-        The nonces died with the previous daemon, so the buttons already on the
-        phone do nothing. For each held job a new nonce is minted (by the same
-        `PhoneChannel.actions` the hold uses) and the `job.held` notification is
-        published again with it, its payload rebuilt from the job record in the
-        shape `Api.send` files. Without the command channel nothing is re-sent:
-        that notification never carried buttons, so nothing on the phone died.
+        §25 re-published a `job.held` notification per held job, with fresh
+        buttons. §31 (review 14 should-fix 1) replaces that: N held jobs made N+1
+        publishes inside one second at every start, which is the ordering problem
+        §30 exists to remove. The ids are listed inside the one `handsd started`
+        notification instead.
+
+        What that loses, plainly: an ntfy notification carries the buttons of one
+        job, so a summary of N carries none. After a restart a held job is decided
+        by `hands approve|deny <job>` or by `approve <job> <secret>` on the command
+        topic — never by a button, until the job is held again. The nonces are
+        still minted here (the same `PhoneChannel.actions` a hold uses), so a later
+        notification for one of these jobs carries a nonce this daemon knows.
+        Without the command channel there is nothing to mint, and the ids are
+        listed all the same.
         """
-        if self.phone is None:
-            return
-        for job in self.spool.list_jobs():
-            if job.state != "held":
-                continue
-            gate = job.gate or {}
-            payload = {
-                "job": job.id,
-                "role": job.role,
-                "state": "held",
-                "reason": gate.get("reason"),
-                "gate": gate.get("kind"),
-            }
-            self.notifier.notify(
-                NOTIFY_KINDS["job.held"], payload, actions=self.phone.actions(job.id)
-            )
+        held = [job for job in self.spool.list_jobs() if job.state == "held"]
+        if self.phone is not None:
+            for job in held:
+                self.phone.actions(job.id)
+        return [job.id for job in held]
 
     async def serve_forever(self) -> None:
         if self._server is None:  # pragma: no cover - defensive

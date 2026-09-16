@@ -441,12 +441,19 @@ def resolve_project(explicit: str | None = None, *, home: Path | None = None) ->
     `handsd --project <name>` (§13) and `hands` share this, so the daemon and the
     CLI can never disagree about which socket they mean. Guessing stops as soon
     as there is more than one candidate.
+
+    §31 (review 14 should-fix 4): a name that is *given* and empty is refused, not
+    ignored. Truthiness let `--project ""` and `HANDS_PROJECT=""` fall through to
+    the next source, so the command silently acted on a different project. A
+    non-empty name is returned as before and refused, if it must be, where it
+    becomes a path (`load_config`, `spool_root`).
     """
-    if explicit:
-        return explicit
-    from_env = os.environ.get("HANDS_PROJECT")
-    if from_env:
-        return from_env
+    for given in (explicit, os.environ.get("HANDS_PROJECT")):
+        if given is None:
+            continue
+        if not given:
+            check_project_name(given)  # raises: '' matches no pattern
+        return given
     names = list_projects(home=home)
     if len(names) == 1:
         return names[0]

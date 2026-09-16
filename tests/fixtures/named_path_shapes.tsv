@@ -56,6 +56,28 @@ run Makefile	Makefile
 Dockerfile	Dockerfile
 GNUmakefile:	GNUmakefile
 .gitignore	.gitignore
+# false positives: prose the bare-name rule reads as a file name (§31, review 14
+# should-fix 6). The class is fail-closed — the prompt fails kit check until the
+# repository has that file — and no shipped prompt says one of these. Pinned here
+# so a change to the rule that widens or narrows the class is a fixture diff.
+PASS	PASS
+FAIL	FAIL
+NOT	NOT
+GREEN	GREEN
+VERDICTS	VERDICTS
+README	README
+API	API
+CLI	CLI
+HEAD	HEAD
+TODO	TODO
+Profile	Profile
+PASS protocol	PASS
+the review is GREEN	GREEN
+the CLI and the API	CLI API
+e.g.	e.g
+github.com	github.com
+# the words next to them that stay prose: VERDICT is excepted by name
+VERDICT	
 # prose
 review	
 Read the protocol.	

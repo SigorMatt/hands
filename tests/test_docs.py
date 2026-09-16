@@ -21,6 +21,7 @@ import pytest
 
 from hands.api import Api
 from hands.config import parse_config
+from hands.daemon import NOTIFY_KINDS
 from hands.playbook import ACTIONS, EVENTS
 
 ROOT = Path(__file__).parents[1]
@@ -157,8 +158,11 @@ def test_both_docs_say_the_task_killed_cause_is_always_unknown() -> None:
         doc = flattened((ROOT / "docs" / name).read_text(encoding="utf-8"))
         assert "`TaskStop`" in doc, f"docs/{name} does not name `TaskStop`"
         assert "`cause` is always `unknown`" in doc, f"docs/{name} does not say cause is unknown"
+    # §31 (review 14 should-fix 1): after a restart the buttons are not re-sent;
+    # the one `handsd started` notification lists the jobs instead.
     integration = flattened((ROOT / "docs" / "INTEGRATION.md").read_text(encoding="utf-8"))
-    assert "handsd re-sends the notification of every job still held" in integration
+    assert "handsd does not re-send them" in integration
+    assert "notification lists every job still held" in integration
 
 
 #: The key statements of INTEGRATION.md's optional section (§11, §24), each
@@ -1158,6 +1162,45 @@ def test_no_shipped_file_tells_a_human_to_run_an_un_templated_unit() -> None:
         if pattern.search(line)
     ]
     assert not offenders, "a retired unit is still named as a command:\n" + "\n".join(offenders)
+
+
+def test_the_integration_doc_says_doctor_judges_every_bash_hook() -> None:
+    """§31 (review 14 should-fix 3): the `role driver` row's rule, in the doc a
+    human reads — every `PreToolUse` Bash hook, and only the Bash ones."""
+    text = flattened((ROOT / "docs" / "INTEGRATION.md").read_text(encoding="utf-8"))
+    for said in (
+        "judges every `PreToolUse` hook whose matcher selects `Bash`, not only the first",
+        "is not a Bash hook and is not judged",
+    ):
+        assert said in text, f"docs/INTEGRATION.md does not say {said!r} (§31)"
+
+
+def test_the_integration_doc_states_the_limit_pair_as_it_is_implemented() -> None:
+    """§31 (review 14 should-fix 2): "the limit pair is documented as it is
+    implemented". `job.held` is the only inbox kind that publishes, so a limit
+    reaches the phone only through a playbook `notify` rule — no shipped playbook
+    has one — and the resume reaches it by no route: `EVENTS` names no resume."""
+    assert set(NOTIFY_KINDS) == {"job.held"}
+    assert "builder.limited" in EVENTS and "driver.limited" in EVENTS
+    assert not [event for event in EVENTS if "resume" in event]
+    books = [
+        ROOT / "PLAYBOOK.toml",
+        ROOT / "templates" / "PLAYBOOK-missions.toml",
+        ROOT / "templates" / "PLAYBOOK-runs.toml",
+    ]
+    for book in books:
+        rules = tomllib.loads(book.read_text(encoding="utf-8")).get("rule") or []
+        limits = [rule for rule in rules if str(rule.get("on", "")).endswith(".limited")]
+        assert limits == [], f"{book.name} has a rule on a limit: {limits}"
+    text = flattened((ROOT / "docs" / "INTEGRATION.md").read_text(encoding="utf-8"))
+    for said in (
+        "A limit and its resume are not such a pair.",
+        "`job.held` is the only inbox event kind hands publishes",
+        "no playbook hands ships has one",
+        "there is no `resume` event a rule can name",
+        "orders the scheduler",
+    ):
+        assert said in text, f"docs/INTEGRATION.md does not say {said!r} (§31)"
 
 
 def test_the_integration_doc_says_paired_notifications_are_spaced() -> None:

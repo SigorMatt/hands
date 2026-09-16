@@ -241,6 +241,32 @@ def test_hands_who_named_beta_shows_the_broken_alpha_as_a_config_error_root(
     assert sorted(payload["daemons"]) == ["beta"]
 
 
+def test_hands_who_named_alpha_when_alpha_is_the_broken_one_exits_1(
+    tmp_home: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """§31 (review 14 should-fix 6, the case review 13 blocker 3 left untested):
+    the *named* project is the broken config among valid ones. §30's fallback is
+    for "several configs and none named", so naming one that does not load is a
+    config error like any other — exit 1 on stderr, no picture, and `beta` is
+    never rendered in its place."""
+    _two_projects(tmp_home, tmp_path)
+    _broken(tmp_home, "alpha")
+    monkeypatch.delenv("HANDS_PROJECT", raising=False)
+    monkeypatch.setattr(who, "proc_table", lambda: {})
+
+    out, err = io.StringIO(), io.StringIO()
+    assert hands_main(["--project", "alpha", "who"], stdout=out, stderr=err) == 1
+    assert "is not valid TOML" in strip_paths(err.getvalue()), err.getvalue()
+    assert "beta" not in strip_paths(err.getvalue()), err.getvalue()
+    assert out.getvalue() == ""
+
+    monkeypatch.setenv("HANDS_PROJECT", "alpha")  # the same from the environment
+    out, err = io.StringIO(), io.StringIO()
+    assert hands_main(["who"], stdout=out, stderr=err) == 1
+    assert "is not valid TOML" in strip_paths(err.getvalue()), err.getvalue()
+    assert out.getvalue() == ""
+
+
 def test_hands_who_with_every_config_broken_exits_1_naming_each(
     tmp_home: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -325,6 +351,51 @@ def test_hands_and_handswho_refuse_a_bad_project_from_the_flag_and_the_environme
     err = io.StringIO()
     assert who.main([], stderr=err) == 1
     assert PROJECT_PATTERN in strip_paths(err.getvalue())
+
+
+def test_an_empty_project_name_is_refused_at_every_entry_that_takes_one(
+    tmp_home: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """§31 (review 14 should-fix 4): "an empty project name is refused, not
+    ignored". `resolve_project` tested truthiness, so `--project ""` and
+    `HANDS_PROJECT=""` fell through to the next source and the command acted on a
+    different project — here `alpha`, the only one there is. `""` does not match
+    the pattern, so every entry refuses it, names it and names the pattern."""
+    body = config_body(tmp_home, tmp_path).replace(
+        f'socket = "{tmp_home}/.hands/handsd.sock"\n', ""
+    )
+    write_project(tmp_home, body, project="alpha")
+    monkeypatch.setattr(who, "proc_table", lambda: {})
+    monkeypatch.setattr(daemon_mod, "_serve", lambda *args: pytest.fail("handsd started"))
+
+    def refused(err: str) -> None:
+        assert "''" in strip_paths(err), err
+        assert PROJECT_PATTERN in strip_paths(err), err
+        assert "alpha" not in strip_paths(err), err  # never the project it fell through to
+
+    monkeypatch.delenv("HANDS_PROJECT", raising=False)
+    for argv in (["--project", "", "status"], ["--project", "", "who"],
+                 ["--project", "", "doctor"]):  # fmt: skip
+        out, err = io.StringIO(), io.StringIO()
+        assert hands_main(argv, stdout=out, stderr=err) == 1, (argv, out.getvalue())
+        refused(err.getvalue())
+        assert out.getvalue() == "", argv
+    err = io.StringIO()
+    assert who.main(["--project", ""], stderr=err) == 1
+    refused(err.getvalue())
+    assert daemon_mod.main(["--project="]) == 1
+    refused(capsys.readouterr().err)
+
+    monkeypatch.setenv("HANDS_PROJECT", "")
+    out, err = io.StringIO(), io.StringIO()
+    assert hands_main(["status"], stdout=out, stderr=err) == 1, out.getvalue()
+    refused(err.getvalue())
+    err = io.StringIO()
+    assert who.main([], stderr=err) == 1
+    refused(err.getvalue())
+    assert daemon_mod.main([]) == 1
+    refused(capsys.readouterr().err)
 
 
 def test_hands_who_shows_a_config_whose_file_name_is_outside_the_pattern_as_a_config_error(

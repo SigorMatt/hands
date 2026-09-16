@@ -208,7 +208,12 @@ Notes that are easy to get wrong:
   read against the driver directory, and nothing else: no further argument
   (`--selftest`), no other interpreter, no `;`, `&`, `|`, redirection, `$`
   other than `$CLAUDE_PROJECT_DIR`, glob, escape or newline. `"disableAllHooks"`
-  in that file fails the row. A named file that does not exist fails. A missing clone warns.
+  in that file fails the row. A named file that does not exist fails. Doctor
+  judges every `PreToolUse` hook whose matcher selects `Bash`, not only the
+  first, and fails if any one of them is not the guard — a second Bash hook
+  beside the real one is a second answer to the same tool call. A `PreToolUse`
+  entry for other tools (the architect's `Write|Edit|MultiEdit` hook) is not a
+  Bash hook and is not judged. A missing clone warns.
 - **The consult flow** (§27, docs/PLAYBOOK.md "Consult"). A rule `then =
   "consult"` fires on an event, say a builder `VERDICT: question`. handsd starts
   a driver-role job in the driver's cwd, `context: clear`, `origin: playbook`,
@@ -367,12 +372,24 @@ Set `ntfy_topic` and subscribe your phone to it. `hands notify --test` proves
 the transport, and the notification check doctor prints proves an event you did
 not ask for arrives (step 4 above).
 
-Two notifications of one cause are published 1.1 s apart: a kit receipt and the
-held apply it files, and a limit and the resume it schedules. ntfy stamps a
+Notifications of one cause are published 1.1 s apart: a kit receipt, then the
+held apply it files, then — for a kit with no `KIT.md` — the answer naming the
+default commit message. ntfy stamps a
 message with per-second timestamps, so two published inside the same second
 would sort arbitrarily on the phone, and the second one reads as the answer to
 the first. Nothing else waits: an unrelated notification is never delayed (§11),
 and no notification queues behind another.
+
+A limit and its resume are not such a pair. Both are events you read with
+`hands inbox` (`limit`, `resume`), but `job.held` is the only inbox event kind
+hands publishes by itself. A limit reaches your phone only when the playbook in
+force has a `notify` rule on `builder.limited` or `driver.limited`, and no
+playbook hands ships has one; the resume reaches it by no route at all, because
+there is no `resume` event a rule can name. What the 1.1 s does here is not a
+published pair — it orders the scheduler: a resume is never scheduled sooner
+than 1.1 s after the limit that caused it, so a limit notification you did add
+is stamped before anything the resumed job goes on to publish. An exhausted
+`max_resumes` is a `stop`, and every `stop` is published (§11).
 
 ### The command channel: approve from the phone
 
@@ -458,8 +475,11 @@ Publish a command to `cmd_topic` from the ntfy app. The last word is the token:
   and kept only in handsd's memory. It can decide only that job, and only once.
   It is gone as soon as the job is decided by any route (phone, `hands
   approve`, the driver) and when handsd restarts. After a restart the old
-  buttons do nothing, but handsd re-sends the notification of every job still
-  held, with new buttons; the command with the secret works too. `pause`, `resume`,
+  buttons do nothing, and handsd does not re-send them: its one `handsd started`
+  notification lists every job still held, and a summary of several jobs can
+  carry the buttons of none. Decide those with `hands approve <job>` / `hands
+  deny <job>`, or with `approve <job> <secret>` on `cmd_topic`; a job held again
+  later gets buttons again. `pause`, `resume`,
   `status` and `go` take the secret only, never a nonce.
 - **Nothing is answered except `status`, an accepted `go` and a written kit.** A wrong secret or nonce, a command
   hands does not know, or a job that is not held is logged in handsd's journal

@@ -1024,6 +1024,27 @@ def test_the_shapes_fixture_holds_the_reviewers_inputs_and_the_real_prompts() ->
         assert prompt in [said for said, _ in rows], prompt
 
 
+#: §31 (review 14 should-fix 6): the bare-name rule's false positives — English
+#: words `named_paths` reads as a file name, so that the boundary of
+#: `kit.NAMED_PATH_RULE` is a fixture row and not only prose. It is fail-closed (a
+#: prompt saying one of these fails `kit check` until the repository has the file)
+#: and no shipped prompt says one, but a change that widened or narrowed the class
+#: used to leave no trace.
+NAMED_PATH_FALSE_POSITIVES = (
+    "PASS", "FAIL", "NOT", "GREEN", "VERDICTS", "README",
+    "API", "CLI", "HEAD", "TODO", "Profile",
+)  # fmt: skip
+
+
+def test_the_shapes_fixture_pins_the_bare_name_rules_false_positives() -> None:
+    """Each false positive is a row of tests/fixtures/named_path_shapes.tsv naming
+    itself, so the parametrized test above runs it against the rule."""
+    rows = dict(_shape_rows())
+    for word in NAMED_PATH_FALSE_POSITIVES:
+        assert rows.get(word) == [word], f"{word!r} is not pinned as a false positive"
+    assert rows.get("VERDICT") == [], "VERDICT, the verdict line's word, is excepted"
+
+
 #: Review 13 blocker 2's inputs, each with the file it names.
 REVIEW_13_PROBES = {
     "read NOTES": "NOTES",

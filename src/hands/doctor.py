@@ -534,8 +534,15 @@ def _settings_name_the_guard(path: Path, cwd: Path) -> tuple[Path | None, str | 
     `cwd`, where Claude Code runs the hook. Any other `$`, a shell operator,
     redirection, glob, escape or newline anywhere in the command, a further
     argument (`--selftest`), or another interpreter does not run the guard, and
-    `"disableAllHooks"` set to anything but false runs no hook at all. With
-    several hooks that do run a guard file, the first is the one checked."""
+    `"disableAllHooks"` set to anything but false runs no hook at all.
+
+    §31 (review 14 should-fix 3): *every* `PreToolUse` hook whose matcher selects
+    `Bash` is judged, and one that is not the guard fails the row — settings
+    carrying the real guard plus a second Bash hook answering `allow` used to pass,
+    because the first hook that ran a guard returned. Entries whose matcher does
+    not select `Bash` (the architect's `Write|Edit|MultiEdit` hook, §31) are not
+    Bash hooks and are not judged. With several Bash hooks that all run a guard
+    file, the first is the one self-tested."""
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except FileNotFoundError:
@@ -548,7 +555,8 @@ def _settings_name_the_guard(path: Path, cwd: Path) -> tuple[Path | None, str | 
     entries = hooks.get("PreToolUse") if isinstance(hooks, dict) else None
     if not isinstance(entries, list):
         return None, "no hooks.PreToolUse"
-    malformed: str | None = None
+    guards: list[Path] = []
+    offenders: list[str] = []
     for entry in entries:
         if not isinstance(entry, dict) or not _matches_bash(entry.get("matcher")):
             continue
@@ -561,16 +569,18 @@ def _settings_name_the_guard(path: Path, cwd: Path) -> tuple[Path | None, str | 
                 continue
             command: str = hook["command"]
             named = _guard_command_path(command, cwd)
-            if named is not None:
-                return named, None
-            if GUARD_HOOK in command:
-                malformed = malformed or command
-    if malformed is not None:
+            if named is None:
+                offenders.append(command)
+            else:
+                guards.append(named)
+    if offenders:
         return None, (
-            f"the hook command {malformed!r} does not run the guard: it must be exactly "
-            f"`{GUARD_INTERPRETER} <path to {GUARD_HOOK}>` (§30)"
+            f"the hook command {offenders[0]!r} does not run the guard: every PreToolUse "
+            f"Bash hook must be exactly `{GUARD_INTERPRETER} <path to {GUARD_HOOK}>` (§31)"
         )
-    return None, f"no PreToolUse command hook for Bash runs {GUARD_HOOK}"
+    if not guards:
+        return None, f"no PreToolUse command hook for Bash runs {GUARD_HOOK}"
+    return guards[0], None
 
 
 def _guard_command_path(command: str, cwd: Path) -> Path | None:

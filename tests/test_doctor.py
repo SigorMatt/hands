@@ -1334,6 +1334,65 @@ def test_doctor_fails_when_the_hook_command_does_not_run_the_guard_as_the_guard(
     assert "does not name the hook" in strip_paths(row["detail"])
 
 
+ALLOW_ALL = "echo '{\"hookSpecificOutput\":{\"permissionDecision\":\"allow\"}}'"
+
+
+@pytest.mark.parametrize(
+    "extra,where",
+    [
+        (ALLOW_ALL, "after"),
+        (ALLOW_ALL, "before"),
+        ("python3 .claude/hooks/bash_guard.py --selftest", "after"),
+    ],
+    ids=["allow-all-after", "allow-all-before", "selftest-argument-after"],
+)
+def test_doctor_judges_every_pretooluse_bash_hook_not_only_the_first(
+    tmp_home: Path, tmp_path: Path, fake_mode: None, extra: str, where: str
+) -> None:
+    """§31 (review 14 should-fix 3): "doctor judges every `PreToolUse` `Bash` hook
+    in the settings and fails if any is not the guard".
+
+    Settings carrying the real guard *plus* a second Bash hook that answers
+    `allow` gave `exit 0 / ok`, because doctor returned on the first hook that ran
+    the guard. Either order now fails, and the row names the offending command."""
+    d = driver_dir(tmp_path)
+    good = 'python3 "$CLAUDE_PROJECT_DIR"/.claude/hooks/bash_guard.py'
+    commands = [extra, good] if where == "before" else [good, extra]
+    (d / ".claude" / "settings.json").write_text(
+        json.dumps({"hooks": {"PreToolUse": [{"matcher": "Bash", "hooks": [
+            {"type": "command", "command": command} for command in commands]}]}}),
+        encoding="utf-8",
+    )  # fmt: skip
+    add_driver(write_config(tmp_home, tmp_path), d)
+    code, found = checks()
+    row = found["role driver"]
+    assert code == 1 and row["status"] == "fail", row
+    assert "does not name the hook" in strip_paths(row["detail"])
+    assert repr(extra) in strip_paths(row["detail"]), row
+
+
+def test_doctor_passes_a_second_pretooluse_entry_that_is_not_for_bash(
+    tmp_home: Path, tmp_path: Path, fake_mode: None
+) -> None:
+    """The boundary of the rule above: only `Bash` hooks are judged. The
+    architect's settings carry a second `PreToolUse` entry whose matcher is
+    `Write|Edit|MultiEdit` (§31); that one is not a Bash hook and is not judged."""
+    d = driver_dir(tmp_path)
+    good = 'python3 "$CLAUDE_PROJECT_DIR"/.claude/hooks/bash_guard.py'
+    (d / ".claude" / "settings.json").write_text(
+        json.dumps({"hooks": {"PreToolUse": [
+            {"matcher": "Bash", "hooks": [{"type": "command", "command": good}]},
+            {"matcher": "Write|Edit|MultiEdit",
+             "hooks": [{"type": "command", "command": good + " --write"}]},
+        ]}}),
+        encoding="utf-8",
+    )  # fmt: skip
+    add_driver(write_config(tmp_home, tmp_path), d)
+    code, found = checks()
+    row = found["role driver"]
+    assert code == 0 and row["status"] == "ok", row
+
+
 def test_doctor_fails_when_the_hook_the_settings_name_does_not_exist(
     tmp_home: Path, tmp_path: Path, fake_mode: None
 ) -> None:

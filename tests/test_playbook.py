@@ -2604,7 +2604,8 @@ def test_end_to_end_a_restarted_daemon_counts_consults_from_its_start(
     time.sleep(0.01)
 
     async def body(daemon: Daemon) -> None:
-        assert daemon.playbook.state.consults_since == daemon.started
+        anchor = daemon.playbook.state.consults_since
+        assert anchor is not None and anchor.daemon_start == daemon.started
         assert (await ok("pipeline"))["consults"] == {"used": 0, "max_consults": 2}
 
     drive(body)
@@ -2652,7 +2653,78 @@ def test_a_daemon_restart_mid_mission_keeps_the_consult_count(
 
     drive(second)
     persisted = json.loads((spool.root / "pipeline.json").read_text(encoding="utf-8"))
-    assert persisted["consults_since"] == started[0]
+    assert persisted["consults_since"]["daemon_start"] == started[0]
+
+
+def test_the_persisted_consult_anchor_names_its_daemon_start_and_the_job_it_derives_from(
+    tmp_home: Path, workdir: Path
+) -> None:
+    """§31 (review 14 should-fix 5): "the `max_consults` anchor stores the job id
+    and the daemon start time it derives from, and a test reads them back".
+
+    The anchor was a bare timestamp, so what it was derived from was not on disk.
+    It is now an object with both fields, read back here off `pipeline.json`: the
+    daemon start is that daemon's own `started`, and the job is the last job in
+    the spool at that moment — every job up to it is on the far side of the
+    anchor. A second daemon does not move either field."""
+    _consult_project(tmp_home, workdir)
+    spool = Spool(tmp_home / ".hands" / PROJECT)
+    about = finished(spool, verdict="VERDICT: question x")
+    started: list[str | None] = []
+
+    async def first(daemon: Daemon) -> None:
+        started.append(daemon.started)
+        anchor = daemon.playbook.state.consults_since
+        assert anchor is not None
+        assert anchor.daemon_start == daemon.started
+        assert anchor.job == about.id
+
+    drive(first)
+    on_disk = json.loads((spool.root / "pipeline.json").read_text(encoding="utf-8"))
+    assert on_disk["consults_since"] == {"daemon_start": started[0], "job": about.id}
+
+    # A later job, a later daemon: neither field moves, and the count still runs
+    # from the anchor's daemon start.
+    time.sleep(0.01)
+    _driver_job(spool, state="done", verdict="VERDICT: resolved a", about=about)
+
+    async def second(daemon: Daemon) -> None:
+        assert daemon.started != started[0]
+        anchor = daemon.playbook.state.consults_since
+        assert anchor is not None and (anchor.daemon_start, anchor.job) == (
+            started[0], about.id
+        )
+        assert (await ok("pipeline"))["consults"] == {"used": 1, "max_consults": 2}
+
+    drive(second)
+    again = json.loads((spool.root / "pipeline.json").read_text(encoding="utf-8"))
+    assert again["consults_since"] == on_disk["consults_since"]
+
+
+def test_a_pipeline_json_written_before_the_anchor_had_fields_still_reads(
+    tmp_home: Path, workdir: Path
+) -> None:
+    """§31: an older `pipeline.json` persisted the anchor as a bare timestamp
+    string. It is read back as the daemon start, with no job, and is not moved by
+    the start that finds it."""
+    _consult_project(tmp_home, workdir)
+    spool = Spool(tmp_home / ".hands" / PROJECT)
+    spool.root.mkdir(parents=True, exist_ok=True)
+    old = "2026-09-15T00:00:00+00:00"
+    (spool.root / "pipeline.json").write_text(
+        json.dumps({"consults_since": old}), encoding="utf-8"
+    )
+
+    async def body(daemon: Daemon) -> None:
+        anchor = daemon.playbook.state.consults_since
+        assert anchor is not None and (anchor.daemon_start, anchor.job) == (old, None)
+        read = json.loads((spool.root / "pipeline.json").read_text(encoding="utf-8"))
+        assert read["consults_since"] == old  # a start that finds one rewrites nothing
+        await ok("pause")  # any later save writes the anchor in its widened shape
+
+    drive(body)
+    on_disk = json.loads((spool.root / "pipeline.json").read_text(encoding="utf-8"))
+    assert on_disk["consults_since"] == {"daemon_start": old, "job": None}
 
 
 def test_end_to_end_an_escalation_over_a_paused_pipeline_is_suppressed_and_notified(

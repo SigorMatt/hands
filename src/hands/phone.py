@@ -73,8 +73,11 @@ an event, the spool or a log line — and it authorizes a decision on that one
 job only. It is spent by the decision it authorizes; a wrong token spends
 nothing. It is dropped when the job is decided by any route (the daemon calls
 `discard` on every `gate.decided`), and with the daemon. A restarted daemon
-mints a fresh nonce for every job still held and re-sends its notification with
-the new buttons (§25; `Daemon._renotify_held`). `pause`, `resume`,
+mints a fresh nonce for every job still held (§25; `Daemon._remint_held`), but
+publishes no notification per job: §31 lists those jobs inside the one `handsd
+started` notification, which carries no buttons, so after a restart a held job
+is decided by `hands approve|deny` or by a command with the secret until it is
+held again. `pause`, `resume`,
 `status` and `go` take the secret only. The secret is compared with
 `hmac.compare_digest` and never published: a notification carries only nonces.
 
@@ -469,6 +472,14 @@ class PhoneChannel:
                 f"{shlex.quote(plan.commit_message)}"
             )
             log.info("phone: %s", text)
+            # §31 (review 14 blocker 2): this is the ordinary kit — no `KIT.md`, so
+            # there is a default to explain — and it is a *third* publish of the one
+            # cause the receipt and the hold are. §30's spacing is per consecutive
+            # pair, not per cause, so it is waited here too; without it this answer
+            # and the `job.held` above share a stamp and sort arbitrarily. The wait
+            # also lets the held notification's spawned publish run first, so the
+            # order on the phone is receipt, hold (with the buttons), explanation.
+            await self.sleep(PAIR_SPACING_S)
             await self.daemon.notifier.answer(KIT_TITLE, text)
         return None
 
