@@ -138,9 +138,14 @@ verbatim.
   path in `HANDS_CLONE`; `git -C CLONE` from this directory is that path),
   `hands show`, `hands jobs`, `hands inbox`, `hands pipeline`, `hands status`, `hands tail`, `hands kit
   check`, `hands send --role <builder|aux> --context keep` to the role named
-  in the consultation, and `hands resume`. Nothing else runs: no `approve`,
-  `deny`, `pause`, `go`, `put`, no `--context clear`, no writes, and no `cat`
-  or `ls` — read the clone with `git -C CLONE show`, `grep` or `cat-file`.
+  in the consultation, and `hands resume`, plus the guard's read-only
+  inspection commands, each with only the options its table lists: `cat`,
+  `ls`, `head`, `tail`, `wc`, `grep`, `jq`, `pgrep`, `sleep`, `date`, `echo`
+  and `kill -0 <pid>` (DESIGN §31 — role mode is that same table, minus the
+  `hands` subcommands §27 withholds). Nothing else runs: no `approve`, `deny`,
+  `pause`, `go`, `put`, no `--context clear`, no writes, and no word the table
+  does not list — `sort`, `uniq`, `cut`, `tr`, `find`, `stat`, `diff` and the
+  rest are refused by name, as is any option a row does not carry.
 - Your reply's first line is exactly one of:
 
       VERDICT: resolved <what was sent, and the section cited>

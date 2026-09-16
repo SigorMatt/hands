@@ -138,15 +138,16 @@ ADVERSARIAL: list[tuple[str, bool]] = [
     # the human's workspace really is `~/git`: live commands, not hypotheticals
     ("ls ~/git", True),
     ("ls -la ~/git/hands", True),
-    ("find ~/git/hands -name '*.py'", True),
+    ("find ~/git/hands -name '*.py'", False),
     ("cat ~/git/hands/DESIGN.md", True),
     ("git -C ~/git/hands log --oneline -5", True),
     ("ls /home/msi/git", True),
     ("cat ~/git/hands/driver/hooks/bash_guard.py", True),
     ("git -C ~/git/hands show HEAD:DESIGN.md", True),
-    # a `find` with no exec flag is fine
-    ("find . -name '*.md'", True),
-    ("find ~/git -maxdepth 1 -type d", True),
+    # §31: `find` left the command table, so even a `find` that only prints is
+    # refused now — by name, before any of its own flags are read
+    ("find . -name '*.md'", False),
+    ("find ~/git -maxdepth 1 -type d", False),
     # ordinary read-only driver traffic
     ("git fetch origin", True),
     ("git status", True),
@@ -209,9 +210,10 @@ ADVERSARIAL: list[tuple[str, bool]] = [
     ("git -C ./repo diff --no-ext-diff HEAD", False),
     ("git -C ./repo diff --output-indicator-new=X HEAD", False),
     ("git -C ./repo log --no-textconv -1", False),
-    # a `find` printing to stdout is still a read
-    ("find . -name '*.md' -print", True),
-    ("find ~/git/hands -type f -printf %p", True),
+    # §31: a `find` printing to stdout was a read until v3.14; `find` is not a
+    # row of the command table, so it is refused by name
+    ("find . -name '*.md' -print", False),
+    ("find ~/git/hands -type f -printf %p", False),
     # --- §12: the wrappers an allowlist refuses by absence ----------------
     # `--upload-pack=`/`--exec=` name the program git runs on the other end
     # of a fetch or an ls-remote; review 5 should-fix 1 executed the first two
@@ -382,9 +384,10 @@ def test_the_adversarial_table_is_independent_of_the_guard() -> None:
 # silent, pinned here: a send with no `--context` is refused (only an explicit
 # `keep` passes); the keep target is builder or aux, never driver, and a send
 # with no `--role` is refused; `--file` on a send writes a file, so it is
-# refused; the read-only inspection words of the human driver's guard (`cat`,
-# `ls`, `grep`, ...) are not on §27's list, so they are refused — the role
-# reads the clone with `git show`/`git grep`/`git cat-file`.
+# refused. §31 settles the words: role mode is the guard's command table minus
+# the `hands` subcommands §27 withholds, so the read-only inspection rows
+# (`cat`, `ls`, `grep`, ...) read here as they do in the human's session, with
+# the options their rows list and no others.
 #: §29: the role's clone in these tables, as `HANDS_CLONE` (driver/CLAUDE.md's CLONE).
 CLONE = "./repo"
 
@@ -451,9 +454,16 @@ ROLE_MODE: list[tuple[str, bool]] = [
     ("cat x | tee f", False),
     ("python3 -c 'print(1)'", False),
     ("claude -p hi", False),
-    ("cat ./repo/DESIGN.md", False),
-    ("ls ./repo", False),
-    ("git -C ./repo log --oneline -5 | head -1", False),
+    # §31: role mode is the same table, so the inspection rows read here too
+    ("cat ./repo/DESIGN.md", True),
+    ("ls ./repo", True),
+    ("git -C ./repo log --oneline -5 | head -1", True),
+    # ... with their listed options only, and the removed words still refused
+    ("cat -n ./repo/DESIGN.md", False),
+    ("head -c 20 ./repo/DESIGN.md", False),
+    ("sort -o /tmp/x ./repo/DESIGN.md", False),
+    ("find . -name '*.md'", False),
+    ("pwd", False),
 ]
 
 ROLE_MODE_ALLOWED_HANDS = {"show", "jobs", "inbox", "pipeline", "status", "tail", "kit", "resume",
@@ -1168,3 +1178,343 @@ def test_role_mode_pins_git_dash_c_by_realpath_through_a_real_symlink(
     monkeypatch.setenv("HANDS_CLONE", str(clone))
     assert run_hook(monkeypatch, f"git -C {escape} status", "driver") == 2
     assert run_hook(monkeypatch, f"git -C {clone} status", "driver") == 0
+
+
+# --- §31: THE GUARD'S COMMAND TABLE (review 14 blocker 1; H-028) -------------
+#
+# `ALLOWED_FIRST_WORDS` was a bare set of words: outside `git` and `hands` no
+# option table was applied, so an allowed word took any option it liked and
+# `sort`/`uniq` wrote a file and ran a program in normal mode. §31 replaces the
+# set with a table from each command the driver's rules name to the options it
+# may take, in both modes; a word not in the table is refused by name.
+
+#: REVIEW-14 blocker 1, the three writes/executions the reviewer reproduced at
+#: the tip through the shipped file with hook JSON on stdin. The blocker prints
+#: the third with `<big file>`, which is the review's placeholder for the path
+#: it ran (REVIEW-14 §4 names it: `/tmp/rev14probe/big.txt`); `<` is refused by
+#: §30's language, so the shape that matters is the `--compress-program=`
+#: option itself, and the spelling below is the one the review executed.
+REVIEW_14_PROBES: list[str] = [
+    "sort -o /tmp/rev14-probe/Z1 /etc/hostname",
+    "uniq /etc/hostname /tmp/rev14-probe/W5",
+    "sort -S 1k --compress-program=/tmp/rev14-probe/prog /tmp/rev14-probe/big.txt",
+]
+
+
+@pytest.mark.parametrize("cmd", REVIEW_14_PROBES)
+def test_review_14_probe_is_refused_in_both_modes(cmd: str) -> None:
+    """§31: `sort` and `uniq` left the table, so each probe is refused by name."""
+    for role, reason in _both_modes(cmd):
+        assert reason is not None, f"a review 14 probe was allowed ({role}): {cmd!r}"
+        assert repr(cmd.split()[0]) in reason, (role, cmd, reason)
+
+
+@pytest.mark.parametrize("cmd", REVIEW_14_PROBES)
+def test_review_14_probe_is_refused_by_the_shipped_file_in_both_modes(
+    tmp_path: Path, cmd: str
+) -> None:
+    """The way the review ran them: the shipped file, hook JSON on stdin."""
+    stdin = json.dumps({"tool_name": "Bash", "tool_input": {"command": cmd}})
+    base = {k: v for k, v in os.environ.items() if not k.startswith("HANDS_")}
+    for extra in ({}, {"HANDS_ROLE": "driver", "HANDS_CONSULT_ROLE": "builder",
+                       "HANDS_CLONE": str(tmp_path)}):
+        done = subprocess.run([sys.executable, str(GUARD)], input=stdin, capture_output=True,
+                              text=True, env={**base, **extra}, timeout=30, check=False)
+        assert done.returncode == 2, (extra, cmd, done.stdout, done.stderr)
+
+
+def test_the_guards_own_tables_carry_every_review_14_probe() -> None:
+    role, normal = dict(guard.ROLE_SELFTEST), dict(guard.SELFTEST)
+    for cmd in REVIEW_14_PROBES:
+        assert normal.get(cmd) is False, f"SELFTEST lacks the blocked probe {cmd!r}"
+        assert role.get(cmd) is False, f"ROLE_SELFTEST lacks the blocked probe {cmd!r}"
+
+
+#: §31's table, transcribed from the design text: the command, and every option
+#: it may take (a value-taking option by its own spelling, `-n` for `-n <int>`).
+#: `git` and `hands` carry their existing tables, judged by their own rules, so
+#: their rows list no flat option.
+DESIGN_31_TABLE: dict[str, set[str]] = {
+    "cat": set(),
+    "ls": {"-l", "-a", "-la", "-1"},
+    "head": {"-n"},
+    "tail": {"-n"},
+    "wc": {"-l", "-c", "-w"},
+    "grep": {"-n", "-c", "-i", "-l", "-E", "-F", "-e", "-r"},
+    "jq": {"-r", "-c", "-e"},
+    "pgrep": {"-f", "-a", "-l"},
+    "sleep": set(),
+    "date": set(),
+    "echo": set(),
+    "kill": {"-0"},
+    "git": set(),
+    "hands": set(),
+}
+
+#: §31: "everything else leaves the table". `pwd` is in neither of §31's lists;
+#: the table is closed ("a word not in it is refused by name"), so it leaves too.
+REMOVED_WORDS: list[str] = [
+    "sort", "uniq", "cut", "tr", "find", "stat", "diff", "printf", "basename",
+    "dirname", "realpath", "tty", "id", "whoami", "uptime", "which", "test",
+    "[", "seq", "true", "false", "pwd",
+]
+
+
+def test_the_guard_carries_the_command_table_design_31_enumerates() -> None:
+    """§31: the table is the whole allowed surface, so the test names every row."""
+    assert not hasattr(guard, "ALLOWED_FIRST_WORDS"), "the bare word set is still there"
+    table = {name: set(row.flags) | set(row.values)
+             for name, row in guard.COMMAND_TABLE.items()}
+    assert table == DESIGN_31_TABLE
+
+
+def test_no_listed_option_of_the_command_table_takes_a_program_or_a_file() -> None:
+    """§31: no listed option takes a value that names a program or a file to
+    write. The two that take a value take an integer and a grep pattern."""
+    takes_a_value = {name: sorted(row.values) for name, row in guard.COMMAND_TABLE.items()
+                     if row.values}
+    assert takes_a_value == {"grep": ["-e"], "head": ["-n"], "tail": ["-n"]}
+
+
+@pytest.mark.parametrize("word", REMOVED_WORDS)
+def test_a_removed_word_is_refused_by_name_in_both_modes(word: str) -> None:
+    for cmd in (f"{word} /etc/hostname", f"ls; {word}", f"cat /etc/hostname | {word} -n"):
+        for role, reason in _both_modes(cmd):
+            assert reason is not None, (role, cmd)
+            assert repr(word) in reason, (role, cmd, reason)
+
+
+#: §31: the table in both modes. Role mode is the same table minus the `hands`
+#: subcommands §27 withholds, so the read-only rows read in role mode too —
+#: the one thing this unit makes more permissive.
+TABLE_BOTH_MODES: list[tuple[str, bool]] = [
+    ("cat ./repo/DESIGN.md", True),
+    ("cat ./repo/DESIGN.md ./repo/SPEC.md", True),
+    ("cat -n ./repo/DESIGN.md", False),
+    ("ls", True),
+    ("ls -la ~/git/hands", True),
+    ("ls -l -1 ./repo", True),
+    ("ls -R ./repo", False),
+    ("head -n 20 ./repo/DESIGN.md", True),
+    ("head -20 ./repo/DESIGN.md", True),
+    ("head -n20 ./repo/DESIGN.md", True),
+    ("head -c 20 ./repo/DESIGN.md", False),
+    ("head -n x ./repo/DESIGN.md", False),
+    ("tail -n 5 ~/.hands/inbox.jsonl", True),
+    ("tail -f ~/.hands/inbox.jsonl", False),
+    ("wc -l -c -w ./repo/DESIGN.md", True),
+    ("wc -m ./repo/DESIGN.md", False),
+    ("grep -n -i -e consult ./repo/DESIGN.md", True),
+    ("grep -r -E -F -c -l pattern ./repo", True),
+    ("grep -f /tmp/patterns ./repo/DESIGN.md", False),
+    ("grep -o consult ./repo/DESIGN.md", False),
+    ("grep --include=*.md consult ./repo", False),
+    ("jq -r -c -e .result ~/.hands/jobs/x.json", True),
+    ("jq -r '.result' ~/.hands/jobs/x.json", True),
+    ("jq --rawfile x /etc/hostname . ~/.hands/jobs/x.json", False),
+    ("jq -f /tmp/prog ~/.hands/jobs/x.json", False),
+    ("pgrep -f -a -l handsd", True),
+    ("pgrep -F /tmp/pidfile handsd", False),
+    ("sleep 20", True),
+    ("sleep 20 30", False),
+    ("sleep 2s", False),
+    ("date", True),
+    ("date +%s", True),
+    ("date -s 2026-01-01", False),
+    ("echo alive", True),
+    ("echo -n alive", False),
+    ("kill -0 1234", True),
+    ("kill -0", False),
+    ("kill -9 1234", False),
+    ("kill 1234", False),
+]
+
+
+@pytest.mark.parametrize("cmd,allowed", TABLE_BOTH_MODES)
+def test_the_command_table_holds_in_both_modes(cmd: str, allowed: bool) -> None:
+    for role, reason in _both_modes(cmd):
+        assert (reason is None) == allowed, (role, cmd, reason)
+
+
+def test_role_mode_reads_with_the_tables_inspection_rows() -> None:
+    """§31: "role mode is the same table minus `hands` subcommands §27
+    withholds" — so the read-only rows the guard refused in role mode before
+    this unit read there now. This is the one widening in U1."""
+    for cmd in ("cat ./repo/DESIGN.md", "ls ./repo", "head -n 5 ./repo/DESIGN.md",
+                "grep -n consult ./repo/DESIGN.md", "wc -l ./repo/DESIGN.md",
+                "git -C ./repo log --oneline -5 | head -1"):
+        assert guard.check(cmd, role="driver", consult_role="builder", clone=CLONE) is None, cmd
+
+
+def test_role_mode_still_withholds_what_section_27_withholds() -> None:
+    """The widening is the inspection rows and nothing else: §27's withheld
+    `hands` subcommands, a clear send and `--no-pager` stay refused (§28)."""
+    for cmd in ("hands go", "hands approve job-1 --human-confirmed --quote 'yes'",
+                "hands deny job-1 --human-confirmed --quote 'no'", "hands pause",
+                "hands put ./x --content y", "hands open job-1",
+                "hands send --role builder --context clear 'Execute run 2'",
+                "git --no-pager log --oneline -3", "git -C /tmp log"):
+        assert guard.check(cmd, role="driver", consult_role="builder",
+                           clone=CLONE) is not None, cmd
+
+
+# --- §31: the fuzz corpus over the removed words -----------------------------
+#
+# The mission 14 U1 corpus was not kept in the tree, so this regenerates one
+# from a pinned seed: every command is built from a word §31 removes and that
+# word's real options, the write-shaped and execute-shaped ones first, and
+# every one must be refused in both modes, by name. The generator avoids every
+# character §30 refuses and every word `FORBIDDEN_PATTERNS` names, so what
+# refuses each command is the table itself and not the language or a pattern.
+FUZZ_SEED = 20260916
+FUZZ_COUNT = 10_000
+
+FUZZ_PATHS = ["/etc/hostname", "./repo/DESIGN.md", "~/.hands/inbox.jsonl",
+              "/tmp/g1/out", "meta/plan.md", "."]
+FUZZ_PROGRAMS = ["/tmp/g1/prog", "./prog", "/tmp/g1/p2"]
+
+#: word -> its real options, `{path}`/`{prog}` filled by the generator.
+REMOVED_WORD_OPTIONS: dict[str, list[str]] = {
+    "sort": ["-o {path}", "-o{path}", "--output={path}", "--compress-program={prog}",
+             "-S 1k", "--parallel=2", "--files0-from={path}", "-u", "-n", "-r",
+             "-k 2", "-t :", "-c", "-m", "--random-source={path}"],
+    "uniq": ["-c", "-d", "-u", "-i", "-f 1", "-s 2", "-w 3", "--group", "-z"],
+    "cut": ["-d :", "-f 1", "-c 1-3", "-b 2", "--output-delimiter=;", "-s",
+            "--complement", "-z"],
+    "tr": ["-d", "-s", "-c", "-t", "--delete", "a-z A-Z"],
+    "find": ["-name x", "-type f", "-maxdepth 1", "-exec {prog} ;", "-execdir {prog} ;",
+             "-ok {prog} ;", "-okdir {prog} ;", "-delete", "-fprint {path}",
+             "-fprint0 {path}", "-fprintf {path} %p", "-fls {path}", "-print",
+             "-printf %p", "-ls", "-newer {path}"],
+    "stat": ["-c %n", "-f", "--format=%n", "--printf=%n", "-L", "-t",
+             "--file-system", "--cached=never"],
+    "diff": ["-u", "-r", "-q", "--to-file={path}", "--from-file={path}",
+             "--brief", "--unified=3", "-y", "--color=never", "--label x"],
+    "printf": ["%s", "-v x", "%s%s", "--", "a%sb"],
+    "basename": ["-a", "-s .md", "-z", "--suffix=.md"],
+    "dirname": ["-z", "--zero"],
+    "realpath": ["-e", "-m", "-s", "--relative-to={path}", "-z", "-q"],
+    "tty": ["-s", "--silent", "--quiet"],
+    "id": ["-u", "-g", "-n", "-G", "-Z", "--zero"],
+    "whoami": ["--version", "--help"],
+    "uptime": ["-p", "-s", "-h"],
+    "which": ["-a", "--all", "-s", "--skip-alias"],
+    "test": ["-f {path}", "-d {path}", "-x {prog}", "-z x", "-n x", "x = y"],
+    "[": ["-f {path} ]", "-x {prog} ]", "x = y ]"],
+    "seq": ["-f %g", "-s :", "-w", "--separator=:", "1 10", "-t x"],
+    "true": ["--version", "--help"],
+    "false": ["--version", "--help"],
+    "pwd": ["-L", "-P", "--logical"],
+}
+
+#: Where the word sits: alone, as a later segment's head, behind a pipe, in a
+#: subshell, and in front of a command the table does allow.
+FUZZ_SHAPES = [
+    "{cmd}",
+    "ls; {cmd}",
+    "{cmd} && ls",
+    "cat {path} | {cmd}",
+    "( {cmd} )",
+    "hands status && {cmd}",
+    "{cmd} | wc -l",
+    "git -C ./repo log --oneline -1 && {cmd}",
+]
+
+
+def fuzz_corpus(seed: int = FUZZ_SEED, count: int = FUZZ_COUNT) -> list[tuple[str, str]]:
+    """`(word, command)` pairs, generated deterministically from `seed`."""
+    import random
+
+    rng = random.Random(seed)
+    words = sorted(REMOVED_WORD_OPTIONS)
+    out: list[tuple[str, str]] = []
+    for _ in range(count):
+        word = rng.choice(words)
+        options = REMOVED_WORD_OPTIONS[word]
+        chosen = [options[i] for i in sorted(rng.sample(range(len(options)),
+                                                        rng.randint(0, min(3, len(options)))))]
+        parts = [word]
+        for option in chosen:
+            parts.append(option.format(path=rng.choice(FUZZ_PATHS),
+                                       prog=rng.choice(FUZZ_PROGRAMS)))
+        for _ in range(rng.randint(0, 2)):
+            parts.append(rng.choice(FUZZ_PATHS))
+        cmd = " ".join(parts)
+        out.append((word, rng.choice(FUZZ_SHAPES).format(cmd=cmd,
+                                                         path=rng.choice(FUZZ_PATHS))))
+    return out
+
+
+def test_the_fuzz_corpus_is_deterministic_and_covers_every_removed_word() -> None:
+    corpus = fuzz_corpus()
+    assert len(corpus) == FUZZ_COUNT >= 10_000
+    assert corpus == fuzz_corpus(), "the corpus is not reproducible from its seed"
+    assert {word for word, _ in corpus} == set(REMOVED_WORD_OPTIONS)
+    assert set(REMOVED_WORD_OPTIONS) == set(REMOVED_WORDS)
+    # the write-shaped and execute-shaped options are really in it
+    joined = "\n".join(cmd for _, cmd in corpus)
+    for shape in ("-o /tmp/g1/out", "--compress-program=", "-exec ", "-execdir ",
+                  "-delete", "-fprintf ", "--to-file=", "--output-delimiter=",
+                  "-S 1k", "-a ", "-f "):
+        assert shape in joined, f"the corpus never generates {shape!r}"
+
+
+def test_every_fuzz_command_is_refused_by_name_in_both_modes() -> None:
+    """§31: a word not in the table is refused by name — 10,000 commands over
+    the removed words and their real options, in both modes."""
+    for word, cmd in fuzz_corpus():
+        for role in (None, "driver"):
+            reason = guard.check(cmd, role=role, consult_role="builder", clone=CLONE)
+            assert reason is not None, (role, cmd)
+            assert repr(word) in reason, (role, cmd, reason)
+
+
+# --- §12, §31: every command line the driver kit tells the driver to run -----
+
+#: `driver/CLAUDE.md`'s parameter block, as the shipped block fills it.
+KIT_PARAMETERS = {"CLONE": "./repo", "BRANCH": "main", "PROJECT": "hands"}
+#: A span carrying one of these is the kit's placeholder syntax, not a command.
+PLACEHOLDER_CHARACTERS = "<>[]|"
+
+
+def driver_kit_command_lines() -> list[str]:
+    """The command lines `driver/CLAUDE.md` shows, with its parameters filled.
+
+    Two shapes: an indented line of a command block (its second column, the
+    description, cut at the first run of two spaces) and an inline `code` span.
+    A span with `<…>`, `[…]` or `|` in it is the kit's placeholder syntax
+    (`hands show <job>`), which is not a command line and is left out.
+    """
+    import re as _re
+
+    text = (ROOT / "driver" / "CLAUDE.md").read_text(encoding="utf-8")
+    spans = [_re.split(r"\s{2,}", line.strip())[0]
+             for line in text.splitlines() if line.startswith("    ") and line.strip()]
+    spans += [span.strip() for span in _re.findall(r"`([^`\n]+)`", text)]
+    out = []
+    for span in spans:
+        for name, value in KIT_PARAMETERS.items():
+            span = _re.sub(rf"\b{name}\b", value, span)
+        head = span.split(" ", 1)[0] if " " in span else ""
+        if head not in guard.COMMAND_TABLE:
+            continue
+        if any(c in span for c in PLACEHOLDER_CHARACTERS):
+            continue
+        words = span.split()
+        if len(words) < 2:
+            continue  # a bare word, not a command line
+        if head == "git" and not set(words) & set(guard.GIT_SUBCOMMAND_OPTIONS):
+            continue  # prose about an option (`git -C`), with no subcommand in it
+        out.append(span)
+    return sorted(set(out))
+
+
+def test_every_command_line_the_driver_kit_shows_passes_the_guard() -> None:
+    """§12: `driver/CLAUDE.md` is the driver's contract. A line it shows that
+    the guard refuses is a line the driver cannot run at all (§31)."""
+    lines = driver_kit_command_lines()
+    assert len(lines) >= 8, lines
+    assert "git -C ./repo fetch && git -C ./repo log --oneline origin/main -10" in lines
+    assert any(line.startswith("hands send --role builder --context clear ") for line in lines)
+    for line in lines:
+        assert guard.check(line) is None, f"the kit shows a line the guard refuses: {line}"

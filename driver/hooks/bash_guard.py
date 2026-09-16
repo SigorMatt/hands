@@ -3,11 +3,26 @@ r"""bash_guard.py — PreToolUse hook for the hands DRIVER session.
 
 Claude Code runs this before every Bash call. It reads the hook JSON on stdin,
 takes the command out of it, and exits 2 (block, with the reason on stderr)
-unless every command segment starts with an allowed word and the command has
-no way to write: no redirection (a `<` or `>` is refused anywhere, §30), no
-tee, no in-place edit, no interpreter, no direct `claude`. `hands open` is
-blocked too: it execs an interactive `claude --resume`, which is a direct
-claude by another name.
+unless every command segment is one of the commands the table below lists,
+carrying only the options that command's row lists. What is allowed is exactly
+that: `hands` and read-only `git` by their own tables, and `cat`, `ls`, `head`,
+`tail`, `wc`, `grep`, `jq`, `pgrep`, `sleep`, `date`, `echo` and `kill -0` with
+the options §31 gives them. No listed option takes a value that names a program
+to run or a file to write, and the language below has no redirection, so a
+segment the guard allows has no way to write — but that is a property of the
+table, not a guess about what a word does. A word the table does not list is
+refused by name. `hands open` is blocked too: it execs an interactive
+`claude --resume`, which is a direct claude by another name.
+
+The command table (DESIGN §31). Until v3.14 the words outside `git` and `hands`
+were a bare set, `ALLOWED_FIRST_WORDS`, with no option table at all, and
+`sort -o F`, `uniq A B` and `sort --compress-program=P` wrote a file, wrote a
+file and ran a program (REVIEW-14 blocker 1, H-028). `COMMAND_TABLE` replaces
+the set: `sort`, `uniq`, `cut`, `tr`, `find`, `stat`, `diff`, `printf`,
+`basename`, `dirname`, `realpath`, `tty`, `id`, `whoami`, `uptime`, `which`,
+`test`, `[`, `seq`, `true`, `false` and `pwd` left it. `tee`, an in-place
+`sed`, an interpreter, a file mutation and a direct `claude` are refused by
+name as well, wherever in the command they are written.
 
 The guard's language (DESIGN §30). The driver's shell is one line, not a
 script. Before any tokenizing the guard refuses a command that contains any
@@ -59,19 +74,27 @@ and paths carry no leading dash, so `rev-parse <sha>^{commit}`,
 `show origin/main:x` and `grep -e x -- docs` still read. A path token is not
 an invocation: the human's workspace is `~/git`, and `ls ~/git` is a read.
 
-`find` with `-exec`, `-execdir`, `-ok`, `-okdir` or `-delete` is forbidden
-outright, because those run commands (or delete) whatever the payload looks
-like. `-fprint`, `-fprint0`, `-fprintf` and `-fls` are forbidden too: they
-write a file at any path.
+`find` is not a row of the command table, so a `find` at the head of a segment
+is refused by name (§31). A `find` in argument position — a wrapper shape — is
+judged as the `git` tokens are: `-exec`, `-execdir`, `-ok` and `-okdir` run
+commands, `-delete` deletes, and `-fprint`, `-fprint0`, `-fprintf` and `-fls`
+write a file at any path, so any of them refuses the segment.
 
-Role mode (DESIGN §27, §28). With `HANDS_ROLE=driver` in the environment, the
-guard guards the driver ROLE, a headless session handsd starts to resolve one
-consultation. The allowlist narrows to §27's:
+Role mode (DESIGN §27, §28, §31). With `HANDS_ROLE=driver` in the environment,
+the guard guards the driver ROLE, a headless session handsd starts to resolve
+one consultation. It is the same command table, minus the `hands` subcommands
+§27 withholds:
 - read-only git, by the table above, with `-C <path>` the only option allowed
-  before the subcommand;
+  before the subcommand, pinned to the role's clone;
 - `hands show|jobs|inbox|pipeline|status|tail|kit check`;
 - `hands send`, judged below;
-- `hands resume`.
+- `hands resume`;
+- the read-only inspection rows of the table (`cat`, `ls`, `head`, `tail`,
+  `wc`, `grep`, `jq`, `pgrep`, `sleep`, `date`, `echo`, `kill -0`), with the
+  options their rows list. Before v3.14 role mode refused these, because §27
+  lists only the `hands` and `git` surface; §31 makes role mode the same table
+  as the human's session, so the role reads its clone with `cat` and `grep` as
+  well as with `git show`, `git grep` and `git cat-file`.
 
 `git -C <path>` is pinned to the role's clone (§29, §30):
 - The value's `os.path.realpath` must equal `HANDS_CLONE`'s. Symlinks and `..`
@@ -93,10 +116,9 @@ an unambiguous prefix of an option, so the guard reads `--cont clear` as
 `--context clear` and `--fi` as `--file`.
 
 Everything else is refused. That covers the `hands` subcommands, by name
-(`approve`, `deny`, `pause`, `go`, `put`), and every command word that is not
-`git` or `hands`. The read-only inspection words above are refused too, since
-§27 does not list them; the role reads its clone with `git show`, `git grep`
-and `git cat-file`. Any other non-empty `HANDS_ROLE` fails closed.
+(`approve`, `deny`, `pause`, `go`, `put`), every `git` option the subcommand
+table does not list, and every command word the table does not carry. Any
+other non-empty `HANDS_ROLE` fails closed.
 
 Self-test: python3 bash_guard.py --selftest
 """
@@ -107,13 +129,10 @@ import shlex
 import sys
 import unicodedata
 
-ALLOWED_FIRST_WORDS = {
-    "hands",
-    "cat", "ls", "jq", "pgrep", "sleep", "date", "echo", "head", "tail",
-    "wc", "grep", "true", "false", "test", "[", "seq", "pwd", "which",
-    "stat", "find", "diff", "sort", "uniq", "cut", "tr", "printf", "basename",
-    "dirname", "realpath", "tty", "id", "whoami", "uptime",
-}
+# DESIGN §31: the set of allowed first words is gone. `COMMAND_TABLE`, further
+# down with the loop that consults it, is a row per command with the options it
+# may take; a word that is not a row is refused by name.
+#
 # DESIGN §12: a table from each allowed subcommand to its allowed options. A
 # subcommand that is not a key is refused. For one that is, every token that
 # begins with `-` and is not in its row is refused. The rows carry the exact
@@ -586,8 +605,189 @@ def send_violation(args, rest, cmd, consult_role):
     return None
 
 
+# --- DESIGN §31: the command table ------------------------------------------
+#
+# A bare set of allowed first words applied no option table outside `git` and
+# `hands`, so an allowed word took any option it liked — and those options
+# write files and run programs: `sort -o F` created a file, `uniq A B` created
+# a file, and `sort --compress-program=P` executed P (REVIEW-14 blocker 1,
+# H-028). The table below is what the driver may run, in both modes, and it is
+# closed the way `GIT_SUBCOMMAND_OPTIONS` is closed: a word that is not a row
+# is refused by name, and for a word that is one, every token beginning with
+# `-` that its row does not list is refused. No listed option takes a value
+# that names a program to run or a file to write — the only two that take a
+# value take an integer (`head`/`tail -n`) and a pattern (`grep -e`).
+#
+# `sort`, `uniq`, `cut`, `tr`, `find`, `stat`, `diff`, `printf`, `basename`,
+# `dirname`, `realpath`, `tty`, `id`, `whoami`, `uptime`, `which`, `test`, `[`,
+# `seq`, `true`, `false` and `pwd` are not rows: they left the table. §31 names
+# all of them but `pwd`, which it names in neither list; the table is closed,
+# so `pwd` leaves with them.
+INTEGER = re.compile(r"[0-9]+")
+COUNT_SHORTHAND = re.compile(r"-[0-9]+")
+
+
+class Command:
+    """One row of the table: what a command word may carry (§31).
+
+    `flags` are the options that take no value. `values` maps an option to the
+    predicate its value must satisfy, read from the next word or attached to
+    the option (`-n5`). `words` judges the words that are not options, or is
+    None when any word may follow (a path, a pattern). `count` also allows the
+    `-<int>` spelling of `-n <int>`, which is how `head -1` is written, as
+    `git log -10` already is.
+
+    `judge` replaces the option reading for `git` and `hands`, whose arguments
+    carry semantics a flat row cannot express (a subcommand and its own option
+    table, a `--context` value, the role a consultation named). They are
+    reached through this same lookup: the table is the one place a command word
+    is allowed, in both modes.
+    """
+
+    def __init__(self, flags=(), values=(), words=None, count=False, judge=None):
+        self.flags = frozenset(flags)
+        self.values = dict(values)
+        self.words = words
+        self.count = count
+        self.judge = judge
+
+    def listed(self) -> str:
+        return ", ".join(sorted(self.flags | set(self.values))) or "no options"
+
+
+def an_integer(value: str) -> bool:
+    return INTEGER.fullmatch(value) is not None
+
+
+def any_value(value: str) -> bool:
+    """`grep -e <pat>`: a pattern is any word. It names no program and no file."""
+    return True
+
+
+def one_integer(name, plain, cmd):
+    """§31: `sleep` takes one integer."""
+    if len(plain) != 1 or not an_integer(plain[0]):
+        return f"`{name}` takes one integer (§31), not {plain}: {cmd!r}"
+    return None
+
+
+def a_format(name, plain, cmd):
+    """§31: `date` takes no options, and no argument but a `+FORMAT`."""
+    if len(plain) > 1 or (plain and not plain[0].startswith("+")):
+        return f"`{name}` takes nothing or one `+FORMAT` (§31), not {plain}: {cmd!r}"
+    return None
+
+
+def a_pid(name, plain, cmd):
+    """§31: `kill -0 <pid>`. `-0` is the only signal (FORBIDDEN_PATTERNS refuses
+    a `kill` that is not followed by it) and the pid is a number."""
+    if not plain or not all(an_integer(w) for w in plain):
+        return f"`{name} -0` takes a pid (§31), not {plain}: {cmd!r}"
+    return None
+
+
+def a_filter(name, plain, cmd):
+    """§31's `.` in jq's row: the first word that is not an option is the
+    filter, a `.` expression; the words after it are the files it reads."""
+    if not plain:
+        return f"`{name}` needs a `.` filter (§31): {cmd!r}"
+    if not plain[0].startswith("."):
+        return f"`{name}`'s filter is a `.` expression (§31), not {plain[0]!r}: {cmd!r}"
+    return None
+
+
+def git_command(words, masks, cmd, role, consult_role):
+    """`git`'s row: every `git` token in the segment, wherever it sits, was
+    already judged against `GIT_SUBCOMMAND_OPTIONS` by `git_violation`."""
+    return None
+
+
+COMMAND_TABLE = {
+    # `hands` and `git` with their existing tables, reached by the same lookup
+    "hands": Command(judge=hands_violation),
+    "git": Command(judge=git_command),
+    # the read-only inspection commands the driver's rules name, each with the
+    # options §31 lists and no others
+    "cat": Command(),
+    "ls": Command(flags={"-l", "-a", "-la", "-1"}),
+    "head": Command(values={"-n": an_integer}, count=True),
+    "tail": Command(values={"-n": an_integer}, count=True),
+    "wc": Command(flags={"-l", "-c", "-w"}),
+    "grep": Command(flags={"-n", "-c", "-i", "-l", "-E", "-F", "-r"},
+                    values={"-e": any_value}),
+    "jq": Command(flags={"-r", "-c", "-e"}, words=a_filter),
+    "pgrep": Command(flags={"-f", "-a", "-l"}),
+    "sleep": Command(words=one_integer),
+    "date": Command(words=a_format),
+    "echo": Command(),
+    "kill": Command(flags={"-0"}, words=a_pid),
+}
+
+
+def value_option(row, word):
+    """The row's value-taking option this word spells, and the value attached to
+    it (`-n5`), or `(None, None)`. An attached value of None means the value is
+    the next word."""
+    if word in row.values:
+        return word, None
+    for option in sorted(row.values):
+        if word.startswith(option) and len(word) > len(option):
+            return option, word[len(option):]
+    return None, None
+
+
+def option_violation(name, row, args, cmd):
+    """The reason this command's words are not the ones its row lists, or None.
+
+    Every token beginning with `-` must be listed by the row; what is left are
+    the plain words (paths, patterns), judged by the row's `words` rule when it
+    has one. This is `unlisted_git_option`'s policy for the rest of the table:
+    an option is refused because it is not listed, not because someone
+    remembered to name it.
+    """
+    plain, i = [], 0
+    while i < len(args):
+        word = args[i]
+        if not word.startswith("-") or word == "-":
+            plain.append(word)
+            i += 1
+            continue
+        if word in row.flags:
+            i += 1
+            continue
+        if row.count and COUNT_SHORTHAND.fullmatch(word):
+            i += 1
+            continue
+        option, attached = value_option(row, word)
+        if option is None:
+            return (f"option not allowed for {name!r}: {word!r} in {cmd!r} (policy: "
+                    f"DESIGN §31 lists the options each command may carry — `{name}` "
+                    f"takes {row.listed()} — and every other option is refused because "
+                    f"it is not listed)")
+        if attached is None:
+            if i + 1 >= len(args):
+                return f"`{name} {option}` with no value: {cmd!r}"
+            attached, i = args[i + 1], i + 2
+        else:
+            i += 1
+        if not row.values[option](attached):
+            return (f"the value of `{option}` for `{name}` is not one §31 allows: "
+                    f"{attached!r} in {cmd!r}")
+    if row.words is not None:
+        return row.words(name, plain, cmd)
+    return None
+
+
 def judge(values, masks, cmd, role, consult_role, clone=None):
-    """The reason this segment's words are refused, or None."""
+    """The reason this segment's words are refused, or None.
+
+    One loop for every command word (§31). Each `git` token is judged wherever
+    it sits, because a wrapper puts the real command in argument position; then
+    the segment's own command word is looked up in COMMAND_TABLE, and a word
+    that is not a row is refused by name. The same table judges both modes:
+    role mode is it minus the `hands` subcommands §27 withholds, which
+    `hands_violation` applies from inside `hands`' row.
+    """
     at = command_start(values)
     words, marks = values[at:], masks[at:]
     if not words:
@@ -597,27 +797,20 @@ def judge(values, masks, cmd, role, consult_role, clone=None):
     reason = git_violation(words, marks, cmd, role, clone)
     if reason:
         return reason
+    name = words[0]
+    row = COMMAND_TABLE.get(name)
+    if row is None:
+        return (f"command not in the guard's table: {name!r} in {cmd!r} (§31: the driver "
+                f"runs {', '.join(sorted(COMMAND_TABLE))}, each with the options that "
+                f"table lists; a word not in it is refused by name)")
+    # `find` is not a row, so this reaches only a `find` in argument position —
+    # a wrapper shape, kept as the git scan above is kept (DESIGN §20, §21).
     action = find_action(words)
     if action:
         return f"find {action}: {cmd!r}"
-    w = words[0]
-    if role == DRIVER_ROLE:
-        if w == "git":
-            return None  # every git token was checked above
-        if w != "hands":
-            return f"command not allowed for the driver role (§27): {w!r} in {cmd!r}"
-        return hands_violation(words, marks, cmd, role, consult_role)
-    if w == "git":
-        return None
-    if w == "hands":
-        return hands_violation(words, marks, cmd)
-    if w == "kill":
-        if len(words) < 2 or words[1] != "-0":
-            return f"kill other than -0: {cmd!r}"
-        return None
-    if w not in ALLOWED_FIRST_WORDS:
-        return f"command not allowed for the driver: {w!r} in {cmd!r}"
-    return None
+    if row.judge is not None:
+        return row.judge(words, marks, cmd, role, consult_role)
+    return option_violation(name, row, words[1:], cmd)
 
 
 def check(cmd: str, role=None, consult_role=None, clone=None):
@@ -658,6 +851,16 @@ REVIEW_13_SHAPES = [
     "ls <<A\nls '\nA\nhands go\nls \"'\" <<'true'\n\"\ntrue",
     "ls <<A\nls '\nA\nhands send --role builder --context clear m\nls \"'\" <<'true'\n\"\ntrue",
     "hands status <<A\nhands show '\nA\nhands go\nhands show \"'\" <<'true'\n\"\ntrue",
+]
+
+# §31: the three writes/executions REVIEW-14 blocker 1 reproduced at the tip,
+# through this file with hook JSON on stdin, in normal mode. The blocker prints
+# the third with `<big file>`, its placeholder for the path it ran (REVIEW-14 §4
+# names it); `<` is refused by §30, so what matters is the option itself.
+REVIEW_14_PROBES = [
+    "sort -o /tmp/rev14-probe/Z1 /etc/hostname",
+    "uniq /etc/hostname /tmp/rev14-probe/W5",
+    "sort -S 1k --compress-program=/tmp/rev14-probe/prog /tmp/rev14-probe/big.txt",
 ]
 
 SELFTEST = [
@@ -722,7 +925,9 @@ SELFTEST = [
     ("find . -fls /tmp/listing", False),
     ("git --no-pager log --oneline -3", True),
     ("git --no-pager -C ./repo show HEAD --stat", True),
-    ("find . -name '*.md' -printf %p", True),
+    # ... and `find` is no longer a word the driver has at all (§31): the row
+    # that allowed a printing `find` before this unit is a block now
+    ("find . -name '*.md' -printf %p", False),
     # ... and under the per-subcommand allowlist (§12) an option is refused
     # simply because its subcommand's row does not list it. These read, and
     # are refused anyway. The wrappers below are refused the same way, which
@@ -828,6 +1033,43 @@ SELFTEST = [
     ("hands send --role builder --context clear 'costs $5!'", True),
     ("hands send --role builder --context clear \"costs $5\"", False),
     ("hands send --role builder --context clear \"done!\"", False),
+    # §31: the command table. The three writes and the execution REVIEW-14
+    # reproduced through this file, and the words they used, which left it
+    *[(probe, False) for probe in REVIEW_14_PROBES],
+    ("sort ~/.hands/inbox.jsonl", False),
+    ("uniq ~/.hands/inbox.jsonl", False),
+    ("cut -d : -f 1 /etc/hostname", False),
+    ("stat --printf=%n ./repo/DESIGN.md", False),
+    ("diff --to-file=/tmp/out a b", False),
+    ("which -a python3", False),
+    ("pwd", False),
+    # ... and a listed word takes the listed options and no others
+    ("cat ~/.hands/inbox.jsonl", True),
+    ("cat -n ~/.hands/inbox.jsonl", False),
+    ("ls -la ~/git/hands", True),
+    ("ls -R ~/git/hands", False),
+    ("head -n 20 ./repo/DESIGN.md", True),
+    ("git -C ./repo log --oneline -5 | head -1", True),
+    ("head -c 20 ./repo/DESIGN.md", False),
+    ("tail -n 5 ~/.hands/inbox.jsonl", True),
+    ("tail -f ~/.hands/inbox.jsonl", False),  # §31: `-f` is `hands log`'s alone
+    ("hands log -f builder", True),
+    ("wc -l -c -w ./repo/DESIGN.md", True),
+    ("wc -m ./repo/DESIGN.md", False),
+    ("grep -r -n -i -e consult ./repo", True),
+    ("grep -o consult ./repo/DESIGN.md", False),
+    ("grep -f /tmp/patterns ./repo/DESIGN.md", False),
+    ("jq -r .result ~/.hands/jobs/0mtxb7ecx.json", True),
+    ("jq --slurpfile x /etc/hostname . ~/.hands/jobs/0mtxb7ecx.json", False),
+    ("pgrep -f -a -l handsd", True),
+    ("sleep 20", True),
+    ("sleep 20 30", False),
+    ("date +%s", True),
+    ("date -s 2026-01-01", False),
+    ("echo alive", True),
+    ("echo -n alive", False),
+    ("kill -0 1234", True),
+    ("kill -0", False),
 ]
 
 
@@ -848,7 +1090,19 @@ ROLE_SELFTEST = [
     ("hands send --role builder --context clear 'Execute run 2'", False),
     ("hands approve job-1 --human-confirmed --quote 'yes'", False),
     ("hands go", False),
-    ("cat ./repo/DESIGN.md", False),
+    # §31: role mode is the same table, so the read-only rows read here too —
+    # this row was a block before this unit, when §27's list alone was the
+    # allowlist and every inspection word was refused
+    ("cat ./repo/DESIGN.md", True),
+    ("ls ./repo", True),
+    ("git -C ./repo log --oneline -5 | head -1", True),
+    ("grep -n -e consult ./repo/DESIGN.md", True),
+    # ... with the same options and no others, and the same words missing
+    ("cat -n ./repo/DESIGN.md", False),
+    ("grep -f /tmp/patterns ./repo/DESIGN.md", False),
+    *[(probe, False) for probe in REVIEW_14_PROBES],
+    ("pwd", False),
+    ("find . -name '*.md' -printf %p", False),
     ("echo x > f", False),
     ("git --no-pager log --oneline -3", False),
     # §28: every probe review 11 executed
@@ -918,16 +1172,22 @@ def main() -> int:
         return 0
     if role is not None:
         print(f"bash_guard blocked this command ({reason}). The driver role may only run "
-              f"read-only git (`git -C` only on ${CLONE_ENV}), "
+              f"the guard's command table (§31), minus the hands subcommands §27 "
+              f"withholds: read-only git (`git -C` only on ${CLONE_ENV}), "
               f"hands show|jobs|inbox|pipeline|status|tail|kit check, "
               f"hands send --context keep to the role the consultation named "
-              f"(${CONSULT_ROLE_ENV}), and hands resume (§27, §28). "
-              f"If the consultation needs more, reply VERDICT: escalate <reason>.",
+              f"(${CONSULT_ROLE_ENV}), hands resume, and "
+              f"{', '.join(sorted(set(COMMAND_TABLE) - {'hands', 'git'}))} with the "
+              f"options their rows list. If the consultation needs more, reply "
+              f"VERDICT: escalate <reason>.",
               file=sys.stderr)
         return 2
-    print(f"bash_guard blocked this command ({reason}). The driver may only run "
-          f"hands, read-only git, and read-only inspection commands; "
-          f"it never writes. If the task needs a write, say 'this is for aux' and stop.",
+    print(f"bash_guard blocked this command ({reason}). The driver may only run the "
+          f"guard's command table (§31): {', '.join(sorted(COMMAND_TABLE))}, each with "
+          f"the options that command's row lists and no others — a word not in the "
+          f"table is refused by name, and no listed option takes a value that names a "
+          f"program or a file to write. If the task needs anything else, say 'this is "
+          f"for aux' and stop.",
           file=sys.stderr)
     return 2
 

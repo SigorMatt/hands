@@ -644,9 +644,15 @@ position where it opened. So there is no redirection, heredoc, comment, escape
 or substitution for a quote to hide a second command behind. What is left is
 words, `'…'` and `"…"`, which `shlex` reads one way only. The command splits
 into segments on `;`, `&&`, `||`, `|`, `&` and parentheses outside quotes, and
-each segment's words are judged by the allowlists: `hands`, read-only git with
-the options §12 lists, and read-only inspection commands (in role mode, §27's
-list alone). A `hands` or `git` argument that still carries an unquoted `$`,
+each segment's words are judged by the guard's command table (§31): `hands` and
+read-only git with the options §12 lists, and `cat`, `ls`, `head`, `tail`,
+`wc`, `grep`, `jq`, `pgrep`, `sleep`, `date`, `echo` and `kill -0` with the
+options §31 lists for each — no listed option takes a value that names a
+program or a file to write, and a word the table does not carry (`sort`,
+`uniq`, `cut`, `tr`, `find`, `stat`, `diff`, `printf`, `basename`, `dirname`,
+`realpath`, `tty`, `id`, `whoami`, `uptime`, `which`, `test`, `[`, `seq`,
+`true`, `false`, `pwd`) is refused by name. Role mode is the same table, minus
+the `hands` subcommands §27 withholds. A `hands` or `git` argument that still carries an unquoted `$`,
 `*`, `?`, `[`, `!`, a brace word or a `~` after `=` or `:` is refused (§28,
 §29). Text that needs a refused character travels as a file, with `hands send
 --prompt-file`. In role mode a `git -C` value must be the clone after realpath
