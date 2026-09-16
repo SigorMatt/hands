@@ -284,7 +284,7 @@ def test_the_repositorys_own_playbook_loads_and_its_review_reads_from_the_last_r
 
 def test_the_repositorys_own_playbook_carries_the_series_kickoff() -> None:
     """§26 (mission 10 U2): the root playbook names its kickoff line in `[series]`.
-    §27 Conventions, §31 (mission 15 U7): it is the next mission's line, BUILDER-16.
+    §27 Conventions, §32 (mission 16 U6): it is the next mission's line, BUILDER-17.
     §31: this repository runs a phone architect, and says so — `architect = "phone"`
     is the default, written out, and it is the only §31 key the table sets."""
     path = Path(__file__).parents[1] / "PLAYBOOK.toml"
@@ -292,7 +292,7 @@ def test_the_repositorys_own_playbook_carries_the_series_kickoff() -> None:
     assert book is not None, "the repository's PLAYBOOK.toml is missing"
     assert book.series == "hands-missions"
     assert book.kickoff == (
-        "Read meta/BUILDER-16-PROMPT.md and execute the mission below its divider."
+        "Read meta/BUILDER-17-PROMPT.md and execute the mission below its divider."
     )
     assert book.architect == "phone"
     assert book.autonomous is False
