@@ -1,0 +1,76 @@
+{
+  "permissions": {
+    "deny": [
+      "NotebookEdit",
+      "Bash(git push:*)",
+      "Bash(git commit:*)",
+      "Bash(git add:*)",
+      "Bash(git checkout:*)",
+      "Bash(git reset:*)",
+      "Bash(git stash:*)",
+      "Bash(git rebase:*)",
+      "Bash(git merge:*)",
+      "Bash(rm:*)",
+      "Bash(tee:*)",
+      "Bash(claude:*)",
+      "Bash(hands send:*)",
+      "Bash(hands approve:*)",
+      "Bash(hands deny:*)",
+      "Bash(hands go:*)",
+      "Bash(hands put:*)",
+      "Bash(hands pause:*)",
+      "Bash(hands resume:*)"
+    ],
+    "allow": [
+      "Read",
+      "Glob",
+      "Grep",
+      "Bash(hands kit check:*)",
+      "Bash(hands kit file:*)",
+      "Bash(hands show:*)",
+      "Bash(hands jobs:*)",
+      "Bash(hands inbox:*)",
+      "Bash(hands pipeline:*)",
+      "Bash(hands status:*)",
+      "Bash(git fetch:*)",
+      "Bash(git -C ./repo fetch:*)",
+      "Bash(git -C ./repo log:*)",
+      "Bash(git -C ./repo show:*)",
+      "Bash(git -C ./repo diff:*)",
+      "Bash(git -C ./repo ls-tree:*)",
+      "Bash(git -C ./repo ls-files:*)",
+      "Bash(git -C ./repo rev-parse:*)",
+      "Bash(cat:*)",
+      "Bash(ls:*)",
+      "Bash(mkdir:*)",
+      "Bash(cp:*)",
+      "Bash(mv:*)",
+      "Bash(zip:*)",
+      "Bash(unzip:*)",
+      "Bash(date:*)",
+      "Bash(echo:*)"
+    ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/bash_guard.py"
+          }
+        ]
+      },
+      {
+        "matcher": "Write|Edit|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/bash_guard.py --write"
+          }
+        ]
+      }
+    ]
+  }
+}

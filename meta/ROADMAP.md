@@ -54,8 +54,10 @@ then an install (`uv tool install --force`) and a driver-kit refresh.
   Mission 13 (closer): review 12, the sweep after the reap, the
   per-project spool and templated units so two projects can run on one
   laptop (M5 starts on that layout). Mission 14 (closer): the guard's
-  one-line language, review 13. Mission 15: the role, its guard, `hands
-  kit file`, the playbook mode and auto-approval, escalation conditions.
+  one-line language, review 13 — DONE 2026-09-16; role mode held its
+  review; the driver role is enabled. Mission 15: review 14 (the command
+  table), the role, its guard, `hands kit file`, the playbook mode and
+  auto-approval, escalation conditions.
   Mission 16: `reply <secret> <text>`
   on the command topic delivered as a `keep` to the architect's last
   session with its answer on the events topic, and self-hosted ntfy behind

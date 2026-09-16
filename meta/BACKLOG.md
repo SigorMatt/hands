@@ -16,14 +16,16 @@ item names the mission it is scheduled for; unscheduled items say so.
 
 ## Mission 13 — DONE 2026-09-15 (review 13: blockers=4; the guard's heredoc hole).
 
-## Mission 14 (scheduled 2026-09-16) — closer: the guard's one-line language (H-026), review 13, notification spacing. Spec: DESIGN v3.13 §30.
+## Mission 14 — DONE 2026-09-16 (review 14: blockers=2; role mode held; the command table).
+
+## Mission 15 (scheduled 2026-09-16) — review 14, the guard's command table, the architect role. Spec: DESIGN v3.14 §31.
 
 - Review 11 blockers 1–5 and should-fix 1–9; the guard rewritten on shlex
   tokens; consult stops in the engine; H-022 resolved. Spec: DESIGN v3.11
   §28. After it: enable `[roles.driver]`, refresh the driver kit, first
   real consultation, then M5.
 
-## Mission 15 — the architect role (decided 2026-09-15; ROADMAP M4c)
+## (specified in DESIGN §31, scheduled as mission 15) the architect role (decided 2026-09-15; ROADMAP M4c)
 
 1. `[roles.architect]`: cwd `~/hands-architect/<project>/` with a fetch-only
    clone; CLAUDE.md = `docs/ARCHITECT-INSTRUCTION.md` (role variant: reads

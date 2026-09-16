@@ -1,13 +1,13 @@
-# hands — DESIGN v3.13
+# hands — DESIGN v3.14
 
 Machinery that replaces the human relay between the planning brain and the two
 Claude Code roles (builder, aux) on the Ubuntu laptop, and that keeps a series
 moving without a human while everything goes by plan. Working name: `hands`.
 The method it serves is described in WORKING-MODEL.md (agile-skills) and
 OPERATING-MODEL.md (spanweave); hands changes the topology, not the method.
-v3.13 (2026-09-16) folds in the mission 13 review and ends the guard's
-parser by shrinking its language to one line; changes are in §30; earlier
-changes in §29–§17.
+v3.14 (2026-09-16) folds in the mission 14 review (the guard's command
+table) and specifies mission 15, the architect role; changes are in §31;
+earlier changes in §30–§17.
 
 Status: proposal, 2026-09-10. Items marked DECIDED were settled in discussion.
 
@@ -224,7 +224,7 @@ States: `held` → `queued` → `running` → `done` | `failed` | `limited` |
 
 Job record (returned verbatim, stored forever):
 
-    id, role, context, created, started, ended, origin (driver|playbook|cli|limit|phone|kit)
+    id, role, context, created, started, ended, origin (driver|playbook|cli|limit|phone|kit|architect)
     prompt, files_written, session_id, transcript_path, pid, exit_code
     head_at_start, head_at_end
     result            # the `result` field of the final message, untouched
@@ -1263,3 +1263,83 @@ buttons is the one message.
 Roadmap: mission 14 is this closer; the architect role is mission 15;
 `reply` and self-hosted ntfy are mission 16. The driver role is enabled
 after a review finds no guard hole in the one-line language.
+
+---
+
+## 31. Changes from v3.13 (mission 14 review; the architect role)
+
+The guard's command table (review 14 blocker 1): the one-line method
+applies to the words as it applied to the syntax. `ALLOWED_FIRST_WORDS` is
+replaced by a table of exactly the commands the driver's rules name, each
+with the options it may take, in both modes: `cat` (no options), `ls`
+(`-l -a -la -1`), `head`/`tail` (`-n <int>`; `-f` only for `hands log`),
+`wc` (`-l -c -w`), `grep` (`-n -c -i -l -E -F -e <pat> -r`; never `-f`,
+`--include`, `-o`... only the listed), `jq` (`-r -c -e .`; never `-f`,
+`--rawfile`, `--slurpfile`, `--argfile`), `pgrep` (`-f -a -l`), `sleep`
+(one integer), `date` (no options or `+FORMAT`), `echo` (no options),
+`kill -0 <pid>`, `hands` and `git` with their existing tables. Everything
+else (`sort`, `uniq`, `cut`, `tr`, `find`, `stat`, `diff`, `printf`,
+`basename`, `dirname`, `realpath`, `tty`, `id`, `whoami`, `uptime`,
+`which`, `test`, `[`, `seq`, `true`, `false`) leaves the table; a word not
+in it is refused by name. No listed option takes a value that names a
+program or a file to write. Role mode is the same table minus `hands`
+subcommands §27 withholds. The reviewer's three probes and the U1
+sub-agent's fuzz corpus are in the tests.
+
+Notifications (blocker 2, should-fix 1, 2): the 1.1 s spacing applies on
+every branch that publishes the kit pair, with a test that binds it to the
+ordinary branch; daemon start publishes one notification, and re-minted
+held jobs are listed inside it rather than each published; the limit pair
+is documented as it is implemented.
+
+Should-fix 3–7: doctor judges every `PreToolUse` `Bash` hook in the
+settings and fails if any is not the guard; an empty project name is
+refused, not ignored; the `max_consults` anchor stores the job id and the
+daemon start time it derives from, and a test reads them back; the
+bare-name rule's false positives are a pinned fixture row; `hands doctor`
+warns when `[series] kickoff` names a brief the repository lacks.
+
+Mission 15, the architect role (§8, §10, §11, §26, §27):
+- `[roles.architect]`: cwd `~/hands-architect/<project>/` with a fetch-only
+  clone under `repo/` and a `kits/` directory; `CLAUDE.md` is
+  `architect/CLAUDE.md` from the kit (the instruction's role variant);
+  `permission_flags` empty; env `HANDS_ROLE=architect`,
+  `HANDS_CLONE=<cwd>/repo`, `HANDS_KITS=<cwd>/kits`.
+- Guard architect mode: the driver's read-only table plus `hands kit check`
+  and `hands kit file`; `mkdir`, `cp`, `zip`, `mv` only with every path
+  argument under `HANDS_KITS`; Write/Edit/MultiEdit tool calls (a second
+  `PreToolUse` matcher) allowed only for paths under `HANDS_KITS`; never
+  `hands send`, `approve`, `deny`, `go`, `put`; never a push. The clone's
+  push URL is disabled as the driver's is.
+- `hands kit file <zip>`: from a path under `HANDS_KITS`, files a held apply
+  job exactly as the phone's `kit` does (`origin: architect`, the same
+  prompt from the zip's entries and `KIT.md`), after running the kit check
+  itself and refusing a failing kit.
+- `[series] architect = "phone" | "role"` (default `phone`) and
+  `[series] autonomous = true|false` (default `false`). In role mode with
+  `autonomous`, held apply jobs of origin `architect` are approved by the
+  engine (`decided_by: playbook`), and `[series] kickoff` is sent after
+  `VERDICT: kit applied` (a `builder.done` rule the engine adds, not the
+  playbook). The human's approval of the playbook is the standing
+  approval; a playbook that sets `autonomous` is itself gated as any kit is.
+- `consult` with `role = "architect"` on review outcomes (`aux.done`), with
+  the event, the review's verdict and blockers/should-fix sections
+  verbatim, the roadmap's next milestone, and the instruction "write the
+  next kit from ROADMAP and the review, file it, or escalate". Verdict
+  vocabulary: `VERDICT: next kit <name>` | `VERDICT: series complete` |
+  `VERDICT: escalate <reason>`. Follow-up in the engine: `next kit` waits
+  for the apply the architect filed; `series complete` stops with that
+  reason; `escalate` stops and notifies with the reason and the architect's
+  session id and the `claude --resume` line; `[limits]
+  max_architect_consults` per series (default 12).
+- Escalation conditions written into `[series]` and enforced by the engine:
+  `gate_failures = 2` (the same roadmap gate failing twice in a row, judged
+  by the architect and stated in its escalate reason), `escalate_on =
+  ["blocker-unanswered", "milestone-missing", "budget-exhausted"]`; the
+  architect's CLAUDE.md names them and the engine stops on the budget one
+  itself.
+- `hands doctor` reports the architect role as it reports the driver role;
+  a `[series] architect = "role"` without `[roles.architect]` is a config
+  error.
+- `architect/` in the repository: `CLAUDE.md`, `settings.json`, `README.md`
+  (the switch-point procedure and the deliverables of the handbook §12).
