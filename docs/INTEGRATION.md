@@ -812,7 +812,10 @@ directory itself, a path outside `HANDS_KITS` by realpath, and an unset
 and refuses a failing kit with the check's output; a passing kit goes to
 handsd, which stores the zip at `~/.hands/<project>/kits/<kit_id>/<name>.zip`
 (outside `HANDS_KITS`, so nothing the architect may write can change it after
-the check), mints the `kit_id`, records it on the job, and files the held apply
+the check), runs `hands kit check` itself on those stored bytes against the
+builder's repository and refuses a failing kit with the check's output (DESIGN
+§33: the client's check is not trusted, because any socket client can call
+`kit_file`), mints the `kit_id`, records it and the passing check, and files the held apply
 the phone's `kit` files, `origin: architect`, whose prompt names that zip. The
 phone's `kit` apply records a `kit_id` handsd mints too. What the tests prove is
 that command against a real daemon socket with the fake `claude`; a real
@@ -838,14 +841,23 @@ that architect files. With both set, the engine approves a held job itself
 is an apply hands filed from a kit the architect role filed (§32): the builder
 apply `hands kit file` files, whose `kit_id` handsd minted and checked against
 the spool — the stored zip and its record naming the kit and the consultation
-it was filed during — never by origin alone. A socket client cannot set `origin:
+it was filed during, and the passing check handsd itself ran on that zip (§33)
+— never by origin alone. A socket client cannot set `origin:
 architect` (`hands send` refuses it, naming §32), handsd takes `hands kit file`
 only while an architect consultation runs or the engine waits for its `next
-kit`, and any other hold stays held for you. `[series] kickoff` is sent when
+kit`, and any other hold stays held for you. A kit that fails `hands kit check`
+is refused by handsd and never filed, so the engine never approves one (§33). A
+consultation may file at most one kit, named as its `VERDICT: next kit <name>`
+names it (§33): the kit is filed while the architect runs, before that verdict,
+so the engine decides the hold at the consultation's end (or at once, for a kit
+filed during the `next kit` wait); a second kit, or a kit of another name, is
+denied by the engine (`decided_by: playbook`) and the consultation ends
+`escalate`. `[series] kickoff` is sent when
 that apply, approved by the engine, replies `VERDICT: kit applied` — a rule the
 engine adds, which no playbook writes. What this cannot tell apart is another
 process of your user calling the socket during a consultation from the
-architect's own `hands kit file`. Read that
+architect's own `hands kit file` — though such a kit must pass the check and be
+the one kit its consultation's verdict names. Read that
 plainly before you turn it on: **the human who approves an `autonomous`
 playbook is approving every apply the architect files under it.** The playbook
 is itself a gated kit apply, so that approval is a real one, made once; it is
@@ -855,17 +867,19 @@ playbook with `architect = "role"` and no `[roles.architect]` in the config is
 a config error (§32): `handsd` refuses to start on it, naming both files; `hands
 doctor` fails its playbook row with it; the engine stops on it if the playbook
 changes under a running daemon; and `hands kit check` fails its playbook check
-on a kit that carries such a playbook, judged against the config `hands`
-resolves (`--project`, `$HANDS_PROJECT`, the only config) — where none resolves,
-as in the phone architect's sandbox, the check passes and says it could not
-judge.
+on a kit that carries such a playbook, judged as `handsd` judges it at load,
+against the config `hands` resolves (`--project`, `$HANDS_PROJECT`, the only
+config). Where no config can be judged — none resolves (the phone architect's
+sandbox), several do and none is named, or it is not valid TOML — the check
+fails and says why (§33): check a role-mode kit where the project's config is.
 
 **When it escalates.** The architect's reply begins with exactly one of
 `VERDICT: next kit <name>`, `VERDICT: series complete` or `VERDICT: escalate
 <reason>`. `next kit` waits for the apply it filed during that consultation,
 by its `kit_id` and under the verdict's name, for up to `[series] kit_wait_s`
-(default 600) — and stops if none is filed; the other two stop the pipeline
-and notify. `architect.*` is not an
+(default 600) — and stops if none is filed; under `autonomous` a second kit or
+a kit of another name ends it `escalate` at once (§33); the other two stop the
+pipeline and notify. `architect.*` is not an
 event a playbook can match: the engine reads the verdict itself. An
 escalation's stop reason carries the architect's own reason, its session id and
 the line that re-opens it — `claude --resume <id>` — so the phone tells you the

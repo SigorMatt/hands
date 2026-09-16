@@ -1698,8 +1698,10 @@ def test_kit_file_files_a_held_apply_with_a_daemon_minted_kit_id(
     stored = spool / "kits" / kit_id / "mission-16-kit.zip"
     assert stored.read_bytes() == kit_mod.build_zip(kit)
     # §32: the record the engine checks an approval against, naming the consultation.
+    # §33: and the check handsd ran on the stored bytes, against the builder's repo.
     assert answers["record"] == {
         "kit_id": kit_id, "name": "mission-16-kit", "consultation": answers["consultation"],
+        "check": "pass",
     }
     assert not any(kits_dir.glob("*.zip")), "the zip is the daemon's, not under HANDS_KITS"
     with zipfile.ZipFile(stored) as archive:
@@ -1774,6 +1776,61 @@ def test_the_daemon_refuses_a_kit_id_from_the_client_and_a_bad_kit(
     assert "kit_id" in strip_paths(refusals[0]), refusals
     assert "kit_id" in strip_paths(refusals[1]), refusals
     assert "no method 'file_apply'" in strip_paths(refusals[5]), refusals
+
+
+def test_the_daemon_refuses_a_kit_that_fails_the_check_with_the_checks_output(
+    tmp_home: Path, tmp_path: Path
+) -> None:
+    """§33 (REVIEW-16 blocker 1, H-035): "`kit_file` runs `check_kit` on the bytes it
+    stores, against the builder's clone, and refuses a failing kit with the check's
+    output". A raw socket `kit_file` — no client-side check — during an open
+    consultation: refused, the refusal carries the check's FAIL lines, and nothing is
+    filed or kept in the spool."""
+    import asyncio
+    import base64
+
+    from hands.cli import call
+    from harness import (
+        UNCHECKED_KIT,
+        architect_table,
+        close_consultation,
+        config_body,
+        drive,
+        open_consultation,
+        write_project,
+    )
+
+    workdir = write_tree(
+        tmp_path / "work", {"PLAYBOOK.toml": PLAYBOOK, "meta/REVIEW-PROTOCOL.md": PROTOCOL}
+    )
+    write_project(tmp_home, config_body(tmp_home, workdir, extra=architect_table(tmp_home)))
+    socket_path = tmp_home / ".hands" / "handsd.sock"
+    unchecked = kit_mod.build_zip(write_tree(tmp_path / "foo", UNCHECKED_KIT))
+    assert not kit_mod.check_kit(zip_kit(tmp_path / "foo.zip", UNCHECKED_KIT), workdir).ok
+    answers: dict[str, object] = {}
+
+    async def body(daemon) -> None:
+        consulting = open_consultation(daemon)
+        try:
+            await asyncio.to_thread(
+                call, socket_path, "kit_file",
+                {"name": "foo", "zip": base64.b64encode(unchecked).decode()},
+            )
+        except Exception as exc:  # the client's refusal of an error answer
+            answers["refused"] = str(exc)
+        close_consultation(daemon, consulting)
+        answers["jobs"] = [job for job in daemon.spool.list_jobs() if job.role != "architect"]
+        kits = daemon.spool.root / "kits"
+        answers["kits"] = sorted(kits.glob("*")) if kits.exists() else []
+
+    drive(body)
+    said = strip_paths(str(answers.get("refused")))
+    assert "hands kit check" in strip_paths(said) and "§33" in strip_paths(said), said
+    for check in ("playbook", "brief", "verdicts", "wording"):
+        assert f"FAIL {check}: " in said, (check, said)
+    assert "PASS paths: " in strip_paths(said), said
+    assert answers["jobs"] == [], "a kit that fails the check was filed"
+    assert answers["kits"] == [], "a refused kit stayed in the spool"
 
 
 @pytest.mark.parametrize("configured", [True, False], ids=["no consultation", "no role"])
@@ -1901,20 +1958,57 @@ def test_a_kit_playbook_in_role_mode_passes_against_a_config_with_roles_architec
     assert "[roles.architect]" in strip_paths(line(out, "playbook")), out
 
 
-def test_a_kit_playbook_in_role_mode_with_no_config_to_judge_passes_and_says_so(
-    tmp_home: Path, tmp_path: Path, repo: Path, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize("case", ["no config", "two configs", "a config that is not TOML"])
+def test_a_kit_playbook_in_role_mode_that_cannot_be_judged_fails_and_says_why(
+    tmp_home: Path, tmp_path: Path, repo: Path, monkeypatch: pytest.MonkeyPatch, case: str
 ) -> None:
-    """Where no hands config resolves — the phone architect's sandbox, where only
-    hands is installed — there is no `[roles.architect]` to judge against: the check
-    passes and its line says it could not judge, and why."""
+    """§33 (REVIEW-16 should-fix 5): `kit check` "judges the playbook's role
+    requirements against the repository's config the way `handsd` will at load, and
+    says so". handsd loads no playbook without a config it can read, so a role-mode
+    kit whose config does not resolve here — none, two and no `--project` /
+    `$HANDS_PROJECT`, or one that is not valid TOML — is not passed unjudged: the
+    playbook check fails, naming why, and says where it can be judged."""
     monkeypatch.delenv("HANDS_PROJECT", raising=False)
+    if case == "two configs":
+        _config(tmp_home, tmp_path, architect=True)
+        (tmp_home / ".hands" / "other.toml").write_text(
+            f'[roles.builder]\ncwd = "{tmp_path}"\n', encoding="utf-8"
+        )
+    elif case == "a config that is not TOML":
+        (tmp_home / ".hands" / "demo.toml").write_text("[roles.builder\n", encoding="utf-8")
     kit = write_tree(tmp_path / "k", {**good_kit(), "PLAYBOOK.toml": ROLE_PLAYBOOK})
     code, out, _ = run_check(kit, repo)
+    failed = strip_paths(assert_failed_only(code, out, "playbook"))
+    assert "not judged" not in strip_paths(failed), failed
+    assert '[series] architect = "role"' in strip_paths(failed), failed
+    assert "handsd" in strip_paths(failed), failed
+    assert "--project" in strip_paths(failed), failed
+    because = {
+        "no config": "no project config",
+        "two configs": "configures several projects",
+        "a config that is not TOML": "is not valid TOML",
+    }[case]
+    assert because in strip_paths(failed), failed
+
+
+def test_a_kit_playbook_in_role_mode_is_judged_against_a_named_project_among_two(
+    tmp_home: Path, tmp_path: Path, repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Named, one of two configs is the one handsd loads: judged, and the line says
+    which file it was judged against and that this is handsd's load-time check."""
+    monkeypatch.delenv("HANDS_PROJECT", raising=False)
+    _config(tmp_home, tmp_path, architect=True)
+    (tmp_home / ".hands" / "other.toml").write_text(
+        f'[roles.builder]\ncwd = "{tmp_path}"\n', encoding="utf-8"
+    )
+    kit = write_tree(tmp_path / "k", {**good_kit(), "PLAYBOOK.toml": ROLE_PLAYBOOK})
+    code, out, _ = run_check(kit, repo, "--project", "demo")
     assert code == 0, out
     said = strip_paths(line(out, "playbook"))
-    assert said.startswith("PASS"), said
-    assert "not judged against [roles.architect]" in strip_paths(said), said
-    assert "no project config" in strip_paths(said), said
+    assert "[roles.architect]" in strip_paths(said) and "demo.toml" in strip_paths(said), said
+    assert "as handsd does at load" in strip_paths(said), said
+    code, out, _ = run_check(kit, repo, "--project", "other")
+    assert "[roles.architect]" in strip_paths(assert_failed_only(code, out, "playbook"))
 
 
 def test_a_kit_playbook_in_phone_mode_does_not_look_for_a_config(

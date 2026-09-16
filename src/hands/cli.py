@@ -388,7 +388,8 @@ def build_parser() -> argparse.ArgumentParser:
     # §31, §32: the architect role's own route to the phone's `kit`. The kit is a
     # directory in the role's kits directory ($HANDS_KITS); its zip is built here
     # and checked against the role's clone ($HANDS_CLONE) before anything is filed,
-    # and the daemon files it (`kit_file`), minting the `kit_id`.
+    # and the daemon files it (`kit_file`), minting the `kit_id` — after running the
+    # same check itself on the bytes it stores, against the builder's repo (§33).
     kit_file = kit_sub.add_parser(
         "file",
         parents=[common],
@@ -397,8 +398,9 @@ def build_parser() -> argparse.ArgumentParser:
         "entries at their paths relative to the directory), run `kit check` on that zip "
         "against the role's clone ($HANDS_CLONE) and, only when every check passes, have "
         "handsd file the same held builder apply the phone's `kit` files, with origin "
-        "architect and a kit_id handsd mints; a failing kit is not filed and the refusal "
-        "carries the check's output",
+        "architect and a kit_id handsd mints; handsd runs the check again on the zip it "
+        "stores, against the builder's repository (§33); a failing kit is not filed and "
+        "the refusal carries the check's output",
     )
     kit_file.add_argument(
         "kit", help="the kit: a directory kits/<name> under $HANDS_KITS, laid out as the repository"
@@ -820,8 +822,9 @@ def main(
         if command == "log" and not as_json:
             return _pages(socket_path, args.job, args.offset, project=project, out=out)
         # §31, §32: `hands kit file <dir>` — the zip built and checked in the client,
-        # the apply filed by the daemon's `kit_file`, which mints the `kit_id` and
-        # takes `Api.send`'s path, so the job takes §8's path from there.
+        # the apply filed by the daemon's `kit_file`, which checks it again (§33),
+        # mints the `kit_id` and takes `Api.send`'s path, so the job takes §8's path
+        # from there.
         if command == "kit":
             return kit_mod.file_run(
                 args.kit,

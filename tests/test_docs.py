@@ -1865,6 +1865,30 @@ def test_the_docs_say_what_the_engine_approves_and_when_the_kickoff_fires() -> N
         assert flattened(stale) not in doc, stale
 
 
+def test_the_docs_say_handsd_checks_the_kit_and_one_kit_per_consultation() -> None:
+    """§33 (REVIEW-16 blocker 1, should-fix 1, 5; H-035): handsd runs the kit check on
+    the zip it stores and refuses a failing kit; a consultation files at most one kit,
+    named as its verdict names it, else the engine denies it and the consultation
+    escalates; and a role-mode kit whose config cannot be judged no longer passes. The
+    docs the human and the architect read say so, and none still says the check passes
+    where no config resolves."""
+    series = playbook_doc("## The series and its kickoff (`[series]`)")
+    section = flattened(integration().split(ARCHITECT_SECTION, 1)[1].split("\n## ", 1)[0])
+    handbook = flattened((ROOT / "docs" / "ARCHITECT-HANDBOOK.md").read_text(encoding="utf-8"))
+    role = flattened((ROOT / "architect" / "CLAUDE.md").read_text(encoding="utf-8"))
+    for where, text in (("docs/PLAYBOOK.md [series]", series), ("INTEGRATION", section),
+                        ("ARCHITECT-HANDBOOK", handbook)):
+        for said in ("§33", "at most one", "escalate"):
+            assert said in text, f"{where} does not say {said!r}"
+    assert "never filed" in series and "never filed" in section
+    assert "at most one kit" in role and "denied" in role
+    for path in (ROOT / "docs" / "PLAYBOOK.md", ROOT / "docs" / "INTEGRATION.md"):
+        text = flattened(path.read_text(encoding="utf-8"))
+        assert "the check passes and says it could not judge" not in text, path.name
+        assert "check passes and says it could not" not in text, path.name
+    assert "no daemon, no config and no network" not in handbook
+
+
 def test_the_playbook_doc_says_kit_wait_s_and_the_rename_rule() -> None:
     """§32's two new rules, with the default from the code: `next kit` waits for its
     kit by `kit_id` up to `kit_wait_s`, and a series rename restates the budget."""

@@ -32,11 +32,21 @@ from hands import __version__, files, gates
 from hands.config import ARCHITECT_ROLE, CONSULT_ROLES
 from hands.doctor import report as doctor_report
 from hands.doctor import run_checks as doctor_checks
-from hands.kit import KIT_NAME_RE, Apply, KitError, apply_from_zip, apply_params, home_shown
+from hands.kit import (
+    KIT_NAME_RE,
+    Apply,
+    KitError,
+    Report,
+    apply_from_zip,
+    apply_params,
+    check_kit,
+    home_shown,
+)
 from hands.notify import NotifyError, send_test
 from hands.runner import KeepRefused
 from hands.spool import (
     ARCHITECT_ORIGIN,
+    KIT_CHECK_PASSED,
     ORIGINS,
     TERMINAL_STATES,
     Event,
@@ -88,6 +98,16 @@ _TAIL_CHUNK = 64 * 1024
 # implementation-defined server-error range, which is where these live.
 HANDS_ERROR = -32001  # a refusal hands is sure about (bad role, full queue, …)
 TIMEOUT = -32003  # `wait --timeout` expired
+
+
+def _check_refusal(name: str, repo: Path, report: Report) -> str:
+    """§33: `kit_file`'s refusal of a kit that fails the check — the check's own lines."""
+    failed = [check.name for check in report.checks if not check.ok]
+    lines = "\n".join(check.line() for check in report.checks)
+    return (
+        f"kit_file: kit {name!r} fails `hands kit check` against the builder's repository "
+        f"{repo} ({', '.join(failed)}), so handsd did not file it (§33):\n{lines}"
+    )
 
 
 class ApiError(Exception):
@@ -269,11 +289,21 @@ class Api:
 
         `name` is the kit directory's name and `zip` the base64 of the zip the
         client built from that directory and checked against the role's clone.
-        handsd mints the `kit_id`, stores the bytes at
-        `<spool>/kits/<kit_id>/<name>.zip` with the record `kit.json` naming the
-        consultation, lists them with the phone's `apply_from_zip` against the
-        builder's cwd, and files the held apply with `origin: architect`. A refusal
-        files nothing and keeps nothing.
+        handsd mints the `kit_id` and stores the bytes at
+        `<spool>/kits/<kit_id>/<name>.zip`. §33: it then runs `check_kit` on those
+        stored bytes itself, against the builder's repository (its cwd) and this
+        daemon's config, and refuses a failing kit with the check's output — the
+        client's check is not trusted, since any socket client can call this. A
+        passing kit gets the record `kit.json` naming the consultation and the
+        passing check, is listed with the phone's `apply_from_zip` against the
+        builder's cwd, and is filed as the held apply with `origin: architect`. A
+        refusal files nothing and keeps nothing.
+
+        §33's other half — one kit per consultation, named as the architect's
+        `VERDICT: next kit <name>` names it — is the engine's to enforce when it
+        decides the hold (`PlaybookEngine`), because the verdict usually arrives
+        after the kit: a second kit filed while the consultation runs is filed here,
+        held, and denied by the engine.
 
         §32: the engine approves "a kit filed by the architect role", so a kit is
         accepted only during an architect consultation — while an architect job is
@@ -303,17 +333,24 @@ class Api:
         kit_id = new_kit_id()
         directory = self.spool.kit_dir(kit_id)
         try:
-            path = await asyncio.to_thread(
-                self.spool.store_kit, kit_id, name=name, data=data, consultation=consultation
-            )
+            path = await asyncio.to_thread(self.spool.store_kit, kit_id, name=name, data=data)
         except FileExistsError as exc:  # an existing directory: it is not this kit's
             raise ApiError(f"kit_file: the kit could not be stored ({type(exc).__name__})") from exc
         except OSError as exc:
             shutil.rmtree(directory, ignore_errors=True)
             raise ApiError(f"kit_file: the kit could not be stored ({type(exc).__name__})") from exc
+        builder = self.config.role("builder").cwd
         try:
-            plan = await asyncio.to_thread(
-                apply_from_zip, path, self.config.role("builder").cwd, home_shown(path)
+            report = await asyncio.to_thread(check_kit, path, builder, config=self.config)
+            if not report.ok:
+                raise ApiError(_check_refusal(name, builder, report))
+            plan = await asyncio.to_thread(apply_from_zip, path, builder, home_shown(path))
+            await asyncio.to_thread(
+                self.spool.record_kit,
+                kit_id,
+                name=name,
+                consultation=consultation,
+                check=KIT_CHECK_PASSED,
             )
             job = await self.file_apply(plan, ARCHITECT_ORIGIN, kit_id)
             self.daemon.playbook.kit_filed(consultation)
@@ -790,6 +827,27 @@ class Api:
                 "and never cancels"
             )
         return await self._decide_as(job, "approved", "playbook", reason=reason, quote=None)
+
+    async def deny_from_playbook(self, job: str, *, reason: str | None = None) -> dict[str, Any]:
+        """§33: the engine denying a held apply the architect role filed — a kit its
+        consultation may not file (a second one, or one whose name is not the
+        verdict's `next kit <name>`).
+
+        Not a command of §4, like `decide_from_playbook`, and as narrow in origin: a
+        held job of origin `architect` and nothing else. It does not ask
+        `kit_apply_problem`: a denial releases nothing, and a hold that is not a
+        filed kit is left to the human by the engine before it gets here.
+        """
+        record = self._job(job)
+        if record.origin != ARCHITECT_ORIGIN:
+            raise ApiError(
+                f"job {record.id} is of origin {record.origin!r}: §33 gives the playbook "
+                f"authority to deny a held apply of origin {ARCHITECT_ORIGIN!r} and nothing "
+                "else; §8's table decides this one"
+            )
+        if record.state != "held":
+            raise ApiError(f"job {record.id} is {record.state}, not held; there is no hold to deny")
+        return await self._decide_as(job, "denied", "playbook", reason=reason, quote=None)
 
     async def _decide_as(
         self,

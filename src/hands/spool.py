@@ -40,6 +40,7 @@ __all__ = [
     "FLAT_ITEMS",
     "INITIAL_STATES",
     "JOB_FIELDS",
+    "KIT_CHECK_PASSED",
     "STATES",
     "TERMINAL_STATES",
     "TRANSITIONS",
@@ -118,9 +119,14 @@ ORIGINS = frozenset(
 ARCHITECT_ORIGIN = "architect"
 #: §32: where handsd stores a kit the architect role filed, under the spool: one
 #: directory per `kit_id`, outside `HANDS_KITS`, holding `<name>.zip` and the record
-#: `kit.json` — the kit's id, its name, and the architect job it was filed during.
+#: `kit.json` — the kit's id, its name, the architect job it was filed during, and
+#: (§33) the result of the kit check handsd ran on the stored zip.
 KITS_DIR = "kits"
 KIT_RECORD = "kit.json"
+#: §33: the `check` a record carries when `hands kit check` passed on the stored
+#: bytes. `Api.kit_file` refuses a failing kit, so no record says otherwise; the
+#: engine approves nothing whose record does not say this.
+KIT_CHECK_PASSED = "pass"
 #: `new_kit_id`'s shape: 16 lowercase hex digits.
 KIT_ID_RE = re.compile(r"[0-9a-f]{16}")
 
@@ -466,13 +472,13 @@ class Spool:
             raise SpoolError(f"bad kit_id {kit_id!r}")
         return self.root / KITS_DIR / kit_id
 
-    def store_kit(self, kit_id: str, *, name: str, data: bytes, consultation: str) -> Path:
-        """§32: keep a filed kit — its zip and its record — and return the zip's path.
+    def store_kit(self, kit_id: str, *, name: str, data: bytes) -> Path:
+        """§32: keep a filed kit's zip, and return its path.
 
-        The directory is created new (an existing one is not this kit's), mode 0700;
-        the zip is written and flushed to disk before the record, so a record never
-        names a zip that is not there. `consultation` is the architect job the kit
-        was filed during; the engine reads the record back (`kit_apply_problem`).
+        The directory is created new (an existing one is not this kit's), mode 0700,
+        and the zip is written and flushed to disk. §33: the kit check runs on these
+        stored bytes, and only then is the record written (`record_kit`), so a
+        record never names a zip that is not there or one that was not checked.
         """
         directory = self.kit_dir(kit_id)
         directory.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -482,9 +488,15 @@ class Spool:
             out.write(data)
             out.flush()
             os.fsync(out.fileno())
-        record = {"kit_id": kit_id, "name": name, "consultation": consultation}
-        atomic_write(directory / KIT_RECORD, json.dumps(record, sort_keys=True))
         return path
+
+    def record_kit(self, kit_id: str, *, name: str, consultation: str, check: str) -> None:
+        """§32, §33: the record of a stored kit — its id, its name, the architect job
+        it was filed during (`consultation`), and the result of the kit check handsd
+        ran on the stored zip (`check`, `KIT_CHECK_PASSED` when it passed). The
+        engine reads it back (`kit_apply_problem`)."""
+        record = {"kit_id": kit_id, "name": name, "consultation": consultation, "check": check}
+        atomic_write(self.kit_dir(kit_id) / KIT_RECORD, json.dumps(record, sort_keys=True))
 
     def read_kit_record(self, kit_id: str) -> dict[str, Any] | None:
         """The record `store_kit` wrote for `kit_id`, or None when there is none that
@@ -495,7 +507,7 @@ class Spool:
             return None
         if not isinstance(data, dict):
             return None
-        keys = ("kit_id", "name", "consultation")
+        keys = ("kit_id", "name", "consultation", "check")
         if sorted(data) != sorted(keys) or not all(isinstance(data[key], str) for key in keys):
             return None
         return data
@@ -816,10 +828,12 @@ def kit_apply_problem(spool: Spool, job: Job) -> str | None:
     engine's kickoff rule all ask this, so "never by origin alone" is said once. It
     is one when it is a builder job of origin `architect` whose gate is `apply
     <name>`, whose `kit_id` has `new_kit_id`'s shape, whose record `kits/<kit_id>/
-    kit.json` names that id and that `<name>`, whose `<name>.zip` is stored beside
-    it, whose record names an architect job in the spool as the consultation it was
-    filed during, and no other job carries that `kit_id`. It judges the record, not
-    the job's state: the caller asks for `held` or `done`.
+    kit.json` names that id and that `<name>`, whose record says the kit check handsd
+    ran on the stored zip passed (§33), whose `<name>.zip` is stored beside it, whose
+    record names an architect job in the spool as the consultation it was filed
+    during, and no other job carries that `kit_id`. It judges the record, not the
+    job's state: the caller asks for `held` or `done`. Whether the consultation's
+    verdict names this kit (§33) is the engine's to judge, not this.
     """
     if job.origin != ARCHITECT_ORIGIN:
         return f"its origin is {job.origin!r}, not {ARCHITECT_ORIGIN!r}"
@@ -838,6 +852,8 @@ def kit_apply_problem(spool: Spool, job: Job) -> str | None:
         return f"handsd holds no record of kit_id {job.kit_id}"
     if record["kit_id"] != job.kit_id or record["name"] != name:
         return f"kit_id {job.kit_id} was filed as kit {record['name']!r}, not {name!r}"
+    if record["check"] != KIT_CHECK_PASSED:
+        return f"the record of kit_id {job.kit_id} holds no passing kit check (§33)"
     if not (spool.kit_dir(job.kit_id) / f"{name}.zip").is_file():
         return f"the zip of kit_id {job.kit_id} is not stored"
     try:

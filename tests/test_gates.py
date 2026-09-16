@@ -218,7 +218,10 @@ def test_no_cli_flag_claims_the_playbooks_authority(human_confirmed: bool) -> No
     from hands.gates import decider_for
 
     assert decider_for(human_confirmed=human_confirmed) in {"cli", "driver"}
-    assert set(Api.COMMANDS).isdisjoint({"decide_from_playbook", "decide_from_phone"})
+    assert set(Api.COMMANDS).isdisjoint(
+        {"decide_from_playbook", "deny_from_playbook", "decide_from_phone"}
+    )
+    assert set(Api.KIT_METHODS).isdisjoint({"decide_from_playbook", "deny_from_playbook"})
 
 
 def test_the_playbook_decider_releases_the_architects_hold(tmp_home: Path, workdir: Path) -> None:
@@ -227,18 +230,20 @@ def test_the_playbook_decider_releases_the_architects_hold(tmp_home: Path, workd
     tests/test_playbook.py; this pins the table row itself — over the one job §32
     gives it: the held apply `kit_file` filed during an architect consultation."""
     import base64
-    import io
-    import zipfile
 
-    from harness import architect_table, close_consultation, open_consultation
+    from harness import (
+        architect_table,
+        close_consultation,
+        kit_zip,
+        open_consultation,
+        passing_kit,
+    )
 
     (tmp_home / ".hands" / f"{PROJECT}.toml").write_text(
         config_body(tmp_home, workdir, extra=architect_table(tmp_home))
     )
-    buffer = io.BytesIO()
-    with zipfile.ZipFile(buffer, "w") as archive:
-        archive.writestr("meta/BUILDER-16-PROMPT.md", "# m16\n")
-    data = base64.b64encode(buffer.getvalue()).decode()
+    # §33: handsd files only a kit that passes `hands kit check` against the builder's repo.
+    data = base64.b64encode(kit_zip(passing_kit())).decode()
 
     async def body(daemon: Daemon) -> None:
         consulting = open_consultation(daemon)

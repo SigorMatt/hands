@@ -36,7 +36,11 @@ plan. Deliverables, all on the branch before the switch:
    `role = "architect"`.
 5. This directory, set up as above.
 
-Applying that playbook (a gated job the human approves) is the switch. To
+Applying that playbook (a gated job the human approves) is the switch. Its
+kit is checked at the laptop (`hands kit check <kit> --repo <repo>`, with the
+project's config resolving): a role-mode playbook is judged against that config
+as `handsd` judges it at load, and fails where no config can be judged (DESIGN
+§33). To
 hand the series back to the phone: `hands pause`, then the phone architect
 continues from the branch; set `architect = "phone"` in the next kit. One
 architect at a time.

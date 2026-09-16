@@ -1,11 +1,14 @@
 """`hands kit check` — a kit checked before it is sent (DESIGN §4 `kit check`, §26).
 
 Runs in the client, like `doctor`: no daemon, no socket, no network, and no
-hands config, so it works in an architect's sandbox where hands is only
-installed. It reads the kit (a `.zip` or a directory whose files sit at their
-repository paths) and the repository the kit lands in, and prints one line per
-check, then — only when every check passes — the apply prompt of the handbook's
-§3 naming every file the kit replaces or adds, and the commit message.
+hands config unless the kit's playbook sets `[series] architect = "role"` (below),
+so it works in an architect's sandbox where hands is only installed. handsd runs
+the same `check_kit` on every kit `hands kit file` files (§33, `Api.kit_file`),
+against the builder's repository, and refuses a failing one. It reads the kit (a
+`.zip` or a directory whose files sit at their repository paths) and the
+repository the kit lands in, and prints one line per check, then — only when
+every check passes — the apply prompt of the handbook's §3 naming every file the
+kit replaces or adds, and the commit message.
 
 The apply prompt is built by one function, `plan_apply`, which `hands kit check`
 and handsd both call (§27): when a kit arrives from the phone, handsd lists the
@@ -37,10 +40,14 @@ The checks, in order (docs/ARCHITECT-HANDBOOK.md §11 says the same):
   `quiet_hours` — without the HEAD comparison, because a kit is by definition
   not yet committed. A kit's playbook must also carry a `[series] kickoff` equal
   to the brief's kickoff line; the repo's is not compared (§26 compares a kit's).
-  §32: a kit's playbook that sets `[series] architect = "role"` fails when the
-  config `hands` resolves (`--project`, `$HANDS_PROJECT`, the only config) has no
-  `[roles.architect]`; with no config to resolve it passes and the line says it
-  was not judged. No config is read for any other kit.
+  §32, §33: a kit's playbook that sets `[series] architect = "role"` is judged
+  against the config the way `handsd` judges it at load (`check_series_roles`):
+  it fails when that config has no `[roles.architect]`, and — since §33 — it fails
+  too when no config can be judged here (none, several and no `--project` /
+  `$HANDS_PROJECT`, or one that does not load), naming why; the passing line says
+  which config it was judged against. handsd itself passes its own config
+  (`check_kit(config=…)`). No config is read for any other kit, so a phone-mode
+  kit still needs none.
 * `brief` — the kit carries exactly one brief, `meta/BUILDER-<N>-PROMPT.md`
   (missions form) or `WORKPLAN.md` (runs form); its kickoff line is the first
   indented line after "Kickoff line"; its final-reply vocabulary is the
@@ -100,7 +107,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any, TextIO
 
 import hands.config as config_mod
-from hands.config import CLONE_ENV, KITS_ENV
+from hands.config import CLONE_ENV, KITS_ENV, Config
 from hands.playbook import (
     DRIVER_VERDICTS,
     GIT_ENV_CLEARED,
@@ -598,36 +605,52 @@ def _load(text: bytes | str, name: str) -> Playbook:
     return parse_playbook(decoded, path=Path(name))
 
 
-def _series_roles(book: Playbook, name: str, project: str | None) -> tuple[bool, str]:
-    """§32 (review 15 blocker 4): a kit's playbook in role mode against this laptop's
-    config. Whether it passes, and what the playbook line says of it: the refusal
-    (`check_series_roles`' message, naming both files), or the clause a passing line
-    ends with — judged, or why it could not be.
+def _series_roles(
+    book: Playbook, name: str, project: str | None, config: Config | None = None
+) -> tuple[bool, str]:
+    """§32 (review 15 blocker 4), §33 (review 16 should-fix 5): a kit's playbook in
+    role mode, judged against the config the way `handsd` judges it at load
+    (`check_series_roles`, which `series_roles_problem` runs before handsd starts).
+    Whether it passes, and what the playbook line says of it: the refusal, or the
+    clause a passing line ends with, naming the config it was judged against.
 
-    The config is the one every `hands` command resolves (`--project`,
-    `$HANDS_PROJECT`, the only `~/.hands/*.toml`), and it is looked for only for a
-    playbook that sets `architect = "role"`: `kit check` of any other kit reads no
-    config (§26). Where none resolves — the phone architect's sandbox, where only
-    hands is installed — there is nothing to judge against; the check passes and
-    says so, rather than fail every role-mode kit written there."""
+    The config is `config` when the caller has one (handsd's `kit_file`), else the
+    one every `hands` command resolves (`--project`, `$HANDS_PROJECT`, the only
+    `~/.hands/*.toml`); it is looked for only for a playbook that sets `architect =
+    "role"`, so `kit check` of any other kit reads no config (§26). §33: where no
+    config can be judged — none resolves, several do and none is named, or the one
+    named does not load — handsd would not load this playbook either, so the check
+    fails and says why, rather than pass a kit it has not judged. (Before §33 it
+    passed there, for the phone architect's sandbox, where only hands is installed:
+    a role-mode kit is now checked where its project's config is.)"""
     if book.architect != "role":
         return True, ""
-    try:
-        config = config_mod.load_config(config_mod.resolve_project(project))
-    except config_mod.ConfigError as exc:
-        return True, (
-            '; its [series] architect = "role" is not judged against [roles.architect]: '
-            f"no hands config resolves here ({exc})"
-        )
+    if config is None:
+        try:
+            config = config_mod.load_config(config_mod.resolve_project(project))
+        except config_mod.ConfigError as exc:
+            return False, (
+                f'the kit\'s {name} sets [series] architect = "role", which handsd judges '
+                "against its project's config when it loads, and no config can be judged "
+                f"here: {exc}; run the check where that config resolves (--project <name> "
+                "or $HANDS_PROJECT) (§33)"
+            )
     try:
         check_series_roles(book, config)
     except PlaybookConfigError as exc:
         return False, f"the kit's {name} loads, and is a config error here: {exc}"
-    return True, f'; its [series] architect = "role" has [roles.architect] in {config.path}'
+    return True, (
+        f'; its [series] architect = "role" has [roles.architect] in {config.path}, judged '
+        "as handsd does at load (§33)"
+    )
 
 
 def _check_playbook(
-    kit: _Kit, repo: Path, kickoff: str | None, project: str | None = None
+    kit: _Kit,
+    repo: Path,
+    kickoff: str | None,
+    project: str | None = None,
+    config: Config | None = None,
 ) -> tuple[Check, Playbook | None]:
     carried = [name for name in PLAYBOOK_PATHS if name in kit.files]
     if len(carried) > 1:
@@ -653,7 +676,7 @@ def _check_playbook(
                 f"the brief's kickoff line {kickoff!r}"
             )
             return Check("playbook", False, reason), book
-        roles_ok, said = _series_roles(book, name, project)
+        roles_ok, said = _series_roles(book, name, project, config)
         if not roles_ok:
             return Check("playbook", False, said), book
         reason = (
@@ -1146,14 +1169,17 @@ def kit_md_note(plan: Apply) -> str:
     return shape + f"this kit carries no {KIT_MD}, so the message is '{plan.commit_message}'"
 
 
-def check_kit(path: Path, repo: Path, *, project: str | None = None) -> Report:
-    """Every check of a kit against `repo`. `project` names the config a kit's
-    role-mode playbook is judged against (§32), resolved as `hands` resolves one."""
+def check_kit(
+    path: Path, repo: Path, *, project: str | None = None, config: Config | None = None
+) -> Report:
+    """Every check of a kit against `repo`. A kit's role-mode playbook is judged
+    against `config` when given — handsd's own, in `Api.kit_file` (§33) — else
+    against the config `project` names, resolved as `hands` resolves one (§32)."""
     kit = _read_kit(path)
     brief_check, brief_name, brief_text = _find_brief(kit)
     kickoff = kickoff_line(brief_text) if brief_text is not None else None
     literals = final_reply_literals(brief_text) if brief_text is not None else None
-    playbook_check, book = _check_playbook(kit, repo, kickoff, project)
+    playbook_check, book = _check_playbook(kit, repo, kickoff, project, config)
     review = _review_vocabulary(book, kit, repo)
     checks = [
         _check_paths(kit, repo),
@@ -1404,8 +1430,10 @@ def file_run(
     filed — is checked against `$HANDS_CLONE`; a kit that fails a check is not
     sent and the refusal carries the check's own lines. A passing kit is sent by
     `send` — the daemon's `kit_file` — as its name and the zip's bytes only: the
-    daemon stores them, mints the `kit_id`, and files the held apply with
-    `origin: architect`, so it takes §8's path from there.
+    daemon stores them, runs the check again on the stored bytes against the
+    builder's repository (§33; this check is the architect's, that one is the
+    one the engine's approval rests on), mints the `kit_id`, and files the held
+    apply with `origin: architect`, so it takes §8's path from there.
     """
     root = kit_dir_under_kits(kit)
     clone = role_clone()
@@ -1444,9 +1472,9 @@ def file_run(
     # The state is the record as the daemon answered, and the hold's release is
     # not this command's to predict: `hands approve|deny` (or the phone's buttons)
     # under an ordinary playbook, and the engine itself — `decided_by: playbook`,
-    # moments after this line is printed — under one that sets [series] architect =
-    # "role" with autonomous = true (§8, §31). Saying "a human decides it" was
-    # false in exactly the case §31 built.
+    # once this consultation ends `VERDICT: next kit <name>` naming this kit (§33) —
+    # under one that sets [series] architect = "role" with autonomous = true (§8,
+    # §31). Saying "a human decides it" was false in exactly the case §31 built.
     print(
         f"kit file: filed {job['id']} as a {job['state']} builder job "
         f"(gate: apply {root.name}, origin: architect, kit_id: {job.get('kit_id')})",
@@ -1455,7 +1483,9 @@ def file_run(
     print(
         "the hold is released by a human (`hands approve|deny`, or the phone's buttons), or "
         'by the engine itself when the playbook in force sets [series] architect = "role" '
-        "and autonomous = true (§8, §31)",
+        "and autonomous = true (§8, §31): it approves the one kit a consultation files once "
+        f"its reply `VERDICT: next kit {root.name}` names it, and denies a second kit or one "
+        "of another name, ending the consultation escalate (§33)",
         file=out,
     )
     return 0

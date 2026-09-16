@@ -141,6 +141,8 @@ class Daemon:
             # playbook. The method is not a command of §4, so no socket client can
             # reach it.
             approve=self.api.decide_from_playbook,
+            # §33: and its denial, of a kit the consultation may not file.
+            deny=self.api.deny_from_playbook,
         )
         #: §24's command channel: on only when `[notify] cmd_topic` is set, which
         #: the config refuses without `cmd_secret`. Its stream is an attribute, so

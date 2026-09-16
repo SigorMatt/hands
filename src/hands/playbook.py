@@ -63,6 +63,7 @@ from hands.config import ARCHITECT_ROLE, CONSULT_ROLES, Config
 from hands.limits import LimitManager
 from hands.spool import (
     ARCHITECT_ORIGIN,
+    TERMINAL_STATES,
     Job,
     Spool,
     SpoolError,
@@ -1279,7 +1280,11 @@ class PlaybookEngine:
     * `approve` — `Api.decide_from_playbook`, §31's fourth gate authority, used
       for one thing only: a held apply hands filed from a kit the architect role
       filed (§32, `kit_apply_problem`) under a playbook that sets `[series]
-      architect = "role"` and `autonomous = true`;
+      architect = "role"` and `autonomous = true`, once the consultation it was
+      filed during has ended naming it (§33);
+    * `deny` — `Api.deny_from_playbook`, the same authority's other answer, for a
+      kit §33 forbids: a second kit of one consultation, or one whose name is not
+      the verdict's `next kit <name>`;
     * `sleep` — an attribute, `asyncio.sleep` by default: §32's `kit_wait_s` is
       waited through it, so a test never waits one out (as `LimitManager.sleep`).
     """
@@ -1294,6 +1299,7 @@ class PlaybookEngine:
         limits: LimitManager | None = None,
         notify: Callable[[str, dict[str, Any]], Any] | None = None,
         approve: Callable[..., Awaitable[dict[str, Any]]] | None = None,
+        deny: Callable[..., Awaitable[dict[str, Any]]] | None = None,
     ) -> None:
         self.config = config
         self.spool = spool
@@ -1303,6 +1309,9 @@ class PlaybookEngine:
         #: wire it, which is then a pipeline that cannot approve anything — the
         #: architect's hold stays held and the engine says so.
         self.approve = approve
+        #: §33's seam: `Api.deny_from_playbook`. None in a caller that does not wire
+        #: it: a forbidden kit then stays held for the human, and the stop says so.
+        self.deny = deny
         #: §6's manager, when there is one: §10's `[limits] max_resumes` overrides
         #: the config's, and the counter both units read is the role's.
         self.limits = limits
@@ -1654,9 +1663,18 @@ class PlaybookEngine:
         stop is the human who would decide the hold anyway.
 
         §32: "never by origin alone". A hold of origin `architect` that is not an
-        apply hands filed from a kit the architect role filed (`kit_apply_problem`)
-        is not the engine's either, and takes that same path: held for a human, and
-        with no `job.held` rule the pipeline stops. The reason is logged.
+        apply hands filed from a kit the architect role filed (`kit_apply_problem`,
+        which since §33 includes the passing check handsd recorded) is not the
+        engine's either, and takes that same path: held for a human, and with no
+        `job.held` rule the pipeline stops. The reason is logged.
+
+        §33: "a consultation may file at most one kit, and its name must equal the
+        name the architect's `VERDICT: next kit <name>` states". A kit is filed while
+        the architect's job runs, before that verdict exists, so the hold is decided
+        when both are known: while its consultation is not over the engine answers
+        the `job.held` by doing nothing yet (no approval, no stop), and
+        `_architect_end` decides it; a kit filed after the end (while `next kit`
+        waits) is decided here and now (`_decide_kits`).
         """
         if job is None or job.origin != ARCHITECT_ORIGIN or not book.architect_is_autonomous:
             return False
@@ -1664,6 +1682,84 @@ class PlaybookEngine:
         if problem is not None:
             log.warning("playbook: job.held: %s is not approved (%s; §32)", job.id, problem)
             return False
+        assert job.kit_id is not None  # `kit_apply_problem` answers None only with one
+        record = self.spool.read_kit_record(job.kit_id)
+        consulted = self._job(record["consultation"]) if record is not None else None
+        if consulted is None or consulted.state not in TERMINAL_STATES:
+            log.info(
+                "playbook: job.held: %s is the kit of consultation %s, which has not ended; "
+                "it is decided when its verdict is known (§33)",
+                job.id, record["consultation"] if record is not None else None,
+            )
+            return True
+        await self._decide_kits(consulted)
+        return True
+
+    def _kits_of(self, consulted: Job) -> list[tuple[Job, str]]:
+        """§33: every apply of origin `architect` whose kit record names the
+        consultation `consulted`, oldest first, with the kit's name — whatever its
+        state, because "a consultation may file at most one kit" counts what it
+        filed, not what is still held."""
+        kits: list[tuple[Job, str]] = []
+        for record in self.spool.list_jobs():
+            if record.kit_id is None or record.origin != ARCHITECT_ORIGIN:
+                continue
+            kit = self.spool.read_kit_record(record.kit_id)
+            if kit is not None and kit["consultation"] == consulted.id:
+                kits.append((record, kit["name"]))
+        return kits
+
+    async def _decide_kits(self, consulted: Job) -> bool:
+        """§33: decide the kits an ended consultation filed. True when it escalated.
+
+        None filed: nothing to decide (`next kit` waits for one). Exactly one, and
+        the consultation ended `VERDICT: next kit <name>` with that name: approved,
+        if it is still held (`_release_kit`). Anything else — two or more kits, or
+        one whose name the verdict does not state, a reply that is not `next kit`
+        among them — is §33's "else": every one of them still held is denied by the
+        engine and the consultation ends `escalate` (`_escalate_kits`). Called only
+        under a playbook in role mode with `autonomous`.
+        """
+        kits = self._kits_of(consulted)
+        if not kits:
+            return False
+        event = f"{ARCHITECT}.{consulted.state}"
+        stop = self._architect_stop(event, consulted)
+        named = _NEXT_KIT_RE.match(consulted.verdict or "") if stop is None else None
+        names = [name for _, name in kits]
+        if len(kits) > 1:
+            shown = ", ".join(repr(name) for name in names)
+            why = f"it filed {len(kits)} kits ({shown}), and a consultation may file at most one"
+        elif named is None:
+            why = (
+                f"it filed kit {names[0]!r}, and its reply is not a `VERDICT: next kit <name>` "
+                "that names it"
+            )
+        elif named.group("name") != names[0]:
+            why = (
+                f"it filed kit {names[0]!r}, and its `VERDICT: next kit {named.group('name')}` "
+                "names another"
+            )
+        else:
+            await self._release_kit(kits[0][0])
+            return False
+        await self._escalate_kits(event, consulted, [job for job, _ in kits], why, stop)
+        return True
+
+    async def _release_kit(self, filed: Job) -> None:
+        """§31, §33: approve the one kit a consultation filed under the name its verdict
+        states — if it is still held, the pipeline is not paused, and it is still an
+        apply hands filed from a checked kit (`kit_apply_problem`)."""
+        job = self._job(filed.id)
+        if job is None or job.state != "held":
+            return  # decided already (by the engine on its hold, or by a human)
+        if self.state.paused:
+            log.info("playbook: paused; the architect's apply %s stays held (§10, §33)", job.id)
+            return
+        problem = kit_apply_problem(self.spool, job)
+        if problem is not None:  # its `job.held` already took the human's path
+            log.warning("playbook: %s is not approved (%s; §32)", job.id, problem)
+            return
         where = _payload("job.held", job)
         if self.approve is None:  # pragma: no cover - wired by the daemon and the tests
             await self.stop(
@@ -1671,7 +1767,7 @@ class PlaybookEngine:
                 "and this engine has no approve seam to release it with (§31)",
                 where,
             )
-            return True
+            return
         try:
             await self.approve(job=job.id, reason=AUTONOMOUS_APPROVAL)
         except asyncio.CancelledError:
@@ -1681,13 +1777,49 @@ class PlaybookEngine:
                 f"job.held: the engine could not approve the architect's apply {job.id}: {exc}",
                 where,
             )
-            return True
+            return
         # No inbox event of its own: the decision is recorded exactly as every
         # other gate decision is, by `Api._gate_decided` — one `gate.decided`
         # carrying `decided_by: playbook` and the reason above — and, as today,
         # a gate decision notifies nobody (`daemon.NOTIFY_KINDS`).
         log.info("playbook: approved the architect's apply %s (decided_by: playbook, §31)", job.id)
-        return True
+
+    async def _escalate_kits(
+        self, event: str, consulted: Job, filed: list[Job], why: str, stop: str | None
+    ) -> None:
+        """§33: "else the apply is denied by the engine and the consultation ends
+        `escalate`". The stop comes first and is §31's escalate: it notifies (over a
+        paused pipeline too, as every consultation stop does) with the reason, the
+        architect's session id and the `claude --resume` line. Then every kit of the
+        consultation that is still held is denied (`decided_by: playbook`); a denial
+        releases nothing, so it is made over a paused pipeline as well."""
+        held = [job for job in (self._job(kit.id) for kit in filed)
+                if job is not None and job.state == "held"]
+        if not held:
+            denied = "no apply of it is still held to deny"
+        elif self.deny is None:  # pragma: no cover - wired by the daemon and the tests
+            denied = f"this engine has no deny seam, so {', '.join(j.id for j in held)} stay held"
+        else:
+            denied = f"the engine denies {', '.join(job.id for job in held)}"
+        reason = (
+            f"{event}: the architect's consultation {consulted.id} ends escalate (§33): {why}; "
+            f"{denied} — {_resume_line(consulted)}"
+        )
+        if stop is not None:
+            reason += f"; its own end: {stop}"
+        await self.stop(reason, _payload(event, consulted), notify_suppressed=True)
+        if self.deny is None:  # pragma: no cover - wired by the daemon and the tests
+            return
+        for job in held:
+            try:
+                await self.deny(
+                    job=job.id,
+                    reason=f"architect consultation {consulted.id}: {why} (§33)",
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:  # the stop above already asked the human
+                log.warning("playbook: could not deny the architect's apply %s: %s", job.id, exc)
 
     # ------------------------------------------------------------- actions
 
@@ -2036,7 +2168,10 @@ class PlaybookEngine:
         """§31: what follows an architect consultation, which is the engine's own.
 
         `next kit` waits for the apply the architect filed: the engine does nothing
-        more, and the held (under `autonomous`, approved) apply carries the series.
+        more, and the held apply carries the series — under `autonomous`, approved
+        here once this end names it (§33, `_decide_kits`), or denied with the
+        consultation ending `escalate` when it filed two kits or a kit of another
+        name.
         `series complete` and `escalate` stop with their reasons, as does every
         other end. No playbook rule fires either way — `architect.*` is not one of
         §10's events — so this is the whole of the follow-up.
@@ -2058,6 +2193,9 @@ class PlaybookEngine:
         await self._ensure_loaded()
         event = f"{ARCHITECT}.{job.state}"
         reason = self._architect_stop(event, job)
+        book = self.playbook
+        if book is not None and book.architect_is_autonomous and await self._decide_kits(job):
+            return  # §33: the consultation's kits made it escalate, and it has stopped
         if reason is not None:
             await self.stop(reason, _payload(event, job), notify_suppressed=True)
             return

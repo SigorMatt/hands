@@ -211,7 +211,11 @@ Run it before emitting any kit; from a fresh sandbox:
     uv tool install git+https://github.com/SigorMatt/hands
     hands kit check <kit.zip|dir> [--repo <clone>]
 
-It needs no daemon, no config and no network. `--repo` defaults to the top
+It needs no daemon and no network, and no config unless the kit's playbook
+sets `[series] architect = "role"`: that one is judged against the project's
+config as `handsd` judges it at load, and fails where no config can be judged
+(none, several and no `--project`, or one that is not valid TOML), so check a
+role-mode kit where the project's config is (DESIGN §33). `--repo` defaults to the top
 level of the git repository you run it in; a directory kit's files are
 taken relative to the directory. It prints one line per check,
 `PASS <name>: <reason>` or `FAIL <name>: <reason>`, in this order:
@@ -338,8 +342,15 @@ under; read it there rather than here. What changes for you:
   `~/.hands/<project>/kits/<kit_id>/<name>.zip`, and the apply prompt names it
   there, with what it replaces and adds judged against the builder's repository
   (`kit check`'s prompt names `~/Downloads/<name>.zip` and judges the clone). A symlink inside the directory refuses the kit; an empty
-  directory carries nothing. Under `[series] autonomous` the engine approves
-  that hold itself and sends the kickoff, so a kit you file is a kit that runs.
+  directory carries nothing. handsd runs the check once more on the zip it
+  stores, against the builder's repository, and refuses a failing kit with the
+  check's output (DESIGN §33). Under `[series] autonomous` the engine approves
+  that hold itself once your reply names it, and sends the kickoff, so a kit you
+  file is a kit that runs.
+- **One kit per consultation, under the name your verdict gives.** File at most
+  one kit, and reply `VERDICT: next kit <name>` with exactly its name. A second
+  kit, or a kit whose name your verdict does not state, is denied by the engine
+  and your consultation ends `escalate` (DESIGN §33).
 - **One verdict line, and it is read by the engine, not by a rule.** Reply with
   exactly one of `VERDICT: next kit <name>`, `VERDICT: series complete` or
   `VERDICT: escalate <reason>`. File the kit *before* you reply `next kit`:

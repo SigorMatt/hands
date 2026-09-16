@@ -105,8 +105,11 @@ itself (`[roles.architect]`, docs/INTEGRATION.md "The architect role"). A
 playbook that sets `role` while the config has **no `[roles.architect]`** is a
 config error (DESIGN §32): `handsd` refuses to start on it, `hands doctor` fails
 its playbook row, the engine stops when it loads the file, and `hands kit check`
-fails a kit that carries it — against the config `hands` resolves, and where
-none resolves the check passes and says it could not judge.
+fails a kit that carries it — judged as `handsd` judges it at load, against the
+config `hands` resolves (`--project`, `$HANDS_PROJECT`, the only config). Since
+DESIGN §33 a role-mode kit whose config cannot be judged there (none, several and
+none named, or one that is not valid TOML) fails too, naming why: check it where
+the project's config is.
 
 `autonomous` (default `false`) says the engine may release what that architect
 files. With `architect = "role"` and `autonomous = true` (DESIGN §32):
@@ -123,6 +126,18 @@ files. With `architect = "role"` and `autonomous = true` (DESIGN §32):
   A socket client cannot set `origin: architect` (`hands send` refuses it), and
   handsd accepts `hands kit file` only while an architect consultation is
   running or the engine waits for its `next kit`;
+- handsd runs `hands kit check` itself on the zip it stores, against the
+  builder's repository, and refuses a failing kit with the check's output, so
+  the record the engine approves on says the check passed (DESIGN §33): a kit
+  that fails the check is never filed, whoever calls the socket;
+- a consultation may file at most one kit, and its name must be the one its
+  `VERDICT: next kit <name>` states (DESIGN §33). The kit is usually filed before
+  that verdict exists, so the engine decides the hold when both are known: at the
+  consultation's end, or when the kit is filed during the `next kit` wait. A
+  second kit, or a kit of another name (a reply that is not `next kit` included),
+  is denied by the engine (`decided_by: playbook`) and the consultation ends
+  `escalate`: the pipeline stops and notifies with the reason, the architect's
+  session id and the `claude --resume <id>` line;
 - `[series] kickoff` is sent to the builder when that apply, approved by the
   engine, replies `VERDICT: kit applied`.
 
@@ -415,7 +430,10 @@ its `kit_id`, under the name the verdict gives (DESIGN §32). Filed before the
 architect's job ended, there is nothing more to wait for. Otherwise the engine
 waits `kit_wait_s` (in `[series]`, default 600), accepting that kit meanwhile, and
 stops, naming the key, if none is filed; a job of origin `architect` that is
-not that apply (an `aux` job, an apply of another name) does not answer it. The
+not that apply (an `aux` job, an architect-origin hold with no kit) does not
+answer it. Under `autonomous`, a kit the consultation did file under another
+name, or a second kit, does not leave it waiting: the engine denies it and the
+consultation ends `escalate` (DESIGN §33). The
 wait is kept in memory: a daemon restarted during it forgets it. `VERDICT: series complete` stops with that reason. `VERDICT: escalate
 <reason>` stops and notifies with the reason, the architect's session id and the
 `claude --resume <id>` line. An unrecognised or missing verdict, and an

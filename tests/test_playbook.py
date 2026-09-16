@@ -66,11 +66,14 @@ from hands.playbook import (
 from hands.spool import Job, Spool, new_kit_id, now_iso
 from harness import (
     PROJECT,
+    UNCHECKED_KIT,
     architect_table,
     cli,
     config_body,
     drive,
+    kit_zip,
     ok,
+    passing_kit,
     poll,
     running_job,
     write_project,
@@ -146,6 +149,8 @@ class Recorder:
         self.enqueued: list[dict[str, Any]] = []
         self.notified: list[tuple[str, dict[str, Any]]] = []
         self.approved: list[dict[str, Any]] = []
+        #: §33: the holds the engine denied (`Api.deny_from_playbook`).
+        self.denied: list[dict[str, Any]] = []
         self.refuse: str | None = None
         #: §31: what `Api.decide_from_playbook` would raise, when it would.
         self.refuse_approve: str | None = None
@@ -174,6 +179,10 @@ class Recorder:
         self.approved.append({"job": job, "reason": reason})
         return {"id": job, "state": "queued"}
 
+    async def deny(self, *, job: str, reason: str | None = None) -> dict[str, Any]:
+        self.denied.append({"job": job, "reason": reason})
+        return {"id": job, "state": "denied"}
+
     def notify(self, title: str, payload: dict[str, Any]) -> None:
         self.notified.append((title, payload))
 
@@ -200,6 +209,7 @@ def engine_for(
         enqueue=recorder.enqueue,
         notify=recorder.notify,
         approve=recorder.approve,
+        deny=recorder.deny,
     )
     return engine, recorder
 
@@ -3174,14 +3184,21 @@ def consultation(spool: Spool, *, state: str = "running", verdict: str | None = 
 def filed_kit(
     spool: Spool, *, name: str = "m16", during: Job | None = None, **job: Any
 ) -> Job:
-    """§32: a kit's held apply exactly as `Api.kit_file` leaves it — the zip and its
-    record stored under `kits/<kit_id>/` by `Spool.store_kit`, naming the
-    consultation it was filed during, and the held builder job carrying the kit_id."""
+    """§32: a kit's held apply exactly as `Api.kit_file` leaves it — the zip stored
+    under `kits/<kit_id>/` by `Spool.store_kit` and its record (`Spool.record_kit`),
+    naming the consultation it was filed during and (§33) the passing check handsd
+    ran, and the held builder job carrying the kit_id.
+
+    By default the consultation has ended `VERDICT: next kit <name>`: §33's approval
+    waits for the verdict's name, so that is the consultation whose kit the engine
+    decides at once."""
     from hands.gates import new_gate
 
-    during = during if during is not None else consultation(spool)
+    if during is None:
+        during = consultation(spool, state="done", verdict=f"VERDICT: next kit {name}")
     kit_id = new_kit_id()
-    spool.store_kit(kit_id, name=name, data=b"PK\x05\x06" + bytes(18), consultation=during.id)
+    spool.store_kit(kit_id, name=name, data=b"PK\x05\x06" + bytes(18))
+    spool.record_kit(kit_id, name=name, consultation=during.id, check="pass")
     fields: dict[str, Any] = {
         "role": "builder",
         "context": "clear",
@@ -3438,6 +3455,12 @@ def _forged(spool: Spool, case: str) -> Job:
         )
     if case == "not a builder job":
         return filed_kit(spool, role="aux")
+    if case == "the record holds no passing check":
+        job = filed_kit(spool)
+        assert job.kit_id is not None
+        record = spool.kit_dir(job.kit_id) / "kit.json"
+        record.write_text(record.read_text().replace('"pass"', '"fail"'))
+        return job
     raise AssertionError(case)
 
 
@@ -3451,6 +3474,7 @@ FORGED = [
     "filed during no architect job",
     "a second job carries the kit_id",
     "not a builder job",
+    "the record holds no passing check",
 ]
 
 
@@ -4115,8 +4139,6 @@ def test_next_kit_waits_for_the_apply_the_architect_filed(
         "nothing filed",
         "an earlier kit",
         "a done aux job of origin architect",
-        "a denied apply of another name",
-        "a kit of another name",
         "an architect-origin hold with no kit_id",
     ],
 )
@@ -4127,7 +4149,8 @@ def test_next_kit_stops_when_its_kit_is_not_filed_within_kit_wait_s(
     origin `architect` and a denied apply named `bar` satisfied `next kit foo`. §32:
     nothing but the kit filed during the consultation under the verdict's name does,
     and when none is filed within `[series] kit_wait_s` (default 600) the pipeline
-    stops, naming the key."""
+    stops, naming the key. (A kit of another name filed during the consultation, or a
+    denied one, is §33's: it escalates at once — see the test after this one.)"""
     engine, recorder = architect_engine(tmp_home, workdir)
     engine.sleep = sleeps = Sleeps()
     spool = engine.spool
@@ -4136,11 +4159,6 @@ def test_next_kit_stops_when_its_kit_is_not_filed_within_kit_wait_s(
     architect = consultation(spool)
     if case == "a done aux job of origin architect":
         finished(spool, role="aux", origin="architect", verdict="VERDICT: x")
-    elif case == "a denied apply of another name":
-        bar = filed_kit(spool, name="bar", during=architect)
-        spool.transition(bar, "denied")
-    elif case == "a kit of another name":
-        filed_kit(spool, name="bar", during=architect)
     elif case == "an architect-origin hold with no kit_id":
         held_apply(spool, name="foo")
     architect = spool.transition(
@@ -4203,6 +4221,143 @@ def test_a_filed_kit_ends_the_wait_it_answers(tmp_home: Path, workdir: Path) -> 
 
     run(go())
     assert not engine.state.paused, engine.state.stop_reason
+
+
+# ---- §33: one kit per consultation, named as the verdict names it
+
+
+def test_a_kit_filed_while_its_consultation_runs_is_approved_only_once_its_verdict_names_it(
+    tmp_home: Path, workdir: Path
+) -> None:
+    """§33: "a consultation may file at most one kit, and its name must equal the name
+    the architect's `VERDICT: next kit <name>` states". The kit is filed while the
+    architect's job runs, before that verdict exists, so the engine does not decide its
+    hold then (no approval, no stop): it decides it when the consultation ends and both
+    are known."""
+    engine, recorder = architect_engine(tmp_home, workdir)
+    engine.sleep = sleeps = Sleeps()
+    architect = consultation(engine.spool)
+    job = filed_kit(engine.spool, name="m18", during=architect)
+    run(engine.on_event("job.held", job=job))
+    assert recorder.approved == [] and recorder.denied == []
+    assert not engine.state.paused, engine.state.stop_reason
+
+    architect = engine.spool.transition(
+        architect, "done", verdict="VERDICT: next kit m18", result="VERDICT: next kit m18"
+    )
+    end_consultation(engine, architect)
+    assert [call["job"] for call in recorder.approved] == [job.id]
+    assert recorder.approved[0]["reason"] == AUTONOMOUS_APPROVAL
+    assert recorder.denied == []
+    assert sleeps.delays == [], "the kit was filed: nothing to wait for"
+    assert not engine.state.paused, engine.state.stop_reason
+
+
+def _kits_escalated(engine: PlaybookEngine, recorder: Recorder, architect: Job) -> str:
+    """§33's escalate: stopped and notified with the reason, the architect's session id
+    and the `claude --resume` line (§31's escalate path); nothing approved."""
+    assert recorder.approved == []
+    assert engine.state.paused
+    said = strip_paths(engine.state.stop_reason or "")
+    assert "escalate" in strip_paths(said) and "§33" in strip_paths(said), said
+    assert "claude --resume sess-arch-1" in strip_paths(said), said
+    assert architect.id in said, said
+    assert [title for title, _ in recorder.notified] == ["hands: the pipeline stopped"]
+    return said
+
+
+@pytest.mark.parametrize("filed", ["both while it ran", "the second after the first's approval"])
+def test_a_second_kit_in_one_consultation_is_denied_and_the_consultation_escalates(
+    tmp_home: Path, workdir: Path, filed: str
+) -> None:
+    """REVIEW-16 should-fix 1: `foo` and `bar` filed during one consultation were both
+    approved although the verdict was `next kit foo`. §33: at most one kit. Filed while
+    the job ran, neither is decided before the verdict, and then both are denied — a
+    consultation that broke the rule releases nothing. A second kit that arrives after
+    the first was approved (a race `Api.kit_file` does not rule out) is denied when it
+    is held. Either way the consultation ends `escalate`."""
+    engine, recorder = architect_engine(tmp_home, workdir)
+    engine.sleep = Sleeps()
+    spool = engine.spool
+    if filed == "both while it ran":
+        architect = consultation(spool)
+        foo = filed_kit(spool, name="foo", during=architect)
+        bar = filed_kit(spool, name="bar", during=architect)
+        for job in (foo, bar):
+            run(engine.on_event("job.held", job=job))
+        assert recorder.approved == [] and recorder.denied == []
+        architect = spool.transition(
+            architect, "done", verdict="VERDICT: next kit foo", result="VERDICT: next kit foo"
+        )
+        end_consultation(engine, architect)
+        assert sorted(call["job"] for call in recorder.denied) == sorted([foo.id, bar.id])
+    else:
+        architect = consultation(spool, state="done", verdict="VERDICT: next kit foo")
+        foo = filed_kit(spool, name="foo", during=architect)
+        run(engine.on_event("job.held", job=foo))
+        assert [call["job"] for call in recorder.approved] == [foo.id]
+        from hands.gates import decide
+
+        assert foo.gate is not None
+        spool.transition(foo, "queued", gate=decide(foo.gate, decision="approved",
+                                                    decided_by="playbook", reason="r"))
+        recorder.approved.clear()
+        bar = filed_kit(spool, name="foo", during=architect)
+        run(engine.on_event("job.held", job=bar))
+        assert [call["job"] for call in recorder.denied] == [bar.id]
+    said = _kits_escalated(engine, recorder, architect)
+    assert "at most one" in strip_paths(said), said
+    for call in recorder.denied:
+        assert "§33" in strip_paths(call["reason"] or ""), call
+
+
+@pytest.mark.parametrize(
+    "case", ["a kit of another name", "a denied apply of another name", "no next kit verdict"]
+)
+def test_a_kit_the_verdict_does_not_name_is_denied_and_the_consultation_escalates(
+    tmp_home: Path, workdir: Path, case: str
+) -> None:
+    """§33: the kit's name "must equal the name the architect's `VERDICT: next kit
+    <name>` states, else the apply is denied by the engine and the consultation ends
+    `escalate`" — at once, without waiting `kit_wait_s` for a kit a filed one already
+    contradicts. A reply that states no `next kit` names no kit at all."""
+    engine, recorder = architect_engine(tmp_home, workdir)
+    engine.sleep = sleeps = Sleeps()
+    spool = engine.spool
+    architect = consultation(spool)
+    bar = filed_kit(spool, name="bar", during=architect)
+    run(engine.on_event("job.held", job=bar))
+    if case == "a denied apply of another name":
+        spool.transition(bar, "denied")
+    verdict = "VERDICT: series complete" if case == "no next kit verdict" else (
+        "VERDICT: next kit foo"
+    )
+    architect = spool.transition(architect, "done", verdict=verdict, result=verdict)
+    end_consultation(engine, architect)
+    assert sleeps.delays == [], "a contradicted verdict waits for nothing"
+    expected = [] if case == "a denied apply of another name" else [bar.id]
+    assert [call["job"] for call in recorder.denied] == expected
+    said = _kits_escalated(engine, recorder, architect)
+    assert "'bar'" in strip_paths(said), said
+
+
+def test_outside_autonomy_the_engine_denies_nothing_and_the_hold_is_the_humans(
+    tmp_home: Path, workdir: Path
+) -> None:
+    """The engine decides an architect's hold only where it approves one — role mode
+    with `autonomous` (§31, §32). Elsewhere a kit of another name is left held for the
+    human, as every hold is there, and the consultation's end is what it was."""
+    body = ARCHITECT_BOOK.replace("autonomous = true", "autonomous = false")
+    engine, recorder = architect_engine(tmp_home, workdir, body)
+    engine.sleep = Sleeps()
+    architect = consultation(engine.spool)
+    filed_kit(engine.spool, name="bar", during=architect)
+    architect = engine.spool.transition(
+        architect, "done", verdict="VERDICT: next kit foo", result="VERDICT: next kit foo"
+    )
+    end_consultation(engine, architect)
+    assert recorder.approved == [] and recorder.denied == []
+    assert "kit_wait_s" in strip_paths(engine.state.stop_reason or "")
 
 
 def test_series_complete_stops_with_that_reason(tmp_home: Path, workdir: Path) -> None:
@@ -4447,31 +4602,55 @@ E2E_BOOK = ARCHITECT_BOOK.replace(
 
 #: What the scripted architect runs in place of `hands kit file <dir>`: the call
 #: that command makes once its client-side check passes — the daemon's `kit_file`
-#: with the kit's name and the zip's bytes, over the same socket (§32). The daemon
-#: mints the kit_id, stores the zip, and files the held apply of origin architect.
+#: with the kit's name and the zip's bytes, over the same socket (§32) — made here
+#: with no client-side check at all, as any socket client can (REVIEW-16 blocker 1).
+#: One call per `name=path` argument, in order; a refusal is written beside the zip
+#: as `<name>.refused`. The daemon checks the zip (§33), mints the kit_id, stores
+#: it, and files the held apply of origin architect.
 FILE_APPLY = """
-import base64, io, sys, zipfile
+import base64, sys
+from pathlib import Path
 from hands.cli import call
-buffer = io.BytesIO()
-with zipfile.ZipFile(buffer, "w") as archive:
-    archive.writestr("meta/BUILDER-17-PROMPT.md", "# mission 17\\n")
-    archive.writestr("KIT.md", "plan: mission 17 kit\\n")
-params = {"name": sys.argv[3], "zip": base64.b64encode(buffer.getvalue()).decode()}
-call(sys.argv[1], "kit_file", params, project=sys.argv[2])
+for pair in sys.argv[3:]:
+    name, _, path = pair.partition("=")
+    params = {"name": name, "zip": base64.b64encode(Path(path).read_bytes()).decode()}
+    try:
+        call(sys.argv[1], "kit_file", params, project=sys.argv[2])
+    except Exception as exc:
+        Path(path).with_suffix(".refused").write_text(str(exc))
 """
 
 
-def file_apply_argv(tmp_home: Path, name: str = "mission-17-kit") -> list[str]:
+def file_apply_argv(
+    tmp_home: Path, kits: dict[str, dict[str, str]] | None = None
+) -> list[str]:
+    """The scripted architect's `exec`: file each of `kits` (name → entries) over the
+    socket, in order; by default one kit, `mission-17-kit`, that passes the check."""
     import sys
 
+    kits = kits if kits is not None else {"mission-17-kit": passing_kit()}
+    where = tmp_home / "filed-kits"
+    where.mkdir(exist_ok=True)
+    pairs = []
+    for name, files in kits.items():
+        path = where / f"{name}.zip"
+        path.write_bytes(kit_zip(files))
+        pairs.append(f"{name}={path}")
     return [
         sys.executable,
         "-c",
         FILE_APPLY,
         str(tmp_home / ".hands" / "handsd.sock"),
         PROJECT,
-        name,
+        *pairs,
     ]
+
+
+def refusals(tmp_home: Path) -> dict[str, str]:
+    """The `kit_file` refusals `FILE_APPLY` wrote, by kit name."""
+    return {
+        path.stem: path.read_text() for path in sorted((tmp_home / "filed-kits").glob("*.refused"))
+    }
 
 
 def fake_result(text: str) -> str:
@@ -4556,7 +4735,9 @@ def test_end_to_end_next_kit_waits_for_the_apply_the_architect_filed(
         assert isinstance(kit_id, str) and len(kit_id) == 16, kit_id
         assert daemon.spool.read_kit_record(kit_id) == {
             "kit_id": kit_id, "name": "mission-17-kit", "consultation": architect["id"],
+            "check": "pass",  # §33: handsd's own check of the stored bytes
         }
+        assert refusals(tmp_home) == {}
         assert (daemon.spool.kit_dir(kit_id) / "mission-17-kit.zip").is_file()
         assert apply_job["created"] > architect["started"]
         gate = apply_job["gate"]
@@ -4634,13 +4815,8 @@ def test_end_to_end_a_kit_filed_after_the_architect_ended_is_waited_for(
 
     async def body(daemon: Daemon) -> None:
         import base64
-        import io
-        import zipfile
 
-        buffer = io.BytesIO()
-        with zipfile.ZipFile(buffer, "w") as archive:
-            archive.writestr("meta/BUILDER-17-PROMPT.md", "# mission 17\n")
-        data = base64.b64encode(buffer.getvalue()).decode()
+        data = base64.b64encode(kit_zip(passing_kit())).decode()
         filed: list[dict[str, Any]] = []
 
         async def sleep(delay: float) -> None:
@@ -4670,6 +4846,116 @@ def test_end_to_end_a_kit_filed_after_the_architect_ended_is_waited_for(
         assert record is not None and record["consultation"] == rows[1]["id"]
 
     drive(body)
+
+
+def test_acceptance_a_kit_that_fails_hands_kit_check_is_never_engine_approved(
+    tmp_home: Path, workdir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """REVIEW-16 blocker 1 (H-035), the reviewer's probe: a real daemon, fake_claude and
+    a role + autonomous playbook. While the architect job runs, a raw socket `kit_file`
+    — no client-side check — files `foo` and `bar`, each carrying the guard, its
+    settings, DESIGN.md and a playbook and no brief; the architect replies `VERDICT:
+    next kit foo`. Then both were `decided_by=playbook`. §33: handsd runs the check on
+    the bytes it stores and refuses each with the check's output, so no apply exists
+    for the engine to approve: no builder job, no gate decision, and the wait for
+    `foo` ends in a stop."""
+    from hands.kit import check_kit
+
+    architect_project(tmp_home, workdir)
+    probe = file_apply_argv(tmp_home, {"foo": UNCHECKED_KIT, "bar": UNCHECKED_KIT})
+    for name in ("foo", "bar"):  # the kits really fail `hands kit check` here
+        assert not check_kit(tmp_home / "filed-kits" / f"{name}.zip", workdir).ok
+    script(tmp_home, monkeypatch, [{"result": "VERDICT: next kit foo", "exec": probe}])
+
+    async def body(daemon: Daemon) -> None:
+        async def sleep(delay: float) -> None:
+            return None
+
+        daemon.playbook.sleep = sleep
+        review = await ok("send", "--role", "aux", "--context", "clear", fake_result(REVIEW))
+        await ok("wait", review["id"])
+        state = await wait_for_stop()
+
+        rows = sorted((await ok("jobs", "-n", "50"))["jobs"], key=lambda row: row["id"])
+        assert [(row["role"], row["origin"]) for row in rows] == [
+            ("aux", "cli"),
+            (ARCHITECT, "playbook"),
+        ], "a kit that fails the check was filed"
+        assert await _events("gate.decided") == []
+        assert await _events("job.held") == []
+        refused = refusals(tmp_home)
+        assert sorted(refused) == ["bar", "foo"], refused
+        for said in refused.values():
+            assert "hands kit check" in strip_paths(said) and "FAIL brief" in strip_paths(said)
+        kits = daemon.spool.root / "kits"
+        assert not kits.exists() or list(kits.iterdir()) == [], "a refused kit was kept"
+        assert "kit_wait_s" in strip_paths(state["stop_reason"]), state["stop_reason"]
+
+    drive(body)
+
+
+def _denied_by_the_engine(row: dict[str, Any]) -> None:
+    assert row["state"] == "denied", row["state"]
+    gate = row["gate"]
+    assert gate["decision"] == "denied" and gate["decided_by"] == "playbook", gate
+    assert "§33" in strip_paths(gate["decided_reason"]), gate
+
+
+@pytest.mark.parametrize("case", ["two kits", "a kit of another name"])
+def test_end_to_end_a_kit_the_rule_forbids_is_denied_and_the_consultation_escalates(
+    tmp_home: Path, workdir: Path, monkeypatch: pytest.MonkeyPatch, case: str
+) -> None:
+    """REVIEW-16 should-fix 1, end to end with kits that pass the check: one
+    consultation files `foo` and `bar` and replies `VERDICT: next kit foo` (both were
+    approved), or files only `bar` under that verdict. §33: denied by the engine
+    (`decided_by: playbook`), and the consultation ends `escalate` — the stop and its
+    one notification carry the reason, the architect's session id and the `claude
+    --resume` line. Nothing is applied and no kickoff follows."""
+    architect_project(tmp_home, workdir, ntfy=True)
+    kits = {"foo": passing_kit(), "bar": passing_kit()} if case == "two kits" else {
+        "bar": passing_kit()
+    }
+    script(tmp_home, monkeypatch,
+           [{"result": "VERDICT: next kit foo", "exec": file_apply_argv(tmp_home, kits)}])
+    posts = TextPosts()
+
+    async def scenario() -> None:
+        daemon = Daemon(load_config(PROJECT))
+        daemon.notifier.post = posts  # before start(): no test may reach a network
+        await daemon.start()
+        try:
+            await asyncio.wait_for(body(daemon), 60)
+        finally:
+            await daemon.stop()
+
+    async def body(daemon: Daemon) -> None:
+        review = await ok("send", "--role", "aux", "--context", "clear", fake_result(REVIEW))
+        await ok("wait", review["id"])
+        state = await wait_for_stop()
+        await daemon.notifier.drain()
+
+        assert refusals(tmp_home) == {}, "the kits pass the check; handsd filed them"
+        rows = sorted((await ok("jobs", "-n", "50"))["jobs"], key=lambda row: row["id"])
+        assert [(row["role"], row["origin"]) for row in rows] == [
+            ("aux", "cli"),
+            (ARCHITECT, "playbook"),
+            *[("builder", "architect")] * len(kits),
+        ], "a kit was applied, or a kickoff followed"
+        architect = await ok("result", rows[1]["id"])
+        for row in rows[2:]:
+            _denied_by_the_engine(await ok("result", row["id"]))
+        said = strip_paths(state["stop_reason"])
+        assert "escalate" in strip_paths(said) and "§33" in strip_paths(said), said
+        assert ("at most one" if case == "two kits" else "'bar'") in said, said
+        session = architect["session_id"]
+        assert session and f"claude --resume {session}" in said, said
+        stops = [message for title, message in posts.sent if title == "hands: the pipeline stopped"]
+        assert len(stops) == 1, posts.sent
+        assert f"claude --resume {session}" in strip_paths(stops[0])
+        assert [e for e in await _events("gate.decided")
+                if e["payload"]["decision"] == "approved"] == []
+
+    asyncio.run(scenario())
 
 
 def test_end_to_end_series_complete_stops_with_that_reason(

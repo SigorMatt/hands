@@ -134,3 +134,94 @@ def open_consultation(daemon: Daemon) -> Job:
 def close_consultation(daemon: Daemon, job: Job) -> Job:
     daemon._running["architect"] = None
     return daemon.spool.transition(job.id, "done")
+
+
+# ------------------------------------------------ a kit that passes the check (§33)
+
+#: §33: handsd runs `hands kit check` on every kit `kit_file` stores, against the
+#: builder's repository, and refuses a failing one. These are the entries of a kit
+#: that passes it against any repository — its own brief, its own playbook (phone
+#: mode, so no config is judged), and the review protocol that playbook's send names
+#: — so a test that files a kit over the socket files one handsd accepts.
+PASSING_BRIEF = """\
+# BUILDER-17-PROMPT — demo mission 17
+
+Kickoff line (the only way this mission is started or resumed):
+
+    Read meta/BUILDER-17-PROMPT.md and execute the mission below its divider.
+
+---
+
+- Your final reply begins with exactly one of: `VERDICT: mission 17
+  finished` | `VERDICT: question <one line>`.
+"""
+
+PASSING_PLAYBOOK = """\
+version = 1
+
+[series]
+name = "demo-17"
+kickoff = "Read meta/BUILDER-17-PROMPT.md and execute the mission below its divider."
+
+[[rule]]
+on = "builder.done"
+verdict = '^VERDICT: mission (?P<n>\\d+) finished'
+then = "send"
+role = "aux"
+context = "clear"
+prompt = "Read meta/REVIEW-PROTOCOL.md, review mission {n}, commit meta/reviews/REVIEW-{n}.md."
+
+[[rule]]
+on = "builder.done"
+verdict = '^VERDICT: kit applied'
+then = "notify"
+message = "Kit applied"
+
+[[rule]]
+on = "builder.done"
+verdict = '^VERDICT: question'
+then = "stop"
+message = "The builder has a question"
+
+[[rule]]
+on = "aux.done"
+verdict = '^VERDICT: review mission (?P<n>\\d+) blockers=0'
+then = "stop"
+message = "Mission {n} reviewed clean"
+"""
+
+PASSING_PROTOCOL = (
+    "# REVIEW-PROTOCOL\n\nYour reply's first line is exactly:\n\n"
+    "    VERDICT: review mission N blockers=<k> should-fix=<m>\n"
+)
+
+
+def passing_kit() -> dict[str, str]:
+    """The entries of a kit `hands kit check` passes against any repository."""
+    return {
+        "meta/BUILDER-17-PROMPT.md": PASSING_BRIEF,
+        "PLAYBOOK.toml": PASSING_PLAYBOOK,
+        "meta/REVIEW-PROTOCOL.md": PASSING_PROTOCOL,
+        "KIT.md": "plan: mission 17 kit\n",
+    }
+
+
+#: REVIEW-16 blocker 1's kit: the guard, its settings, DESIGN.md and a playbook, and
+#: no brief. `hands kit check` fails it (playbook, brief, verdicts, wording).
+UNCHECKED_KIT: dict[str, str] = {
+    ".claude/hooks/bash_guard.py": "# neutered\n",
+    ".claude/settings.json": "{}\n",
+    "DESIGN.md": "# DESIGN\n",
+    "PLAYBOOK.toml": PASSING_PLAYBOOK,
+}
+
+
+def kit_zip(files: dict[str, str]) -> bytes:
+    """The zip of `files`, each entry at its repository path."""
+    import zipfile
+
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        for name, text in files.items():
+            archive.writestr(name, text)
+    return buffer.getvalue()

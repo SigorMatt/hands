@@ -66,4 +66,8 @@ Rules:
     and read `docs/ARCHITECT-HANDBOOK.md` and `templates/`. Before emitting
     any kit, install hands in the sandbox (`uv tool install
     git+https://github.com/SigorMatt/hands`) and run `hands kit check` on
-    it; a kit that fails the check is not sent.
+    it; a kit that fails the check is not sent. One exception: a kit whose
+    playbook sets `[series] architect = "role"` (the switch point) is judged
+    against the project's hands config, which the sandbox does not have, so
+    its playbook check fails there (DESIGN §33); say so, and the human runs
+    `hands kit check` on it at the laptop before sending it.
