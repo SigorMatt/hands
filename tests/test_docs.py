@@ -141,17 +141,48 @@ def test_the_playbook_doc_says_a_review_reads_from_the_last_review_commit() -> N
         assert must in prose, f"docs/PLAYBOOK.md's prose does not say {must!r} (§23)"
 
 
-def test_the_playbook_doc_maps_the_mission_8_detectors_to_stop_and_says_the_group_is_weaker(
-) -> None:
-    """§24: both detectors are `stop` rules, and the process-group fallback is
-    weaker than the scope."""
+def test_the_playbook_doc_maps_the_mission_8_detectors_and_says_the_group_is_weaker() -> None:
+    """§24, §32: the prose shows `monitor.orphan_processes` as a `stop` rule and
+    `monitor.task_killed` as a `notify` rule, says why (the detector cannot tell a
+    harness reap, a `TaskStop` or a reaped long foreground command apart; the job
+    that ends `failed` is what stops), and the process-group fallback is weaker
+    than the scope."""
     doc = (ROOT / "docs" / "PLAYBOOK.md").read_text(encoding="utf-8")
     prose = flattened(doc.split("## The example (DESIGN §10, verbatim)")[0])
-    for event in ("monitor.task_killed", "monitor.orphan_processes"):
-        assert f'on = "{event}" then = "stop"' in prose, f"no stop rule shown for {event}"
+    assert 'on = "monitor.orphan_processes" then = "stop"' in prose
+    assert 'on = "monitor.task_killed" then = "notify"' in prose
+    assert 'on = "monitor.task_killed" then = "stop"' not in prose
+    for must in (
+        "a long foreground command the harness moved to the background and then reaped",
+        "a job that ends `failed` is what stops",
+        "H-034",
+    ):
+        assert must in prose, f"docs/PLAYBOOK.md's prose does not say {must!r} (§32)"
     assert "which is weaker" in prose
     assert "`setsid` has left the group and is never killed" in prose
     assert "listed with `killed: false` while it carries the job's `HANDS_JOB` mark" in prose
+
+
+#: §32's docs sweep: sentences that said a killed task stops the pipeline, each
+#: in the file that carried it before mission 16 U5.
+TASK_KILLED_STOP_SAYINGS = (
+    ("README.md", "`PLAYBOOK.toml` stops on both"),
+    ("docs/INTEGRATION.md", "the example playbook maps the event to `stop`"),
+    ("docs/ARCHITECT-HANDBOOK.md", "`task_killed`/`orphan_processes` → `stop`"),
+    ("docs/PLAYBOOK.md", "DESIGN §24 puts both in the example playbook"),
+)
+
+
+def test_no_doc_still_says_a_killed_task_stops_the_series() -> None:
+    """§32: `monitor.task_killed` maps to `notify` in this repository's playbook and
+    both templates; the docs that said it stops say `notify` now. Only the sentences
+    listed are checked, not every phrasing a doc could use."""
+    for name, said in TASK_KILLED_STOP_SAYINGS:
+        text = flattened((ROOT / name).read_text(encoding="utf-8"))
+        assert said not in text, f"{name} still says {said!r}"
+    for name in ("README.md", "docs/INTEGRATION.md", "docs/ARCHITECT-HANDBOOK.md"):
+        text = flattened((ROOT / name).read_text(encoding="utf-8"))
+        assert "`notify`" in text and "task_killed" in text, name
 
 
 def test_both_docs_say_the_task_killed_cause_is_always_unknown() -> None:

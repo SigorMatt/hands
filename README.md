@@ -113,8 +113,9 @@ releases it.
 Besides stalls and tripwires, the monitor files `monitor.task_killed` when a
 task inside a role job is killed, and `monitor.orphan_processes` when a job's
 processes outlive its `claude -p` (they are listed, then killed). This
-repository's `PLAYBOOK.toml` stops on both; `docs/PLAYBOOK.md` says what each
-means.
+repository's `PLAYBOOK.toml` and both templates stop on leftover processes and
+only `notify` on a killed task, since the stream cannot say who killed it; a job
+that ends `failed` is what stops. `docs/PLAYBOOK.md` says what each means.
 
 ## Optional: the phone and the who view
 

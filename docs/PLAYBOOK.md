@@ -193,12 +193,18 @@ happens and files one event per task, with its `task_id` and its command line
 (`command`, taken from the `Bash` call that started it; empty when that call is
 not in the stream). The stream does not say who killed the task: the harness
 reaping it, the agent's own `TaskStop` and a killed parent agent look the same,
-so the event's `cause` is always `unknown` (DESIGN §25). Work the job was
-waiting on did not finish, so the rule is `stop`:
+so the event's `cause` is always `unknown` (DESIGN §25). Nor can it tell any of
+those from a long foreground command the harness moved to the background and then
+reaped — something a healthy job can live through. A killed task is therefore
+something to look at, not a verdict on the job: the rule is `notify` (DESIGN §32).
+If the task mattered, the job does not end well, and a job that ends `failed` is
+what stops — `aux.failed` is `stop`, and `builder.failed` is `resume` until
+`max_resumes` is used up, then `stop`:
 
     [[rule]]
     on = "monitor.task_killed"
-    then = "stop"
+    then = "notify"
+    message = "A task inside a role job was killed"
 
 `monitor.orphan_processes` (DESIGN §24) means processes a role job started were
 still alive after its `claude -p` exited. hands files one event per job, only
@@ -219,8 +225,11 @@ one is in force. Work the job left running did not finish with it, so the rule i
     then = "stop"
 
 An event with no matching rule stops anyway; each rule says it on purpose.
-DESIGN §24 puts both in the example playbook, and this repository's own
-`PLAYBOOK.toml` carries both.
+This repository's own `PLAYBOOK.toml` and both templates carry both rules,
+`monitor.task_killed` as `notify` and `monitor.orphan_processes` as `stop`. The
+verbatim copy of DESIGN §10's example at the end of this file still maps
+`monitor.task_killed` to `stop`, as §10 does today; finding H-034 asks for §10 to
+follow §32, and until it does the copy stays byte for byte.
 
 `quiet_hours` is retired: a playbook whose `[limits]` sets it is refused at
 load with a message saying so. Notifications are never delayed (§11).

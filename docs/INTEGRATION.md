@@ -911,7 +911,9 @@ Whichever of the two decides, hands also reads every role job's stream-json
 `monitor.task_killed` with the task's command line, once per task (§24). It
 needs no script and no flag. The stream cannot tell a harness reap from the
 agent's own `TaskStop` (or a killed parent agent), so the event's `cause` is
-always `unknown` (§25), and the example playbook maps the event to `stop`.
+always `unknown` (§25). Nor can it tell those from a long foreground command
+the harness backgrounded and reaped, so this repository's playbook and both
+templates map the event to `notify`; a job that ends `failed` is what stops (§32).
 
 Each `claude -p` also runs isolated per job (§24). When `systemd-run --user
 --scope` can start a scope on this machine (systemd-run and systemctl on PATH,

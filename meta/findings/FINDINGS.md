@@ -1710,3 +1710,59 @@ tables. §30's condition stands: the driver and architect roles are enabled
 after a review finds no hole in this language.
 
 Status: resolved by DESIGN v3.15 (code: mission 16 U1)
+
+---
+
+## H-034 — §10's example playbook still maps `monitor.task_killed` to `stop`; §32 says `notify`
+
+Severity: low · Component: DESIGN §10 ("Example (spanweave audit-fix series)")
+and §24 ("Mission 8, the detectors", last bullet) against §32's last paragraph;
+`tests/fixtures/playbook_example.toml`; the verbatim block at the end of
+`docs/PLAYBOOK.md`
+Filed by: mission 16 U5, from the unit brief (playbook severity).
+
+Symptom. DESIGN v3.15 §32 says: "`monitor.task_killed`: the detector cannot
+tell a reap from a `TaskStop` or from the harness backgrounding a long
+foreground command and reaping it; the example playbook and this repository's
+map it to `notify`, and a job that ends `failed` is what stops." §10's example
+still ends with `on = "monitor.task_killed"` → `then = "stop"`, and §24 still
+says "The example playbook maps `monitor.task_killed` and
+`monitor.orphan_processes` to `stop`". The example's two copies,
+`tests/fixtures/playbook_example.toml` and the block under "## The example
+(DESIGN §10, verbatim)" in `docs/PLAYBOOK.md`, are pinned byte for byte to §10
+by `tests/test_playbook.py::test_the_fixture_is_section_10s_example_verbatim` and
+`tests/test_docs.py::test_the_playbook_doc_carries_the_section_10_example_verbatim`,
+and builders do not edit DESIGN.md — the same shape as H-016.
+
+What U5 did instead. This repository's `PLAYBOOK.toml` and both templates map
+the event to `notify` (the kit had already changed them); a test loads each
+through the real loader and pins `notify`, `aux.failed` → `stop`,
+`builder.failed` → `resume` with `max_resumes` set, and drives each file through
+the engine. `docs/PLAYBOOK.md`'s prose shows the `notify` rule, says why, and
+says the verbatim copy of §10 still says `stop` until this finding is resolved.
+The two copies of §10's example are unchanged, and
+`test_the_example_parses_into_the_rules_of_section_10` still lists
+`("monitor.task_killed", "stop")`.
+
+Direction, for the architect. In §10's example replace
+
+    [[rule]]
+    on = "monitor.task_killed"
+    then = "stop"
+
+with
+
+    [[rule]]
+    on = "monitor.task_killed"
+    then = "notify"
+    message = "A task inside a role job was killed"
+
+(a `notify` rule needs a message, or the loader refuses it), and in §24 read "maps
+`monitor.orphan_processes` to `stop`" (the §32 paragraph covers the other). The
+next builder copies the block into the fixture and the doc, changes the rule list
+in `test_the_example_parses_into_the_rules_of_section_10`, adjusts the sentence
+after the verbatim block ("killed tasks and orphan processes stop and call you"),
+and drops the H-034 sentence from `docs/PLAYBOOK.md`'s prose and its pin in
+`tests/test_docs.py`.
+
+Status: open

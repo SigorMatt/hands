@@ -480,8 +480,8 @@ def test_the_events_and_actions_are_exactly_section_10s() -> None:
         "driver.limited",
         "monitor.stall",
         "monitor.tripwire",
-        "monitor.task_killed",  # §24: mission 8's detector, mapped to `stop`
-        "monitor.orphan_processes",  # §24: the other one, mapped to `stop` too
+        "monitor.task_killed",  # §24: mission 8's detector; §32 maps it to `notify`
+        "monitor.orphan_processes",  # §24: the other one, mapped to `stop`
         "job.held",
         "job.denied",
     )
@@ -1009,8 +1009,9 @@ def test_a_monitor_tripwire_stops_the_pipeline(tmp_home: Path, workdir: Path) ->
 
 
 def test_a_task_killed_rule_loads_and_stops_the_pipeline(tmp_home: Path, workdir: Path) -> None:
-    """§24: the example playbook maps `monitor.task_killed` to `stop`, so the
-    loader accepts the name and the event reaches the rule."""
+    """§24: the loader accepts `monitor.task_killed` and the event reaches the rule.
+    A playbook may still map it to `stop`; §32's shipped playbooks map it to
+    `notify` (pinned below, over `SHIPPED_PLAYBOOKS`)."""
     body = EXAMPLE + '\n[[rule]]\non = "monitor.task_killed"\nthen = "stop"\n'
     book = parse_playbook(body, path=workdir / "PLAYBOOK.toml")
     assert (book.rules[-1].on, book.rules[-1].then) == ("monitor.task_killed", "stop")
@@ -3022,6 +3023,64 @@ def test_no_shipped_playbook_notifies_on_job_held() -> None:
     # — and the hold's own notification, with buttons, is still published.
     root = tomllib.loads(SHIPPED_PLAYBOOKS[0].read_text(encoding="utf-8"))
     assert [r["on"] for r in root["rule"] if r["on"] == "job.denied"] == ["job.denied"]
+
+
+@pytest.mark.parametrize("path", SHIPPED_PLAYBOOKS, ids=lambda path: path.name)
+def test_each_shipped_playbook_notifies_a_killed_task_and_stops_a_failed_job(path: Path) -> None:
+    """§32: "the example playbook and this repository's map it to `notify`, and a
+    job that ends `failed` is what stops". Read through the real loader (the
+    committed copy): `monitor.task_killed` has exactly one rule, `notify` with a
+    message; `aux.failed` is `stop`; `builder.failed` is `resume`, bounded by a
+    `[limits] max_resumes` the file sets, which stops once used up."""
+    book = load_playbook(path)
+    assert book is not None, f"{path} is missing"
+
+    def thens(event: str) -> list[str]:
+        return [rule.then for rule in book.rules if rule.on == event and rule.verdict is None]
+
+    killed = [rule for rule in book.rules if rule.on == "monitor.task_killed"]
+    assert [rule.then for rule in killed] == ["notify"], (path.name, killed)
+    assert killed[0].message, "a notify needs a message"
+    assert thens("aux.failed") == ["stop"], path.name
+    assert thens("builder.failed") == ["resume"], path.name
+    assert isinstance(book.max_resumes, int), f"{path.name} leaves max_resumes unbounded"
+    assert thens("monitor.orphan_processes") == ["stop"], path.name
+
+
+@pytest.mark.parametrize("path", SHIPPED_PLAYBOOKS, ids=lambda path: path.name)
+def test_each_shipped_playbook_under_the_engine_keeps_going_on_a_killed_task(
+    path: Path, tmp_home: Path, workdir: Path
+) -> None:
+    """§32 through the engine: each shipped file, committed in a scratch repository,
+    notifies on `monitor.task_killed` without pausing; the builder job that then
+    ends `failed` with its resumes used up stops the pipeline, and so does an
+    `aux` job that ends `failed`."""
+    engine, recorder = engine_for(tmp_home, workdir, body=path.read_text(encoding="utf-8"))
+    job = engine.spool.create_job(role="builder", context="clear", prompt="p", origin="cli")
+    run(engine.on_job_start(job))
+    payload = {"job": job.id, "task_id": "bg1", "command": "sleep 600", "block": "TASK_KILLED"}
+    run(engine.on_event("monitor.task_killed", payload=payload))
+    assert engine.pipeline()["paused"] is False, engine.pipeline()["stop_reason"]
+    assert len(recorder.notified) == 1, recorder.notified
+    assert recorder.sent == [] and recorder.enqueued == []
+
+    assert engine.playbook is not None and engine.playbook.max_resumes is not None
+    engine.spool.update_role("builder", consecutive_resumes=engine.playbook.max_resumes)
+    failed = finished(engine.spool, state="failed")
+    run(engine.on_job_start(failed))
+    run(engine.on_job(failed))
+    assert recorder.enqueued == []
+    assert engine.pipeline()["paused"] is True
+    assert "max_resumes" in strip_paths(engine.pipeline()["stop_reason"])
+
+    run(engine.resume())  # the human's `hands resume`
+    assert engine.pipeline()["paused"] is False
+    aux = finished(engine.spool, role="aux", state="failed")
+    run(engine.on_job_start(aux))
+    run(engine.on_job(aux))
+    assert recorder.enqueued == [] and recorder.sent == []
+    assert engine.pipeline()["paused"] is True
+    assert strip_paths(engine.pipeline()["stop_reason"]) == "Aux job failed"
 
 
 # ------------------------------- §31: series mode and autonomy (mission 15 U4)

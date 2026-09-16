@@ -146,7 +146,8 @@ default 2; docs/PLAYBOOK.md "Consult").
 Rules are tried in order; the first match wins; an event with no matching
 rule stops. So: specific verdict rules first, then a catch-all `stop` per
 `*.done` event, then process rules (`orphaned`/`failed` → `resume`,
-`task_killed`/`orphan_processes` → `stop`), then `job.held`/`job.denied` →
+`orphan_processes` → `stop`, `task_killed` → `notify`, since a job that ends
+`failed` is what stops), then `job.held`/`job.denied` →
 `notify`.
 
 `[series]` holds two keys: `name`, the series' name, and `kickoff`, the
