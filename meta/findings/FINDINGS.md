@@ -1632,4 +1632,15 @@ a test that both roles are refused. If instead a laptop send is meant to stay
 possible, say so in §31 and the asymmetry is closed by a sentence rather than a
 line of code.
 
-Status: open (found by mission 15 U6; no code changed)
+Correction appended 2026-09-16 (mission 15 orchestrator). The memo's "simplest"
+direction is not simple: `meta/BACKLOG.md` "Mission 16 — talking to the
+architect" item 1 is `reply <secret> <text>` on `cmd_topic`, "delivered as
+`hands send --role architect --context keep` to the architect's last session".
+So a send to the architect is the *next* mission's design, and extending
+`Api.send`'s driver refusal to both consult roles would have to be undone by it.
+The two candidate resolutions are therefore: refuse a send to the architect
+except from the phone's `reply` origin (which mission 16 builds), or leave the
+laptop send as the human's own authority and say so in §31. Mission 15 chose
+neither and left the asymmetry, which is why this stays open.
+
+Status: open (found by mission 15 U6; no code changed; it meets mission 16)

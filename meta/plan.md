@@ -16,42 +16,44 @@ kit)`).
       `[series] kickoff` plainly names a file the builder's cwd lacks;
       `spool.ORIGINS` gains `architect`, which DESIGN v3.14 §6 already lists
       and the base commit left red
-- [ ] U1 The guard's command table (§31; blocker 1) — `ALLOWED_FIRST_WORDS`
+- [x] U1 The guard's command table (§31; blocker 1) d32f409 — `ALLOWED_FIRST_WORDS`
       replaced by a per-command option table in both modes; the reviewer's
       three probes and a regenerated 10k fuzz corpus over the removed words
       blocked; every command in driver/CLAUDE.md and the two self-test tables
       still allowed
-- [ ] U2 Notifications and doctor (§31; blocker 2; should-fix 1–6) — spacing on
+- [x] U2 Notifications and doctor (§31; blocker 2; should-fix 1–6) 6b27320 — spacing on
       every branch with the ordinary-branch (`default_why`) test; one
       daemon-start notification listing re-minted holds; the limit pair
       documented as implemented; doctor judges every Bash `PreToolUse` hook;
       empty project name refused; the `max_consults` anchor's fields read back;
       the bare-name false-positive row pinned
-- [ ] U3 Architect guard mode and `hands kit file` (§31) — `HANDS_ROLE=architect`
+- [x] U3 Architect guard mode and `hands kit file` (§31) adf3d7a — `HANDS_ROLE=architect`
       in driver/hooks/bash_guard.py, the `--write` entry point,
       architect/settings.json verified against the CLI; `hands kit file <zip>`
       checks the kit against the role's clone, refuses a failing kit, else
       files the held apply with `origin: architect`
-- [ ] U4 Series mode and autonomy (§31) — `[series] architect`, `autonomous`,
+- [x] U4 Series mode and autonomy (§31) c9ccc18 — `[series] architect`, `autonomous`,
       `gate_failures`, `escalate_on`, `[limits] max_architect_consults`;
       engine approval of `origin: architect` holds as `decided_by: playbook`;
       the kickoff sent after `VERDICT: kit applied` by an engine rule;
       `architect = "role"` without `[roles.architect]` is a config error
-- [ ] U5 Consult for the architect (§31) — `consult` with `role = "architect"`
+- [x] U5 Consult for the architect (§31) 9ed931b — `consult` with `role = "architect"`
       on `aux.done`; the prompt carries the event, the review's verdict line
       and its Blockers/Should-fix sections verbatim, the roadmap file and the
       instruction; `next kit` | `series complete` | `escalate` matched;
       escalation notification with the session id and the `claude --resume`
       line; `max_architect_consults` per series; `budget-exhausted` is the
       engine's
-- [ ] U6 Docs and the templates — docs/INTEGRATION.md (the architect role, the
+- [x] U6 Docs and the templates f798521 — docs/INTEGRATION.md (the architect role, the
       switch point, the two-project note), docs/PLAYBOOK.md (new keys and
       events), both templates gain a commented architect block,
       docs/ARCHITECT-HANDBOOK.md §12 role-mode onboarding, `hands doctor`
       reports the architect role
-- [ ] U7 This repository's playbook — `[series] kickoff` becomes BUILDER-16's
+- [x] U7 This repository's playbook fd1a2dd — `[series] kickoff` becomes BUILDER-16's
       line; `architect = "phone"` stated explicitly; nothing else
-- [ ] U8 Final report (meta/FINAL-REPORT-15.md)
+- [x] U8 Final report (meta/FINAL-REPORT-15.md) (the commit that carries this
+      line) — drafted under meta/drafts/, moved in by this commit, which also
+      carries the mission's meta bookkeeping; mission 15 finished
 
 Review items by unit. REVIEW-14 blocker 1 → U1; blocker 2 → U2; should-fix 1,
 2 → U2; should-fix 3, 4, 5, 6 → U2; should-fix 7 → U0.
@@ -92,3 +94,11 @@ which U2's bare-name row could move: U7 after U2. U2 is independent of U1.
 
 Findings. H-028 and H-029 filed by U0. H-027 stays open (it is the architect's
 to resolve in DESIGN). H-001 and H-009 stay open.
+
+Findings filed during the mission, beyond U0's two: H-030 (U3 — the architect
+cannot name a zip's entries as repository paths with §31's words; open, and it
+blocks an autonomous series), H-031 (U4 — DESIGN §6's `decided_by` vocabulary
+is three values and §31 needs four; open), H-032 (U6 — `Api.send` refuses
+`--role driver` by name and not `--role architect`; open, and it meets mission
+16's `reply`). All three are the architect's to resolve; none was improvised
+around.
