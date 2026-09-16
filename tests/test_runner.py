@@ -1462,3 +1462,40 @@ def test_a_driver_job_carries_its_clone_as_hands_clone(
     assert asyncio.run(runner.run(job)).result == expected
     # a builder job does not get it from hands (it inherits handsd's own)
     assert send(runner, spool, "FAKE:env HANDS_CLONE").result == "/tmp"
+
+
+def test_an_architect_job_carries_its_role_clone_and_kits(
+    tmp_home: Path, workdir: Path, spool: Spool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """§31: an architect job's environment is `HANDS_ROLE=architect`,
+    `HANDS_CLONE=<cwd>/repo` and `HANDS_KITS=<cwd>/kits` — never from handsd's
+    environment or the role's `env` table, which the guard's modes depend on."""
+    monkeypatch.setenv("HANDS_KITS", "/tmp")
+    monkeypatch.setenv("HANDS_CLONE", "/tmp")
+    (workdir / "repo" / ".git").mkdir(parents=True)
+    cfg = parse_config(
+        {
+            "roles": {
+                "builder": {"cwd": str(workdir)},
+                "architect": {
+                    "cwd": str(workdir),
+                    "env": {"HANDS_KITS": "/etc", "HANDS_CLONE": "/etc"},
+                },
+            },
+            "runner": {"claude": str(FAKE)},
+        },
+        project="demo",
+        path=tmp_home / ".hands" / "demo.toml",
+    )
+    runner = Runner(cfg, spool)
+
+    def ran(var: str) -> str:
+        job = spool.create_job(role="architect", context="clear", prompt=f"FAKE:env {var}",
+                               origin="cli")
+        return asyncio.run(runner.run(job)).result
+
+    assert ran("HANDS_ROLE") == "architect"
+    assert ran("HANDS_CLONE") == str(workdir / "repo")
+    assert ran("HANDS_KITS") == str(workdir / "kits")
+    # a builder job gets none of them from hands (it inherits handsd's own)
+    assert send(runner, spool, "FAKE:env HANDS_KITS").result == "/tmp"

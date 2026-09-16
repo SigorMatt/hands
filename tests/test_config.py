@@ -1170,3 +1170,66 @@ def test_an_unknown_role_names_driver_among_the_known_ones(write_config) -> None
     with pytest.raises(ConfigError) as caught:
         load_config("demo")
     assert "builder, aux, driver" in strip_paths(str(caught.value))
+
+
+# ---------------------------------------------- [roles.architect] (§31, U3)
+
+
+def test_an_architect_role_loads_beside_the_others(write_config) -> None:
+    """§31: cwd `~/hands-architect/<project>/`, `permission_flags` empty, and
+    `HANDS_ROLE=architect` on every job of that role."""
+    write_config(
+        """
+[roles.builder]
+cwd = "~/g"
+[roles.aux]
+cwd = "~/g"
+[roles.architect]
+cwd = "~/hands-architect/demo"
+model = "opus"
+[roles.architect.env]
+HANDS_EXTRA = "yes"
+"""
+    )
+    cfg = load_config("demo")
+    architect = cfg.role("architect")
+    assert architect.cwd == Path("~/hands-architect/demo").expanduser()
+    assert architect.permission_flags == ""
+    assert architect.queue_depth == 1
+    assert architect.spawn_env == {
+        "CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS": "0",
+        "HANDS_EXTRA": "yes",
+        "HANDS_ROLE": "architect",
+    }
+    assert cfg.role("builder").spawn_env.get("HANDS_ROLE") is None
+
+
+def test_the_architect_role_is_always_architect_whatever_its_env_says(write_config) -> None:
+    write_config(
+        """
+[roles.builder]
+cwd = "~/g"
+[roles.architect]
+cwd = "~/a"
+env = { HANDS_ROLE = "driver" }
+"""
+    )
+    assert load_config("demo").role("architect").spawn_env["HANDS_ROLE"] == "architect"
+
+
+@pytest.mark.parametrize("flags", ["--dangerously-skip-permissions", "--permission-mode x"])
+def test_an_architect_role_with_permission_flags_does_not_load(write_config, flags: str) -> None:
+    """§31: "`permission_flags` empty", as the driver role's is (§27)."""
+    write_config(
+        f"""
+[roles.builder]
+cwd = "~/g"
+[roles.architect]
+cwd = "~/a"
+permission_flags = "{flags}"
+"""
+    )
+    with pytest.raises(ConfigError) as caught:
+        load_config("demo")
+    assert "[roles.architect]" in strip_paths(str(caught.value))
+    assert "permission_flags must be empty" in strip_paths(str(caught.value))

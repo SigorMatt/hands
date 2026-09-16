@@ -1519,3 +1519,51 @@ has no human between a bad kit and the branch except the kit check and the cold
 review.
 
 Status: resolved by DESIGN v3.14 (code: mission 15 U3, U4, U5)
+
+---
+
+## H-030 — the architect can write a kit under KITS but cannot name its entries as repository paths
+
+Severity: medium · Component: DESIGN §31 (architect guard mode, `hands kit
+file`); `driver/hooks/bash_guard.py`, `architect/CLAUDE.md` rule 3
+Filed by: mission 15 U3, from building the mode §31 specifies.
+
+Symptom. §31 gives the architect `zip` "only with every path argument under
+`HANDS_KITS`", and `architect/CLAUDE.md` rule 3 says its output is "a zip under
+KITS whose entries are repository paths". Those two cannot both hold with the
+words the mode has. `zip` stores each entry under the path it is given on the
+command line, and Info-ZIP has no option that changes directory first (no `-C`,
+no `--strip-components`; `-j` junks *all* directories, which flattens
+`meta/BUILDER-16-PROMPT.md` to `BUILDER-16-PROMPT.md`). The role's cwd is
+`~/hands-architect/<project>/` and `HANDS_KITS` is `<cwd>/kits`, so:
+
+    zip -r kits/m16.zip kits/m16     -> entries `kits/m16/DESIGN.md`, …
+    zip -r kits/m16.zip DESIGN.md    -> refused: `DESIGN.md` is not under KITS
+    cd kits/m16 && zip -r ../m16.zip .   -> `cd` is not a word the table has
+
+The first is the only one the guard allows, and its entries are not repository
+paths. `kit check`'s `paths` check does not catch it either: `kits/m16/DESIGN.md`
+*is* a syntactically valid repository path, so the kit passes the check and the
+apply prompt tells the builder to add files under `kits/`. Nothing in this unit
+is wrong by §31; the mode as specified just cannot produce the artifact the
+role's own instruction asks for. Evidence: `zip --help` on this machine lists no
+directory option, and `driver/hooks/bash_guard.py: KITS_TABLE` has no `cd` row
+(by §31: the table is closed, and `cd` would change what every later relative
+path in the session means).
+
+Direction — three candidates, none of them this unit's to choose:
+1. `hands kit file <dir>`: `hands.kit._read_kit` already reads a directory kit
+   at its own relative paths, and `check_kit` already accepts one; only
+   `apply_from_zip` is zip-only. The architect would stage `kits/m16/<repo
+   path>` and file the directory, and hands would build the zip (or the apply
+   prompt would name the directory). This needs no new guard word.
+2. A `zip` option table entry that makes the entries right — there is none, so
+   this would mean a different archiver (`tar` is not in the table either).
+3. A confined `cd`, allowed only into a path under `HANDS_KITS`. The cheapest to
+   write and the most expensive to reason about: every relative path the guard
+   judges afterwards, including `git -C` and the KITS containment itself, is
+   resolved against the hook's cwd.
+Until one is decided, an architect role that reaches rule 3 will either file a
+kit whose entries are wrong or escalate.
+
+Status: open (found while building mission 15 U3; U3 implements §31 as written)

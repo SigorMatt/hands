@@ -117,7 +117,7 @@ from urllib.parse import quote
 
 from hands import notify as notify_mod
 from hands.api import ApiError
-from hands.kit import KitError, apply_from_zip
+from hands.kit import KitError, apply_from_zip, apply_params, home_shown
 from hands.notify import PAIR_SPACING_S
 from hands.playbook import PlaybookError, load_playbook, playbook_path
 from hands.spool import PathEscape, SpoolError, resolve_under_roots
@@ -452,17 +452,13 @@ class PhoneChannel:
         """
         cwd = self.daemon.config.role("builder").cwd
         try:
-            plan = await asyncio.to_thread(apply_from_zip, path, cwd, _home_shown(path))
+            plan = await asyncio.to_thread(apply_from_zip, path, cwd, home_shown(path))
         except KitError as exc:
             return self._refuse_kit(f"the apply was not filed: {exc}")
         try:
-            job = await self.daemon.api.send(
-                role="builder",
-                context="clear",
-                prompt=plan.prompt,
-                gate=f"apply {plan.name}",
-                origin="kit",
-            )
+            # §31: the same params `hands kit file` sends, with this route's
+            # origin — the one statement of what a kit apply is (`apply_params`).
+            job = await self.daemon.api.send(**apply_params(plan, "kit"))
         except ApiError as exc:
             return self._refuse_kit(f"the apply was not filed: the send was refused ({exc})")
         log.info("phone: kit apply filed as builder job %s (%s)", job["id"], job["state"])
@@ -536,17 +532,6 @@ def status_summary(daemon: Daemon) -> str:
     lines.append(f"pipeline: {'paused' if pipeline.get('paused') else 'running'}")
     lines.append(f"inbox: {status['inbox']['unacked']} unacked")
     return "\n".join(lines)
-
-
-def _home_shown(path: Path) -> str:
-    """`path` as the apply prompt names it: `~/…` under `$HOME`, else absolute."""
-    home = Path.home()
-    for base in dict.fromkeys((home, home.resolve())):
-        try:
-            return f"~/{path.relative_to(base).as_posix()}"
-        except ValueError:
-            continue
-    return str(path)
 
 
 class _KitRefused(Exception):

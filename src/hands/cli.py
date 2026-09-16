@@ -360,13 +360,15 @@ def build_parser() -> argparse.ArgumentParser:
         f"your subscription; refused when ${doctor.FAKE_ENV}=1",
     )
     # §4 `kit check`, §26: answered by the client with no daemon, config or
-    # network, so it is not a daemon method and has no `_PARAMS` entry.
+    # network, so it is not a daemon method and has no `_PARAMS` entry. §31's
+    # `kit file` is the other half: it checks the kit the same way and then
+    # files the apply, which does need the daemon.
     kit = command(
         "kit",
-        "check a kit before it is sent: paths, playbook, brief, verdicts, wording, "
-        "protocol (§4, §26)",
+        "kit check: paths, playbook, brief, verdicts, wording, protocol (§4, §26); "
+        "kit file: check a kit under $HANDS_KITS and file its held apply (§31)",
     )
-    kit_sub = kit.add_subparsers(dest="kit_command", metavar="check", required=True)
+    kit_sub = kit.add_subparsers(dest="kit_command", metavar="check|file", required=True)
     kit_check = kit_sub.add_parser(
         "check",
         parents=[common],
@@ -382,6 +384,19 @@ def build_parser() -> argparse.ArgumentParser:
         help="the repository the kit lands in (default: the top level of the current "
         "git repository)",
     )
+    # §31: the architect role's own route to the phone's `kit`. The kit comes
+    # from the role's kits directory ($HANDS_KITS) and is checked against the
+    # role's clone ($HANDS_CLONE) before anything is filed.
+    kit_file = kit_sub.add_parser(
+        "file",
+        parents=[common],
+        help="check a kit under $HANDS_KITS and file its held apply (§31)",
+        description="run `kit check` on a kit under $HANDS_KITS against the role's clone "
+        "($HANDS_CLONE) and, only when every check passes, file the same held builder "
+        "apply the phone's `kit` files, with origin architect; a failing kit is not "
+        "filed and the refusal carries the check's output",
+    )
+    kit_file.add_argument("kit", help="the kit: a .zip under $HANDS_KITS")
     return parser
 
 
@@ -721,8 +736,9 @@ def main(
     as_json = getattr(args, "json", False)
     try:
         # §26: `kit check` runs where hands is only installed (an architect's
-        # sandbox), so it is answered before any config is looked for.
-        if command == "kit":
+        # sandbox), so it is answered before any config is looked for. `kit
+        # file` files a job, so it takes the config and socket route below.
+        if command == "kit" and args.kit_command == "check":
             return kit_mod.run(args.kit, args.repo, out=out, as_json=as_json)
         if command == "migrate-spool":
             return _migrate_spool(out=out, err=err, as_json=as_json)
@@ -785,6 +801,16 @@ def main(
         # transcript.
         if command == "log" and not as_json:
             return _pages(socket_path, args.job, args.offset, project=project, out=out)
+        # §31: `hands kit file` — the check in the client, the apply through the
+        # daemon's own `send`, so the job takes §8's path from `Api.send` on.
+        if command == "kit":
+            return kit_mod.file_run(
+                args.kit,
+                builder_cwd=config.role("builder").cwd,
+                send=lambda params: call(socket_path, "send", params, project=project),
+                out=out,
+                as_json=as_json,
+            )
         # §4: `tail -n` is `n >= 1`. Refused here, before the daemon is
         # contacted, because "the last 0 entries" is not a question.
         if command == "tail" and args.n < 1:

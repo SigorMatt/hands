@@ -63,7 +63,16 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, TextIO
 
-from hands.config import CLONE_ENV, CONSULT_ROLE_ENV, DRIVER_ROLE, Config, RoleConfig, driver_clone
+from hands.config import (
+    ARCHITECT_ROLE,
+    CLONE_ENV,
+    CONSULT_ROLE_ENV,
+    DRIVER_ROLE,
+    KITS_ENV,
+    Config,
+    RoleConfig,
+    driver_clone,
+)
 from hands.limits import is_limit_notice, parse_reset_at, to_iso
 from hands.monitor import (
     CGROUP_ROOT,
@@ -1013,9 +1022,13 @@ def job_env(job: Job, role: RoleConfig) -> dict[str, str]:
     §29: it also carries `HANDS_CLONE`, the role's clone (`driver_clone`), the same
     way: never from handsd's environment or the env table, and absent with no
     clone, when the guard refuses every `git -C`.
+    §31: an architect job carries the same `HANDS_CLONE` and, in addition,
+    `HANDS_KITS` — `<cwd>/kits`, the one directory that role may write to. It is
+    set whether or not the directory exists yet: the guard confines paths to it,
+    and a `mkdir -p` under it is how the architect makes it.
     """
     env = {**os.environ, **role.spawn_env, JOB_ENV: job.id}
-    if job.role == DRIVER_ROLE:
+    if job.role in (DRIVER_ROLE, ARCHITECT_ROLE):
         env.pop(CONSULT_ROLE_ENV, None)
         head = consult_head(job.prompt)
         if head is not None:
@@ -1024,6 +1037,8 @@ def job_env(job: Job, role: RoleConfig) -> dict[str, str]:
         clone = driver_clone(role.cwd)
         if clone is not None:
             env[CLONE_ENV] = str(clone)
+    if job.role == ARCHITECT_ROLE:
+        env[KITS_ENV] = str(role.cwd / "kits")
     return env
 
 

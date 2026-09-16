@@ -1378,3 +1378,194 @@ def test_the_missions_template_with_the_held_rule_added_back_still_passes(
     )
     code, out, err = run_check(kit, write_tree(tmp_path / "repo", {"README.md": "x"}))
     assert code == 0, out + err
+
+
+# ------------------------------------------------- `hands kit file` (§31, U3)
+#
+# The architect's own route to the phone's `kit`: a zip under `$HANDS_KITS`,
+# checked against the role's clone (`$HANDS_CLONE`) first, and — only when every
+# check passes — filed as the same held builder apply, with `origin: architect`.
+# Unlike `kit check` it reaches the daemon, so it needs a config and a socket.
+
+
+@pytest.fixture
+def kits(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, repo: Path) -> Path:
+    """The role's kits directory and clone, as handsd sets them on the job."""
+    directory = tmp_path / "kits"
+    directory.mkdir()
+    monkeypatch.setenv("HANDS_KITS", str(directory))
+    monkeypatch.setenv("HANDS_CLONE", str(repo))
+    return directory
+
+
+def zip_kit(path: Path, files: dict[str, str]) -> Path:
+    with zipfile.ZipFile(path, "w") as archive:
+        for name, text in files.items():
+            archive.writestr(name, text)
+    return path
+
+
+def run_file(kit: Path, *extra: str) -> tuple[int, str, str]:
+    out, err = io.StringIO(), io.StringIO()
+    code = main(["kit", "file", str(kit), *extra], stdout=out, stderr=err)
+    return code, out.getvalue(), err.getvalue()
+
+
+def test_hands_help_lists_kit_file(capsys: pytest.CaptureFixture[str]) -> None:
+    """The mission's acceptance: `hands --help` names `kit file`."""
+    with pytest.raises(SystemExit) as exc:
+        main(["--help"])
+    assert exc.value.code == 0
+    assert "kit file" in strip_paths(capsys.readouterr().out)
+
+
+def test_hands_kit_help_lists_both_subcommands(capsys: pytest.CaptureFixture[str]) -> None:
+    with pytest.raises(SystemExit) as exc:
+        main(["kit", "--help"])
+    assert exc.value.code == 0
+    out = capsys.readouterr().out
+    assert re.search(r"^\s+check\s", out, re.MULTILINE), out
+    assert re.search(r"^\s+file\s", out, re.MULTILINE), out
+
+
+@pytest.mark.parametrize("where", ["outside", "dotdot", "symlink"])
+def test_kit_file_refuses_a_path_that_is_not_under_hands_kits(
+    tmp_path: Path, repo: Path, kits: Path, write_config, where: str
+) -> None:
+    """§31: "from a path under `HANDS_KITS`" — decided by realpath, so a `..`
+    and a symlink out of the directory are refused as an outside path is."""
+    write_config()
+    outside = zip_kit(tmp_path / "outside.zip", good_kit())
+    if where == "outside":
+        path = outside
+    elif where == "dotdot":
+        path = kits / ".." / "outside.zip"
+    else:
+        path = kits / "link.zip"
+        path.symlink_to(outside)
+    code, out, err = run_file(path)
+    assert code != 0, out
+    assert "HANDS_KITS" in strip_paths(err), err
+    assert "filed" not in strip_paths(out)
+
+
+def test_kit_file_refuses_when_hands_kits_is_unset(
+    tmp_path: Path, repo: Path, kits: Path, write_config, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    write_config()
+    kit = zip_kit(kits / "m16.zip", good_kit())
+    monkeypatch.delenv("HANDS_KITS")
+    code, _, err = run_file(kit)
+    assert code != 0 and "HANDS_KITS" in strip_paths(err), err
+    monkeypatch.setenv("HANDS_KITS", "")
+    code, _, err = run_file(kit)
+    assert code != 0 and "HANDS_KITS" in strip_paths(err), err
+
+
+def test_kit_file_refuses_when_hands_clone_is_unset(
+    repo: Path, kits: Path, write_config, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """§31: the check runs "against the role's clone (`HANDS_CLONE`) as the repo"."""
+    write_config()
+    kit = zip_kit(kits / "m16.zip", good_kit())
+    monkeypatch.delenv("HANDS_CLONE")
+    code, _, err = run_file(kit)
+    assert code != 0 and "HANDS_CLONE" in strip_paths(err), err
+
+
+def test_kit_file_does_not_file_a_failing_kit_and_carries_the_checks_output(
+    repo: Path, kits: Path, write_config
+) -> None:
+    """§31: "after running the kit check itself and refusing a failing kit"."""
+    write_config()
+    broken = {**good_kit(), "../escape.md": "no"}
+    kit = zip_kit(kits / "m16.zip", broken)
+    code, out, err = run_file(kit)
+    assert code == 1, out + err
+    # the check's own output, line for line, is what the refusal carries
+    assert line(out, "paths").startswith("FAIL"), out
+    for name in CHECK_NAMES:
+        assert line(out, name), out
+    assert "not filed" in strip_paths(out), out
+    assert "apply prompt:" not in strip_paths(out), out
+
+
+def test_kit_file_json_says_the_failing_kit_was_not_filed(
+    repo: Path, kits: Path, write_config
+) -> None:
+    write_config()
+    kit = zip_kit(kits / "m16.zip", {**good_kit(), "/etc/passwd": "no"})
+    code, out, _ = run_file(kit, "--json")
+    assert code == 1
+    answer = json.loads(out)
+    assert answer["filed"] is False and answer["ok"] is False and answer["job"] is None
+    assert [check["name"] for check in answer["checks"]] == list(CHECK_NAMES)
+
+
+def test_kit_file_files_the_held_apply_the_phones_kit_files(
+    tmp_home: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """§31: "files a held apply job exactly as the phone's `kit` does
+    (`origin: architect`, the same prompt from the zip's entries and `KIT.md`)".
+
+    The prompt is built by the one function the phone builds it with, from the
+    same three arguments; the job is born `held` inside `Api.send`, so the
+    `job.held` inbox event — and with it the notification and the buttons —
+    happens on the daemon's own event path, with nothing added here.
+    """
+    import asyncio
+
+    from harness import config_body, drive, write_project
+
+    workdir = write_tree(
+        tmp_path / "work", {"PLAYBOOK.toml": PLAYBOOK, "meta/REVIEW-PROTOCOL.md": PROTOCOL}
+    )
+    clone = write_tree(
+        tmp_path / "clone", {"PLAYBOOK.toml": PLAYBOOK, "meta/REVIEW-PROTOCOL.md": PROTOCOL}
+    )
+    kits_dir = tmp_path / "kits"
+    kits_dir.mkdir()
+    monkeypatch.setenv("HANDS_KITS", str(kits_dir))
+    monkeypatch.setenv("HANDS_CLONE", str(clone))
+    kit = zip_kit(
+        kits_dir / "mission-16-kit.zip", {**good_kit(), "KIT.md": "plan: mission 16 kit\n"}
+    )
+    write_project(tmp_home, config_body(tmp_home, workdir))
+    answers: dict[str, object] = {}
+
+    async def body(daemon) -> None:
+        code, out, err = await asyncio.to_thread(run_file, kit, "--json")
+        answers["code"], answers["out"], answers["err"] = code, out, err
+        answers["events"] = [event.kind for event in daemon.spool.unacked()]
+
+    drive(body)
+    assert answers["code"] == 0, answers["out"] + answers["err"]
+    answer = json.loads(str(answers["out"]))
+    assert answer["filed"] is True and answer["ok"] is True
+    job = answer["job"]
+    assert job["role"] == "builder" and job["context"] == "clear"
+    assert job["origin"] == "architect", "§31: the origin is the architect's own"
+    assert job["state"] == "held", "§8: a gated job is born held"
+    assert job["gate"]["reason"] == "apply mission-16-kit"
+    plan = kit_mod.apply_from_zip(kit, workdir, kit_mod.home_shown(kit))
+    assert job["prompt"] == plan.prompt
+    assert plan.commit_message == "plan: mission 16 kit"
+    kinds = answers["events"]
+    assert isinstance(kinds, list) and kinds[0] == "job.held", kinds
+
+
+def test_the_phone_and_the_architect_file_one_apply_with_two_origins() -> None:
+    """The shared body, so the two routes cannot drift: same role, context, gate
+    and prompt; only the origin differs (§27 `kit`, §31 `architect`)."""
+    plan = kit_mod.Apply(name="m16", replaces=[], adds=[], commit_message="plan: kit m16",
+                         kit_md=None, prompt="Apply it.")
+    phone = kit_mod.apply_params(plan, "kit")
+    architect = kit_mod.apply_params(plan, "architect")
+    assert phone == {**architect, "origin": "kit"}
+    assert architect == {
+        "role": "builder",
+        "context": "clear",
+        "prompt": "Apply it.",
+        "gate": "apply m16",
+        "origin": "architect",
+    }

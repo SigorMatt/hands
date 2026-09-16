@@ -1518,3 +1518,472 @@ def test_every_command_line_the_driver_kit_shows_passes_the_guard() -> None:
     assert any(line.startswith("hands send --role builder --context clear ") for line in lines)
     for line in lines:
         assert guard.check(line) is None, f"the kit shows a line the guard refuses: {line}"
+
+
+# --- §31: ARCHITECT MODE (H-029) --------------------------------------------
+#
+# With `HANDS_ROLE=architect` the guard guards the architect ROLE: the read-only
+# table, `hands kit check` and `hands kit file`, and `mkdir|cp|mv|zip|unzip` only
+# when every path argument is under `HANDS_KITS`. It never sends, approves,
+# denies, goes, puts, pauses, resumes or opens, and it never pushes. Writes are a
+# second `PreToolUse` matcher (`--write`), allowed only under `HANDS_KITS`.
+# Choices where §31 is silent, pinned here: the `hands` surface is the one
+# `architect/settings.json` allows (show, jobs, inbox, pipeline, status, kit
+# check, kit file) — the role's own shipped instruction — so `tail` and `resume`
+# are refused, `resume` being denied by those settings outright; a KITS command
+# takes at least one path argument; and the options are the minimum rule 3 needs
+# (`mkdir -p`, `cp -r`, `zip -r`, `unzip -o`, `unzip -d <dir>`).
+KITS = "./kits"
+ARCHITECT = {"role": "architect", "consult_role": "builder", "clone": CLONE, "kits": KITS}
+
+ARCHITECT_MODE: list[tuple[str, bool]] = [
+    # the read-only table, as the driver role has it
+    ("cat ./repo/DESIGN.md", True),
+    ("ls -la ./kits", True),
+    ("head -n 40 ./repo/meta/ROADMAP.md", True),
+    ("grep -n -e ROADMAP ./repo/DESIGN.md", True),
+    ("git -C ./repo fetch -q", True),
+    ("git -C ./repo log --oneline origin/main -10", True),
+    ("git -C ./repo show origin/main:DESIGN.md", True),
+    ("git -C /tmp log", False),
+    ("git -C ./repo push", False),
+    ("git commit -m x", False),
+    ("cat -n ./repo/DESIGN.md", False),
+    ("pwd", False),
+    ("find . -name '*.md'", False),
+    ("sort -o ./kits/x ./repo/DESIGN.md", False),
+    # the two `hands` commands §31 adds
+    ("hands kit check ./kits/m16.zip --repo ./repo", True),
+    ("hands kit file ./kits/m16.zip", True),
+    ("hands --json kit file ./kits/m16.zip", True),
+    # §31 is silent; §27's reason for a role's send holds for the one command
+    # that files work: the two options that leave the role's own project are
+    # refused on `kit file`, and kept on the `kit check` that writes nothing.
+    ("hands --project other kit file ./kits/m16.zip", False),
+    ("hands kit file --project=other ./kits/m16.zip", False),
+    ("hands kit file --socket /tmp/other.sock ./kits/m16.zip", False),
+    ("hands --project other kit check ./kits/m16.zip", True),
+    ("hands show job-1 --json", True),
+    ("hands jobs --role builder -n 5", True),
+    ("hands inbox", True),
+    ("hands pipeline", True),
+    ("hands status --json", True),
+    # ... and every authority command, by name
+    ("hands send --role builder --context keep 'do it'", False),
+    ("hands send --role builder --context clear 'do it'", False),
+    ("hands approve job-1 --human-confirmed --quote 'yes'", False),
+    ("hands deny job-1 --human-confirmed --quote 'no'", False),
+    ("hands go", False),
+    ("hands put ./kits/x --content y", False),
+    ("hands pause", False),
+    ("hands resume", False),
+    ("hands open job-1", False),
+    ("hands tail --role builder -n 20", False),
+    ("hands cancel job-1 --reason x", False),
+    ("hands kit", False),
+    ("hands kit apply ./kits/m16.zip", False),
+    # the five words architect mode adds, with every path under KITS
+    ("mkdir -p ./kits/m16/meta", True),
+    ("mkdir ./kits/m16", True),
+    ("cp -r ./kits/m16 ./kits/m17", True),
+    ("cp ./kits/a ./kits/b", True),
+    ("mv ./kits/a ./kits/b", True),
+    ("zip -r ./kits/m16.zip ./kits/m16", True),
+    ("unzip -o ./kits/m16.zip -d ./kits/out", True),
+    ("unzip ./kits/m16.zip", True),
+    # ... and refused as soon as one path argument is not under KITS
+    ("mkdir -p /tmp/evil", False),
+    ("mkdir -p ./kits/../evil", False),
+    ("cp ./repo/DESIGN.md ./kits/DESIGN.md", False),
+    ("cp ./kits/a /tmp/b", False),
+    ("mv ./kits/a ../a", False),
+    ("zip -r /tmp/m16.zip ./kits/m16", False),
+    ("zip -r ./kits/m16.zip /etc", False),
+    ("unzip -o ./kits/m16.zip -d /tmp/out", False),
+    ("unzip /tmp/m16.zip", False),
+    ("mkdir", False),
+    ("zip -r", False),
+    # ... and with only the options the five rows list
+    ("zip -T ./kits/m16.zip", False),
+    ("zip --unzip-command=/tmp/prog ./kits/m16.zip", False),
+    ("zip -r ./kits/m16.zip ./kits/m16 -x ./kits/m16/x", False),
+    ("cp -a ./kits/a ./kits/b", False),
+    ("cp --parents ./kits/a ./kits/b", False),
+    ("mv -f ./kits/a ./kits/b", False),
+    ("mkdir -m 777 ./kits/a", False),
+    ("unzip -p ./kits/m16.zip", False),
+    ("unzip -l ./kits/m16.zip", False),
+    # ... and the mutations §31 never gives it stay refused, under KITS or not
+    ("rm -rf ./kits/m16", False),
+    ("touch ./kits/m16/x", False),
+    ("chmod 777 ./kits/m16", False),
+    ("ln -s /etc ./kits/etc", False),
+    ("rmdir ./kits/m16", False),
+    ("install ./kits/a ./kits/b", False),
+    ("echo x > ./kits/m16/x", False),
+    ("cat ./repo/DESIGN.md | tee ./kits/DESIGN.md", False),
+    ("python3 -c 'print(1)'", False),
+    ("claude -p hi", False),
+    ("ls; rm -rf ./kits", False),
+    ("mkdir ./kits/a && rm -rf /", False),
+]
+
+
+@pytest.mark.parametrize("cmd,allowed", ARCHITECT_MODE)
+def test_architect_mode_case(cmd: str, allowed: bool) -> None:
+    """§31: the architect role's surface, from `tests/`' own table."""
+    reason = guard.check(cmd, **ARCHITECT)
+    if allowed:
+        assert reason is None, f"architect mode blocked an allowed command: {cmd} -> {reason}"
+    else:
+        assert reason is not None, f"architect mode allowed a refused command: {cmd}"
+
+
+#: §31: the `hands` subcommands architect mode allows — `architect/settings.json`'s
+#: own allow list, which is the role's shipped instruction.
+ARCHITECT_HANDS = {"show", "jobs", "inbox", "pipeline", "status", "kit"}
+#: Refused by name (§31), `resume` and `tail` with them: the settings deny
+#: `hands resume` and allow neither.
+ARCHITECT_REFUSED_HANDS = ["send", "approve", "deny", "go", "put", "pause", "resume",
+                           "open", "tail"]
+
+
+def test_the_architect_mode_table_names_both_verdicts_and_every_allowed_hands() -> None:
+    named = {cmd.split()[1] for cmd, ok in ARCHITECT_MODE
+             if ok and cmd.startswith("hands ") and not cmd.split()[1].startswith("-")}
+    named |= {"kit"}  # listed behind a global option above
+    assert named == ARCHITECT_HANDS
+    assert sum(1 for _, ok in ARCHITECT_MODE if ok) >= 15
+    assert sum(1 for _, ok in ARCHITECT_MODE if not ok) >= 30
+
+
+@pytest.mark.parametrize("sub", ARCHITECT_REFUSED_HANDS)
+def test_architect_mode_refuses_the_authority_subcommands_by_name(sub: str) -> None:
+    reason = guard.check(f"hands {sub} job-1", **ARCHITECT)
+    assert reason is not None and sub in reason, (sub, reason)
+
+
+def test_architect_mode_refuses_every_push_and_every_git_write() -> None:
+    for cmd in ("git -C ./repo push", "git push origin main", "git -C ./repo commit -m x",
+                "git -C ./repo add -A", "git remote set-url origin x",
+                "git -c core.pager=touch log", "git -C ./repo checkout main"):
+        assert guard.check(cmd, **ARCHITECT) is not None, cmd
+
+
+def test_architect_mode_pins_git_dash_c_to_the_clone_as_role_mode_does() -> None:
+    assert guard.check("git -C ./repo log --oneline -1", **ARCHITECT) is None
+    assert guard.check("git -C ./kits log", **ARCHITECT) is not None
+    assert guard.check("git -C ./repo -C ./repo log", **ARCHITECT) is not None
+    assert guard.check("git -C ./repo log", role="architect", consult_role=None,
+                       clone=None, kits=KITS) is not None
+
+
+#: §31: "every path argument under `HANDS_KITS`", decided as role mode decides
+#: `git -C`: `os.path.realpath` containment, relative paths joined to the hook's
+#: cwd, no `~` expansion. (command, HANDS_KITS, allowed)
+ABS_KITS = "/home/u/hands-architect/hands/kits"
+KITS_PIN: list[tuple[str, str | None, bool]] = [
+    (f"mkdir -p {ABS_KITS}/m16", ABS_KITS, True),
+    (f"zip -r {ABS_KITS}/m16.zip {ABS_KITS}/m16", ABS_KITS, True),
+    (f"mkdir -p {ABS_KITS}", ABS_KITS, True),
+    (f"mkdir -p {ABS_KITS}/../evil", ABS_KITS, False),
+    (f"mkdir -p {ABS_KITS}/..", ABS_KITS, False),
+    ("mkdir -p /tmp/evil", ABS_KITS, False),
+    (f"cp {ABS_KITS}/a /tmp/b", ABS_KITS, False),
+    ("mkdir -p ~/kits/m16", ABS_KITS, False),  # no `~` is expanded
+    (f"mkdir -p {ABS_KITS}/m16", None, False),  # unset: nothing in the group passes
+    (f"mkdir -p {ABS_KITS}/m16", "", False),
+    (f"zip -r {ABS_KITS}/m16.zip {ABS_KITS}/m16", None, False),
+    (f"unzip -o {ABS_KITS}/m16.zip -d {ABS_KITS}/out", ABS_KITS, True),
+    (f"unzip -o {ABS_KITS}/m16.zip -d /tmp/out", ABS_KITS, False),
+    (f"unzip -o {ABS_KITS}/m16.zip -d {ABS_KITS}/out", None, False),
+]
+
+
+@pytest.mark.parametrize("cmd,kits,allowed", KITS_PIN)
+def test_architect_mode_confines_every_path_argument_to_hands_kits(
+    cmd: str, kits: str | None, allowed: bool
+) -> None:
+    reason = guard.check(cmd, role="architect", consult_role="builder", clone=CLONE, kits=kits)
+    assert (reason is None) == allowed, (cmd, kits, reason)
+
+
+#: §28: a word the shell expands after the guard read it is not the path the
+#: guard judged — `./kits/{a,../../evil}` is one path to the guard and two to
+#: bash, the second of them outside the kits directory. The KITS rows carry the
+#: same residual-character rule `git` and `hands` arguments carry.
+KITS_EXPANSION = [
+    "mkdir -p ./kits/{a,../../evil}",
+    "mkdir ./kits/{m16,../evil}",
+    "zip -r ./kits/x.zip ./kits/{a,../../etc}",
+    "cp -r ./kits/{a,../../etc/passwd} ./kits/b",
+    "mkdir -p ./kits/x{1..3}",
+    "mkdir -p ./kits/a?b",
+    "mkdir -p ./kits/*",
+    "unzip -o ./kits/m16.zip -d ./kits/{a,../../evil}",
+]
+
+
+@pytest.mark.parametrize("cmd", KITS_EXPANSION)
+def test_architect_mode_refuses_a_path_the_shell_would_still_expand(cmd: str) -> None:
+    reason = guard.check(cmd, **ARCHITECT)
+    assert reason is not None, f"architect mode allowed an expandable path: {cmd}"
+    assert "expand" in reason, reason
+
+
+def test_a_quoted_path_under_kits_is_a_path(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The other half of §28: inside quotes none of those characters is
+    expanded, so a kit whose name carries one is still filed."""
+    assert guard.check("mkdir -p './kits/{a,b}'", **ARCHITECT) is None
+    assert guard.check('mkdir -p "./kits/m16 draft"', **ARCHITECT) is None
+
+
+@pytest.mark.parametrize("cmd,kits,allowed", KITS_PIN)
+def test_the_kits_words_are_architect_modes_alone(
+    cmd: str, kits: str | None, allowed: bool
+) -> None:
+    """The five words exist only in architect mode: normal mode and the driver
+    role refuse every one of them, whatever HANDS_KITS says."""
+    for role in (None, "driver"):
+        reason = guard.check(cmd, role=role, consult_role="builder", clone=CLONE, kits=kits)
+        assert reason is not None, (role, cmd)
+
+
+def test_architect_mode_confinement_is_by_realpath_through_a_real_symlink(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A symlink out of the kits directory lands where the kernel takes it."""
+    root = tmp_path.resolve()
+    kits = root / "kits"
+    (kits / "m16").mkdir(parents=True)
+    evil = root / "evil"
+    evil.mkdir()
+    (kits / "link").symlink_to(evil)
+    mode = {"role": "architect", "consult_role": "builder", "clone": CLONE, "kits": str(kits)}
+    assert guard.check(f"mkdir -p {kits}/m16/meta", **mode) is None
+    assert guard.check(f"mkdir -p {kits}/link/x", **mode) is not None
+    assert guard.check(f"zip -r {kits}/link/m16.zip {kits}/m16", **mode) is not None
+    assert guard.check(f"cp {kits}/m16/a {kits}/link/a", **mode) is not None
+    monkeypatch.chdir(root)
+    assert guard.check("mkdir -p kits/m16/meta", **mode) is None
+    assert guard.check("mkdir -p kits/link/x", **mode) is not None
+    assert guard.check("mkdir -p kits/../evil", **mode) is not None
+
+
+def test_the_hook_takes_architect_mode_and_the_kits_from_the_environment(
+    monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """§31: `HANDS_ROLE=architect` and `HANDS_KITS` in the hook's environment."""
+    monkeypatch.setenv("HANDS_KITS", ABS_KITS)
+    monkeypatch.setenv("HANDS_CLONE", ABS_CLONE)
+    assert run_hook(monkeypatch, f"mkdir -p {ABS_KITS}/m16", "architect") == 0
+    assert run_hook(monkeypatch, "mkdir -p /tmp/evil", "architect") == 2
+    assert run_hook(monkeypatch, "hands kit file ./kits/m16.zip", "architect") == 0
+    assert run_hook(monkeypatch, "hands go", "architect") == 2
+    assert run_hook(monkeypatch, f"mkdir -p {ABS_KITS}/m16", "driver") == 2
+    assert run_hook(monkeypatch, f"mkdir -p {ABS_KITS}/m16", None) == 2
+    monkeypatch.delenv("HANDS_KITS")
+    assert run_hook(monkeypatch, f"mkdir -p {ABS_KITS}/m16", "architect") == 2
+    assert run_hook(monkeypatch, "hands status", "architect") == 0
+
+
+# --- §31: the second matcher, Write|Edit|MultiEdit --------------------------
+#
+# Claude Code names the path `file_path` for Write, Edit and MultiEdit. Any
+# other shape, any other tool and any other mode fails closed.
+WRITE_MATCHER: list[tuple[dict[str, object], str | None, bool]] = [
+    ({"tool_name": "Write", "tool_input": {"file_path": f"{ABS_KITS}/m16/KIT.md"}},
+     ABS_KITS, True),
+    ({"tool_name": "Edit", "tool_input": {"file_path": f"{ABS_KITS}/m16/KIT.md"}},
+     ABS_KITS, True),
+    ({"tool_name": "MultiEdit", "tool_input": {"file_path": f"{ABS_KITS}/m16/KIT.md"}},
+     ABS_KITS, True),
+    ({"tool_name": "Write", "tool_input": {"file_path": ABS_KITS}}, ABS_KITS, True),
+    ({"tool_name": "Write", "tool_input": {"file_path": "/tmp/evil"}}, ABS_KITS, False),
+    ({"tool_name": "Write", "tool_input": {"file_path": f"{ABS_KITS}/../evil"}},
+     ABS_KITS, False),
+    ({"tool_name": "Write", "tool_input": {"file_path": "~/kits/x"}}, ABS_KITS, False),
+    ({"tool_name": "Write", "tool_input": {"file_path": f"{ABS_KITS}/x"}}, None, False),
+    ({"tool_name": "Write", "tool_input": {"file_path": f"{ABS_KITS}/x"}}, "", False),
+    # a shape the guard does not recognise
+    ({"tool_name": "Write", "tool_input": {}}, ABS_KITS, False),
+    ({"tool_name": "Write", "tool_input": {"file_path": ""}}, ABS_KITS, False),
+    ({"tool_name": "Write", "tool_input": {"file_path": 7}}, ABS_KITS, False),
+    ({"tool_name": "Write", "tool_input": {"path": f"{ABS_KITS}/x"}}, ABS_KITS, False),
+    ({"tool_name": "Write", "tool_input": []}, ABS_KITS, False),
+    ({"tool_name": "Write"}, ABS_KITS, False),
+    ({}, ABS_KITS, False),
+    # any other tool
+    ({"tool_name": "NotebookEdit", "tool_input": {"notebook_path": f"{ABS_KITS}/x.ipynb"}},
+     ABS_KITS, False),
+    ({"tool_name": "Bash", "tool_input": {"command": "ls"}}, ABS_KITS, False),
+    ({"tool_name": "write", "tool_input": {"file_path": f"{ABS_KITS}/x"}}, ABS_KITS, False),
+]
+
+
+@pytest.mark.parametrize("data,kits,allowed", WRITE_MATCHER)
+def test_the_write_matcher_allows_only_paths_under_hands_kits(
+    data: dict[str, object], kits: str | None, allowed: bool
+) -> None:
+    reason = guard.write_violation(data, role="architect", kits=kits)
+    assert (reason is None) == allowed, (data, kits, reason)
+
+
+@pytest.mark.parametrize("data,kits,allowed", WRITE_MATCHER)
+def test_the_write_matcher_fails_closed_outside_architect_mode(
+    data: dict[str, object], kits: str | None, allowed: bool
+) -> None:
+    for role in (None, "", "driver", "builder", "Architect"):
+        assert guard.write_violation(data, role=role, kits=kits) is not None, (role, data)
+
+
+def run_write_hook(monkeypatch: pytest.MonkeyPatch, data: object, role: str | None) -> int:
+    import io as _io
+    import json as _json
+
+    if role is None:
+        monkeypatch.delenv("HANDS_ROLE", raising=False)
+    else:
+        monkeypatch.setenv("HANDS_ROLE", role)
+    monkeypatch.setattr("sys.argv", ["bash_guard.py", "--write"])
+    monkeypatch.setattr("sys.stdin", _io.StringIO(_json.dumps(data)))
+    return guard.main()
+
+
+def test_the_write_entry_point_reads_the_hook_json_on_stdin(
+    monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("HANDS_KITS", ABS_KITS)
+    allowed = {"tool_name": "Write", "tool_input": {"file_path": f"{ABS_KITS}/KIT.md"}}
+    outside = {"tool_name": "Write", "tool_input": {"file_path": "/tmp/evil"}}
+    assert run_write_hook(monkeypatch, allowed, "architect") == 0
+    assert run_write_hook(monkeypatch, outside, "architect") == 2
+    assert run_write_hook(monkeypatch, allowed, "driver") == 2
+    assert run_write_hook(monkeypatch, allowed, None) == 2
+    monkeypatch.delenv("HANDS_KITS")
+    assert run_write_hook(monkeypatch, allowed, "architect") == 2
+
+
+def test_the_write_entry_point_fails_closed_on_unparsable_input(
+    monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import io as _io
+
+    monkeypatch.setenv("HANDS_ROLE", "architect")
+    monkeypatch.setenv("HANDS_KITS", ABS_KITS)
+    monkeypatch.setattr("sys.argv", ["bash_guard.py", "--write"])
+    monkeypatch.setattr("sys.stdin", _io.StringIO("{not json"))
+    assert guard.main() == 2
+
+
+def test_the_shipped_file_judges_both_matchers_in_architect_mode(tmp_path: Path) -> None:
+    """The way Claude Code runs them: the shipped file, hook JSON on stdin."""
+    kits = tmp_path / "kits"
+    kits.mkdir()
+    base = {k: v for k, v in os.environ.items() if not k.startswith("HANDS_")}
+    env = {**base, "HANDS_ROLE": "architect", "HANDS_KITS": str(kits),
+           "HANDS_CLONE": str(tmp_path / "repo")}
+    cases = [
+        ([], {"tool_name": "Bash", "tool_input": {"command": f"mkdir -p {kits}/m16"}}, 0),
+        ([], {"tool_name": "Bash", "tool_input": {"command": "mkdir -p /tmp/evil"}}, 2),
+        ([], {"tool_name": "Bash", "tool_input": {"command": "hands go"}}, 2),
+        (["--write"], {"tool_name": "Write", "tool_input": {"file_path": f"{kits}/KIT.md"}}, 0),
+        (["--write"], {"tool_name": "Write", "tool_input": {"file_path": "/tmp/evil"}}, 2),
+        (["--write"], {"tool_name": "NotebookEdit", "tool_input": {"file_path": f"{kits}/x"}}, 2),
+    ]
+    for argv, data, expected in cases:
+        done = subprocess.run([sys.executable, str(GUARD), *argv], input=json.dumps(data),
+                              capture_output=True, text=True, env=env, timeout=30, check=False)
+        assert done.returncode == expected, (argv, data, done.stdout, done.stderr)
+
+
+def test_the_guards_own_architect_table_carries_both_verdicts() -> None:
+    assert len(guard.ARCHITECT_SELFTEST) >= 30
+    assert any(ok for _, ok in guard.ARCHITECT_SELFTEST)
+    assert any(not ok for _, ok in guard.ARCHITECT_SELFTEST)
+    assert len(guard.WRITE_SELFTEST) >= 4
+    assert {ok for _, _, ok in guard.WRITE_SELFTEST} == {True, False}
+
+
+@pytest.mark.parametrize("cmd,allowed", guard.ARCHITECT_SELFTEST)
+def test_architect_selftest_case(cmd: str, allowed: bool) -> None:
+    reason = guard.check(cmd, role=guard.ARCHITECT_ROLE,
+                         consult_role=guard.SELFTEST_CONSULT_ROLE,
+                         clone=guard.SELFTEST_CLONE, kits=guard.SELFTEST_KITS)
+    assert (reason is None) == allowed, (cmd, reason)
+
+
+def test_the_bare_word_set_is_gone_from_the_file_as_well_as_the_module() -> None:
+    """The mission's acceptance line: the file has no `ALLOWED_FIRST_WORDS`."""
+    assert not hasattr(guard, "ALLOWED_FIRST_WORDS"), "the bare word set is still there"
+    assert "ALLOWED_FIRST_WORDS" not in GUARD.read_text(encoding="utf-8")
+
+
+# --- §31: `architect/settings.json` against the CLI and the guard ------------
+
+ARCHITECT_KIT = ROOT / "architect"
+
+
+def architect_settings() -> dict:
+    return json.loads((ARCHITECT_KIT / "settings.json").read_text(encoding="utf-8"))
+
+
+def test_the_architect_settings_allow_exactly_the_hands_commands_the_guard_allows() -> None:
+    """§31: "verify it against the CLI and fix it if the CLI differs" — the
+    settings' `hands` allow list and the guard's architect surface are one list."""
+    settings = architect_settings()
+    allowed = {entry[len("Bash(hands "):-len(":*)")].split()[0]
+               for entry in settings["permissions"]["allow"]
+               if entry.startswith("Bash(hands ")}
+    assert allowed == ARCHITECT_HANDS
+    assert "Bash(hands kit check:*)" in settings["permissions"]["allow"]
+    assert "Bash(hands kit file:*)" in settings["permissions"]["allow"]
+    denied = {entry[len("Bash(hands "):-len(":*)")].split()[0]
+              for entry in settings["permissions"]["deny"]
+              if entry.startswith("Bash(hands ")}
+    assert denied <= set(ARCHITECT_REFUSED_HANDS)
+    for sub in denied:
+        assert guard.check(f"hands {sub} x", **ARCHITECT) is not None, sub
+
+
+def test_every_bash_command_the_architect_settings_allow_is_a_word_the_guard_has() -> None:
+    """A word the settings allow that the guard has no row for would be a
+    permission the role can never use."""
+    words = {entry[len("Bash("):entry.index(":*)")].split()[0]
+             for entry in architect_settings()["permissions"]["allow"]
+             if entry.startswith("Bash(")}
+    for word in words:
+        assert word in guard.COMMAND_TABLE or word in guard.KITS_TABLE, word
+
+
+def test_the_architect_settings_wire_both_matchers_to_the_guard() -> None:
+    entries = architect_settings()["hooks"]["PreToolUse"]
+    by_matcher = {entry["matcher"]: entry["hooks"][0]["command"] for entry in entries}
+    assert set(by_matcher) == {"Bash", "Write|Edit|MultiEdit"}
+    assert by_matcher["Bash"].endswith("bash_guard.py")
+    assert by_matcher["Write|Edit|MultiEdit"].endswith("bash_guard.py --write")
+
+
+def test_every_command_line_the_architect_kit_shows_passes_the_guard(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """`architect/CLAUDE.md` is the role's contract (§31): a line it shows that
+    the guard refuses is a line the architect cannot run at all."""
+    import re as _re
+
+    monkeypatch.chdir(tmp_path)
+    text = (ARCHITECT_KIT / "CLAUDE.md").read_text(encoding="utf-8")
+    spans = [span.strip() for span in _re.findall(r"`([^`\n]+)`", text)]
+    lines = []
+    for span in spans:
+        span = span.replace("<zip>", "./kits/m16.zip").replace("KITS", "./kits")
+        head = span.split(" ", 1)[0]
+        if head not in guard.COMMAND_TABLE and head not in guard.KITS_TABLE:
+            continue
+        if any(c in span for c in PLACEHOLDER_CHARACTERS) or len(span.split()) < 2:
+            continue
+        lines.append(span)
+    assert "git -C ./repo fetch" in lines
+    assert "hands kit file ./kits/m16.zip" in lines
+    for line in lines:
+        assert guard.check(line, **ARCHITECT) is None, f"the kit shows a refused line: {line}"

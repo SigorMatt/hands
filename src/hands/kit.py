@@ -87,11 +87,12 @@ import stat
 import subprocess
 import zipfile
 import zlib
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from typing import Any, TextIO
 
+from hands.config import CLONE_ENV, KITS_ENV
 from hands.playbook import (
     DRIVER_VERDICTS,
     GIT_ENV_CLEARED,
@@ -114,9 +115,12 @@ __all__ = [
     "KitError",
     "Report",
     "apply_from_zip",
+    "apply_params",
     "apply_prompt",
     "check_kit",
+    "file_run",
     "final_reply_literals",
+    "home_shown",
     "kickoff_line",
     "kit_md_message",
     "named_paths",
@@ -1176,4 +1180,135 @@ def run(kit: str, repo: str | None, *, out: TextIO, as_json: bool) -> int:
     print(f"commit message: {report.commit_message}", file=out)
     print(report.kit_md_note, file=out)
     print(f"kit check: pass ({len(report.checks)} of {len(report.checks)} checks)", file=out)
+    return 0
+
+
+# ------------------------------------------- `hands kit file` (§31, the role)
+
+
+def home_shown(path: Path) -> str:
+    """`path` as the apply prompt names it: `~/…` under `$HOME`, else absolute."""
+    home = Path.home()
+    for base in dict.fromkeys((home, home.resolve())):
+        try:
+            return f"~/{path.relative_to(base).as_posix()}"
+        except ValueError:
+            continue
+    return str(path)
+
+
+def apply_params(plan: Apply, origin: str) -> dict[str, Any]:
+    """The send that files a kit's apply, held: §27's job, with `origin` naming
+    the route it came in by (`kit` from the phone, `architect` from the role).
+
+    The one statement of what a kit apply *is*, so the phone (`hands.phone`) and
+    `hands kit file` cannot drift: the same role, context, prompt and gate.
+    """
+    return {
+        "role": "builder",
+        "context": "clear",
+        "prompt": plan.prompt,
+        "gate": f"apply {plan.name}",
+        "origin": origin,
+    }
+
+
+def _under(path: Path, root: Path) -> bool:
+    """Is `path` the directory `root` or something inside it, by realpath?
+
+    The guard's rule for `$HANDS_KITS` (`bash_guard.py: under`), so a `..` and a
+    symlink land where the kernel takes them and the CLI answers what the hook
+    would have answered.
+    """
+    here = os.path.realpath(path)
+    there = os.path.realpath(root)
+    return here == there or here.startswith(there + os.sep)
+
+
+def kit_under_kits(name: str) -> Path:
+    """§31: the kit's path, refused unless it resolves under `$HANDS_KITS`.
+
+    `hands kit file` is the architect role's command, and the role's kits
+    directory is the only place it may write; a kit somewhere else was not
+    written under this guard, so it is not filed.
+    """
+    kits = os.environ.get(KITS_ENV) or ""
+    if not kits:
+        raise KitError(
+            f"hands kit file runs in the architect role, and ${KITS_ENV} is not set: "
+            "it names the role's kits directory, the only place a kit may come from (§31)"
+        )
+    path = Path(name).expanduser()
+    if not _under(path, Path(kits)):
+        raise KitError(
+            f"{path} is not under ${KITS_ENV} ({kits}), compared by realpath (§31): "
+            "file a kit from the role's kits directory"
+        )
+    return path
+
+
+def role_clone() -> Path:
+    """§31: the repository the check runs against — the role's fetch-only clone."""
+    clone = os.environ.get(CLONE_ENV) or ""
+    if not clone:
+        raise KitError(
+            f"hands kit file checks the kit against the role's clone, and ${CLONE_ENV} "
+            "is not set (§31)"
+        )
+    root = Path(clone)
+    if not root.is_dir():
+        raise KitError(f"${CLONE_ENV} ({clone}) is not a directory (§31)")
+    return root
+
+
+def file_run(
+    kit: str,
+    *,
+    builder_cwd: Path,
+    send: Callable[[dict[str, Any]], dict[str, Any]],
+    out: TextIO,
+    as_json: bool,
+) -> int:
+    """`hands kit file <zip>`: check the kit here, then file its held apply (§31).
+
+    The path must resolve under `$HANDS_KITS` and the check runs against
+    `$HANDS_CLONE`; a kit that fails a check is not filed and the refusal
+    carries the check's own lines. A passing kit is filed by `send` — the
+    daemon's `send` method — with the params the phone's `kit` uses and
+    `origin: architect`, so it is born held and takes §8's path from there.
+    """
+    path = kit_under_kits(kit)
+    report = check_kit(path, role_clone())
+    failed = [check for check in report.checks if not check.ok]
+    if failed:
+        if as_json:
+            print(json.dumps({**report.to_dict(), "filed": False, "job": None}, sort_keys=True),
+                  file=out)
+            return 1
+        for check in report.checks:
+            print(check.line(), file=out)
+        print(report.kit_md_note, file=out)
+        print(
+            f"kit file: FAIL ({len(failed)} of {len(report.checks)} checks failed); "
+            "the kit was not filed",
+            file=out,
+        )
+        return 1
+    # The apply is built against the builder's own repository, from the path as
+    # it is on disk — the two arguments the phone gives `apply_from_zip`.
+    plan = apply_from_zip(path, builder_cwd, home_shown(path))
+    job = send(apply_params(plan, "architect"))
+    if as_json:
+        answer = {**report.to_dict(), "apply_prompt": plan.prompt, "filed": True, "job": job}
+        print(json.dumps(answer, sort_keys=True), file=out)
+        return 0
+    for check in report.checks:
+        print(check.line(), file=out)
+    print(f"commit message: {plan.commit_message}", file=out)
+    print(report.kit_md_note, file=out)
+    print(
+        f"kit file: filed {job['id']} as a {job['state']} builder job "
+        f"(gate: apply {plan.name}, origin: architect); a human decides it",
+        file=out,
+    )
     return 0

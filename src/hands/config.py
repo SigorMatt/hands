@@ -18,12 +18,15 @@ from pathlib import Path
 from typing import Any
 
 __all__ = [
+    "ARCHITECT_ROLE",
     "BG_WAIT_CEILING_ENV",
     "CLONE_ENV",
     "CONSULT_ROLE_ENV",
     "DEFAULT_GATE_PATTERNS",
     "DEFAULT_ROLE_ENV",
     "DRIVER_ROLE",
+    "GUARDED_ROLES",
+    "KITS_ENV",
     "Config",
     "ConfigError",
     "FilesConfig",
@@ -62,8 +65,9 @@ DEFAULT_GATE_PATTERNS: tuple[str, ...] = (
     "open the PR",
 )
 
-KNOWN_ROLES: tuple[str, ...] = ("builder", "aux", "driver")  # §27: driver is the third
-DEFAULT_QUEUE_DEPTH = {"builder": 1, "aux": 4, "driver": 1}  # §6; §27 is silent for driver
+KNOWN_ROLES: tuple[str, ...] = ("builder", "aux", "driver", "architect")  # §27, §31
+DEFAULT_QUEUE_DEPTH = {"builder": 1, "aux": 4, "driver": 1, "architect": 1}
+#: §6; §27 and §31 are silent for the two roles handsd starts one job at a time
 DEFAULT_MODEL = "opus"
 DEFAULT_NTFY_URL = "https://ntfy.sh"
 #: §29: under the project's own spool, so two daemons' default sockets never collide.
@@ -94,7 +98,15 @@ CONSULT_ROLE_ENV = "HANDS_CONSULT_ROLE"
 #: §29: the driver role's clone, in its job's environment (the runner sets it from
 #: `driver_clone`; the guard in role mode allows `git -C` on that path only).
 CLONE_ENV = "HANDS_CLONE"
+#: §31: the architect role's kits directory, in its job's environment (the runner
+#: sets it to `<cwd>/kits`; the guard in architect mode confines every path
+#: argument of `mkdir|cp|mv|zip|unzip` and every write to that directory).
+KITS_ENV = "HANDS_KITS"
 DRIVER_ROLE = "driver"
+ARCHITECT_ROLE = "architect"
+#: §27, §31: the roles handsd starts headless, each with its own guard mode and
+#: no permission bypass — `settings.json` and the hook are the law.
+GUARDED_ROLES: tuple[str, ...] = (DRIVER_ROLE, ARCHITECT_ROLE)
 #: A name `[roles.<r>] env` may set: what a POSIX shell accepts as a variable name.
 _ENV_NAME_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 
@@ -177,11 +189,12 @@ class RoleConfig:
 
         `DEFAULT_ROLE_ENV` under the configured table, so a configured value
         wins and an unset ceiling is `0` — whatever handsd itself inherited.
-        A driver-role job also carries `HANDS_ROLE=driver` (§27), on top of the
-        table: the guard's role mode is not something a config can switch off.
+        A driver-role job also carries `HANDS_ROLE=driver` (§27) and an
+        architect-role job `HANDS_ROLE=architect` (§31), on top of the table:
+        the guard's mode is not something a config can switch off.
         """
-        if self.name == DRIVER_ROLE:
-            return {**DEFAULT_ROLE_ENV, **self.env, ROLE_ENV: DRIVER_ROLE}
+        if self.name in GUARDED_ROLES:
+            return {**DEFAULT_ROLE_ENV, **self.env, ROLE_ENV: self.name}
         return {**DEFAULT_ROLE_ENV, **self.env}
 
     @property
@@ -732,12 +745,13 @@ def _role(name: str, table: Any, path: Path) -> RoleConfig:
     )
     if "cwd" not in table:
         raise ConfigError(f"{path}: {where} needs a cwd")
-    if name == DRIVER_ROLE and _str(table, "permission_flags", "", where, path, blank=None):
-        # §27: "no permission bypass: the role runs with `permission_flags` empty
-        # so `settings.json` and the hook are the law". Refused at load, so handsd
-        # never holds a driver role that could run with one; doctor reports it.
+    if name in GUARDED_ROLES and _str(table, "permission_flags", "", where, path, blank=None):
+        # §27, §31: "no permission bypass: the role runs with `permission_flags`
+        # empty so `settings.json` and the hook are the law". Refused at load, so
+        # handsd never holds such a role that could run with one; doctor reports it.
+        section = "§27" if name == DRIVER_ROLE else "§31"
         raise ConfigError(
-            f"{path}: {where} permission_flags must be empty (§27): the driver role "
+            f"{path}: {where} permission_flags must be empty ({section}): the {name} role "
             "runs under its settings.json and the Bash guard, with no permission bypass"
         )
     return RoleConfig(

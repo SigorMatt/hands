@@ -15,10 +15,10 @@ refused by name. `hands open` is blocked too: it execs an interactive
 `claude --resume`, which is a direct claude by another name.
 
 The command table (DESIGN §31). Until v3.14 the words outside `git` and `hands`
-were a bare set, `ALLOWED_FIRST_WORDS`, with no option table at all, and
-`sort -o F`, `uniq A B` and `sort --compress-program=P` wrote a file, wrote a
-file and ran a program (REVIEW-14 blocker 1, H-028). `COMMAND_TABLE` replaces
-the set: `sort`, `uniq`, `cut`, `tr`, `find`, `stat`, `diff`, `printf`,
+were a bare set with no option table at all, and `sort -o F`, `uniq A B` and
+`sort --compress-program=P` wrote a file, wrote a file and ran a program
+(REVIEW-14 blocker 1, H-028). `COMMAND_TABLE` replaces
+that set: `sort`, `uniq`, `cut`, `tr`, `find`, `stat`, `diff`, `printf`,
 `basename`, `dirname`, `realpath`, `tty`, `id`, `whoami`, `uptime`, `which`,
 `test`, `[`, `seq`, `true`, `false` and `pwd` left it. `tee`, an in-place
 `sed`, an interpreter, a file mutation and a direct `claude` are refused by
@@ -120,6 +120,39 @@ Everything else is refused. That covers the `hands` subcommands, by name
 table does not list, and every command word the table does not carry. Any
 other non-empty `HANDS_ROLE` fails closed.
 
+Architect mode (DESIGN §31, H-029). With `HANDS_ROLE=architect` the guard
+guards the architect ROLE, a headless session handsd starts to write one kit:
+- the read-only rows of the table above, and read-only `git` with `-C` pinned
+  to `HANDS_CLONE` exactly as role mode pins it;
+- `hands kit check` and `hands kit file`, plus the reads
+  `hands show|jobs|inbox|pipeline|status`. That is the `hands` surface
+  `architect/settings.json` — the role's own shipped instruction — allows, so
+  `tail` is not in it and `resume` (which those settings deny outright) is not
+  either. Never `send`, `approve`, `deny`, `go`, `put`, `pause`, `open`, and
+  never a push: the clone's push URL is disabled as the driver's is;
+- `mkdir`, `cp`, `mv`, `zip` and `unzip` — `KITS_TABLE`, this mode's rows and
+  no other mode's — with the options rule 3 of `architect/CLAUDE.md` needs
+  (`mkdir -p`, `cp -r`, `zip -r`, `unzip -o`, `unzip -d <dir>`) and **every
+  path argument** under `HANDS_KITS`. `zip -T` and `--unzip-command` run a
+  program and `unzip -d` names a directory, so the first two are refused by
+  not being listed and the third's value is a path like any other. "Under
+  `HANDS_KITS`" is decided as `git -C` is: `os.path.realpath` containment,
+  relative paths joined to the hook's working directory, no `~` expanded, and
+  with `HANDS_KITS` unset or empty nothing in that group passes. §28 holds for
+  those paths as it holds for `git` and `hands` arguments: a word the shell
+  would still expand after the guard read it is refused, because
+  `./kits/{a,../../evil}` is one path here and two to bash.
+`FORBIDDEN_PATTERNS` refuses `mkdir|cp|mv|…` as a file mutation before any
+tokenizing, so that row drops exactly these five words in architect mode and
+keeps them everywhere else (`rm`, `touch`, `chmod`, `ln` and the rest stay
+refused in every mode, under `HANDS_KITS` or not).
+
+The write matcher (DESIGN §31): `python3 bash_guard.py --write` is the second
+`PreToolUse` hook, for `Write|Edit|MultiEdit`. It reads the same hook JSON on
+stdin, takes the tool's `file_path`, and allows it only in architect mode and
+only under `HANDS_KITS`. Any other tool name, any payload shape it does not
+recognise, and any other mode fail closed.
+
 Self-test: python3 bash_guard.py --selftest
 """
 import json
@@ -187,8 +220,17 @@ FORBIDDEN_HANDS_SUBCOMMANDS = {"open"}
 ROLE_ENV = "HANDS_ROLE"
 CONSULT_ROLE_ENV = "HANDS_CONSULT_ROLE"
 CLONE_ENV = "HANDS_CLONE"  # §29: role mode's `git -C` must name this path
+KITS_ENV = "HANDS_KITS"  # §31: architect mode's writes must land under this path
 DRIVER_ROLE = "driver"
+ARCHITECT_ROLE = "architect"  # §31: the third mode value
+#: The two modes handsd starts: both pin `git -C` to the role's clone.
+ROLE_MODES = (DRIVER_ROLE, ARCHITECT_ROLE)
 ROLE_HANDS_SUBCOMMANDS = {"show", "jobs", "inbox", "pipeline", "status", "tail", "resume"}
+#: §31: the `hands` reads architect mode has, which is `architect/settings.json`'s
+#: own allow list. `kit` is judged by its own subcommand below (`check` and
+#: `file`, never `apply`), and `send` is not here at all.
+ARCHITECT_HANDS_SUBCOMMANDS = {"show", "jobs", "inbox", "pipeline", "status"}
+ARCHITECT_KIT_SUBCOMMANDS = ("check", "file")
 ROLE_SEND_TARGETS = {"builder", "aux"}
 # `hands` options that may come before the subcommand. Two take a value, one
 # does not.
@@ -199,14 +241,38 @@ SHELL_KEYWORDS = {"do", "done", "if", "then", "else", "elif", "fi", "while",
 
 # Read on the command with its quoted text removed (`unquoted`). No pattern
 # for redirection: a `<` or `>` never gets this far (§30).
-FORBIDDEN_PATTERNS = [
-    (r"\btee\b", "tee"),
-    (r"\bsed\s+(-[a-zA-Z]*i|--in-place)", "sed -i"),
-    (r"(^|[\s;&|(])(rm|mv|cp|touch|mkdir|rmdir|chmod|chown|ln|truncate|dd|install)\b", "file mutation"),
-    (r"(^|[\s;&|(])(python3?|perl|ruby|node|bash|sh|zsh|eval|exec|source|xargs|env|sudo|su)\b", "interpreter or wrapper"),
-    (r"(^|[^\w./-])claude\b", "direct claude"),
-    (r"\bkill\b(?!\s+-0\b)", "kill other than -0"),
-]
+#
+# §31: the words the mutation row refuses, wherever they are written. The five
+# `KITS_TABLE` carries are dropped from it in architect mode — and only there —
+# because that mode judges them by their path arguments instead; everything
+# else in the row (`rm`, `touch`, `chmod`, `ln`, ...) is refused in every mode.
+MUTATION_WORDS = ("rm", "mv", "cp", "touch", "mkdir", "rmdir", "chmod", "chown",
+                  "ln", "truncate", "dd", "install")
+KITS_WORDS = ("mkdir", "cp", "mv", "zip", "unzip")
+
+
+def _mutation_row(words):
+    return (r"(^|[\s;&|(])(" + "|".join(words) + r")\b", "file mutation")
+
+
+def _patterns(mutation_words):
+    return [
+        (r"\btee\b", "tee"),
+        (r"\bsed\s+(-[a-zA-Z]*i|--in-place)", "sed -i"),
+        _mutation_row(mutation_words),
+        (r"(^|[\s;&|(])(python3?|perl|ruby|node|bash|sh|zsh|eval|exec|source|xargs|env|sudo|su)\b", "interpreter or wrapper"),
+        (r"(^|[^\w./-])claude\b", "direct claude"),
+        (r"\bkill\b(?!\s+-0\b)", "kill other than -0"),
+    ]
+
+
+FORBIDDEN_PATTERNS = _patterns(MUTATION_WORDS)
+ARCHITECT_PATTERNS = _patterns([w for w in MUTATION_WORDS if w not in KITS_WORDS])
+
+
+def patterns_for(role):
+    """§31: the pre-tokenizing patterns this mode reads."""
+    return ARCHITECT_PATTERNS if role == ARCHITECT_ROLE else FORBIDDEN_PATTERNS
 
 # §30: the language. These are refused in any position, quoted or not, before
 # any tokenizing. The two-character sequences are looked for first, at each
@@ -383,6 +449,29 @@ def clone_problem(value: str, clone):
     return None
 
 
+def under(value: str, root: str) -> bool:
+    """Is `value` the directory `root` or something inside it? (§31)
+
+    Both sides are compared after `os.path.realpath`, so a symlink and a `..`
+    land where the kernel takes them and a relative path joins the hook's
+    working directory, which is the role's cwd. No `~` is expanded.
+    """
+    here = os.path.realpath(value)
+    there = os.path.realpath(root)
+    return here == there or here.startswith(there + os.sep)
+
+
+def kits_problem(value: str, kits, name: str):
+    """§31: why `name`'s path argument `value` is not under `HANDS_KITS`, or None."""
+    if not kits:
+        return (f"architect mode runs `{name}` only on paths under the role's kits "
+                f"directory, and {KITS_ENV} is not set (§31), so {value!r} is refused")
+    if not under(value, kits):
+        return (f"`{name}` takes only path arguments under the role's kits directory "
+                f"({KITS_ENV}={kits!r}, compared by realpath, §31), not {value!r}")
+    return None
+
+
 def git_subcommand(words, start: int, role=None, clone=None):
     """Read the option area of the `git` at words[start - 1].
 
@@ -395,7 +484,8 @@ def git_subcommand(words, start: int, role=None, clone=None):
     one `-C <path>`, and the path must be the role's clone (§29, §30,
     `clone_problem`).
     """
-    pre_flags = set() if role == DRIVER_ROLE else GIT_ALLOWED_PRE_FLAGS
+    pinned_mode = role in ROLE_MODES
+    pre_flags = set() if pinned_mode else GIT_ALLOWED_PRE_FLAGS
     seen_path = False
     i = start
     while i < len(words):
@@ -403,14 +493,14 @@ def git_subcommand(words, start: int, role=None, clone=None):
         if w == GIT_PRE_FLAG_WITH_PATH:
             if i + 1 >= len(words):
                 return None, i, "`-C` with no path after it"
-            if role == DRIVER_ROLE and seen_path:
+            if pinned_mode and seen_path:
                 return None, i, ("a second `-C` is refused in role mode: git applies each "
                                  "`-C` relative to the one before (§30)")
             value = words[i + 1]
             if value.startswith("-"):
                 return None, i, (f"the `-C` value must be a single path that does "
                                  f"not begin with `-`, not {value!r}")
-            if role == DRIVER_ROLE:
+            if pinned_mode:
                 pinned = clone_problem(value, clone)
                 if pinned is not None:
                     return None, i, pinned
@@ -422,7 +512,7 @@ def git_subcommand(words, start: int, role=None, clone=None):
             continue
         if w.startswith("-"):
             allowed = ("only `-C <path>` may come before a git subcommand in role mode"
-                       if role == DRIVER_ROLE else
+                       if pinned_mode else
                        "only `-C <path>` and `--no-pager` may come before a git subcommand")
             return None, i, (f"git option before the subcommand not allowed: {w!r} "
                              f"({allowed}; `-c`, `--config-env` and the rest can "
@@ -560,7 +650,7 @@ def hands_violation(words, masks, cmd, role=None, consult_role=None):
         return reason
     args = words[1:]
     i = hands_subcommand(args)
-    if role != DRIVER_ROLE:
+    if role not in ROLE_MODES:
         sub = next((a for a in args[i:] if not a.startswith("-")), None)
         if sub in FORBIDDEN_HANDS_SUBCOMMANDS:
             return f"hands {sub} starts an interactive session: {cmd!r}"
@@ -568,6 +658,8 @@ def hands_violation(words, masks, cmd, role=None, consult_role=None):
     if i >= len(args) or args[i].startswith("-"):
         got = args[i] if i < len(args) else "nothing"
         return f"hands needs an allowed subcommand in role mode, got {got!r}: {cmd!r}"
+    if role == ARCHITECT_ROLE:
+        return architect_hands_violation(args, args[i], args[i + 1:], cmd)
     sub, rest = args[i], args[i + 1:]
     if sub in ROLE_HANDS_SUBCOMMANDS:
         return None
@@ -579,6 +671,34 @@ def hands_violation(words, masks, cmd, role=None, consult_role=None):
         return send_violation(args, rest, cmd, consult_role)
     return (f"hands {sub} is not allowed for the driver role (§27: show, jobs, inbox, "
             f"pipeline, status, tail, kit check, send --context keep, resume): {cmd!r}")
+
+
+def architect_hands_violation(args, sub, rest, cmd):
+    """§31: the `hands` surface of architect mode, or None.
+
+    `kit check` and `kit file`, and the reads `architect/settings.json` allows.
+    Everything else is refused by name, `send` with the authority commands:
+    the architect files a kit and replies, and never drives a role.
+    """
+    if sub in ARCHITECT_HANDS_SUBCOMMANDS:
+        return None
+    if sub == "kit":
+        if rest and rest[0] in ARCHITECT_KIT_SUBCOMMANDS:
+            if rest[0] == "file":
+                # §31 is silent here; §27's reason for the driver's send holds:
+                # the job is filed in the role's own project, so the two options
+                # that leave it are refused. `kit check` writes nothing and
+                # reads neither, so it keeps them.
+                for name in HANDS_VALUE_OPTIONS:
+                    if any(option_is(a, name) for a in args):
+                        return (f"hands kit file {name} leaves the architect's own "
+                                f"project, refused (§27's rule for a role's send): {cmd!r}")
+            return None
+        return (f"only `hands kit check` and `hands kit file` are allowed for the "
+                f"architect role (§31): {cmd!r}")
+    return (f"hands {sub} is not allowed for the architect role (§31: kit check, kit "
+            f"file, show, jobs, inbox, pipeline, status — never send, approve, deny, "
+            f"go, put, pause, resume or open): {cmd!r}")
 
 
 def send_violation(args, rest, cmd, consult_role):
@@ -644,12 +764,18 @@ class Command:
     is allowed, in both modes.
     """
 
-    def __init__(self, flags=(), values=(), words=None, count=False, judge=None):
+    def __init__(self, flags=(), values=(), words=None, count=False, judge=None,
+                 kits=False):
         self.flags = frozenset(flags)
         self.values = dict(values)
         self.words = words
         self.count = count
         self.judge = judge
+        # §31: a `KITS_TABLE` row. Every path argument of this command — each
+        # word that is not an option, and the value of every option it takes,
+        # since all of those name a path too — must be under `HANDS_KITS`, and
+        # it takes at least one.
+        self.kits = kits
 
     def listed(self) -> str:
         return ", ".join(sorted(self.flags | set(self.values))) or "no options"
@@ -723,6 +849,22 @@ COMMAND_TABLE = {
     "kill": Command(flags={"-0"}, words=a_pid),
 }
 
+# §31, architect mode only: the five words that write, each with the minimum
+# `architect/CLAUDE.md` rule 3 needs to build a zip of repository-path entries
+# under `HANDS_KITS`, and no more. Every path argument is confined to that
+# directory (`Command.kits`), including `unzip -d`'s, which is a directory like
+# any other. Nothing here takes a value that names a program: `zip -T` and
+# `zip --unzip-command=P` run one, and both are refused because they are not
+# listed. These rows exist in no other mode, where the five words remain what
+# `FORBIDDEN_PATTERNS` calls them — a file mutation.
+KITS_TABLE = {
+    "mkdir": Command(flags={"-p"}, kits=True),
+    "cp": Command(flags={"-r"}, kits=True),
+    "mv": Command(kits=True),
+    "zip": Command(flags={"-r"}, kits=True),
+    "unzip": Command(flags={"-o"}, values={"-d": any_value}, kits=True),
+}
+
 
 def value_option(row, word):
     """The row's value-taking option this word spells, and the value attached to
@@ -736,7 +878,7 @@ def value_option(row, word):
     return None, None
 
 
-def option_violation(name, row, args, cmd):
+def option_violation(name, row, args, cmd, kits=None):
     """The reason this command's words are not the ones its row lists, or None.
 
     Every token beginning with `-` must be listed by the row; what is left are
@@ -744,6 +886,9 @@ def option_violation(name, row, args, cmd):
     has one. This is `unlisted_git_option`'s policy for the rest of the table:
     an option is refused because it is not listed, not because someone
     remembered to name it.
+
+    For a `KITS_TABLE` row (§31) every one of those words, and every value its
+    options take, must also be a path under `HANDS_KITS`.
     """
     plain, i = [], 0
     while i < len(args):
@@ -773,12 +918,23 @@ def option_violation(name, row, args, cmd):
         if not row.values[option](attached):
             return (f"the value of `{option}` for `{name}` is not one §31 allows: "
                     f"{attached!r} in {cmd!r}")
+        if row.kits:
+            problem = kits_problem(attached, kits, name)
+            if problem is not None:
+                return f"{problem}: {cmd!r}"
+    if row.kits:
+        if not plain:
+            return f"`{name}` takes at least one path under {KITS_ENV} (§31): {cmd!r}"
+        for word in plain:
+            problem = kits_problem(word, kits, name)
+            if problem is not None:
+                return f"{problem}: {cmd!r}"
     if row.words is not None:
         return row.words(name, plain, cmd)
     return None
 
 
-def judge(values, masks, cmd, role, consult_role, clone=None):
+def judge(values, masks, cmd, role, consult_role, clone=None, kits=None):
     """The reason this segment's words are refused, or None.
 
     One loop for every command word (§31). Each `git` token is judged wherever
@@ -799,9 +955,13 @@ def judge(values, masks, cmd, role, consult_role, clone=None):
         return reason
     name = words[0]
     row = COMMAND_TABLE.get(name)
+    if row is None and role == ARCHITECT_ROLE:
+        row = KITS_TABLE.get(name)  # §31: these five rows exist in this mode only
     if row is None:
-        return (f"command not in the guard's table: {name!r} in {cmd!r} (§31: the driver "
-                f"runs {', '.join(sorted(COMMAND_TABLE))}, each with the options that "
+        table = dict(COMMAND_TABLE, **KITS_TABLE) if role == ARCHITECT_ROLE else COMMAND_TABLE
+        who = "the architect" if role == ARCHITECT_ROLE else "the driver"
+        return (f"command not in the guard's table: {name!r} in {cmd!r} (§31: {who} "
+                f"runs {', '.join(sorted(table))}, each with the options that "
                 f"table lists; a word not in it is refused by name)")
     # `find` is not a row, so this reaches only a `find` in argument position —
     # a wrapper shape, kept as the git scan above is kept (DESIGN §20, §21).
@@ -810,38 +970,82 @@ def judge(values, masks, cmd, role, consult_role, clone=None):
         return f"find {action}: {cmd!r}"
     if row.judge is not None:
         return row.judge(words, marks, cmd, role, consult_role)
-    return option_violation(name, row, words[1:], cmd)
+    if row.kits:
+        # §28, for the one group whose words are judged as paths: a word the
+        # shell still expands is not the path the guard read. `./kits/{a,../x}`
+        # is one word here and two paths to bash, and the second one leaves the
+        # kits directory (`git` and `hands` arguments carry the same rule).
+        reason = residual_violation(words, marks, 0, name, cmd)
+        if reason:
+            return reason
+    return option_violation(name, row, words[1:], cmd, kits)
 
 
-def check(cmd: str, role=None, consult_role=None, clone=None):
+def check(cmd: str, role=None, consult_role=None, clone=None, kits=None):
     """Return None if allowed, else a reason string.
 
     `role` is `HANDS_ROLE`: None for the human's driver session, `driver` for
-    §27's role mode, and anything else is refused outright (fail closed).
-    `consult_role` is `HANDS_CONSULT_ROLE` and `clone` is `HANDS_CLONE`; only
-    role mode reads them. The language comes first (§30): a command that is
-    not one line of words and quotes is refused before any tokenizing, naming
-    the first offender and its position.
+    §27's role mode, `architect` for §31's, and anything else is refused
+    outright (fail closed). `consult_role` is `HANDS_CONSULT_ROLE`, `clone` is
+    `HANDS_CLONE` and `kits` is `HANDS_KITS`; only the role modes read them.
+    The language comes first (§30): a command that is not one line of words and
+    quotes is refused before any tokenizing, naming the first offender and its
+    position.
     """
-    if role is not None and role != DRIVER_ROLE:
-        return f"unknown {ROLE_ENV} {role!r} (only {DRIVER_ROLE!r} is a mode): {cmd!r}"
+    if role is not None and role not in ROLE_MODES:
+        known = " or ".join(repr(name) for name in ROLE_MODES)
+        return f"unknown {ROLE_ENV} {role!r} (only {known} is a mode): {cmd!r}"
     problem = language_problem(cmd)
     if problem is not None:
         return (f"refused before tokenizing: {problem} (§30: the driver's shell is one "
                 f"line of words and quotes): {cmd!r}")
     bare = unquoted(cmd)
-    for pat, why in FORBIDDEN_PATTERNS:
+    for pat, why in patterns_for(role):
         if re.search(pat, bare):
             return f"{why}: {cmd!r}"
     try:
         for raw, mask in segments(cmd):
             values, masks = tokens(raw, mask)
-            reason = judge(values, masks, cmd, role, consult_role, clone)
+            reason = judge(values, masks, cmd, role, consult_role, clone, kits)
             if reason:
                 return reason
     except Refused as e:
         return f"{e}, refused (§28): {cmd!r}"
     return None
+
+
+# --- DESIGN §31: the second matcher, Write|Edit|MultiEdit --------------------
+#
+# Claude Code names the path of a Write, an Edit and a MultiEdit `file_path` in
+# the tool's input. This reads that one field and nothing else: a payload whose
+# shape it does not recognise is refused, not guessed at.
+WRITE_TOOLS = ("Write", "Edit", "MultiEdit")
+WRITE_PATH_KEY = "file_path"
+
+
+def write_violation(data, role=None, kits=None):
+    """§31: the reason this Write/Edit/MultiEdit call is refused, or None.
+
+    Allowed only in architect mode, and only for a path under `HANDS_KITS`.
+    Every other mode, every other tool name and every shape this does not
+    recognise fails closed, so the matcher can only ever narrow what
+    `settings.json` already allows.
+    """
+    if role != ARCHITECT_ROLE:
+        return (f"a write is allowed only in architect mode ({ROLE_ENV}={role!r}, §31), "
+                f"and only under {KITS_ENV}")
+    tool = data.get("tool_name") if isinstance(data, dict) else None
+    if tool not in WRITE_TOOLS:
+        return (f"the write matcher judges {' | '.join(WRITE_TOOLS)}, not {tool!r} "
+                f"(§31: any other tool fails closed)")
+    tool_input = data.get("tool_input")
+    if not isinstance(tool_input, dict):
+        return f"the {tool} call carries no tool_input object (§31: fail closed)"
+    path = tool_input.get(WRITE_PATH_KEY)
+    if not isinstance(path, str) or not path:
+        return (f"the {tool} call carries no {WRITE_PATH_KEY} the guard can read "
+                f"({path!r}, §31: fail closed)")
+    return kits_problem(path, kits, tool)
 
 
 # §30: review 13 blocker 1's `<<` shape, verbatim (bash's decoding of the
@@ -1138,38 +1342,169 @@ ROLE_SELFTEST = [
 ]
 
 
+# The role's kits directory, as the self-test's HANDS_KITS (architect/CLAUDE.md's
+# KITS). Relative, like the clone: `under` resolves both against the same cwd.
+SELFTEST_KITS = "./kits"
+
+# Architect mode (§31): `check(cmd, role="architect", kits="./kits")`.
+ARCHITECT_SELFTEST = [
+    # the read-only table, as the driver role has it
+    ("git -C ./repo fetch && git -C ./repo log --oneline origin/main -10", True),
+    ("git -C ./repo show origin/main:meta/ROADMAP.md", True),
+    ("git -C ./repo grep -n -e ROADMAP origin/main -- docs", True),
+    ("cat ./repo/DESIGN.md", True),
+    ("ls -la ./kits", True),
+    ("head -n 40 ./repo/meta/ROADMAP.md", True),
+    ("wc -l ./kits/m16/KIT.md", True),
+    ("git -C /tmp log", False),
+    ("git -C ./repo push", False),
+    ("git commit -m x", False),
+    ("cat -n ./repo/DESIGN.md", False),
+    ("pwd", False),
+    # the two `hands` commands §31 adds, and the reads the settings allow
+    ("hands kit check ./kits/m16.zip --repo ./repo", True),
+    ("hands kit file ./kits/m16.zip", True),
+    ("hands --project other kit file ./kits/m16.zip", False),
+    ("hands kit file --socket /tmp/other.sock ./kits/m16.zip", False),
+    ("hands --project other kit check ./kits/m16.zip", True),
+    ("hands show job-1 --json", True),
+    ("hands jobs --role builder -n 5", True),
+    ("hands inbox", True),
+    ("hands pipeline", True),
+    ("hands status --json", True),
+    # ... and every command that drives a role or decides a gate, by name
+    ("hands send --role builder --context keep 'do it'", False),
+    ("hands send --role builder --context clear 'do it'", False),
+    ("hands approve job-1 --human-confirmed --quote 'yes'", False),
+    ("hands deny job-1 --human-confirmed --quote 'no'", False),
+    ("hands go", False),
+    ("hands put ./kits/x --content y", False),
+    ("hands pause", False),
+    ("hands resume", False),
+    ("hands open job-1", False),
+    ("hands tail --role builder -n 20", False),
+    ("hands kit apply ./kits/m16.zip", False),
+    # the five words this mode adds, every path argument under HANDS_KITS
+    ("mkdir -p ./kits/m16/meta", True),
+    ("cp -r ./kits/m16 ./kits/m17", True),
+    ("mv ./kits/m16/BRIEF.md ./kits/m16/meta/BRIEF.md", True),
+    ("zip -r ./kits/m16.zip ./kits/m16", True),
+    ("unzip -o ./kits/m16.zip -d ./kits/out", True),
+    ("mkdir -p /tmp/evil", False),
+    ("mkdir -p ./kits/../evil", False),
+    ("cp ./repo/DESIGN.md ./kits/DESIGN.md", False),
+    ("mv ./kits/a ../a", False),
+    ("zip -r /tmp/m16.zip ./kits/m16", False),
+    ("unzip -o ./kits/m16.zip -d /tmp/out", False),
+    ("mkdir", False),
+    # §28: a word the shell would still expand is not the path the guard read
+    ("mkdir -p ./kits/{m16,../evil}", False),
+    ("mkdir -p ./kits/*", False),
+    ("mkdir -p './kits/{m16,x}'", True),
+    # ... with only the options those rows list
+    ("zip -T ./kits/m16.zip", False),
+    ("zip --unzip-command=/tmp/prog ./kits/m16.zip", False),
+    ("cp -a ./kits/a ./kits/b", False),
+    ("mkdir -m 777 ./kits/a", False),
+    ("unzip -p ./kits/m16.zip", False),
+    # ... and the mutations §31 never gives it, under the kits directory or not
+    ("rm -rf ./kits/m16", False),
+    ("touch ./kits/m16/x", False),
+    ("chmod 777 ./kits/m16", False),
+    ("ln -s /etc ./kits/etc", False),
+    ("echo x > ./kits/m16/x", False),
+    ("cat ./repo/DESIGN.md | tee ./kits/DESIGN.md", False),
+    ("python3 -c 'print(1)'", False),
+    ("claude -p hi", False),
+    ("mkdir ./kits/a && rm -rf /", False),
+    # §30's language holds here too
+    *[(shape, False) for shape in REVIEW_13_SHAPES],
+    *[(probe, False) for probe in REVIEW_14_PROBES],
+]
+
+# The write matcher (§31): `(tool_name, file_path, allowed)` in architect mode.
+WRITE_SELFTEST = [
+    ("Write", "./kits/m16/KIT.md", True),
+    ("Edit", "./kits/m16/DESIGN.md", True),
+    ("MultiEdit", "./kits/m16/PLAYBOOK.toml", True),
+    ("Write", "./kits", True),
+    ("Write", "./repo/DESIGN.md", False),
+    ("Write", "./kits/../repo/DESIGN.md", False),
+    ("Write", "/tmp/evil", False),
+    ("Write", "~/kits/x", False),
+    ("Write", "", False),
+    ("NotebookEdit", "./kits/m16/x.ipynb", False),
+    ("Bash", "./kits/m16/KIT.md", False),
+]
+
+
 def selftest() -> int:
     bad = 0
     cases = [(cmd, expected, None) for cmd, expected in SELFTEST]
     cases += [(cmd, expected, DRIVER_ROLE) for cmd, expected in ROLE_SELFTEST]
+    cases += [(cmd, expected, ARCHITECT_ROLE) for cmd, expected in ARCHITECT_SELFTEST]
     for cmd, expected, role in cases:
-        reason = check(cmd, role=role, consult_role=SELFTEST_CONSULT_ROLE, clone=SELFTEST_CLONE)
+        reason = check(cmd, role=role, consult_role=SELFTEST_CONSULT_ROLE,
+                       clone=SELFTEST_CLONE, kits=SELFTEST_KITS)
         ok = (reason is None) == expected
         if not ok:
             bad += 1
             mode = f" [{ROLE_ENV}={role}]" if role else ""
             print(f"FAIL expected {'allow' if expected else 'block'}{mode}: {cmd!r}  -> {reason}")
-    print(f"selftest: {len(cases) - bad}/{len(cases)} ok")
+    for tool, path, expected in WRITE_SELFTEST:
+        data = {"tool_name": tool, "tool_input": {WRITE_PATH_KEY: path}}
+        reason = write_violation(data, role=ARCHITECT_ROLE, kits=SELFTEST_KITS)
+        if (reason is None) != expected:
+            bad += 1
+            print(f"FAIL expected {'allow' if expected else 'block'} [--write]: "
+                  f"{tool} {path!r}  -> {reason}")
+    total = len(cases) + len(WRITE_SELFTEST)
+    print(f"selftest: {total - bad}/{total} ok")
     return 1 if bad else 0
 
 
 def main() -> int:
     if len(sys.argv) > 1 and sys.argv[1] == "--selftest":
         return selftest()
+    write = len(sys.argv) > 1 and sys.argv[1] == "--write"
     try:
         data = json.load(sys.stdin)
     except Exception as e:  # malformed input: fail closed
         print(f"bash_guard: cannot parse hook input ({e}); blocking", file=sys.stderr)
         return 2
+    role = os.environ.get(ROLE_ENV) or None
+    kits = os.environ.get(KITS_ENV) or None
+    if write:
+        # §31: the Write|Edit|MultiEdit matcher. Nothing here is judged as a
+        # command; only the path is read, and only architect mode has a path
+        # it may write to at all.
+        reason = write_violation(data if isinstance(data, dict) else {}, role=role, kits=kits)
+        if reason is None:
+            return 0
+        print(f"bash_guard blocked this write ({reason}). The architect writes only under "
+              f"${KITS_ENV}, its kits directory; the repository is read through its clone "
+              f"and changed by filing a kit (`hands kit file`). If the task needs a write "
+              f"anywhere else, reply VERDICT: escalate <reason>.", file=sys.stderr)
+        return 2
     if data.get("tool_name") != "Bash":
         return 0
     cmd = (data.get("tool_input") or {}).get("command", "")
-    role = os.environ.get(ROLE_ENV) or None
     consult_role = os.environ.get(CONSULT_ROLE_ENV) or None
     clone = os.environ.get(CLONE_ENV) or None
-    reason = check(cmd, role=role, consult_role=consult_role, clone=clone)
+    reason = check(cmd, role=role, consult_role=consult_role, clone=clone, kits=kits)
     if reason is None:
         return 0
+    if role == ARCHITECT_ROLE:
+        print(f"bash_guard blocked this command ({reason}). The architect role may only run "
+              f"the guard's read-only table (§31) — read-only git (`git -C` only on "
+              f"${CLONE_ENV}), hands "
+              f"{'|'.join(sorted(ARCHITECT_HANDS_SUBCOMMANDS))}, hands kit check, hands kit "
+              f"file, and {', '.join(sorted(set(COMMAND_TABLE) - {'hands', 'git'}))} with "
+              f"the options their rows list — plus "
+              f"{', '.join(sorted(KITS_TABLE))} with every path argument under "
+              f"${KITS_ENV}. It never sends, approves, denies, goes, puts or pushes. If the "
+              f"kit needs more, reply VERDICT: escalate <reason>.", file=sys.stderr)
+        return 2
     if role is not None:
         print(f"bash_guard blocked this command ({reason}). The driver role may only run "
               f"the guard's command table (§31), minus the hands subcommands §27 "
