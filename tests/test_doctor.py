@@ -859,6 +859,20 @@ def test_the_probe_sends_whatever_flags_the_monitor_sends(
 # ------------------------------------ go and kit transport: on/off (§26, M10 U6)
 
 KICKOFF = "Read meta/BUILDER-11-PROMPT.md and execute the mission below its divider."
+#: The brief that kickoff names, relative to the builder's cwd (§31).
+BRIEF = "meta/BUILDER-11-PROMPT.md"
+
+
+def write_brief(tmp_path: Path, name: str = BRIEF) -> Path:
+    """Put the brief the kickoff names in the builder's cwd (§31).
+
+    Not committed: doctor asks whether the file is there, which is what a phone
+    `go` needs — the playbook is the only file §10 wants committed.
+    """
+    path = tmp_path / "work" / name
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("# the mission\n\n---\n\nDo the thing.\n")
+    return path
 
 
 def with_channel(path: Path, files: str = "") -> None:
@@ -871,10 +885,10 @@ def with_channel(path: Path, files: str = "") -> None:
     )
 
 
-def kickoff_playbook() -> str:
+def kickoff_playbook(kickoff: str = KICKOFF) -> str:
     """§10's example with its name moved into §26's `[series]` table (H-019)."""
     body = EXAMPLE_PLAYBOOK.read_text().replace('series = "audit-fixes"\n', "")
-    return body + f'\n[series]\nname = "audit-fixes"\nkickoff = "{KICKOFF}"\n'
+    return body + f'\n[series]\nname = "audit-fixes"\nkickoff = "{kickoff}"\n'
 
 
 def test_go_is_off_without_the_command_channel_and_doctor_exits_0(
@@ -932,6 +946,7 @@ def test_go_is_on_with_the_channel_and_a_kickoff_and_prints_no_secret(
 ) -> None:
     with_channel(write_config(tmp_home, tmp_path))
     commit_file(tmp_path / "work", "PLAYBOOK.toml", kickoff_playbook())
+    write_brief(tmp_path)  # §31: the kickoff names a brief the repository has
     code, out, err = run()
     assert code == 0, f"{out}\n{err}"
     assert "go on" in strip_paths(text_row(out, "go"))
@@ -943,6 +958,81 @@ def test_go_is_on_with_the_channel_and_a_kickoff_and_prints_no_secret(
     for text in (out, err, json.dumps(found)):
         assert PHONE_SECRET not in strip_paths(text)
         assert "hands-cmd-doctor" not in strip_paths(text)
+
+
+#: §31 (review 14 should-fix 7): kickoffs doctor must stay quiet about. The
+#: named-path rule it borrows reads a bare capitalised word as a file name
+#: (`README`, `HEAD`, `TODO`, `API`) and reads `e.g.` as `e.g`; doctor fails
+#: soft, so none of these is plainly a path and none of them warns.
+QUIET_KICKOFFS = (
+    "Start the next batch.",
+    "Read the README and start the next batch.",
+    "Check HEAD, the TODO list and the API, then start.",
+    "Start the next batch, e.g. the one after this one.",
+    "Read notes and start the batch under newdir/notes.",
+)
+
+
+def test_go_warns_when_the_kickoff_names_a_brief_the_repository_lacks(
+    tmp_home: Path, tmp_path: Path, fake_mode: None
+) -> None:
+    """§31: the brief is absent, so a phone `go` would send the builder to nothing."""
+    with_channel(write_config(tmp_home, tmp_path))
+    commit_file(tmp_path / "work", "PLAYBOOK.toml", kickoff_playbook())
+    code, found = checks()
+
+    assert code == 0, found
+    assert found["go"]["status"] == "warn"
+    assert BRIEF in strip_paths(found["go"]["detail"]), found["go"]["detail"]
+    assert "a phone `go` would send the builder" in strip_paths(found["go"]["detail"])
+
+
+def test_a_warned_go_row_keeps_doctor_green_and_exit_0(
+    tmp_home: Path, tmp_path: Path, fake_mode: None
+) -> None:
+    """§31: a warn is a warn — nothing about the install is broken."""
+    with_channel(write_config(tmp_home, tmp_path))
+    commit_file(tmp_path / "work", "PLAYBOOK.toml", kickoff_playbook())
+    code, out, err = run()
+    assert code == 0, f"{out}\n{err}"
+    assert out.strip().endswith("doctor: green"), out
+    assert "0 failed" in strip_paths(out)
+    assert "warn" in strip_paths(text_row(out, "go"))
+
+    code, json_out, _ = run("--json")
+    assert code == 0
+    assert json.loads(json_out)["green"] is True
+
+
+def test_go_is_ok_when_the_kickoff_names_a_brief_the_repository_has(
+    tmp_home: Path, tmp_path: Path, fake_mode: None
+) -> None:
+    """§31: the file is there, so the row keeps its wording and its `ok`."""
+    with_channel(write_config(tmp_home, tmp_path))
+    commit_file(tmp_path / "work", "PLAYBOOK.toml", kickoff_playbook())
+    write_brief(tmp_path)
+    code, found = checks()
+
+    assert code == 0, found
+    assert found["go"]["status"] == "ok"
+    assert strip_paths(found["go"]["detail"]).startswith("go on:"), found["go"]["detail"]
+    assert KICKOFF in strip_paths(found["go"]["detail"])
+    assert "would send the builder" not in strip_paths(found["go"]["detail"])
+
+
+@pytest.mark.parametrize("kickoff", QUIET_KICKOFFS)
+def test_go_is_ok_when_the_kickoff_names_no_path_the_repository_lacks(
+    tmp_home: Path, tmp_path: Path, fake_mode: None, kickoff: str
+) -> None:
+    """§31 fails soft: a doubtful name is prose here, never a warning."""
+    with_channel(write_config(tmp_home, tmp_path))
+    commit_file(tmp_path / "work", "PLAYBOOK.toml", kickoff_playbook(kickoff))
+    code, found = checks()
+
+    assert code == 0, found
+    assert found["go"]["status"] == "ok", found["go"]["detail"]
+    assert strip_paths(found["go"]["detail"]).startswith("go on:"), found["go"]["detail"]
+    assert kickoff in strip_paths(found["go"]["detail"])
 
 
 def test_kit_transport_is_off_without_the_command_channel_and_doctor_exits_0(

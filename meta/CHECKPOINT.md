@@ -1,21 +1,26 @@
 # CHECKPOINT
 
-Mission: 14 (meta/BUILDER-14-PROMPT.md, DESIGN v3.13 §30 with §11, §12, §28,
-§29) — FINISHED.
-Base: c958a62 (`plan: mission 14 kit (DESIGN v3.13)`).
-Unit in progress: none. U0-U7 `[x]` in meta/plan.md.
-Done: U0 f9e0729 (2284); U1 9a5bc75 (2437); U2 e79e770 (2524); U3 599b993
-(2569); U4 2ad4356 (2588); U5 104666d (2597); U6 fa8fbae (2597); U7 is the
-commit that carries this line (meta only), green 3/3 (2597).
-Report: meta/FINAL-REPORT-14.md (what changed, what tests prove, NOT PROVEN,
-`## Review items`, acceptance, for the architect).
-Review 13 closed: blockers 1 (U1), 2 and 3 (U2), 4 (U3); should-fix 1 (U1),
-2-5 (U4), 6 (U3), 7 (U5), 8 (U0). REVIEW-11 blocker 1 closed by U1's
-language; FINAL-REPORT-13's row for it corrected by U0.
-Findings: H-026 resolved by v3.13 (code U1); H-027 open (DESIGN §12 rule 6
-and §14's `systemd/handsd.service` line, which builders may not edit); H-001
-and H-009 open.
-Next: PLAYBOOK.toml names meta/BUILDER-15-PROMPT.md, which the architect ships.
+Mission: 15 (meta/BUILDER-15-PROMPT.md, DESIGN v3.14 §31 with §8, §10, §11,
+§12, §26, §27, §30) — IN PROGRESS.
+Base: 1f8141c (`plan: mission 15 kit (DESIGN v3.14, architect kit)`).
+Unit in progress: none (U0 is the commit that carries this line).
+Intent: write meta/plan.md and this file; file H-028 (the guard's command
+table, review 14 blocker 1) and H-029 (the architect role, §31); close review
+14 should-fix 7 — `hands doctor` warns when `[series] kickoff` names a brief
+the repository lacks.
+Done means: plan and checkpoint written; both findings appended to
+meta/findings/FINDINGS.md; a failing test for the doctor warning written first
+and then green; `./scripts/check` green three consecutive runs; one `plan:`
+commit carrying exactly those files plus the doctor change, pushed.
+Note on numbering: the brief names H-027 and H-028; H-027 is taken (mission 14
+U5, open), so the ledger's next free numbers H-028 and H-029 are used.
+Done: U0 (this `plan:` commit) — plan, checkpoint, H-028 and H-029; doctor's
+`go` row warns on a kickoff naming an absent file (review 14 should-fix 7);
+`spool.ORIGINS` gains `architect` (DESIGN v3.14 §6 already lists it and the
+base commit was red without it); green 3/3 (2605 tests).
+Findings: H-027 open (DESIGN §12 rule 6 and §14's layout line, which builders
+may not edit); H-001 and H-009 open.
+Next: U1, the guard's command table (§31, review 14 blocker 1).
 Standing constraints: one foreground sub-agent per product unit, commit and
 push every unit, ./scripts/check green three consecutive runs before each
 commit, explicit paths only in `git add` (never `-A`), reports drafted under

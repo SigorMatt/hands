@@ -470,14 +470,16 @@ def test_the_integration_doc_describes_the_closed_phone_loop_once() -> None:
 
 
 def test_the_origin_listings_name_kit() -> None:
-    """§6 (v3.10): `origin (driver|playbook|cli|limit|phone|kit)`; INTEGRATION and
-    PLAYBOOK say a `kit` job exists and un-pauses a stopped pipeline when it starts."""
+    """§6 (v3.14): `origin (driver|playbook|cli|limit|phone|kit|architect)`;
+    INTEGRATION and PLAYBOOK say a `kit` job exists and un-pauses a stopped
+    pipeline when it starts. `architect` is the value §31 gives the held apply
+    `hands kit file` will file; here it is only legal (mission 15 U0, U3)."""
     from hands.playbook import UNPAUSE_ORIGINS
     from hands.spool import ORIGINS
 
     design = flattened((ROOT / "DESIGN.md").read_text(encoding="utf-8"))
-    assert "origin (driver|playbook|cli|limit|phone|kit)" in design
-    assert ORIGINS == {"driver", "playbook", "cli", "limit", "phone", "kit"}
+    assert "origin (driver|playbook|cli|limit|phone|kit|architect)" in design
+    assert ORIGINS == {"driver", "playbook", "cli", "limit", "phone", "kit", "architect"}
     assert UNPAUSE_ORIGINS == {"cli", "phone", "kit"}
     integration = flattened((ROOT / "docs" / "INTEGRATION.md").read_text(encoding="utf-8"))
     assert "`hands jobs --origin kit`" in integration

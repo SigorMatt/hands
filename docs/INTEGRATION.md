@@ -350,9 +350,12 @@ them:
 `hands doctor` reports each of the three as on or off, never as a failure: its
 `notifications`, `phone` and `who` rows. Its `go` and `kit transport` rows
 (§26) are on/off the same way: `go` is on when the command channel is on and
-the playbook in force loads with a `[series] kickoff`, which the row prints;
-`kit transport` is on when the command channel is on and `[files] kit_dir` is
-inside `allowed_roots`, and it prints `kit_dir` and `kit_max_mb`. Off, each
+the playbook in force loads with a `[series] kickoff`, which the row prints —
+and it warns, still green, when that kickoff plainly names a file the builder's
+cwd does not have, because a phone `go` would then send the builder to a brief
+that is not there; `kit transport` is on when the command channel is on and
+`[files] kit_dir` is inside `allowed_roots`, and it prints `kit_dir` and
+`kit_max_mb`. Off, each
 names what is missing. It prints no topic and no secret. The
 `config` row also warns when `ntfy_topic` is missing, since you then learn you
 are needed only by looking; and a config that does not load (a `cmd_topic`

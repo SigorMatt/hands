@@ -58,6 +58,7 @@ from hands.config import (
     RoleConfig,
     driver_clone,
 )
+from hands.kit import named_paths
 from hands.playbook import PlaybookError, load_playbook, playbook_path
 from hands.runner import build_argv
 from hands.spool import SpoolError, resolve_under_roots
@@ -94,6 +95,10 @@ LIVE_S = 180.0
 #: The live turn's prompt: one turn, no tools, and it exercises §10's VERDICT
 #: contract at the same time.
 LIVE_PROMPT = "Reply with exactly this line and nothing else:\nVERDICT: doctor ok\n"
+
+#: §31: a file extension — a `.` and two or more letters or digits at the end of a
+#: name. `WORKPLAN.md` has one; `e.g` does not.
+_EXTENSION_RE = re.compile(r"\.[A-Za-z0-9]{2,}\Z")
 
 #: What a script prints when it does not know a flag. Used to tell "this script
 #: does not take `--pids`" apart from "it took them and then failed for its own
@@ -260,14 +265,41 @@ def _phone_check(config: Config) -> Check:
     return Check("phone", OK, detail)
 
 
+def _plainly_missing(kickoff: str, cwd: Path) -> list[str]:
+    """The files `kickoff` plainly names that are not in `cwd`, in order (§31).
+
+    The naming rule is `hands.kit.named_paths`, the one `kit check` reads a send
+    prompt with, run with no kit — but doctor fails soft where that check fails
+    closed, so it judges only the names that plainly are paths. A name is judged
+    when it is a repository path (relative, no `..`, no `~`, no placeholder) and
+    either holds a `/` or ends in an extension. Everything the rule reads as a
+    bare name (`README`, `HEAD`, `TODO`, `PASS`) or as `e.g` is prose here: a
+    doubtful name must not warn, a missing `meta/BUILDER-16-PROMPT.md` must.
+    """
+    seen: list[str] = []
+    for name in named_paths(kickoff, (), cwd):
+        if name in seen or name.startswith(("/", "~")) or "{" in name or "}" in name:
+            continue
+        if ".." in name.split("/") or not ("/" in name or _EXTENSION_RE.search(name)):
+            continue
+        seen.append(name)
+    return [name for name in seen if not (cwd / name).is_file()]
+
+
 def _go_check(config: Config) -> Check:
-    """§26's `go`, on or off — `ok` either way, never a failure from here.
+    """§26's `go`, on or off — `ok` or `warn`, never a failure from here.
 
     On means what `hands.phone` needs to accept a `go`: the command channel, and
     the playbook in force loading (by the same loader, from the builder's cwd)
     with a `[series] kickoff`. A playbook that does not load is the `playbook`
     row's failure; here it is only why `go` is off. Whether a builder job is
     running, queued or held is a moment, not an install, so it is not checked.
+
+    §31 (review 14 should-fix 7): `go` on, with a kickoff naming a file the
+    builder's cwd does not have, is the one `warn` here — the phone would send
+    the builder to a brief that is not there. It is a warning and not a failure
+    because nothing about the *install* is broken, and because the naming is
+    read out of English (`_plainly_missing`), which no rule can do exactly.
     """
     if not config.notify.channel:
         return Check(
@@ -291,12 +323,22 @@ def _go_check(config: Config) -> Check:
         return Check(
             "go", OK, f"go off: {path} has no [series] kickoff, so `go` has nothing to send (§26)"
         )
-    return Check(
-        "go",
-        OK,
+    detail = (
         f"go on: `go <secret>` on cmd_topic sends the builder, clear, origin phone: "
-        f"{book.kickoff}\nrefused while a builder job is running, queued or held (§27)",
+        f"{book.kickoff}\nrefused while a builder job is running, queued or held (§27)"
     )
+    cwd = config.role("builder").cwd
+    missing = _plainly_missing(book.kickoff, cwd)
+    if missing:
+        names = ", ".join(missing)
+        return Check(
+            "go",
+            WARN,
+            f"{detail}\nthe kickoff names {names}, which "
+            f"{'are' if len(missing) > 1 else 'is'} not in {cwd}: a phone `go` "
+            f"would send the builder to a file that is not there (§31)",
+        )
+    return Check("go", OK, detail)
 
 
 def _kit_check(config: Config) -> Check:

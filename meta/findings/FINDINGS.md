@@ -1423,3 +1423,99 @@ test keeps passing unchanged once DESIGN says the same thing — the replacement
 is then a no-op. Nothing else in the repository depends on either line.
 
 Status: open
+
+---
+
+## H-028 — an allowed first word took unchecked options: the guard wrote and ran a program
+
+Severity: high · Component: `driver/hooks/bash_guard.py` (`ALLOWED_FIRST_WORDS`,
+`driver/hooks/bash_guard.py:110-116` at 041f647), normal mode; DESIGN §12, §30,
+§31
+Filed by: mission 15 U0, from REVIEW-14 blocker 1 (which reproduced it at the
+tip 041f647) and the mission 14 U1 sub-agent's differential fuzz.
+
+Symptom. §30 made the driver's *language* small enough to have no corners: no
+redirection, no substitution, no escape, no comment. It did not touch the set of
+allowed command words. `ALLOWED_FIRST_WORDS` admitted `sort`, `uniq`, `cut`,
+`tr`, `find`, `stat`, `diff`, `printf`, … as bare words, and outside `git` and
+`hands` no option table was applied in normal mode. Those commands write and
+execute through their own options, so nothing in the command had to *look* like
+a write. REVIEW-14 reproduced three, through the shipped file with hook JSON on
+stdin:
+
+    sort -o /tmp/rev14-probe/Z1 /etc/hostname                       -> exit 0 ; Z1 created
+    uniq /etc/hostname /tmp/rev14-probe/W5                          -> exit 0 ; W5 created
+    sort -S 1k --compress-program=/tmp/rev14-probe/prog <big file>  -> exit 0 ; prog EXECUTED
+
+The file's own words contradicted this on disk: the docstring
+(`driver/hooks/bash_guard.py:7`) said the command has "no way to write", and the
+refusal text said the driver may run "read-only inspection commands; it never
+writes". The comment above `GIT_SUBCOMMAND_OPTIONS` stated the right principle —
+"no listed option takes a value that names a program to run" — and applied it to
+git's rows only. Role mode refused all three (exit 2), so this was never a
+role-mode hole; it was pre-existing at 4192af1 and undisclosed by
+FINAL-REPORT-14 §3.1, which named only unquoted `$`.
+
+Direction. DESIGN v3.14 §31 answers it: the one-line method applies to the words
+as it applied to the syntax. `ALLOWED_FIRST_WORDS` is replaced by a table from
+each command the driver's rules name to the options it may take, in both modes
+(`cat`, `ls`, `head`, `tail`, `wc`, `grep`, `jq`, `pgrep`, `sleep`, `date`,
+`echo`, `kill -0`, `hands`, `git`); every other word leaves the table and is
+refused by name. No listed option takes a value that names a program or a file
+to write. The three probes and a fuzz corpus over the removed words go into the
+tests, and the docstring and refusal text are made to say what is true.
+
+Status: resolved by DESIGN v3.14 (code: mission 15 U1)
+
+---
+
+## H-029 — the architect is a person in the loop; §31 makes it a role
+
+Severity: medium · Component: DESIGN §31 (with §8, §10, §11, §26, §27);
+`src/hands/config.py`, `src/hands/playbook.py`, `src/hands/kit.py`,
+`src/hands/cli.py`, `src/hands/doctor.py`, `driver/hooks/bash_guard.py`,
+`architect/`
+Filed by: mission 15 U0, recording the shape of the change so the reasoning
+survives the mission.
+
+Symptom — what stood in the way before §31. Every planning round needed the
+human: the architect thought in a chat Project, emitted a kit as files, the
+human moved the zip to the laptop, `kit <secret>` filed a held apply, the human
+pressed Approve, and `go <secret>` sent the kickoff. Three of those five steps
+are judgment the human already exercised once, at the plan the series runs on.
+The loop closed at mission 10 was closed *through the phone*, not closed.
+
+Direction — what §31 decides, and the seams it opens.
+
+- A fourth role, `architect`, started by handsd for one consultation, with no
+  memory of earlier ones: the branch carries the state. Its cwd is
+  `~/hands-architect/<project>/` with a fetch-only clone under `repo/` and a
+  `kits/` directory; `permission_flags` is empty, so `settings.json` and the
+  hook are the law, as for the driver role (§27).
+- A third guard mode (`HANDS_ROLE=architect`): the driver's read-only table plus
+  `hands kit check|file`, and `mkdir|cp|mv|zip|unzip` only with every path
+  argument under `HANDS_KITS`. Writes are a *second* `PreToolUse` matcher
+  (Write|Edit|MultiEdit → `--write`), which is new: until now the guard judged
+  Bash alone and writes were denied outright by `settings.json`.
+- `hands kit file <zip>` gives the role the phone's `kit` path from inside the
+  laptop, running the kit check itself first and refusing a failing kit.
+- `[series] architect = "phone" | "role"` and `[series] autonomous`: with both
+  set, the engine approves held applies of `origin: architect` as `decided_by:
+  playbook` and sends the kickoff after `VERDICT: kit applied`. §8's "nothing
+  else releases a `held` job" gains an engine path, and its authority is the
+  human's approval of the playbook — which is itself a gated kit apply. That
+  standing approval is the whole of the autonomy, so it is worth naming: the
+  human who approves an `autonomous` playbook is approving every apply the
+  architect files under it.
+- Escalation is written down rather than judged in the moment:
+  `gate_failures = 2`, `escalate_on = ["blocker-unanswered", "milestone-missing",
+  "budget-exhausted"]`, `[limits] max_architect_consults` (default 12), and the
+  engine owns `budget-exhausted` itself.
+
+Risks this mission should keep visible: a role that writes at all is a new
+surface (mitigated by `HANDS_KITS` confinement on both matchers); `decided_by:
+playbook` is a fourth gate authority §8 did not have; and an autonomous series
+has no human between a bad kit and the branch except the kit check and the cold
+review.
+
+Status: resolved by DESIGN v3.14 (code: mission 15 U3, U4, U5)
