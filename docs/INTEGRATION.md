@@ -665,30 +665,54 @@ Fill in the parameter block at the top of `CLAUDE.md`. The driver never
 writes: the deny-list, the Bash guard hook and the push-disabled clone are
 three separate layers, and none of them is prose (§12).
 
-**The guard's language (§30).** The driver's shell is one line of words and
-quotes, and the Bash guard judges nothing else. Before any tokenizing it
-refuses a command containing a newline, a carriage return or any other control
-character, `<`, `>`, `#`, a backtick, `$(`, `\` or `$'`, in any position,
-quoted or not, and inside double quotes a `$` or a `!`; the refusal names the
-first offender and its position, and an unbalanced quote is refused at the
-position where it opened. So there is no redirection, heredoc, comment, escape
-or substitution for a quote to hide a second command behind. What is left is
-words, `'…'` and `"…"`, which `shlex` reads one way only. The command splits
-into segments on `;`, `&&`, `||`, `|`, `&` and parentheses outside quotes, and
-each segment's words are judged by the guard's command table (§31): `hands` and
-read-only git with the options §12 lists, and `cat`, `ls`, `head`, `tail`,
-`wc`, `grep`, `jq`, `pgrep`, `sleep`, `date`, `echo` and `kill -0` with the
-options §31 lists for each — no listed option takes a value that names a
-program or a file to write, and a word the table does not carry (`sort`,
-`uniq`, `cut`, `tr`, `find`, `stat`, `diff`, `printf`, `basename`, `dirname`,
-`realpath`, `tty`, `id`, `whoami`, `uptime`, `which`, `test`, `[`, `seq`,
-`true`, `false`, `pwd`) is refused by name. Role mode is the same table, minus
-the `hands` subcommands §27 withholds. A `hands` or `git` argument that still carries an unquoted `$`,
-`*`, `?`, `[`, `!`, a brace word or a `~` after `=` or `:` is refused (§28,
-§29). Text that needs a refused character travels as a file, with `hands send
---prompt-file`. In role mode a `git -C` value must be the clone after realpath
-on both sides (`HANDS_CLONE` resolved the same way), and a second `-C` is
-refused, because git applies each `-C` relative to the one before.
+**The guard's language (§30, §32).** The driver's shell is one line of words,
+quotes and separators, and the Bash guard judges nothing else. Before any
+tokenizing it refuses, in every mode and in any position, quoted or not: a
+newline, a carriage return or any other control character, `<`, `>`, `#`, a
+backtick, `\`, `$`, `{` and `}`; a `!` inside double quotes; and every reserved
+word of the shell appearing as a word — `for while until if then else elif fi
+do done case esac select function in time coproc ! [[ ]]` — a word being what
+bash splits outside quotes, on spaces and `; & | ( )`, so a quoted `'done'` is
+text. The refusal names the first offender and its position (a reserved word by
+name and position), and an unbalanced quote is refused at the position where it
+opened. What remains is words, `'…'` and `"…"` quotes, which `shlex` reads one
+way only, and the separators `;`, `&&`, `||`, `|` and `&` (parentheses only
+split): no expansion, no control flow, no redirection, no comment, no heredoc
+and no escape. Each segment is judged by the command table, and every word
+after its command word must be a plain word — no unquoted `*`, `?`, `[`, `!`,
+or `~` after `=` or `:` — because the shell would expand it after the guard
+read it. The table (§12, §31): `hands`, every subcommand but `open`; read-only
+`git`, with only `-C <path>` and `--no-pager` before the subcommand and after it
+only `log --oneline -n --grep --format --stat --name-status`, `show --stat
+--name-status`, `fetch -q`, `ls-remote --heads --tags`, `rev-parse --verify
+--short`, `diff --stat --name-status --name-only`, `grep -n -c -l -i -e`,
+`cat-file -t -p -e`, `ls-files`, `ls-tree`, `branch --list`, `remote -v` and
+`status`; `cat` (no options), `ls` (`-l -a -la -1`), `head` and `tail` (`-n
+<int>`), `wc` (`-l -c -w`), `grep` (`-n -c -i -l -E -F -r -e <pattern>`), `jq`
+(`-r -c -e` and a `.` filter), `pgrep` (`-f -a -l`), `sleep <int>`, `date
+[+FORMAT]`, `echo` (no options) and `kill -0 <pid>`. Any other option (`wc
+--files0-from=`, `grep -f`, `date --set`, `tail -f`, which is `hands log -f`'s
+alone) and any other word (`sort`, `uniq`, `cut`, `tr`, `find`, `stat`, `diff`,
+`printf`, `basename`, `dirname`, `realpath`, `tty`, `id`, `whoami`, `uptime`,
+`which`, `test`, `[`, `seq`, `true`, `false`, `pwd`) is refused by name. Driver
+role mode (`HANDS_ROLE=driver`) is that table minus the `hands` subcommands §27
+withholds — only `hands show|jobs|inbox|pipeline|status|tail|kit check|resume`
+and `hands send --context keep` to `$HANDS_CONSULT_ROLE` — and its `git` takes
+one `-C`, whose realpath must equal `HANDS_CLONE`'s (a second `-C` is refused,
+because git applies each `-C` relative to the one before). Architect mode
+(`HANDS_ROLE=architect`) is the same read-only table with `hands
+show|jobs|inbox|pipeline|status|kit check|kit file`, plus `mkdir -p`, `cp -r`,
+`mv`, `zip -r` and `unzip -o -d` with every path under `HANDS_KITS`. In both
+role modes reads are confined to the clone and the spool: every path that
+`cat`, `ls` (`.` when it names none), `head`, `tail`, `wc`, `grep` (`.` under
+`-r` when it names none), `jq`, `git` (its words after the subcommand, from the
+`-C` value) and `hands` (`--prompt-file`, `--socket`, `--repo`, a kit) read must
+resolve by realpath under `HANDS_CLONE`, under the spool `~/.hands/<project>/`
+(the project `$HANDS_PROJECT` names, else the only `~/.hands/*.toml`) or, for
+the architect, under `HANDS_KITS`; with none of them named every path read is
+refused, a read of stdin through a pipe is allowed, and a role's `jq` filter may
+not name `env`. The human's session reads anywhere. Text that needs a refused
+character travels as a file, with `hands send --prompt-file`.
 
 ## 6. The architect (§14 step 3)
 

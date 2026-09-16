@@ -642,9 +642,9 @@ def test_driver_rule_6_is_the_design_section_12_rule_6() -> None:
 
 
 def test_no_driver_kit_file_still_promises_that_quoting_makes_text() -> None:
-    r"""§30: the guard refuses a newline, `<`, `>`, `#`, a backtick, `$(`, `\`,
-    `$'` or a control character wherever it stands, and `$`/`!` inside double
-    quotes. A kit file that still says quoted text is text would send the driver
+    r"""§30, §32: the guard refuses a newline, `<`, `>`, `#`, a backtick, `\`,
+    `$`, `{`, `}` or a control character wherever it stands, and `!` inside
+    double quotes. A kit file that still says quoted text is text would send the driver
     to write a command the guard blocks (REVIEW-13 blocker 1's language)."""
     promise = re.compile(r"quoted text (?:as|is) text")
     offenders = [
@@ -1065,17 +1065,45 @@ def test_the_integration_doc_lists_what_the_no_background_hook_cannot_see() -> N
 
 
 def test_the_integration_doc_states_the_guards_language_in_one_paragraph() -> None:
-    """§30: `docs/INTEGRATION.md` states the guard's language in one paragraph,
-    so a reviewer can attack the definition rather than the parser."""
+    """§30, §32: `docs/INTEGRATION.md` states the guard's whole language in one
+    paragraph and lists the tables, per mode, with the role modes' read
+    confinement, so a reviewer can attack the definition rather than the parser."""
     text = (ROOT / "docs" / "INTEGRATION.md").read_text(encoding="utf-8")
     paragraphs = [" ".join(p.split()) for p in text.split("\n\n")]
     stated = [p for p in paragraphs if "The guard's language" in p]
     assert len(stated) == 1, f"expected one paragraph stating the language, found {len(stated)}"
     for said in ("newline", "carriage return", "control character", "`<`", "`>`", "`#`",
-                 "backtick", "`$(`", "`\\`", "`$'`", "first offender", "position",
-                 "inside double quotes", "`$`", "`!`", "`shlex`", "`;`", "`&&`", "`||`",
-                 "`|`", "`&`", "realpath", "second `-C`", "--prompt-file"):
-        assert said in stated[0], f"the language paragraph does not say {said!r} (§30)"
+                 "backtick", "`\\`", "`$`", "`{`", "`}`", "first offender", "position",
+                 "inside double quotes", "`!`", "reserved word",
+                 "`for while until if then else elif fi do done case esac select function "
+                 "in time coproc ! [[ ]]`", "`shlex`", "`;`", "`&&`", "`||`", "`|`", "`&`",
+                 "no expansion, no control flow, no redirection, no comment", "plain word",
+                 "realpath", "second `-C`", "--prompt-file", "`HANDS_ROLE=driver`",
+                 "`HANDS_ROLE=architect`", "`HANDS_KITS`", "`HANDS_CLONE`",
+                 "reads are confined to the clone and the spool", "`~/.hands/<project>/`",
+                 "`wc --files0-from=`", "`grep -f`", "`date --set`", "`tail -f`"):
+        assert said in stated[0], f"the language paragraph does not say {said!r} (§30, §32)"
+    for row in ("cat", "ls", "head", "tail", "wc", "grep", "jq", "pgrep", "sleep <int>",
+                "date [+FORMAT]", "echo", "kill -0 <pid>", "hands", "git"):
+        assert f"`{row}" in stated[0], f"the language paragraph does not list {row!r} (§32)"
+    guard = _load_guard_module()
+    for word in guard.RESERVED_WORDS:
+        assert f" {word} " in f" {stated[0]} " or f"`{word} " in stated[0] or (
+            f" {word}`" in stated[0]), word
+    for sub, options in guard.GIT_SUBCOMMAND_OPTIONS.items():
+        assert f"`{sub}" in stated[0] or f" {sub} " in stated[0], sub
+        for option in options:
+            assert option in stated[0], (sub, option)
+
+
+def _load_guard_module():
+    spec = importlib.util.spec_from_file_location(
+        "bash_guard", ROOT / "driver" / "hooks" / "bash_guard.py"
+    )
+    assert spec and spec.loader
+    guard = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(guard)
+    return guard
 
 
 def test_the_driver_bash_guard_selftest_passes() -> None:

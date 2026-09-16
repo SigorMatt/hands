@@ -131,7 +131,9 @@ ADVERSARIAL: list[tuple[str, bool]] = [
     ('hands send builder "$(git commit -am x)" --context c', False),
     ("echo \"result: `git push origin main`\"", False),
     # --- FALSE POSITIVES: these must be ALLOWED ---------------------------
-    ("git -C ./repo rev-parse 8448b6f^{commit}", True),
+    ("git -C ./repo rev-parse 8448b6f^0", True),
+    # ... except that §32 refuses a brace anywhere, `^{commit}` included
+    ("git -C ./repo rev-parse 8448b6f^{commit}", False),
     ("git log --grep=commit -5", True),
     ("git -C ./repo show origin/main:meta/CHECKPOINT.md", True),
     ("git -C ./repo log --oneline --grep=push -20", True),
@@ -201,7 +203,8 @@ ADVERSARIAL: list[tuple[str, bool]] = [
     # --- the read-only git the driver actually relies on: ALLOWED ---------
     ("git -C ./repo show origin/main:src/hands/config.py", True),
     ("git -C ./repo log --grep=commit", True),
-    ("git -C ./repo rev-parse abc^{commit}", True),
+    ("git -C ./repo rev-parse abc^0", True),
+    ("git -C ./repo rev-parse abc^{commit}", False),
     ('git -C ./repo grep -n "git diff" origin/main -- docs', True),
     ("git --no-pager log --oneline -5", True),
     ("git --no-pager -C ./repo diff HEAD~1", True),
@@ -271,7 +274,8 @@ ADVERSARIAL: list[tuple[str, bool]] = [
     ("git -C ./repo grep -e pattern origin/main -- docs", True),
     ("git -C ./repo cat-file -t HEAD", True),
     ("git -C ./repo cat-file -p HEAD:DESIGN.md", True),
-    ("git -C ./repo cat-file -e HEAD^{commit}", True),
+    ("git -C ./repo cat-file -e HEAD^0", True),
+    ("git -C ./repo cat-file -e HEAD^{commit}", False),
     ("git -C ./repo ls-files", True),
     ("git -C ./repo ls-tree HEAD", True),
     ("git -C ./repo branch --list", True),
@@ -413,11 +417,14 @@ ROLE_MODE: list[tuple[str, bool]] = [
     ("hands pipeline", True),
     ("hands status --json", True),
     ("hands tail --role builder -n 20", True),
-    ("hands kit check ~/Downloads/kit.zip --repo ./repo", True),
+    ("hands kit check ./repo/kit.zip --repo ./repo", True),
+    # §32 (should-fix 7): a role's reads are confined to the clone and the spool
+    ("hands kit check ~/Downloads/kit.zip --repo ./repo", False),
     ("hands resume", True),
     # send: only an explicit keep, only to builder or aux
     ("hands send --role builder --context keep 'Answer: use §27, then continue.'", True),
-    ("hands send --role builder --context keep --prompt-file ~/Downloads/answer.txt", True),
+    ("hands send --role builder --context keep --prompt-file ./repo/answer.txt", True),
+    ("hands send --role builder --context keep --prompt-file ~/Downloads/answer.txt", False),
     ("hands send --role=builder --context=keep 'ok'", True),
     ("hands --json send --context keep --role builder 'ok'", True),
     ("hands send --role builder --context clear 'Execute run 2'", False),
@@ -632,12 +639,15 @@ SHELL_DELIVERY_BOTH_MODES: list[tuple[str, bool]] = [
     ("git log HEAD^!", False),
     ("git log --grep=x=~/y", False),
     # ... and the same characters where the shell does not expand them
-    ("git log -- '*.py'", True),
-    ("git -C ./repo grep -n -e '$x' origin/main", True),
-    ('git -C ./repo grep -n -e "a*b?[c]{d,e}~" origin/main', True),
+    ("git -C ./repo log -- '*.py'", True),
+    ("git -C ./repo grep -n -e '*x' origin/main", True),
+    ('git -C ./repo grep -n -e "a*b?[c]~" origin/main', True),
     ("git -C ./repo diff --stat HEAD~1", True),
-    ("git -C ./repo rev-parse HEAD^{commit}", True),
-    ("git -C ./repo rev-parse HEAD^{}", True),
+    ("git -C ./repo rev-parse HEAD^0", True),
+    # §32: `$` and braces are refused anywhere, quoted or not
+    ("git -C ./repo grep -n -e '$x' origin/main", False),
+    ("git -C ./repo rev-parse HEAD^{commit}", False),
+    ("git -C ./repo rev-parse HEAD^{}", False),
     # the command word itself is what the shell delivers
     ("'git' push", False),
     ("$SHELL -c 'git push'", False),
@@ -657,7 +667,7 @@ def test_the_shell_delivery_rules_hold_in_both_modes(cmd: str, allowed: bool) ->
 HANDS_BOTH_MODES: list[tuple[str, bool]] = [
     ("hands show $x", False),
     ("hands show x{a,b}", False),
-    ("hands show 'x{a,b}'", True),
+    ("hands show 'x{a,b}'", False),  # §32: a brace anywhere
     ("hands show job-*", False),
     ("hands show 'job-*'", True),
     ("HANDS_PROJECT=other hands show x", False),
@@ -674,8 +684,10 @@ HANDS_NORMAL_MODE: list[tuple[str, bool]] = [
     ("hands 'open' y", False),
     ("hands --project x show y", True),
     # quoted prose is text: characters the shell leaves alone inside quotes
-    ("hands send --role builder --context clear 'Did it pass? Run *all* [the] {checks}!'", True),
-    ('hands send --role builder --context clear "Did it pass? Run *all* [the] {checks}"', True),
+    ("hands send --role builder --context clear 'Did it pass? Run *all* [the] checks!'", True),
+    ('hands send --role builder --context clear "Did it pass? Run *all* [the] checks"', True),
+    # ... but never a `$` or a brace, quoted or not (§32)
+    ("hands send --role builder --context clear 'Did it pass? Run {checks}'", False),
     # ... except the ones it still expands inside double quotes
     ('hands send --role builder --context clear "costs $5"', False),
     ('hands send --role builder --context clear "run `id`"', False),
@@ -701,7 +713,8 @@ def test_hands_in_normal_mode(cmd: str, allowed: bool) -> None:
 # HANDS_CONSULT_ROLE, allowed)
 ROLE_SEND: list[tuple[str, str | None, bool]] = [
     ("hands send --role builder --context keep m", "builder", True),
-    ("hands send --role aux --context keep --prompt-file ~/Downloads/answer.txt", "aux", True),
+    ("hands send --role aux --context keep --prompt-file ./repo/answer.txt", "aux", True),
+    ("hands send --role aux --context keep --prompt-file ~/Downloads/answer.txt", "aux", False),
     ("hands send --role=aux --context=keep m", "aux", True),
     ("hands send --role builder --context keep m", "aux", False),
     ("hands send --role aux --context keep m", "builder", False),
@@ -836,9 +849,10 @@ LANGUAGE_OFFENDERS: list[tuple[str, str]] = [
     ("a `>`", ">"),
     ("a `#`", "#"),
     ("a backtick", "`"),
-    ("a `$(`", "$("),
     ("a backslash", "\\"),
-    ("a `$'`", "$'"),
+    ("a `$`", "$"),  # §32: `$(`, `$'` and every other `$` shape
+    ("a `{`", "{"),
+    ("a `}`", "}"),
 ]
 
 
@@ -886,9 +900,9 @@ REFUSED_BY_THE_LANGUAGE: list[tuple[str, str, int]] = [
     ("ls # it's\ntouch /tmp/rev12-pwned #'", "a `#`", 3),
     (REVIEW_13_PROBE, "a `<`", 3),
     # allowed before §30; each needs a character §30 plainly refuses
-    ('sleep 20; kill -0 "$(pgrep -f handsd)" && echo alive || echo dead', "a `$(`", 19),
+    ('sleep 20; kill -0 "$(pgrep -f handsd)" && echo alive || echo dead', "a `$`", 19),
     ("ls probe.txt 2>&1", "a `>`", 14),
-    ("for i in $(seq 1 3); do echo $i; done", "a `$(`", 9),
+    ("for i in $(seq 1 3); do echo $i; done", "a `$`", 9),
     ("git status 2>/dev/null", "a `>`", 12),
     ('hands send --role builder --context clear --gate "apply kit" "Apply ~/Downloads/k.zip '
      "(it replaces DESIGN.md), then commit 'plan: kit (v3.1)' and push. Reply: VERDICT: kit "
@@ -896,8 +910,8 @@ REFUSED_BY_THE_LANGUAGE: list[tuple[str, str, int]] = [
     ("hands send --role aux --context clear 'Review commits since abc123; report blockers=0 "
      "or blockers>0 (count them)'", "a `>`", 97),
     ('echo "a > b"', "a `>`", 8),
-    ("echo '$(rm -rf x)'", "a `$(`", 6),
-    ('kill -0 "$(jq -r .pid ~/.hands/jobs/0mtxb7ecx.json)" && echo alive', "a `$(`", 9),
+    ("echo '$(rm -rf x)'", "a `$`", 6),
+    ('kill -0 "$(jq -r .pid ~/.hands/jobs/0mtxb7ecx.json)" && echo alive', "a `$`", 9),
     ("hands send --role builder --context clear --stdin < ~/Downloads/m2-send.txt", "a `<`", 50),
     ("hands send --role builder --context keep \\--context=clear m", "a backslash", 41),
     ("hands send --role builder --context keep \\--file a=b m", "a backslash", 41),
@@ -911,19 +925,19 @@ REFUSED_BY_THE_LANGUAGE: list[tuple[str, str, int]] = [
     ("git -C ./repo log --grep=\\$x\\*\\?\\[a\\]\\{b,c\\}\\!", "a backslash", 25),
     # blocked before §30 by parsing the language no longer has
     ("git status\ngit push", "a newline", 10),
-    ("echo $(git push)", "a `$(`", 5),
+    ("echo $(git push)", "a `$`", 5),
     ("echo `git push`", "a backtick", 5),
-    ('echo "$(git status; git push)"', "a `$(`", 6),
+    ('echo "$(git status; git push)"', "a `$`", 6),
     ('echo "`git push`"', "a backtick", 6),
-    ("echo $(echo $(git push))", "a `$(`", 5),
+    ("echo $(echo $(git push))", "a `$`", 5),
     ("git status \\\n; git push", "a backslash", 11),
     ("git log --oneline -1 \\\n--output=/tmp/x", "a backslash", 21),
     ("git log --oneline -1 \\", "a backslash", 21),
-    ("echo $(git status", "a `$(`", 5),
+    ("echo $(git status", "a `$`", 5),
     ("echo `git status", "a backtick", 5),
-    ("git log $'--output=/tmp/x'", "a `$'`", 8),
-    ("git log --grep=$'a'", "a `$'`", 15),
-    ('git log "$x"', "a `$` inside double quotes", 9),
+    ("git log $'--output=/tmp/x'", "a `$`", 8),
+    ("git log --grep=$'a'", "a `$`", 15),
+    ('git log "$x"', "a `$`", 9),
     ("git log `echo -1`", "a backtick", 8),
     ('git log "--grep=\\x"', "a backslash", 16),
     ("g\\it push", "a backslash", 1),
@@ -938,12 +952,12 @@ REFUSED_BY_THE_LANGUAGE: list[tuple[str, str, int]] = [
     ("# only a comment", "a `#`", 0),
     ("hands show x\n# it's", "a newline", 12),
     ('hands show "x" #"', "a `#`", 15),
-    ("hands show x $#", "a `#`", 14),
-    ('hands show "$(hands status # it\'s)"', "a `$(`", 12),
+    ("hands show x $#", "a `$`", 13),
+    ('hands show "$(hands status # it\'s)"', "a `$`", 12),
     ("hands show `hands status #`", "a backtick", 11),
     ("hands show x ; # y", "a `#`", 15),
     ("hands show 'a#b' c#d", "a `#`", 13),
-    ('hands show "$(hands status # x)"', "a `$(`", 12),
+    ('hands show "$(hands status # x)"', "a `$`", 12),
     ("hands show `hands \\$x #`", "a backtick", 11),
     ("git -C ./repo log --grep=\\\\$x", "a backslash", 25),
     ('git -C ./repo log --grep="a`true`"', "a backtick", 27),
@@ -951,11 +965,11 @@ REFUSED_BY_THE_LANGUAGE: list[tuple[str, str, int]] = [
     ('git -C ./repo log --grep="a\\x"', "a backslash", 27),
     # the first offender is the one named; quotes
     ("echo a > b # c", "a `>`", 7),
-    ('hands send --role builder --context clear "costs $5"', "a `$` inside double quotes", 49),
+    ('hands send --role builder --context clear "costs $5"', "a `$`", 49),
     ('hands send --role builder --context clear "hi!"', "a `!` inside double quotes", 45),
     ("hands send 'oops", "an unbalanced `'` quote", 11),
     ('git log "oops', 'an unbalanced `"` quote', 8),
-    ("hands show 'x' \"a$'\"", "a `$'`", 17),
+    ("hands show 'x' \"a$'\"", "a `$`", 17),
 ]
 
 
@@ -972,16 +986,16 @@ def test_the_language_refuses_naming_the_first_offender_and_its_position(
             role, cmd, reason)
 
 
-#: What the language still allows: `$` and `!` outside double quotes are not
-#: refused before tokenizing (the §28 rules judge them in `hands`/`git`
-#: arguments), and quoted text without a refused character is text.
+#: What the language still allows: glob characters and `!` outside double
+#: quotes are not refused before tokenizing (the plain-word rule judges them,
+#: §28, §32), and quoted text without a refused character is text.
 ALLOWED_BY_THE_LANGUAGE: list[tuple[str, bool]] = [
-    ("hands send --role builder --context keep 'costs $5! (a|b; c&d)'", True),
-    ('hands send --role builder --context keep "a*b?[c]{d,e}~ (x|y; z&w)"', True),
+    ("hands send --role builder --context keep 'costs 5! (a|b; c&d)'", True),
+    ('hands send --role builder --context keep "a*b?[c]~ (x|y; z&w)"', True),
     ("hands send --role builder --context keep 'say \"hi\"'", True),
     ('hands send --role builder --context keep "it\'s"', True),
-    ("git -C ./repo grep -n -e '$x' origin/main", True),
-    ("hands show $x", False),
+    ("git -C ./repo grep -n -e '*x' origin/main", True),
+    ("hands show x*", False),
     ("hands show x!", False),
 ]
 
@@ -996,7 +1010,10 @@ def test_what_the_language_leaves_to_the_word_rules(cmd: str, allowed: bool) -> 
 
 #: The parsing §30 makes unreachable is gone from the file, not only bypassed.
 REMOVED_FROM_THE_GUARD = ["_scan", "strip_redirect_noise", "strip_quoted", "UnbalancedQuotes",
-                          "SUBSTITUTED", "DOUBLE_QUOTE_LIVE"]
+                          "SUBSTITUTED", "DOUBLE_QUOTE_LIVE",
+                          # §32: what `$`, braces and reserved words make unreachable
+                          "REFUSED_SEQUENCES", "BRACE_EXPANSION", "SHELL_KEYWORDS",
+                          "command_start"]
 
 
 def test_the_parsing_the_language_makes_unreachable_is_removed() -> None:
@@ -1006,6 +1023,8 @@ def test_the_parsing_the_language_makes_unreachable_is_removed() -> None:
     assert source.count("heredoc") == 0
     assert "offset" not in source
     assert "`" not in guard.RESIDUAL and "\\" not in guard.RESIDUAL
+    assert not set("${}") & guard.RESIDUAL, "§32 refuses these before tokenizing"
+    assert set(guard.REFUSED_IN_DOUBLE_QUOTES) == {"!"}
 
 
 @pytest.mark.parametrize("cmd", REVIEW_12_PROBES)
@@ -1031,16 +1050,18 @@ def test_the_guards_own_tables_carry_every_review_12_probe() -> None:
 # argument words in both modes, (clause, command, allowed). There is no
 # backslash clause: a backslash is refused before tokenizing.
 H024_CLAUSES: list[tuple[str, str, bool]] = [
-    ("single quotes", "git -C ./repo log --grep='$x*?[a]{b,c}!~'", True),
-    ("single quotes", "git -C ./repo log --grep='a'$x", False),
-    ("double quotes", 'git -C ./repo log --grep="a*b?[c]{d,e}~"', True),
+    ("single quotes", "git -C ./repo log --grep='*?[a]!~'", True),
+    ("single quotes", "git -C ./repo log --grep='a'*", False),
+    ("double quotes", 'git -C ./repo log --grep="a*b?[c]~"', True),
     ("double quotes", 'git -C ./repo log --grep="$x"', False),
     ("double quotes", 'git -C ./repo log --grep="a!b"', False),
-    ("braces", "git -C ./repo log HEAD@{1}", True),
-    ("braces", "git -C ./repo rev-parse HEAD^{commit}", True),
-    ("braces", "hands show x{1}", True),
-    ("braces", "hands show x{a}y}", True),
-    ('braces', 'hands show x{"a,b"}', True),
+    # §32 retires H-024's brace reading: a brace is refused anywhere, so the
+    # shapes it once allowed are refused with the rest
+    ("braces", "git -C ./repo log HEAD@{1}", False),
+    ("braces", "git -C ./repo rev-parse HEAD^{commit}", False),
+    ("braces", "hands show x{1}", False),
+    ("braces", "hands show x{a}y}", False),
+    ('braces', 'hands show x{"a,b"}', False),
     ("braces", "hands show x{a,b}", False),
     ("braces", "hands show x{1..3}", False),
     ("braces", "hands show x{a,{b}}", False),
@@ -1059,7 +1080,8 @@ def test_h024_reading_clause(clause: str, cmd: str, allowed: bool) -> None:
 
 
 def test_h024_every_clause_has_an_allowed_and_a_refused_example() -> None:
-    for clause in {c for c, _, _ in H024_CLAUSES}:
+    assert {ok for c, _, ok in H024_CLAUSES if c == "braces"} == {False}  # §32
+    for clause in {c for c, _, _ in H024_CLAUSES} - {"braces"}:
         verdicts = {ok for c, _, ok in H024_CLAUSES if c == clause}
         assert verdicts == {True, False}, clause
 
@@ -1278,7 +1300,8 @@ def test_no_listed_option_of_the_command_table_takes_a_program_or_a_file() -> No
 
 @pytest.mark.parametrize("word", REMOVED_WORDS)
 def test_a_removed_word_is_refused_by_name_in_both_modes(word: str) -> None:
-    for cmd in (f"{word} /etc/hostname", f"ls; {word}", f"cat /etc/hostname | {word} -n"):
+    for cmd in (f"{word} /etc/hostname", f"ls ./repo; {word}",
+                f"cat ./repo/DESIGN.md | {word} -n"):
         for role, reason in _both_modes(cmd):
             assert reason is not None, (role, cmd)
             assert repr(word) in reason, (role, cmd, reason)
@@ -1291,8 +1314,8 @@ TABLE_BOTH_MODES: list[tuple[str, bool]] = [
     ("cat ./repo/DESIGN.md", True),
     ("cat ./repo/DESIGN.md ./repo/SPEC.md", True),
     ("cat -n ./repo/DESIGN.md", False),
-    ("ls", True),
-    ("ls -la ~/git/hands", True),
+    ("ls ./repo", True),
+    ("ls -la ./repo", True),
     ("ls -l -1 ./repo", True),
     ("ls -R ./repo", False),
     ("head -n 20 ./repo/DESIGN.md", True),
@@ -1300,8 +1323,8 @@ TABLE_BOTH_MODES: list[tuple[str, bool]] = [
     ("head -n20 ./repo/DESIGN.md", True),
     ("head -c 20 ./repo/DESIGN.md", False),
     ("head -n x ./repo/DESIGN.md", False),
-    ("tail -n 5 ~/.hands/inbox.jsonl", True),
-    ("tail -f ~/.hands/inbox.jsonl", False),
+    ("tail -n 5 ./repo/inbox.jsonl", True),
+    ("tail -f ./repo/inbox.jsonl", False),
     ("wc -l -c -w ./repo/DESIGN.md", True),
     ("wc -m ./repo/DESIGN.md", False),
     ("grep -n -i -e consult ./repo/DESIGN.md", True),
@@ -1309,8 +1332,8 @@ TABLE_BOTH_MODES: list[tuple[str, bool]] = [
     ("grep -f /tmp/patterns ./repo/DESIGN.md", False),
     ("grep -o consult ./repo/DESIGN.md", False),
     ("grep --include=*.md consult ./repo", False),
-    ("jq -r -c -e .result ~/.hands/jobs/x.json", True),
-    ("jq -r '.result' ~/.hands/jobs/x.json", True),
+    ("jq -r -c -e .result ./repo/x.json", True),
+    ("jq -r '.result' ./repo/x.json", True),
     ("jq --rawfile x /etc/hostname . ~/.hands/jobs/x.json", False),
     ("jq -f /tmp/prog ~/.hands/jobs/x.json", False),
     ("pgrep -f -a -l handsd", True),
@@ -1411,9 +1434,9 @@ REMOVED_WORD_OPTIONS: dict[str, list[str]] = {
 #: subshell, and in front of a command the table does allow.
 FUZZ_SHAPES = [
     "{cmd}",
-    "ls; {cmd}",
+    "ls ./repo; {cmd}",
     "{cmd} && ls",
-    "cat {path} | {cmd}",
+    "cat ./repo/DESIGN.md | {cmd}",
     "( {cmd} )",
     "hands status && {cmd}",
     "{cmd} | wc -l",
@@ -1477,7 +1500,7 @@ KIT_PARAMETERS = {"CLONE": "./repo", "BRANCH": "main", "PROJECT": "hands"}
 PLACEHOLDER_CHARACTERS = "<>[]|"
 
 
-def driver_kit_command_lines() -> list[str]:
+def driver_kit_command_lines(text: str | None = None) -> list[str]:
     """The command lines `driver/CLAUDE.md` shows, with its parameters filled.
 
     Two shapes: an indented line of a command block (its second column, the
@@ -1487,7 +1510,8 @@ def driver_kit_command_lines() -> list[str]:
     """
     import re as _re
 
-    text = (ROOT / "driver" / "CLAUDE.md").read_text(encoding="utf-8")
+    if text is None:
+        text = (ROOT / "driver" / "CLAUDE.md").read_text(encoding="utf-8")
     spans = [_re.split(r"\s{2,}", line.strip())[0]
              for line in text.splitlines() if line.startswith("    ") and line.strip()]
     spans += [span.strip() for span in _re.findall(r"`([^`\n]+)`", text)]
@@ -1728,13 +1752,15 @@ KITS_EXPANSION = [
 def test_architect_mode_refuses_a_path_the_shell_would_still_expand(cmd: str) -> None:
     reason = guard.check(cmd, **ARCHITECT)
     assert reason is not None, f"architect mode allowed an expandable path: {cmd}"
-    assert "expand" in reason, reason
+    # §32: a brace is refused before tokenizing; a glob is not a plain word
+    assert "expand" in reason or "a `{` at position" in reason, reason
 
 
 def test_a_quoted_path_under_kits_is_a_path(monkeypatch: pytest.MonkeyPatch) -> None:
     """The other half of §28: inside quotes none of those characters is
     expanded, so a kit whose name carries one is still filed."""
-    assert guard.check("mkdir -p './kits/{a,b}'", **ARCHITECT) is None
+    assert guard.check("mkdir -p './kits/a*b'", **ARCHITECT) is None
+    assert guard.check("mkdir -p './kits/{a,b}'", **ARCHITECT) is not None  # §32
     assert guard.check('mkdir -p "./kits/m16 draft"', **ARCHITECT) is None
 
 
@@ -1778,7 +1804,7 @@ def test_the_hook_takes_architect_mode_and_the_kits_from_the_environment(
     monkeypatch.setenv("HANDS_CLONE", ABS_CLONE)
     assert run_hook(monkeypatch, f"mkdir -p {ABS_KITS}/m16", "architect") == 0
     assert run_hook(monkeypatch, "mkdir -p /tmp/evil", "architect") == 2
-    assert run_hook(monkeypatch, "hands kit file ./kits/m16.zip", "architect") == 0
+    assert run_hook(monkeypatch, f"hands kit file {ABS_KITS}/m16.zip", "architect") == 0
     assert run_hook(monkeypatch, "hands go", "architect") == 2
     assert run_hook(monkeypatch, f"mkdir -p {ABS_KITS}/m16", "driver") == 2
     assert run_hook(monkeypatch, f"mkdir -p {ABS_KITS}/m16", None) == 2
@@ -1909,7 +1935,8 @@ def test_the_guards_own_architect_table_carries_both_verdicts() -> None:
 def test_architect_selftest_case(cmd: str, allowed: bool) -> None:
     reason = guard.check(cmd, role=guard.ARCHITECT_ROLE,
                          consult_role=guard.SELFTEST_CONSULT_ROLE,
-                         clone=guard.SELFTEST_CLONE, kits=guard.SELFTEST_KITS)
+                         clone=guard.SELFTEST_CLONE, kits=guard.SELFTEST_KITS,
+                         spool=guard.SELFTEST_SPOOL)
     assert (reason is None) == allowed, (cmd, reason)
 
 
@@ -1989,3 +2016,563 @@ def test_every_command_line_the_architect_kit_shows_passes_the_guard(
     assert "hands kit check kits/m16 --repo ./repo" in lines
     for line in lines:
         assert guard.check(line, **ARCHITECT) is None, f"the kit shows a refused line: {line}"
+
+
+# --- §32: THE GUARD'S LANGUAGE, FINISHED (review 15 blocker 1, should-fix 7; H-033)
+#
+# Besides §30's refusals the guard refuses `$` anywhere, `{` and `}` anywhere,
+# and every reserved word of the shell appearing as a word, in every mode,
+# before tokenizing. What remains is words, '…'/"…" quotes and `; && || | &`:
+# no expansion, no control flow, no redirection, no comment. The option tables
+# judge every word, values included, and a word the shell would still expand is
+# not a plain word. Role and architect modes are strict subsets, and their
+# reads are confined to the clone and the spool's own paths (and, for the
+# architect, `HANDS_KITS`).
+#
+# "As a word" is read the way bash splits words: outside quotes, on spaces and
+# on `; & | ( )`. A reserved word inside quotes (`grep -e 'done' f`) is not a
+# word bash can read as a reserved word — a quoted word never is — so it stays
+# text; the language keeps no control flow either way, because the unquoted
+# spelling, the only one bash acts on, is refused.
+
+#: The §32 list, transcribed from the design text.
+DESIGN_32_RESERVED_WORDS = {"for", "while", "until", "if", "then", "else", "elif", "fi",
+                            "do", "done", "case", "esac", "select", "function", "in",
+                            "time", "coproc", "!", "[[", "]]"}
+
+#: The role's spool in the check()-level tables (`~/.hands/<project>/`).
+SPOOL = "/home/u/.hands/hands"
+
+#: The three modes, as `check()` keyword arguments.
+MODES: dict[str, dict[str, str | None]] = {
+    "normal": {"role": None, "consult_role": "builder", "clone": CLONE, "kits": KITS,
+               "spool": SPOOL},
+    "driver": {"role": "driver", "consult_role": "builder", "clone": CLONE, "kits": KITS,
+               "spool": SPOOL},
+    "architect": {"role": "architect", "consult_role": "builder", "clone": CLONE,
+                  "kits": KITS, "spool": SPOOL},
+}
+ROLE_MODES_ONLY = ("driver", "architect")
+
+
+def _all_modes(cmd: str) -> list[tuple[str, str | None]]:
+    return [(mode, guard.check(cmd, **kwargs)) for mode, kwargs in MODES.items()]
+
+
+#: REVIEW-15 blocker 1, verbatim, and the U1 sub-agent's variants.
+REVIEW_15_PROBES: list[str] = [
+    "for a in '$x'; do echo; done; for c in ${a%x}'(touch${IFS}/tmp/rev15-tip/PWN)'; "
+    "do echo ${c@P}; done",
+    "for a in '$x'; do echo; done; for c in ${a%x}'(touch${IFS}/tmp/rev15-tip/PWN)'; "
+    "do cat ${c@P}; done",
+    "for a in '$x'; do echo; done; for c in ${a%x}'(touch${IFS}/tmp/rev15-tip/PWN)'; "
+    "do ls ${c@P}; done",
+    "for o in -f; do tail $o /etc/hostname; done",
+    "for o in --files0-from=F; do wc $o; done",
+    "for o in -f; do grep $o F x; done",
+    "for s in '%s --set=2020-01-01'; do date +$s; done",
+]
+
+#: §32: "`wc --files0-from=`, `grep -f`, `date --set`, `tail -f` outside `hands log`
+#: are not in the tables and are refused by name". (command, the name the refusal carries)
+REFUSED_BY_NAME_32: list[tuple[str, str]] = [
+    ("wc --files0-from=F", "--files0-from=F"),
+    ("wc --files0-from=./repo/F", "--files0-from=./repo/F"),
+    ("grep -f F x", "-f"),
+    ("grep -f ./repo/F ./repo/x", "-f"),
+    ("date --set=2020-01-01", "--set=2020-01-01"),
+    ("date +%s --set=2020-01-01", "--set=2020-01-01"),
+    ("date -s 2020-01-01", "-s"),
+    ("tail -f /etc/hostname", "-f"),
+    ("tail -f ./repo/DESIGN.md", "-f"),
+]
+
+
+def test_the_guard_carries_the_reserved_words_design_32_enumerates() -> None:
+    assert set(guard.RESERVED_WORDS) == DESIGN_32_RESERVED_WORDS
+
+
+@pytest.mark.parametrize("cmd", REVIEW_15_PROBES)
+def test_review_15_probe_is_refused_before_tokenizing_in_all_three_modes(cmd: str) -> None:
+    for mode, reason in _all_modes(cmd):
+        assert reason is not None, f"a review 15 probe was allowed ({mode}): {cmd!r}"
+        assert "before tokenizing" in reason, (mode, cmd, reason)
+
+
+def _hook_env(tmp_path: Path, mode: str) -> dict[str, str]:
+    base = {k: v for k, v in os.environ.items() if not k.startswith("HANDS_")}
+    if mode == "normal":
+        return base
+    return {**base, "HANDS_ROLE": mode, "HANDS_CONSULT_ROLE": "builder",
+            "HANDS_CLONE": str(tmp_path / "repo"), "HANDS_KITS": str(tmp_path / "kits")}
+
+
+def _run_shipped(tmp_path: Path, cmd: str, mode: str) -> subprocess.CompletedProcess[str]:
+    stdin = json.dumps({"tool_name": "Bash", "tool_input": {"command": cmd}})
+    return subprocess.run([sys.executable, str(GUARD)], input=stdin, capture_output=True,
+                          text=True, env=_hook_env(tmp_path, mode), cwd=tmp_path, timeout=30,
+                          check=False)
+
+
+#: Every probe of reviews 11–15, with the modes it is refused in. Review 11's
+#: probes attacked role mode; twelve of them are commands the human's session
+#: may run (`hands go`, a clear send, `--project`), which §28 left allowed there
+#: and REVIEW-12 judged right, so their normal-mode verdict is the table's.
+def _every_review_probe() -> list[tuple[str, tuple[str, ...]]]:
+    probes: list[tuple[str, tuple[str, ...]]] = []
+    for cmd, blocked_normal in REVIEW_11_PROBES:
+        probes.append((cmd, tuple(MODES) if blocked_normal else ROLE_MODES_ONLY))
+    for cmd in [*REVIEW_12_PROBES, *REVIEW_13_PROBES, *REVIEW_14_PROBES, *REVIEW_15_PROBES]:
+        probes.append((cmd, tuple(MODES)))
+    return probes
+
+
+@pytest.mark.parametrize("cmd,modes", _every_review_probe())
+def test_every_review_11_to_15_probe_is_refused_by_the_shipped_file(
+    tmp_path: Path, cmd: str, modes: tuple[str, ...]
+) -> None:
+    """The way the reviews ran them: the shipped file, hook JSON on stdin."""
+    for mode in modes:
+        done = _run_shipped(tmp_path, cmd, mode)
+        assert done.returncode == 2, (mode, cmd, done.stdout, done.stderr)
+
+
+def test_every_review_11_to_15_probe_is_refused_in_the_architects_mode_too() -> None:
+    for cmd, _ in _every_review_probe():
+        assert guard.check(cmd, **MODES["architect"]) is not None, cmd
+
+
+@pytest.mark.parametrize("cmd,name", REFUSED_BY_NAME_32)
+def test_the_options_section_32_names_are_refused_by_name_in_all_three_modes(
+    cmd: str, name: str
+) -> None:
+    for mode, reason in _all_modes(cmd):
+        assert reason is not None and repr(name) in reason, (mode, cmd, reason)
+
+
+def test_tail_dash_f_is_hands_logs_alone() -> None:
+    assert guard.check("hands log -f builder") is None
+    assert guard.check("tail -f ./repo/DESIGN.md") is not None
+
+
+@pytest.mark.parametrize("char", ["$", "{", "}"])
+@pytest.mark.parametrize("shape", ["hands show a{}b", "hands show 'a{}b'", 'hands show "a{}b"',
+                                   "cat ./repo/{}", "echo {}", "{} ls"])
+def test_a_dollar_or_a_brace_is_refused_anywhere_naming_its_position(
+    char: str, shape: str
+) -> None:
+    cmd = shape.format(char)
+    position = cmd.index(char)
+    for mode, reason in _all_modes(cmd):
+        assert reason is not None and f"a `{char}` at position {position}" in reason, (
+            mode, cmd, reason)
+        assert "before tokenizing" in reason, (mode, cmd, reason)
+
+
+RESERVED_WORD_POSITIONS = ["{w} ls", "ls; {w}", "ls ;{w}", "echo {w}", "hands status && {w} x",
+                           "cat ./repo/x|{w}", "({w})", "ls & {w}", "ls||{w} ls", "echo a {w} b"]
+
+
+@pytest.mark.parametrize("word", sorted(DESIGN_32_RESERVED_WORDS))
+@pytest.mark.parametrize("shape", RESERVED_WORD_POSITIONS)
+def test_a_reserved_word_is_refused_as_a_word_in_every_position(word: str, shape: str) -> None:
+    cmd = shape.format(w=word)
+    at = shape.index("{w}")
+    for mode, reason in _all_modes(cmd):
+        assert reason is not None, (mode, cmd)
+        assert f"the reserved word `{word}` at position {at}" in reason, (mode, cmd, reason)
+
+
+#: A reserved word inside quotes, or inside a longer word, is not a word bash can
+#: read as reserved: it is text. (command, allowed in every mode)
+RESERVED_WORD_AS_TEXT: list[tuple[str, bool]] = [
+    ("grep -n -e 'done' ./repo/DESIGN.md", True),
+    ('grep -n -e "for" ./repo/DESIGN.md', True),
+    ("grep -n -e 'if x then y' ./repo/DESIGN.md", True),
+    ("grep -n -e done ./repo/DESIGN.md", False),
+    ("cat ./repo/done", True),
+    ("cat ./repo/in", True),
+    ("cat ./repo/ in", False),
+    ("grep -n -e d'one' ./repo/DESIGN.md", True),
+    ("grep -n -e fi ./repo/DESIGN.md", False),
+    ("git -C ./repo log --oneline --grep=done -1", True),
+    ("git -C ./repo log --oneline --grep done -1", False),
+]
+
+
+@pytest.mark.parametrize("cmd,allowed", RESERVED_WORD_AS_TEXT)
+def test_a_reserved_word_inside_quotes_or_a_longer_word_is_text(cmd: str, allowed: bool) -> None:
+    for mode, reason in _all_modes(cmd):
+        assert (reason is None) == allowed, (mode, cmd, reason)
+
+
+#: §32's fuzz corpus: reserved words and `$`/brace shapes, in every segment
+#: position, mixed with commands the table allows and every separator.
+LANGUAGE_FUZZ_SEED = 20260917
+LANGUAGE_FUZZ_COUNT = 10_000
+FUZZ_TABLE_COMMANDS = [
+    "cat ./repo/DESIGN.md", "ls -la ./repo", "head -n 5 ./repo/DESIGN.md",
+    "tail -n 5 ./repo/DESIGN.md", "wc -l ./repo/DESIGN.md", "grep -n -e x ./repo/DESIGN.md",
+    "jq -r .result ./repo/x.json", "echo alive", "date +%s", "sleep 1", "kill -0 1",
+    "pgrep -f handsd", "hands status", "hands show job-1", "git -C ./repo log --oneline -1",
+    "git -C ./repo fetch -q",
+]
+FUZZ_EXPANSIONS = [
+    "$x", "${x}", "${c@P}", "${a%x}", "${IFS}", "$IFS", "$'x'", "$(id)", "$((1+1))", "$[1]",
+    "$1", "$@", "$*", "$$", "$?", "$-", "$#", "${!x}", "${x:-id}", "${#x}", "${x@Q}",
+    "'$x'", '"$x"', "a$b", "-$o", "+$s", "--x=$y", "{a,b}", "x{1..3}", "{", "}", "'{'",
+    '"}"', "{a,b}c", "a}", "{ ls; }", "'${c@P}'", "${a%x}'(touch${IFS}/tmp/x)'",
+]
+FUZZ_CONTROL_FLOW = [
+    "for x in a; do {cmd}; done", "for x in -f; do {cmd}; done", "while {cmd}; do {cmd}; done",
+    "until {cmd}; do {cmd}; done", "if {cmd}; then {cmd}; fi",
+    "if {cmd}; then {cmd}; elif {cmd}; then {cmd}; else {cmd}; fi",
+    "case x in x) {cmd};; esac", "select x in a; do {cmd}; done", "function f ( ) ( {cmd} )",
+    "time {cmd}", "coproc {cmd}", "! {cmd}", "[[ -f x ]] && {cmd}", "{cmd} && [[ x ]]",
+]
+FUZZ_SEPARATORS = ["; ", " && ", " || ", " | ", " & ", ";", "&&", "||", "|", "&"]
+
+
+def language_fuzz_corpus(seed: int = LANGUAGE_FUZZ_SEED,
+                         count: int = LANGUAGE_FUZZ_COUNT) -> list[tuple[str, str]]:
+    """`(kind, command)` pairs, generated deterministically from `seed`."""
+    import random
+
+    rng = random.Random(seed)
+    words = sorted(DESIGN_32_RESERVED_WORDS)
+    out: list[tuple[str, str]] = []
+    for _ in range(count):
+        kind = rng.choice(["expansion", "reserved", "control"])
+        segments = [rng.choice(FUZZ_TABLE_COMMANDS) for _ in range(rng.randint(1, 3))]
+        at = rng.randrange(len(segments))
+        if kind == "expansion":
+            offender = rng.choice(FUZZ_EXPANSIONS)
+            place = rng.choice(["segment", "argument", "command"])
+            if place == "segment":
+                segments.insert(at, offender)
+            elif place == "argument":
+                segments[at] = f"{segments[at]} {offender}"
+            else:
+                segments[at] = f"{offender} {segments[at]}"
+        elif kind == "reserved":
+            offender = rng.choice(words)
+            place = rng.choice(["segment", "argument", "command"])
+            if place == "segment":
+                segments.insert(at, offender)
+            elif place == "argument":
+                segments[at] = f"{segments[at]} {offender}"
+            else:
+                segments[at] = f"{offender} {segments[at]}"
+        else:
+            template = rng.choice(FUZZ_CONTROL_FLOW)
+            filled = template
+            while "{cmd}" in filled:
+                filled = filled.replace("{cmd}", rng.choice(FUZZ_TABLE_COMMANDS), 1)
+            segments[at] = filled
+        cmd = segments[0]
+        for segment in segments[1:]:
+            cmd += rng.choice(FUZZ_SEPARATORS) + segment
+        out.append((kind, cmd))
+    return out
+
+
+def test_the_language_fuzz_corpus_is_deterministic_and_covers_every_shape() -> None:
+    corpus = language_fuzz_corpus()
+    assert len(corpus) == LANGUAGE_FUZZ_COUNT >= 10_000
+    assert corpus == language_fuzz_corpus(), "the corpus is not reproducible from its seed"
+    joined = "\n".join(cmd for _, cmd in corpus)
+    for shape in [*FUZZ_EXPANSIONS, *(t.split("{cmd}")[0] for t in FUZZ_CONTROL_FLOW)]:
+        assert shape in joined, f"the corpus never generates {shape!r}"
+    for word in DESIGN_32_RESERVED_WORDS:
+        assert any(word in cmd.replace(";", " ").replace("|", " ").replace("&", " ").split()
+                   for kind, cmd in corpus if kind == "reserved"), word
+    assert {kind for kind, _ in corpus} == {"expansion", "reserved", "control"}
+
+
+def test_every_language_fuzz_command_is_refused_before_tokenizing_in_all_three_modes() -> None:
+    """§32: 10,000 commands over the reserved words and the `$`/brace shapes."""
+    for _, cmd in language_fuzz_corpus():
+        for mode, reason in _all_modes(cmd):
+            assert reason is not None, (mode, cmd)
+            assert "before tokenizing" in reason, (mode, cmd, reason)
+
+
+def test_what_the_language_leaves_is_the_table() -> None:
+    """The control group for the corpus: every table command it mixes in is
+    allowed on its own and joined by every separator, in every mode that has it."""
+    for cmd in FUZZ_TABLE_COMMANDS:
+        for mode, reason in _all_modes(cmd):
+            assert reason is None, (mode, cmd, reason)
+    for separator in FUZZ_SEPARATORS:
+        cmd = f"cat ./repo/DESIGN.md{separator}git -C ./repo log --oneline -1"
+        for mode, reason in _all_modes(cmd):
+            assert reason is None, (mode, cmd, reason)
+
+
+#: §32: a value that is not a plain word is refused in every row, not only in
+#: `git` and `hands`: bash expands `*` to `-f` when a file of that name exists.
+NOT_A_PLAIN_WORD: list[str] = [
+    "tail -n 5 *", "cat ./repo/*", "head ./repo/?", "wc -l ./repo/[ab]", "grep -n -e x *",
+    "ls ./repo/x!", "echo a=~/x", "cat x:~/y",
+]
+
+
+#: With `extglob` on (a shell snapshot may carry it) `@(…)` and `+(…)` are
+#: patterns whose inner words the segment split would judge as commands.
+EXTGLOB: list[tuple[str, int]] = [
+    ("tail -n 1 @(-f)", 11), ("ls ./repo/+(cat)", 11), ("cat ./repo/x'y'(ls)", 15),
+    ("echo a(b)", 6),
+]
+
+
+@pytest.mark.parametrize("cmd,position", EXTGLOB)
+def test_a_parenthesis_joined_to_a_word_is_refused_before_tokenizing(
+    cmd: str, position: int
+) -> None:
+    for mode, reason in _all_modes(cmd):
+        assert reason is not None and f"joined to the word before it at position {position}" in (
+            reason), (mode, cmd, reason)
+    assert guard.check("echo 'it (works)'") is None
+    assert guard.check("ls ./repo && (hands status)") is None
+
+
+@pytest.mark.parametrize("cmd", NOT_A_PLAIN_WORD)
+def test_a_word_the_shell_would_still_expand_is_refused_in_every_row(cmd: str) -> None:
+    for mode, reason in _all_modes(cmd):
+        assert reason is not None and "expand" in reason, (mode, cmd, reason)
+
+
+# --- §32 should-fix 7: role-mode reads confined to the clone and the spool ----
+
+CONFINED = "reads are confined to the clone and the spool"
+
+#: REVIEW-15 should-fix 7's probes, and the other path-taking rows.
+READS_OUTSIDE: list[str] = [
+    "cat ~/.ssh/id_rsa",
+    "cat /proc/self/environ",
+    "grep -r x /",
+    "cat /etc/shadow",
+    "head -n 1 /etc/hostname",
+    "tail -n 1 /etc/hostname",
+    "wc -l /etc/hostname",
+    "jq -r .x /etc/x.json",
+    "grep -n -e x /etc/hostname",
+    "grep -n x /etc/hostname",
+    "ls /",
+    "ls -la ~",
+    "ls",
+    "grep -r x",
+    "cat ./repo/../CLAUDE.md",
+    "cat ./repo/DESIGN.md /etc/hostname",
+    "cat /home/u/.hands/hands.toml",
+    "cat /home/u/.hands/other/inbox.jsonl",
+    "git -C ./repo diff /etc/hostname /dev/null",
+    "git -C ./repo diff --stat ../x ./y",
+    "git diff CLAUDE.md .claude/settings.json",
+    "git -C ./repo fetch -q /home/u/git/private",
+    "hands send --role builder --context keep --prompt-file ~/.ssh/id_rsa",
+    "hands kit check ~/Downloads/kit.zip",
+    "hands --project other kit check /etc/hostname",
+    "hands --json kit check --repo ./repo /etc/hostname",
+    "hands kit check --repo=/etc ./repo/kit.zip",
+    "hands --prompt-file=/etc/hostname show job-1",
+    "cat ~root/.ssh/id_rsa",
+    "cat ~+/repo/DESIGN.md",
+    "git -C ./repo log -- ../../x",
+    "hands kit check ./repo --repo /home/u/git/other",
+    "hands --socket /tmp/other.sock status",
+]
+
+READS_INSIDE: list[str] = [
+    "cat ./repo/DESIGN.md",
+    "cat repo/DESIGN.md ./repo/meta/plan.md",
+    "head -n 5 ./repo/DESIGN.md",
+    "tail -n 5 /home/u/.hands/hands/inbox.jsonl",
+    "wc -l ./repo/DESIGN.md",
+    "grep -r -n -e consult ./repo",
+    "grep -n consult ./repo/DESIGN.md",
+    "jq -r .result /home/u/.hands/hands/jobs/0mtxb7ecx.json",
+    "ls -la ./repo",
+    "ls /home/u/.hands/hands/jobs",
+    "cat '/home/u/.hands/hands/jobs/x.json'",
+    "git -C ./repo diff --stat HEAD~1",
+    "git -C ./repo show origin/main:DESIGN.md",
+    "git -C ./repo grep -n consult origin/main -- DESIGN.md",
+    "hands status",
+]
+
+#: A read with no path reads stdin, which in this language only a pipe from
+#: another judged segment can fill: allowed.
+STDIN_READS: list[str] = [
+    "hands status | grep -n -e daemon",
+    "git -C ./repo log --oneline -5 | head -n 1",
+    "hands show job-1 --json | jq -r .result",
+    "cat ./repo/DESIGN.md | wc -l",
+    "cat ./repo/DESIGN.md | tail -n 2",
+]
+
+
+@pytest.mark.parametrize("cmd", READS_OUTSIDE)
+@pytest.mark.parametrize("mode", ROLE_MODES_ONLY)
+def test_role_mode_reads_outside_the_clone_and_the_spool_are_refused_saying_so(
+    mode: str, cmd: str
+) -> None:
+    reason = guard.check(cmd, **MODES[mode])
+    assert reason is not None, (mode, cmd)
+    assert CONFINED in reason, (mode, cmd, reason)
+
+
+@pytest.mark.parametrize("cmd", [*READS_INSIDE, *STDIN_READS])
+@pytest.mark.parametrize("mode", ROLE_MODES_ONLY)
+def test_role_mode_reads_inside_the_clone_or_the_spool_are_allowed(mode: str, cmd: str) -> None:
+    reason = guard.check(cmd, **MODES[mode])
+    assert reason is None, (mode, cmd, reason)
+
+
+@pytest.mark.parametrize("cmd", ["cat ~/.ssh/id_rsa", "cat /proc/self/environ", "grep -r x /"])
+def test_normal_mode_reads_are_not_confined_by_this_item(cmd: str) -> None:
+    assert guard.check(cmd, **MODES["normal"]) is None
+
+
+def test_the_architect_also_reads_its_kits_directory_and_the_driver_does_not() -> None:
+    for cmd in ("ls -la ./kits", "cat ./kits/m16/KIT.md", "hands kit check kits/m16 --repo ./repo"):
+        assert guard.check(cmd, **MODES["architect"]) is None, cmd
+    for cmd in ("ls -la ./kits", "cat ./kits/m16/KIT.md"):
+        reason = guard.check(cmd, **MODES["driver"])
+        assert reason is not None and CONFINED in reason, (cmd, reason)
+
+
+@pytest.mark.parametrize("mode", ROLE_MODES_ONLY)
+def test_role_mode_reads_fail_closed_with_no_confinement_named(mode: str) -> None:
+    bare = {**MODES[mode], "clone": None, "spool": None, "kits": None}
+    for cmd in ("cat ./repo/DESIGN.md", "ls ./repo", f"cat {SPOOL}/inbox.jsonl"):
+        reason = guard.check(cmd, **bare)
+        assert reason is not None and CONFINED in reason, (mode, cmd, reason)
+    empty = {**MODES[mode], "clone": "", "spool": "", "kits": ""}
+    assert guard.check("cat ./repo/DESIGN.md", **empty) is not None
+    # only the clone unset: the spool still reads, the clone does not
+    no_clone = {**MODES[mode], "clone": None}
+    assert guard.check(f"cat {SPOOL}/inbox.jsonl", **no_clone) is None
+    assert guard.check("cat ./repo/DESIGN.md", **no_clone) is not None
+    # a stdin read names no path and needs no confinement
+    assert guard.check("hands status | grep -n -e daemon", **bare) is None
+
+
+@pytest.mark.parametrize("mode", ROLE_MODES_ONLY)
+def test_role_mode_jq_may_not_read_the_environment(mode: str) -> None:
+    reason = guard.check("jq -r '.|env' ./repo/x.json", **MODES[mode])
+    assert reason is not None and "env" in reason, reason
+    assert guard.check("jq -r '.|env' ./repo/x.json", **MODES["normal"]) is None
+
+
+def test_role_mode_reads_are_confined_by_realpath_through_a_real_symlink(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path.resolve()
+    clone = root / "repo"
+    clone.mkdir()
+    (clone / "DESIGN.md").write_text("x\n", encoding="utf-8")
+    secret = root / "secret"
+    secret.mkdir()
+    (secret / "id_rsa").write_text("k\n", encoding="utf-8")
+    (clone / "link").symlink_to(secret)
+    monkeypatch.chdir(root)
+    for mode in ROLE_MODES_ONLY:
+        kwargs = {**MODES[mode], "clone": str(clone)}
+        assert guard.check("cat repo/DESIGN.md", **kwargs) is None
+        for cmd in ("cat repo/link/id_rsa", f"cat {clone}/link/id_rsa", "ls repo/link",
+                    "grep -r x repo/link", "cat repo/link/../../secret/id_rsa"):
+            reason = guard.check(cmd, **kwargs)
+            assert reason is not None and CONFINED in reason, (mode, cmd, reason)
+
+
+def test_the_hook_derives_the_spool_the_way_hands_derives_the_project(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The role's environment names no spool; `hands` finds its project from
+    `$HANDS_PROJECT`, else the only `~/.hands/*.toml`. The guard reads the same two
+    and confines reads to `~/.hands/<project>/`; anything else names no spool."""
+    home = tmp_path / "home"
+    (home / ".hands" / "alpha" / "jobs").mkdir(parents=True)
+    (home / ".hands" / "alpha.toml").write_text("", encoding="utf-8")
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("HANDS_CONSULT_ROLE", "builder")
+    monkeypatch.setenv("HANDS_CLONE", str(tmp_path / "repo"))
+    monkeypatch.setenv("HANDS_KITS", str(tmp_path / "kits"))
+    monkeypatch.delenv("HANDS_PROJECT", raising=False)
+    inbox = "cat ~/.hands/alpha/inbox.jsonl"
+    for role in ROLE_MODES_ONLY:
+        assert run_hook(monkeypatch, inbox, role) == 0, role
+        assert run_hook(monkeypatch, "cat ~/.hands/alpha.toml", role) == 2, role
+        assert run_hook(monkeypatch, "ls ~/.hands", role) == 2, role
+        assert run_hook(monkeypatch, "cat ~/.ssh/id_rsa", role) == 2, role
+    # two configs and no HANDS_PROJECT: no spool is named, so none reads
+    (home / ".hands" / "beta.toml").write_text("", encoding="utf-8")
+    assert run_hook(monkeypatch, inbox, "driver") == 2
+    monkeypatch.setenv("HANDS_PROJECT", "alpha")
+    assert run_hook(monkeypatch, inbox, "driver") == 0
+    assert run_hook(monkeypatch, "cat ~/.hands/beta/inbox.jsonl", "driver") == 2
+    for bad in ("", "..", "a/b"):
+        monkeypatch.setenv("HANDS_PROJECT", bad)
+        assert run_hook(monkeypatch, inbox, "driver") == 2, bad
+    assert guard.spool_dir() is None
+
+
+@pytest.mark.parametrize("cmd", ["cat ~/.ssh/id_rsa", "cat /proc/self/environ", "grep -r x /"])
+@pytest.mark.parametrize("mode", ROLE_MODES_ONLY)
+def test_should_fix_7_probes_are_refused_by_the_shipped_file_saying_so(
+    tmp_path: Path, mode: str, cmd: str
+) -> None:
+    done = _run_shipped(tmp_path, cmd, mode)
+    assert done.returncode == 2, (mode, cmd, done.stdout, done.stderr)
+    assert CONFINED in done.stderr, (mode, cmd, done.stderr)
+    inside = _run_shipped(tmp_path, "cat ./repo/DESIGN.md", mode)
+    assert inside.returncode == 0, (mode, inside.stderr)
+
+
+def test_role_and_architect_modes_are_strict_subsets_of_normal_mode() -> None:
+    """§32: every command a role mode allows, normal mode allows too — over every
+    command in this file's tables and both corpora."""
+    commands = {cmd for cmd, _ in guard.SELFTEST} | {cmd for cmd, _ in guard.ROLE_SELFTEST}
+    commands |= {cmd for cmd, _ in guard.ARCHITECT_SELFTEST}
+    commands |= {cmd for cmd, _ in [*ADVERSARIAL, *ROLE_MODE, *TABLE_BOTH_MODES,
+                                    *RESERVED_WORD_AS_TEXT, *SHELL_DELIVERY_BOTH_MODES,
+                                    *HANDS_BOTH_MODES]}
+    commands |= {*READS_INSIDE, *READS_OUTSIDE, *STDIN_READS, *FUZZ_TABLE_COMMANDS}
+    commands |= {cmd for cmd, _, _ in ROLE_SEND}
+    # the architect's `mkdir|cp|mv|zip|unzip` rows are table rows of that mode
+    # alone (§31, U2's), not language, so they are the one exception
+    commands = {c for c in commands if c.split(" ")[0] not in guard.KITS_TABLE}
+    for cmd in sorted(commands):
+        normal = guard.check(cmd, **MODES["normal"])
+        for mode in ROLE_MODES_ONLY:
+            if guard.check(cmd, **MODES[mode]) is None:
+                assert normal is None, (mode, cmd, normal)
+
+
+def test_every_command_line_the_driver_kits_role_section_shows_passes_in_role_mode() -> None:
+    """driver/CLAUDE.md "As a role": what it tells the driver ROLE to run passes
+    the guard in driver mode, not only in the human's session."""
+    text = (ROOT / "driver" / "CLAUDE.md").read_text(encoding="utf-8")
+    section = text.split("## As a role", 1)[1]
+    lines = driver_kit_command_lines(section)
+    assert {"hands show", "hands jobs", "hands resume"} <= set(lines), lines
+    for line in lines:
+        reason = guard.check(line, **MODES["driver"])
+        assert reason is None, f"the role section shows a refused line: {line} -> {reason}"
+
+
+def test_no_kit_command_line_uses_what_section_32_refuses() -> None:
+    """Every command line both kit files show, in its own mode, is free of `$`,
+    braces and reserved words — none of them needed the rule weakened."""
+    for line in driver_kit_command_lines():
+        assert guard.language_problem(line) is None, line
+    text = (ARCHITECT_KIT / "CLAUDE.md").read_text(encoding="utf-8")
+    import re as _re
+
+    text = text.replace("kits/<name>", "kits/m16")
+    spans = [span.strip() for span in _re.findall(r"`([^`\n]+)`", text)]
+    for span in spans:
+        if span.split(" ", 1)[0] in guard.COMMAND_TABLE and len(span.split()) >= 2:
+            assert guard.language_problem(span) is None, span
