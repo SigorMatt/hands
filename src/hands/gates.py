@@ -19,6 +19,12 @@ so a human reading the job later can check it against what they actually said.
 That is an audit trail, not an authentication mechanism, and nothing here should
 be read as one.
 
+`playbook` (§31) is the other authority §8's own table does not carry: the engine
+approves a held apply of origin `architect` when the playbook in force sets
+`[series] architect = "role"` and `autonomous = true`. What makes that a human
+decision is one step removed — the human approved that playbook, at a gate like
+any other — and the record says so in `decided_reason`, not in a quote.
+
 `phone` (§24) is the exception, and it does not come through the socket at all:
 `hands.phone` reads commands from ntfy, checks their token (the configured secret
 or the held job's nonce), and only then decides through `Api.decide_from_phone`.
@@ -97,10 +103,30 @@ DECIDERS: dict[str, Decider] = {
         available=True,
         note="the ntfy command channel: cmd_secret or the held job's nonce (§24)",
     ),
+    #: §31: the engine releasing a held apply of origin `architect` under a
+    #: playbook that sets `[series] architect = "role"` and `autonomous = true`.
+    #: Its authority is the human's approval of that playbook, which arrived as a
+    #: kit and was gated like any other: approving an `autonomous` playbook is
+    #: approving every apply the architect files under it. Like `phone`, it is not
+    #: reachable over the socket — no API command takes a decider, and
+    #: `Api.decide_from_playbook` is not in `COMMANDS` — and unlike `phone` it is
+    #: narrowed twice more: only a job of origin `architect` (the API's check) and
+    #: only while that playbook is in force (the engine's).
+    "playbook": Decider(
+        name="playbook",
+        requires_quote=False,
+        available=True,
+        note=(
+            'the engine, under a playbook with [series] architect = "role" and '
+            "autonomous = true; the human's approval of the playbook is the "
+            "standing approval (§31)"
+        ),
+    ),
 }
 
-#: Every `gate.decided_by` a record can carry: the available rows above, exactly
-#: DESIGN §6's `decided_by: cli|driver|phone` (review 8 should-fix 2, H-017).
+#: Every `gate.decided_by` a record can carry: the available rows above — DESIGN
+#: §6's `decided_by: cli|driver|phone` (review 8 should-fix 2, H-017) and §31's
+#: `playbook`, which §6's record line does not yet list (H-031).
 DECIDED_BY: tuple[str, ...] = tuple(name for name, row in DECIDERS.items() if row.available)
 
 DECISIONS = ("approved", "denied")

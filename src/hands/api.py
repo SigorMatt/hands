@@ -30,7 +30,15 @@ from hands.doctor import report as doctor_report
 from hands.doctor import run_checks as doctor_checks
 from hands.notify import NotifyError, send_test
 from hands.runner import KeepRefused
-from hands.spool import ORIGINS, TERMINAL_STATES, Event, Job, SpoolError, resolve_kinds
+from hands.spool import (
+    ARCHITECT_ORIGIN,
+    ORIGINS,
+    TERMINAL_STATES,
+    Event,
+    Job,
+    SpoolError,
+    resolve_kinds,
+)
 
 if TYPE_CHECKING:  # pragma: no cover - import cycle only matters to type checkers
     from hands.daemon import Daemon
@@ -595,6 +603,33 @@ class Api:
         command's token matched `cmd_secret` or that job's nonce.
         """
         return await self._decide_as(job, decision, "phone", reason=reason, quote=None)
+
+    async def decide_from_playbook(self, job: str, *, reason: str | None = None) -> dict[str, Any]:
+        """§31: the engine approving a held apply the architect role filed.
+
+        Not a command of §4 and not in `COMMANDS`, so no socket client can reach
+        it: `method()` answers None for any name outside that tuple. The playbook
+        engine is its only caller, and it calls it only under a playbook that sets
+        `[series] architect = "role"` and `autonomous = true`.
+
+        The origin is checked here as well as there, because it is the half of the
+        narrowness that does not depend on which file is in force: §31 gives this
+        authority over applies the architect filed, and over nothing else. A kit
+        from the phone, a human's own gated send and a gated cancel stay §8's.
+        """
+        record = self._job(job)
+        if record.origin != ARCHITECT_ORIGIN:
+            raise ApiError(
+                f"job {record.id} is of origin {record.origin!r}: §31 gives the playbook "
+                f"authority over a held apply of origin {ARCHITECT_ORIGIN!r} and nothing "
+                "else; §8's table decides this one"
+            )
+        if record.state != "held":
+            raise ApiError(
+                f"job {record.id} is {record.state}, not held; the playbook releases holds "
+                "and never cancels"
+            )
+        return await self._decide_as(job, "approved", "playbook", reason=reason, quote=None)
 
     async def _decide_as(
         self,

@@ -221,7 +221,12 @@ def test_the_code_vocabularies_are_section_6s_lists() -> None:
     assert set(FAILURE_REASONS) == set(reasons) and len(FAILURE_REASONS) == len(reasons)
     deciders = section_6_vocabulary("decided_by")
     assert deciders == ["cli", "driver", "phone"]
-    assert set(DECIDED_BY) == set(deciders) and len(DECIDED_BY) == len(deciders)
+    # §31 adds a fourth authority — `decided_by: playbook`, the engine releasing a
+    # held apply of origin `architect` under an autonomous playbook — without
+    # restating §6's record line, which still lists three. So the vocabulary in
+    # code is §6's plus that one, and no more (H-031).
+    assert set(DECIDED_BY) == {*deciders, "playbook"}
+    assert len(DECIDED_BY) == len(deciders) + 1
 
 
 def test_the_integration_doc_names_both_vocabularies_and_the_precedence() -> None:

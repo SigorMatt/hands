@@ -31,16 +31,24 @@ from conftest import commit_file, strip_paths
 from hands.cli import _pipeline_block
 from hands.config import Config, load_config, parse_config
 from hands.daemon import Daemon
+from hands.gates import DECIDERS
+from hands.kit import Apply, apply_params
 from hands.playbook import (
     ACTIONS,
+    AUTONOMOUS_APPROVAL,
     CONSULT_QUESTION,
+    DEFAULT_MAX_ARCHITECT_CONSULTS,
     DRIVER_VERDICTS,
+    ENGINE_RULE_INDEX,
+    ESCALATE_ON,
     EVENTS,
     JOB_PLACEHOLDERS,
+    LIMIT_KEYS,
     PipelineState,
     PlaceholderError,
     PlaybookEngine,
     PlaybookError,
+    check_series_roles,
     consult_prompt,
     load_playbook,
     parse_playbook,
@@ -104,6 +112,7 @@ def make_config(
     *,
     builder: dict[str, Any] | None = None,
     driver: Path | None = None,
+    architect: Path | None = None,
 ) -> Config:
     roles: dict[str, Any] = {
         "builder": {"cwd": str(workdir), **(builder or {})},
@@ -111,6 +120,8 @@ def make_config(
     }
     if driver is not None:
         roles["driver"] = {"cwd": str(driver)}  # §27
+    if architect is not None:
+        roles["architect"] = {"cwd": str(architect)}  # §31
     return parse_config(
         {"roles": roles},
         project=PROJECT,
@@ -125,7 +136,10 @@ class Recorder:
         self.sent: list[dict[str, Any]] = []
         self.enqueued: list[dict[str, Any]] = []
         self.notified: list[tuple[str, dict[str, Any]]] = []
+        self.approved: list[dict[str, Any]] = []
         self.refuse: str | None = None
+        #: §31: what `Api.decide_from_playbook` would raise, when it would.
+        self.refuse_approve: str | None = None
 
     async def send(self, **fields: Any) -> dict[str, Any]:
         if self.refuse:
@@ -145,6 +159,12 @@ class Recorder:
             prompt=fields["prompt"],
         )
 
+    async def approve(self, *, job: str, reason: str | None = None) -> dict[str, Any]:
+        if self.refuse_approve:
+            raise RuntimeError(self.refuse_approve)
+        self.approved.append({"job": job, "reason": reason})
+        return {"id": job, "state": "queued"}
+
     def notify(self, title: str, payload: dict[str, Any]) -> None:
         self.notified.append((title, payload))
 
@@ -156,10 +176,13 @@ def engine_for(
     *,
     builder: dict[str, Any] | None = None,
     driver: Path | None = None,
+    architect: Path | None = None,
 ) -> tuple[PlaybookEngine, Recorder]:
     if body is not None:
         commit_file(workdir, "PLAYBOOK.toml", body)  # §10: only the committed file loads
-    config = make_config(tmp_home, workdir, builder=builder, driver=driver)
+    config = make_config(
+        tmp_home, workdir, builder=builder, driver=driver, architect=architect
+    )
     recorder = Recorder()
     engine = PlaybookEngine(
         config,
@@ -167,6 +190,7 @@ def engine_for(
         send=recorder.send,
         enqueue=recorder.enqueue,
         notify=recorder.notify,
+        approve=recorder.approve,
     )
     return engine, recorder
 
@@ -2980,3 +3004,426 @@ def test_no_shipped_playbook_notifies_on_job_held() -> None:
     # — and the hold's own notification, with buttons, is still published.
     root = tomllib.loads(SHIPPED_PLAYBOOKS[0].read_text(encoding="utf-8"))
     assert [r["on"] for r in root["rule"] if r["on"] == "job.denied"] == ["job.denied"]
+
+
+# ------------------------------- §31: series mode and autonomy (mission 15 U4)
+
+#: A playbook in §31's role mode with `autonomous`, and the escalation conditions
+#: §31 writes into `[series]`. Its `builder.done` rule for `^VERDICT: kit applied`
+#: is the one the shipped playbooks carry, so the engine-added rule of §31 meets a
+#: playbook rule that would also match.
+AUTONOMOUS = """
+version = 1
+
+[series]
+name = "m16"
+kickoff = "Read meta/BUILDER-16-PROMPT.md and execute the mission below its divider."
+architect = "role"
+autonomous = true
+gate_failures = 2
+escalate_on = ["blocker-unanswered", "milestone-missing", "budget-exhausted"]
+
+[limits]
+max_architect_consults = 12
+
+[[rule]]
+on = "builder.done"
+verdict = '^VERDICT: kit applied'
+then = "notify"
+message = "Kit applied; the next kickoff is the driver's"
+
+[[rule]]
+on = "builder.done"
+verdict = '^VERDICT: mission (?P<n>\\d+) finished'
+then = "stop"
+message = "Mission {n} finished"
+"""
+
+PHONE_MODE = AUTONOMOUS.replace('architect = "role"', 'architect = "phone"')
+NOT_AUTONOMOUS = AUTONOMOUS.replace("autonomous = true", "autonomous = false")
+
+
+def series_body(**keys: str) -> str:
+    """A minimal playbook whose `[series]` table is exactly `keys`."""
+    lines = "\n".join(f"{name} = {value}" for name, value in keys.items())
+    return f'version = 1\n\n[series]\nname = "s"\n{lines}\n'
+
+
+def held_apply(spool: Spool, *, origin: str = "architect", name: str = "m16") -> Job:
+    """The held builder job a kit apply is (§27, §31): gated, born `held`."""
+    from hands.gates import new_gate
+
+    return spool.create_job(
+        role="builder",
+        context="clear",
+        prompt="Apply the kit.",
+        origin=origin,
+        state="held",
+        gate=new_gate(kind="send", reason=f"apply {name}"),
+    )
+
+
+# ---- the keys (§31, refused at load)
+
+
+def test_the_series_defaults_are_phone_not_autonomous(tmp_home: Path, workdir: Path) -> None:
+    """§31: `architect` defaults to `phone`, `autonomous` to `false`. U4 also
+    decides the two the design leaves open: `gate_failures` defaults to §31's own
+    2, and `escalate_on` to nothing — a condition is enforced when it is written."""
+    book = parse_playbook(EXAMPLE, path=workdir / "PLAYBOOK.toml")
+    assert book.architect == "phone"
+    assert book.autonomous is False
+    assert book.gate_failures == 2
+    assert book.escalate_on == ()
+    assert book.max_architect_consults == DEFAULT_MAX_ARCHITECT_CONSULTS == 12
+
+
+def test_the_series_keys_of_section_31_load(tmp_home: Path, workdir: Path) -> None:
+    book = parse_playbook(AUTONOMOUS, path=workdir / "PLAYBOOK.toml")
+    assert book.architect == "role"
+    assert book.autonomous is True
+    assert book.gate_failures == 2
+    assert book.escalate_on == (
+        "blocker-unanswered",
+        "milestone-missing",
+        "budget-exhausted",
+    )
+    assert book.max_architect_consults == 12
+    assert book.kickoff == (
+        "Read meta/BUILDER-16-PROMPT.md and execute the mission below its divider."
+    )
+
+
+@pytest.mark.parametrize(
+    ("keys", "because"),
+    [
+        ({"architect": '"laptop"'}, "architect must be"),
+        ({"architect": "true"}, "architect must be"),
+        ({"autonomous": '"yes"'}, "autonomous must be"),
+        ({"autonomous": "1"}, "autonomous must be"),
+        ({"gate_failures": "0"}, "gate_failures must be"),
+        ({"gate_failures": "-1"}, "gate_failures must be"),
+        ({"gate_failures": "true"}, "gate_failures must be"),
+        ({"gate_failures": '"2"'}, "gate_failures must be"),
+        ({"escalate_on": '"blocker-unanswered"'}, "escalate_on must be a list"),
+        ({"escalate_on": "[1]"}, "escalate_on must be a list"),
+        ({"escalate_on": '["blocker-unaswered"]'}, "escalate_on"),
+        ({"escalate_on": '["budget-exhausted", "nope"]'}, "escalate_on"),
+        ({"leader": '"me"'}, "leader"),
+    ],
+)
+def test_the_series_table_refuses_what_section_31_does_not_name(
+    workdir: Path, keys: dict[str, str], because: str
+) -> None:
+    """§10's discipline: refused when the playbook is loaded, never when a rule
+    fires. The closed vocabulary of `escalate_on` is §31's three conditions."""
+    with pytest.raises(PlaybookError) as caught:
+        parse_playbook(series_body(**keys), path=workdir / "PLAYBOOK.toml")
+    assert because in strip_paths(str(caught.value)), caught.value
+
+
+def test_escalate_on_names_the_three_conditions_of_section_31(workdir: Path) -> None:
+    with pytest.raises(PlaybookError) as caught:
+        parse_playbook(series_body(escalate_on='["nope"]'), path=workdir / "PLAYBOOK.toml")
+    for condition in ESCALATE_ON:
+        assert condition in strip_paths(str(caught.value))
+    assert set(ESCALATE_ON) == {"blocker-unanswered", "milestone-missing", "budget-exhausted"}
+
+
+@pytest.mark.parametrize("value", ["-1", '"12"', "true"])
+def test_max_architect_consults_must_be_a_non_negative_integer(
+    workdir: Path, value: str
+) -> None:
+    body = f"version = 1\n\n[limits]\nmax_architect_consults = {value}\n"
+    with pytest.raises(PlaybookError) as caught:
+        parse_playbook(body, path=workdir / "PLAYBOOK.toml")
+    assert "max_architect_consults" in strip_paths(str(caught.value))
+
+
+def test_max_architect_consults_is_a_limits_key_the_playbook_may_set(workdir: Path) -> None:
+    body = "version = 1\n\n[limits]\nmax_architect_consults = 3\n"
+    assert parse_playbook(body, path=workdir / "PLAYBOOK.toml").max_architect_consults == 3
+    assert LIMIT_KEYS == ("auto_runs", "max_resumes", "max_consults", "max_architect_consults")
+
+
+# ---- `architect = "role"` without `[roles.architect]` (§31)
+
+
+def test_role_mode_without_the_configured_role_is_a_config_error(
+    tmp_home: Path, workdir: Path
+) -> None:
+    """§31: "a `[series] architect = "role"` without `[roles.architect]` is a
+    config error". The two live in different files, so the message names both."""
+    book = parse_playbook(AUTONOMOUS, path=workdir / "PLAYBOOK.toml")
+    config = make_config(tmp_home, workdir)
+    with pytest.raises(PlaybookError) as caught:
+        check_series_roles(book, config)
+    said = str(caught.value)
+    assert "PLAYBOOK.toml" in strip_paths(said), said
+    assert config.path.name in strip_paths(said), said
+    assert "[roles.architect]" in strip_paths(said), said
+
+
+def test_phone_mode_needs_no_configured_architect(tmp_home: Path, workdir: Path) -> None:
+    book = parse_playbook(PHONE_MODE, path=workdir / "PLAYBOOK.toml")
+    check_series_roles(book, make_config(tmp_home, workdir))  # no raise
+
+
+def test_role_mode_with_the_configured_role_loads(tmp_home: Path, workdir: Path) -> None:
+    book = parse_playbook(AUTONOMOUS, path=workdir / "PLAYBOOK.toml")
+    check_series_roles(book, make_config(tmp_home, workdir, architect=workdir))  # no raise
+
+
+def test_the_engine_stops_on_a_role_mode_playbook_with_no_architect_role(
+    tmp_home: Path, workdir: Path
+) -> None:
+    """The cross-check runs where a loaded playbook meets the config — the engine's
+    own load — so the pipeline stops rather than fire a rule under a playbook the
+    project cannot honour."""
+    engine, _ = engine_for(tmp_home, workdir, AUTONOMOUS)
+    run(engine.on_event("builder.done", job=finished(engine.spool, verdict="VERDICT: x")))
+    assert engine.state.paused
+    said = engine.state.stop_reason or ""
+    assert "[roles.architect]" in strip_paths(said), said
+    assert engine.playbook is None
+
+
+# ---- the engine's approval of the architect's holds (§8, §31)
+
+
+@pytest.mark.parametrize(
+    ("body", "approved"),
+    [(AUTONOMOUS, True), (NOT_AUTONOMOUS, False), (PHONE_MODE, False), (EXAMPLE, False)],
+    ids=["role+autonomous", "no autonomous", "phone mode", "no series keys"],
+)
+def test_only_a_role_mode_autonomous_playbook_approves_the_architects_hold(
+    tmp_home: Path, workdir: Path, body: str, approved: bool
+) -> None:
+    engine, recorder = engine_for(tmp_home, workdir, body, architect=workdir)
+    job = held_apply(engine.spool)
+    run(engine.on_event("job.held", job=job))
+    assert [call["job"] for call in recorder.approved] == ([job.id] if approved else [])
+    if approved:
+        assert recorder.approved[0]["reason"] == AUTONOMOUS_APPROVAL
+        assert not engine.state.paused, "an approved hold is not a stop"
+    else:
+        # §30: no shipped playbook has a `job.held` rule, so the hold stops the
+        # pipeline and waits for a human, exactly as it does today.
+        assert engine.state.paused
+
+
+@pytest.mark.parametrize("origin", ["kit", "cli", "phone", "limit", "playbook"])
+def test_the_engine_approves_only_the_architects_own_holds(
+    tmp_home: Path, workdir: Path, origin: str
+) -> None:
+    """§31 names one origin. A kit from the phone, a human's gated send and every
+    other origin keep §8's table: only a human releases them."""
+    engine, recorder = engine_for(tmp_home, workdir, AUTONOMOUS, architect=workdir)
+    job = held_apply(engine.spool, origin=origin)
+    run(engine.on_event("job.held", job=job))
+    assert recorder.approved == []
+    assert engine.spool.load_job(job.id).state == "held"
+
+
+def test_a_held_architect_apply_under_a_paused_pipeline_is_not_approved(
+    tmp_home: Path, workdir: Path
+) -> None:
+    """§10: a paused pipeline fires nothing, and the engine's approval is the
+    pipeline acting. The hold waits for the human who is already being asked."""
+    engine, recorder = engine_for(tmp_home, workdir, AUTONOMOUS, architect=workdir)
+    run(engine.pause())
+    job = held_apply(engine.spool)
+    run(engine.on_event("job.held", job=job))
+    assert recorder.approved == []
+
+
+def test_an_approval_the_api_refuses_stops_the_pipeline(tmp_home: Path, workdir: Path) -> None:
+    engine, recorder = engine_for(tmp_home, workdir, AUTONOMOUS, architect=workdir)
+    recorder.refuse_approve = "the builder queue is full"
+    job = held_apply(engine.spool)
+    run(engine.on_event("job.held", job=job))
+    assert engine.state.paused
+    assert "the builder queue is full" in strip_paths(engine.state.stop_reason or "")
+
+
+# ---- the kickoff the engine adds after `VERDICT: kit applied` (§31)
+
+
+def test_the_engine_sends_the_kickoff_after_kit_applied(tmp_home: Path, workdir: Path) -> None:
+    """§31: "a `builder.done` rule the engine adds, not the playbook". It is first,
+    so the playbook's own `^VERDICT: kit applied` rule does not fire — §10's own
+    "the first rule whose `on` matches … fires"."""
+    engine, recorder = engine_for(tmp_home, workdir, AUTONOMOUS, architect=workdir)
+    job = finished(engine.spool, verdict="VERDICT: kit applied abc1234", origin="architect")
+    run(engine.on_event("builder.done", job=job))
+    assert recorder.sent == [
+        {
+            "role": "builder",
+            "context": "clear",
+            "prompt": (
+                "Read meta/BUILDER-16-PROMPT.md and execute the mission below its divider."
+            ),
+            "origin": "playbook",
+            "playbook_sha256": engine.playbook.sha256,
+        }
+    ]
+    assert recorder.notified == [], "the playbook's notify rule did not fire"
+    assert engine.state.last_rule is not None
+    assert engine.state.last_rule["rule"] == ENGINE_RULE_INDEX == -1
+    assert engine.state.last_rule["then"] == "send"
+
+
+@pytest.mark.parametrize("body", [NOT_AUTONOMOUS, PHONE_MODE])
+def test_without_role_mode_and_autonomous_the_playbooks_own_rule_fires(
+    tmp_home: Path, workdir: Path, body: str
+) -> None:
+    engine, recorder = engine_for(tmp_home, workdir, body, architect=workdir)
+    job = finished(engine.spool, verdict="VERDICT: kit applied abc1234", origin="architect")
+    run(engine.on_event("builder.done", job=job))
+    assert recorder.sent == []
+    assert [title for title, _ in recorder.notified] == [
+        "hands: Kit applied; the next kickoff is the driver's"
+    ]
+
+
+def test_the_engine_rule_does_not_swallow_other_builder_verdicts(
+    tmp_home: Path, workdir: Path
+) -> None:
+    engine, recorder = engine_for(tmp_home, workdir, AUTONOMOUS, architect=workdir)
+    job = finished(engine.spool, verdict="VERDICT: mission 16 finished")
+    run(engine.on_event("builder.done", job=job))
+    assert recorder.sent == []
+    assert engine.state.paused
+    assert "Mission 16 finished" in strip_paths(engine.state.stop_reason or "")
+
+
+def test_the_engine_rule_stops_when_the_series_has_no_kickoff(
+    tmp_home: Path, workdir: Path
+) -> None:
+    """The rule the engine adds sends `[series] kickoff`; without one there is
+    nothing to send, and §10 stops for what it cannot do."""
+    body = AUTONOMOUS.replace(
+        'kickoff = "Read meta/BUILDER-16-PROMPT.md and execute the mission below its divider."\n',
+        "",
+    )
+    engine, recorder = engine_for(tmp_home, workdir, body, architect=workdir)
+    job = finished(engine.spool, verdict="VERDICT: kit applied abc1234", origin="architect")
+    run(engine.on_event("builder.done", job=job))
+    assert recorder.sent == []
+    assert engine.state.paused
+    assert "kickoff" in strip_paths(engine.state.stop_reason or "")
+
+
+# ---- end to end (§31, the unit's gate)
+
+
+def test_the_architects_kit_is_approved_applied_and_the_kickoff_sent(
+    tmp_home: Path, workdir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """§31 end to end, over a real daemon and `fake_claude`: a kit filed with
+    `origin: architect` → approved by the engine (`decided_by: playbook`) → the
+    builder applies it and replies `VERDICT: kit applied <sha>` → the engine sends
+    `[series] kickoff`, clear. Every step is read back from the spool.
+
+    The apply is filed through `Api.send` with `hands.kit.apply_params(plan,
+    "architect")` — the same params `hands kit file` sends — rather than through
+    the CLI, which would need a real architect sandbox ($HANDS_KITS, $HANDS_CLONE
+    and a clone that passes the kit check); `tests/test_kit.py` covers that path.
+    """
+    git_repo(workdir)
+    architect = tmp_home / "hands-architect"
+    architect.mkdir(exist_ok=True)
+    write_project(
+        tmp_home,
+        config_body(tmp_home, workdir, extra=f'\n[roles.architect]\ncwd = "{architect}"\n'),
+    )
+    write_playbook(workdir, AUTONOMOUS)
+    replies = tmp_home / "replies.json"
+    replies.write_text(json.dumps(["VERDICT: kit applied abc1234", "VERDICT: mission 16 finished"]))
+    monkeypatch.setenv("HANDS_FAKE_CLAUDE_REPLIES", str(replies))
+    plan = Apply(
+        name="mission-16-kit",
+        replaces=[],
+        adds=["meta/BUILDER-16-PROMPT.md"],
+        commit_message="plan: mission 16 kit",
+        kit_md=None,
+        prompt="Apply ~/kits/mission-16-kit.zip. Reply with one line: VERDICT: kit applied <sha>.",
+    )
+
+    async def body(daemon: Daemon) -> None:
+        filed = await daemon.api.send(**apply_params(plan, "architect"))
+        assert filed["state"] == "held" and filed["origin"] == "architect"
+        state = await wait_for_stop()
+
+        rows = sorted((await ok("jobs", "-n", "50"))["jobs"], key=lambda row: row["id"])
+        assert [(row["role"], row["origin"]) for row in rows] == [
+            ("builder", "architect"),
+            ("builder", "playbook"),
+        ]
+        apply_job, kickoff = [await ok("result", row["id"]) for row in rows]
+
+        assert apply_job["id"] == filed["id"]
+        assert apply_job["state"] == "done"
+        assert apply_job["prompt"] == plan.prompt
+        gate = apply_job["gate"]
+        assert gate["decision"] == "approved"
+        assert gate["decided_by"] == "playbook", "§31: the engine is the decider"
+        assert gate["reason"] == "apply mission-16-kit"
+        assert gate["quote"] is None
+        assert gate["decided_reason"] == AUTONOMOUS_APPROVAL
+        assert gate["decided_at"]
+
+        assert kickoff["prompt"] == (
+            "Read meta/BUILDER-16-PROMPT.md and execute the mission below its divider."
+        )
+        assert kickoff["context"] == "clear"
+        assert kickoff["state"] == "done"
+        assert kickoff["playbook_sha256"] == state["playbook"]["sha256"]
+
+        events = (await ok("inbox"))["events"]
+        kinds = [event["kind"] for event in events]
+        assert kinds[0] == "job.held"
+        decided = [event for event in events if event["kind"] == "gate.decided"]
+        assert len(decided) == 1
+        assert decided[0]["payload"]["decided_by"] == "playbook"
+        assert decided[0]["payload"]["job"] == filed["id"]
+        fired = [event for event in events if event["kind"] == "playbook.rule"]
+        assert [event["payload"]["rule"] for event in fired] == [ENGINE_RULE_INDEX, 1]
+        assert fired[0]["payload"]["fired_job"] == kickoff["id"]
+        assert kinds[-1] == "stop"
+        assert "Mission 16 finished" in strip_paths(state["stop_reason"] or "")
+
+    drive(body)
+
+
+def test_the_architects_readme_shows_keys_that_load(tmp_home: Path, workdir: Path) -> None:
+    """`architect/README.md`'s Config block is what the human types. Its `[series]`
+    half is lifted out of the file and put through the real loader, so a key that
+    stops loading cannot stay in the instructions."""
+    readme = (Path(__file__).parents[1] / "architect" / "README.md").read_text(encoding="utf-8")
+    lines = [line[4:] for line in readme.splitlines() if line.startswith("    ")]
+    start = lines.index("[series]")
+    table = []
+    for line in lines[start:]:
+        if not line.strip():
+            break
+        table.append(line)
+    book = parse_playbook("version = 1\n\n" + "\n".join(table), path=workdir / "PLAYBOOK.toml")
+    assert book.architect == "role" and book.autonomous is True
+    assert book.gate_failures == 2
+    assert book.escalate_on == ESCALATE_ON
+    config = make_config(tmp_home, workdir, architect=workdir)
+    check_series_roles(book, config)  # the README's `[roles.architect]`, as configured
+
+
+def test_a_playbook_that_sets_autonomous_arrives_as_a_gated_apply() -> None:
+    """§31: "a playbook that sets `autonomous` is itself gated as any kit is".
+
+    It is, by construction and with nothing added here: every kit apply carries a
+    gate reason, whichever route filed it, so the job is born `held` and §8's
+    table decides it. Pinned rather than built."""
+    plan = Apply(name="m16", replaces=["PLAYBOOK.toml"], adds=[],
+                 commit_message="plan: kit m16", kit_md=None, prompt="Apply it.")
+    for origin in ("kit", "architect"):
+        assert apply_params(plan, origin)["gate"] == "apply m16"
+    assert DECIDERS["playbook"].available and not DECIDERS["playbook"].requires_quote

@@ -136,6 +136,10 @@ class Daemon:
             enqueue=self._enqueue_resume,
             limits=self.limits,
             notify=self.notifier.notify,
+            # §31: the engine's own gate authority, for one case — a held apply of
+            # origin `architect` under an autonomous playbook. The method is not a
+            # command of §4, so no socket client can reach it.
+            approve=self.api.decide_from_playbook,
         )
         #: §24's command channel: on only when `[notify] cmd_topic` is set, which
         #: the config refuses without `cmd_secret`. Its stream is an attribute, so

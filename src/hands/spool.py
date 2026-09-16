@@ -32,6 +32,7 @@ from typing import Any
 log = logging.getLogger("hands.spool")
 
 __all__ = [
+    "ARCHITECT_ORIGIN",
     "EVENT_KINDS",
     "FLAT_ITEMS",
     "INITIAL_STATES",
@@ -102,10 +103,13 @@ CONTEXTS = frozenset({"clear", "keep"})  # §2
 #: §26 adds `phone`: the job a `go <secret>` on `cmd_topic` files (H-018 gap 1);
 #: §27 adds `kit`: the held apply handsd files when a kit arrives from the phone;
 #: §31 adds `architect`: the held apply `hands kit file` files from the architect's
-#: own cwd. Legal here so the record can carry it; nothing writes it yet (U3).
+#: own cwd, and the one origin the engine may approve on its own (§31, U4).
 ORIGINS = frozenset(
     {"driver", "playbook", "cli", "limit", "phone", "kit", "architect"}
 )  # §6 (v3.14)
+#: §31: named, because three modules test against it — `hands kit file` writes it,
+#: `Api.decide_from_playbook` refuses anything else, and the engine reads it.
+ARCHITECT_ORIGIN = "architect"
 
 # §11 event kinds. Closed on purpose: a unit that needs a new kind adds it here,
 # where `hands wait --for <kind>` and the playbook can see it.

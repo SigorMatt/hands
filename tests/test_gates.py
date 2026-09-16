@@ -13,6 +13,7 @@ from pathlib import Path
 import pytest
 
 from conftest import strip_paths
+from hands.api import ApiError
 from hands.config import DEFAULT_GATE_PATTERNS
 from hands.daemon import Daemon
 from hands.gates import DECIDERS
@@ -194,14 +195,74 @@ def test_the_authority_table_of_section_8(project: str, case: Case, decision: st
 
 def test_the_decider_vocabulary_is_section_8s(project: str) -> None:
     """`button` is §9's deferred remote face: named, and not reachable. `phone` is
-    §24's command channel: available, no quote (it is authenticated instead)."""
-    assert set(DECIDERS) == {"cli", "driver", "button", "phone"}
+    §24's command channel: available, no quote (it is authenticated instead).
+    `playbook` is §31's fourth authority: the engine releasing a held apply of
+    origin `architect` under an `autonomous` playbook the human approved."""
+    assert set(DECIDERS) == {"cli", "driver", "button", "phone", "playbook"}
     assert DECIDERS["cli"].requires_quote is False
     assert DECIDERS["driver"].requires_quote is True
     assert DECIDERS["phone"].requires_quote is False
+    assert DECIDERS["playbook"].requires_quote is False
     assert DECIDERS["cli"].available and DECIDERS["driver"].available
     assert DECIDERS["phone"].available
+    assert DECIDERS["playbook"].available
     assert not DECIDERS["button"].available
+
+
+@pytest.mark.parametrize("human_confirmed", [True, False])
+def test_no_cli_flag_claims_the_playbooks_authority(human_confirmed: bool) -> None:
+    """§8's two socket paths are the only ones `hands approve` can claim. §31's
+    `playbook` row is reachable only through `Api.decide_from_playbook`, which is
+    not a command of §4 — as `phone` is reachable only through §24's channel."""
+    from hands.api import Api
+    from hands.gates import decider_for
+
+    assert decider_for(human_confirmed=human_confirmed) in {"cli", "driver"}
+    assert set(Api.COMMANDS).isdisjoint({"decide_from_playbook", "decide_from_phone"})
+
+
+def test_the_playbook_decider_releases_the_architects_hold(project: str) -> None:
+    """The record a `decided_by: playbook` approval leaves: §8's fields, the
+    reason §31 gives it, and no quote. The end-to-end path is in
+    tests/test_playbook.py; this pins the table row itself."""
+
+    async def body(daemon: Daemon) -> None:
+        job = await daemon.api.send(
+            role="builder", context="clear", prompt="Apply the kit.",
+            gate="apply m16", origin="architect",
+        )
+        assert job["state"] == "held"
+        decided = await daemon.api.decide_from_playbook(job["id"], reason="because §31")
+        gate = decided["gate"]
+        assert gate["decision"] == "approved"
+        assert gate["decided_by"] == "playbook"
+        assert gate["quote"] is None
+        assert gate["decided_reason"] == "because §31"
+        assert decided["state"] in {"queued", "running", "done"}
+        kinds = [event["kind"] for event in (await ok("inbox"))["events"]]
+        assert "gate.decided" in kinds
+
+    drive(body)
+
+
+@pytest.mark.parametrize("origin", ["cli", "kit", "phone", "playbook"])
+def test_the_playbook_decider_releases_nothing_but_an_architects_hold(
+    project: str, origin: str
+) -> None:
+    """§31 names one origin, so the method that carries its authority refuses every
+    other: a kit from the phone and a human's own gated send stay §8's to decide."""
+
+    async def body(daemon: Daemon) -> None:
+        job = await daemon.api.send(
+            role="builder", context="clear", prompt="please open the PR now", origin=origin,
+        )
+        assert job["state"] == "held"
+        with pytest.raises(ApiError) as caught:
+            await daemon.api.decide_from_playbook(job["id"])
+        assert "architect" in strip_paths(str(caught.value))
+        assert (await ok("result", job["id"]))["state"] == "held"
+
+    drive(body)
 
 
 def test_a_denied_job_is_terminal(project: str) -> None:

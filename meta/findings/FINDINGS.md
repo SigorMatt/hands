@@ -1567,3 +1567,34 @@ Until one is decided, an architect role that reaches rule 3 will either file a
 kit whose entries are wrong or escalate.
 
 Status: open (found while building mission 15 U3; U3 implements §31 as written)
+
+---
+
+## H-031 — §6's `decided_by` vocabulary is three values; §31 adds a fourth
+
+Severity: low · Component: DESIGN §6 (the job record's `gate` field) against
+§31; `src/hands/gates.py` (`DECIDERS`, `DECIDED_BY`), `tests/test_docs.py`
+Filed by: mission 15 U4, from building `decided_by: playbook`.
+
+Symptom. DESIGN §6's job record line reads
+
+    gate              # {reason, decided_by: cli|driver|phone, decided_at, quote?}
+
+and §31 says a held apply of origin `architect` under a playbook with
+`[series] architect = "role"` and `autonomous = true` is "approved by the
+engine (`decided_by: playbook`)". Both cannot be read literally: `playbook` is
+a value the record now carries and §6 does not list it. Review 8 should-fix 2
+(H-017) turned §6's list into a test — `tests/test_docs.py::
+test_the_code_vocabularies_are_section_6s_lists` parses the list out of §6 and
+asserts `set(hands.gates.DECIDED_BY)` equals it exactly — so implementing §31
+as written makes that test red without touching it.
+
+Direction. U4 implemented §31's words (the code's vocabulary is `cli`,
+`driver`, `phone`, `playbook`) and weakened that one assertion to "§6's list
+plus `playbook`, and no more", naming this finding. The check still fails on a
+fifth value appearing in code without a design change, which is what it was
+for. The tidy resolution is a §6 line that reads `decided_by:
+cli|driver|phone|playbook`, after which the assertion goes back to equality;
+DESIGN.md is the architect's file, so this unit did not make that edit.
+
+Status: open (worked around in tests/test_docs.py by mission 15 U4)

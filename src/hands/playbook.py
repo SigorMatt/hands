@@ -58,16 +58,26 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from hands.config import Config
+from hands.config import ARCHITECT_ROLE, Config
 from hands.limits import LimitManager
-from hands.spool import Job, Spool, SpoolError, atomic_write, now_iso
+from hands.spool import ARCHITECT_ORIGIN, Job, Spool, SpoolError, atomic_write, now_iso
 
 __all__ = [
     "ACTIONS",
+    "ARCHITECT_MODES",
+    "AUTONOMOUS_APPROVAL",
     "CONSULT_QUESTION",
     "ConsultAnchor",
+    "DEFAULT_ARCHITECT_MODE",
+    "DEFAULT_GATE_FAILURES",
+    "DEFAULT_MAX_ARCHITECT_CONSULTS",
     "DEFAULT_MAX_CONSULTS",
     "DRIVER_VERDICTS",
+    "ENGINE_RULE_INDEX",
+    "ESCALATE_ON",
+    "KIT_APPLIED",
+    "LIMIT_KEYS",
+    "SERIES_KEYS",
     "PAUSE_REASON",
     "EVENTS",
     "JOB_PLACEHOLDERS",
@@ -77,9 +87,11 @@ __all__ = [
     "PlaceholderError",
     "Playbook",
     "PlaybookEngine",
+    "PlaybookConfigError",
     "PlaybookError",
     "PlaybookNotCommitted",
     "Rule",
+    "check_series_roles",
     "load_playbook",
     "parse_playbook",
     "playbook_path",
@@ -150,6 +162,34 @@ KIT_ORIGIN = "kit"
 #: §27: the journal a consultation appends one line to, under `roles.builder.cwd`.
 JOURNAL = Path("meta") / "journal.md"
 
+#: §31: `[series] architect`. `phone` is the architect the human talks to in a
+#: chat Project; `role` is the headless architect handsd starts (`[roles.architect]`).
+ARCHITECT_MODES: tuple[str, ...] = ("phone", "role")
+DEFAULT_ARCHITECT_MODE = "phone"
+#: §31: `[series] escalate_on`, a closed vocabulary. The engine owns the budget
+#: one itself; the architect's CLAUDE.md names all three.
+ESCALATE_ON: tuple[str, ...] = ("blocker-unanswered", "milestone-missing", "budget-exhausted")
+#: §31 writes `gate_failures = 2` and leaves the default unsaid; U4 takes the
+#: design's own number, so a playbook that omits the key behaves as §31's example.
+DEFAULT_GATE_FAILURES = 2
+#: §31: `[limits] max_architect_consults` per series (default 12).
+DEFAULT_MAX_ARCHITECT_CONSULTS = 12
+#: §31: the reply the engine's own `builder.done` rule matches. It is the verdict
+#: line the apply prompt asks for (`hands.kit.APPLY_VERDICT`), anchored.
+KIT_APPLIED = r"^VERDICT: kit applied"
+_KIT_APPLIED_RE = re.compile(KIT_APPLIED)
+#: §31: the index of the rule the engine adds. Negative so it can never be a
+#: playbook rule's index, and so `last_rule` says plainly that no line of the
+#: file fired.
+ENGINE_RULE_INDEX = -1
+#: §31: what a `decided_by: playbook` gate record stores as its reason. The
+#: authority is one step removed and the record says which step.
+AUTONOMOUS_APPROVAL = (
+    'the playbook in force sets [series] architect = "role" and autonomous = true; '
+    "the human's approval of that playbook is the standing approval for the applies "
+    "the architect files under it (§31)"
+)
+
 #: §10's "Placeholders": the job fields a rule may name as `{job.<field>}`.
 JOB_PLACEHOLDERS: tuple[str, ...] = ("id", "head_at_start", "head_at_end", "session_id")
 
@@ -173,11 +213,25 @@ PAUSE_REASON = "paused by human"
 SUPPRESSED_CONSULT_TITLE = "hands: a consultation stopped over a paused pipeline"
 
 TOP_KEYS: tuple[str, ...] = ("version", "series", "limits", "rule")
-LIMIT_KEYS: tuple[str, ...] = ("auto_runs", "max_resumes", "max_consults")
+LIMIT_KEYS: tuple[str, ...] = (
+    "auto_runs",
+    "max_resumes",
+    "max_consults",
+    "max_architect_consults",  # §31
+)
 #: §26's `[series]` table: `kickoff`, and `name`, which is where the series' name
 #: goes when the table is used — TOML cannot hold `series = "…"` beside a
 #: `[series]` table (H-019).
-SERIES_KEYS: tuple[str, ...] = ("name", "kickoff")
+#: §31 adds the series' mode (`architect`, `autonomous`) and its escalation
+#: conditions (`gate_failures`, `escalate_on`), all refused at load like the rest.
+SERIES_KEYS: tuple[str, ...] = (
+    "name",
+    "kickoff",
+    "architect",
+    "autonomous",
+    "gate_failures",
+    "escalate_on",
+)
 #: §11 (§25, decision 2026-09-12): the retired `[limits]` key, refused by name.
 RETIRED_LIMIT = "quiet_hours"
 RULE_KEYS: tuple[str, ...] = (
@@ -200,6 +254,17 @@ class PlaybookError(Exception):
 
 class PlaybookNotCommitted(PlaybookError):
     """The file on disk is not the committed copy (§10, §25): dirty or untracked."""
+
+
+class PlaybookConfigError(PlaybookError):
+    """The playbook is valid, and this project cannot honour it (§31).
+
+    The playbook is a file in the builder's repository and the roles are in
+    `~/.hands/<project>.toml`; only where the two meet can a `[series] architect
+    = "role"` be checked against `[roles.architect]`. That is `check_series_roles`,
+    called from the engine's own load — so the pipeline stops rather than fire a
+    rule under a playbook whose architect this laptop does not configure.
+    """
 
 
 #: How long `git show HEAD:<path>` may take before the playbook is refused (§10).
@@ -395,6 +460,22 @@ class Playbook:
     kickoff: str | None = None
     #: §27: consultations a mission may start, counted from the last kickoff.
     max_consults: int = DEFAULT_MAX_CONSULTS
+    #: §31's `[series]`: which architect runs this series, whether the engine may
+    #: approve its applies, and the escalation conditions written down rather than
+    #: judged in the moment.
+    architect: str = DEFAULT_ARCHITECT_MODE
+    autonomous: bool = False
+    gate_failures: int = DEFAULT_GATE_FAILURES
+    escalate_on: tuple[str, ...] = ()
+    #: §31: consultations of the architect role this series may start.
+    max_architect_consults: int = DEFAULT_MAX_ARCHITECT_CONSULTS
+
+    @property
+    def architect_is_autonomous(self) -> bool:
+        """§31: both keys, or neither. One alone gives the engine nothing: a
+        `phone` architect files no job for it to approve, and a `role` architect
+        without `autonomous` files applies a human decides."""
+        return self.architect == "role" and self.autonomous
 
     def rules_for(self, event: str) -> list[Rule]:
         """Every rule on `event`, in file order — §10 reads top to bottom."""
@@ -503,7 +584,7 @@ def parse_playbook(text: str, *, path: Path) -> Playbook:
     version = data.get("version")
     if version != VERSION:
         raise PlaybookError(f"{path}: version must be {VERSION} (§10), got {version!r}")
-    series, kickoff = _series(data.get("series"), path)
+    series = _series(data.get("series"), path)
 
     limits = data.get("limits", {})
     if not isinstance(limits, dict):
@@ -537,6 +618,19 @@ def parse_playbook(text: str, *, path: Path) -> Playbook:
             f"{path}: [limits] max_consults must be a non-negative integer, got {max_consults!r}"
         )
 
+    # §31: the architect role's own budget, counted per series rather than per
+    # mission; U5 spends it, this unit only reads it out of the file.
+    architect_consults = limits.get("max_architect_consults", DEFAULT_MAX_ARCHITECT_CONSULTS)
+    if (
+        isinstance(architect_consults, bool)
+        or not isinstance(architect_consults, int)
+        or architect_consults < 0
+    ):
+        raise PlaybookError(
+            f"{path}: [limits] max_architect_consults must be a non-negative integer (§31), "
+            f"got {architect_consults!r}"
+        )
+
     raw_rules = data.get("rule", [])
     if not isinstance(raw_rules, list) or any(not isinstance(item, dict) for item in raw_rules):
         raise PlaybookError(f"{path}: [[rule]] must be a list of tables, got {raw_rules!r}")
@@ -549,41 +643,121 @@ def parse_playbook(text: str, *, path: Path) -> Playbook:
         path=path,
         sha256=hashlib.sha256(text.encode("utf-8")).hexdigest(),
         version=version,
-        series=series,
+        series=series["name"],
         auto_runs=tuple(auto_runs),
         max_resumes=max_resumes,
         rules=rules,
-        kickoff=kickoff,
+        kickoff=series["kickoff"],
         max_consults=max_consults,
+        architect=series["architect"],
+        autonomous=series["autonomous"],
+        gate_failures=series["gate_failures"],
+        escalate_on=series["escalate_on"],
+        max_architect_consults=architect_consults,
     )
 
 
-def _series(value: Any, path: Path) -> tuple[str | None, str | None]:
-    """The series' name and kickoff line: `series = "<name>"` (§10's example), or a
-    `[series]` table of `name` and `kickoff` (§26; H-019). TOML allows one or the
-    other, never both."""
+def _series(value: Any, path: Path) -> dict[str, Any]:
+    """The `[series]` table: `series = "<name>"` (§10's example), or a table of
+    `name` and `kickoff` (§26; H-019) and §31's mode and escalation conditions.
+    TOML allows the string or the table, never both.
+
+    Every key is decided here, at load, and never when a rule fires — §10's
+    discipline, which `run`/`auto_runs` already follows.
+    """
+    series: dict[str, Any] = {
+        "name": None,
+        "kickoff": None,
+        "architect": DEFAULT_ARCHITECT_MODE,
+        "autonomous": False,
+        "gate_failures": DEFAULT_GATE_FAILURES,
+        "escalate_on": (),
+    }
     if value is None:
-        return None, None
+        return series
     if isinstance(value, str):
-        return value, None
+        return {**series, "name": value}
     if not isinstance(value, dict):
         raise PlaybookError(
             f"{path}: series must be a string (the series' name) or a [series] table, "
             f"got {value!r}"
         )
     _check_keys(value, SERIES_KEYS, "[series]", path)
-    found: list[str | None] = []
-    for key in SERIES_KEYS:
+    for key in ("name", "kickoff"):
         item = value.get(key)
-        if item is not None:
-            if not isinstance(item, str):
-                raise PlaybookError(f"{path}: [series] {key} must be a string, got {item!r}")
-            if not item.strip():
-                raise PlaybookError(
-                    f"{path}: [series] {key} is empty (§20): omit the key or give it a value"
-                )
-        found.append(item)
-    return found[0], found[1]
+        if item is None:
+            continue
+        if not isinstance(item, str):
+            raise PlaybookError(f"{path}: [series] {key} must be a string, got {item!r}")
+        if not item.strip():
+            raise PlaybookError(
+                f"{path}: [series] {key} is empty (§20): omit the key or give it a value"
+            )
+        series[key] = item
+
+    if "architect" in value:
+        mode = value["architect"]
+        if not isinstance(mode, str) or mode not in ARCHITECT_MODES:
+            raise PlaybookError(
+                f"{path}: [series] architect must be one of "
+                f"{' | '.join(repr(name) for name in ARCHITECT_MODES)} (§31), got {mode!r}"
+            )
+        series["architect"] = mode
+
+    if "autonomous" in value:
+        flag = value["autonomous"]
+        if not isinstance(flag, bool):
+            raise PlaybookError(
+                f"{path}: [series] autonomous must be true or false (§31), got {flag!r}"
+            )
+        series["autonomous"] = flag
+
+    if "gate_failures" in value:
+        failures = value["gate_failures"]
+        if isinstance(failures, bool) or not isinstance(failures, int) or failures < 1:
+            raise PlaybookError(
+                f"{path}: [series] gate_failures must be a positive integer — the number of "
+                f"times one roadmap gate may fail in a row (§31), got {failures!r}"
+            )
+        series["gate_failures"] = failures
+
+    if "escalate_on" in value:
+        conditions = value["escalate_on"]
+        if not isinstance(conditions, list) or any(
+            not isinstance(item, str) for item in conditions
+        ):
+            raise PlaybookError(
+                f"{path}: [series] escalate_on must be a list of condition names (§31), "
+                f"got {conditions!r}"
+            )
+        unknown = [item for item in conditions if item not in ESCALATE_ON]
+        if unknown:
+            raise PlaybookError(
+                f"{path}: [series] escalate_on names {', '.join(repr(u) for u in unknown)}, "
+                f"which §31 does not; the conditions are: {', '.join(ESCALATE_ON)}"
+            )
+        series["escalate_on"] = tuple(conditions)
+
+    return series
+
+
+def check_series_roles(book: Playbook, config: Config) -> None:
+    """§31: `[series] architect = "role"` without `[roles.architect]` is a config error.
+
+    The check cannot live in `load_playbook`: the playbook is a repository file and
+    the roles are in `~/.hands/<project>.toml`, and the loader is run by `hands kit
+    check` in an architect's sandbox where this laptop's config is not there to read.
+    So it lives where a loaded playbook meets a config — the engine's own `_load`,
+    and any other caller that has both — and its message names both files, because
+    either one of them is the thing to fix.
+    """
+    if book.architect != "role" or ARCHITECT_ROLE in config.roles:
+        return
+    raise PlaybookConfigError(
+        f'{book.path} sets [series] architect = "role", and {config.path} configures no '
+        f"[roles.architect] (§31): add the role's table (cwd = the architect's "
+        f'directory), or set [series] architect = "phone"'
+    )
 
 
 def _rule(index: int, table: dict[str, Any], path: Path, *, auto_runs: tuple[int, ...]) -> Rule:
@@ -846,12 +1020,15 @@ class PipelineState:
 class PlaybookEngine:
     """§10's automaton: one event in, one rule out, `stop` by default.
 
-    The daemon owns one. Its two seams are callables and not the daemon itself,
+    The daemon owns one. Its seams are callables and not the daemon itself,
     so every branch below is drivable without a socket:
 
     * `send` — `Api.send`, so a job hands starts on its own passes §8's gate
       patterns exactly as a human's send does;
-    * `enqueue` — the daemon's queue, for a `resume`, which §6 does not re-gate.
+    * `enqueue` — the daemon's queue, for a `resume`, which §6 does not re-gate;
+    * `approve` — `Api.decide_from_playbook`, §31's fourth gate authority, used
+      for one thing only: a held apply of origin `architect` under a playbook that
+      sets `[series] architect = "role"` and `autonomous = true`.
     """
 
     def __init__(
@@ -863,11 +1040,16 @@ class PlaybookEngine:
         enqueue: Callable[..., Awaitable[Job]],
         limits: LimitManager | None = None,
         notify: Callable[[str, dict[str, Any]], Any] | None = None,
+        approve: Callable[..., Awaitable[dict[str, Any]]] | None = None,
     ) -> None:
         self.config = config
         self.spool = spool
         self.send = send
         self.enqueue = enqueue
+        #: §31's seam: `Api.decide_from_playbook`. None in a caller that does not
+        #: wire it, which is then a pipeline that cannot approve anything — the
+        #: architect's hold stays held and the engine says so.
+        self.approve = approve
         #: §6's manager, when there is one: §10's `[limits] max_resumes` overrides
         #: the config's, and the counter both units read is the role's.
         self.limits = limits
@@ -925,16 +1107,21 @@ class PlaybookEngine:
         self._loaded = True
         try:
             book = load_playbook(path, cwd=self.config.role("builder").cwd)
+            if book is not None:
+                # §31: the one check that needs the playbook *and* the config.
+                check_series_roles(book, self.config)
         except PlaybookError as exc:
             self.playbook = None
             self.load_error = str(exc)
             # §10, §25: a dirty or untracked file is refused through this same
-            # path — the one `stop()`, its reason naming both sha256s.
-            what = (
-                "is not the committed copy"
-                if isinstance(exc, PlaybookNotCommitted)
-                else "cannot be read"
-            )
+            # path — the one `stop()`, its reason naming both sha256s. §31: so is
+            # a playbook this project's configuration cannot honour.
+            if isinstance(exc, PlaybookNotCommitted):
+                what = "is not the committed copy"
+            elif isinstance(exc, PlaybookConfigError):
+                what = "does not agree with this project's configuration"
+            else:
+                what = "cannot be read"
             await self.stop(
                 f"the playbook {what}, so no rule can be trusted to fire: {exc}",
                 {"playbook": str(path)},
@@ -1014,6 +1201,8 @@ class PlaybookEngine:
             if enforced is not None:  # §28: the engine's stop needs no playbook
                 await self.stop(enforced, _payload(event, job))
             return  # no playbook: hands runs jobs, nothing chains (§10)
+        if event == "job.held" and await self._approve_architect_hold(book, job):
+            return  # §31: the engine answered this hold; no rule fires for it
         try:
             await self._match(book, event, job, payload, enforced=enforced)
         except asyncio.CancelledError:
@@ -1034,7 +1223,7 @@ class PlaybookEngine:
         *,
         enforced: str | None = None,
     ) -> None:
-        candidates = book.rules_for(event)
+        candidates = self._engine_rules(book, event) + book.rules_for(event)
         if enforced is not None:
             # §28: the playbook cannot remove this stop. A first matching `stop`
             # rule is the stop, with its message; any other rule does not fire.
@@ -1070,6 +1259,94 @@ class PlaybookEngine:
             return
 
         await self._fire(chosen, event, job, match)
+
+    def _engine_rules(self, book: Playbook, event: str) -> list[Rule]:
+        """§31: "a `builder.done` rule the engine adds, not the playbook".
+
+        In role mode with `autonomous`, the engine behaves as if a `builder.done`
+        rule on `^VERDICT: kit applied` sending `[series] kickoff` to the builder,
+        clear, stood at the top of the file. At the top, and not at the bottom,
+        because §10 already decides what happens when two rules match — "the first
+        rule whose `on` matches it and whose `verdict` regex matches … fires" —
+        and the engine's rule is the one §31 promises will run. Every shipped
+        playbook carries a `^VERDICT: kit applied` rule of its own (a `notify`);
+        under autonomy that rule does not fire, and the inbox says which rule did
+        (`rule: -1`). Outside role mode with `autonomous` the engine adds nothing
+        and the playbook's rule is the only one there is.
+
+        The kickoff job's origin is `playbook` (`ORIGIN`), like every other job a
+        rule starts: the phone did not send it, the engine did. It therefore does
+        not clear a stop (`UNPAUSE_ORIGINS`), and it anchors `max_consults` as any
+        kickoff-prompted builder job does (`consults_used`).
+        """
+        if event != "builder.done" or not book.architect_is_autonomous:
+            return []
+        if book.kickoff is None:
+            # Refused here rather than rendered into an empty prompt: §10 stops
+            # for what it cannot do, and the reason names the missing key.
+            return [
+                Rule(
+                    index=ENGINE_RULE_INDEX,
+                    on="builder.done",
+                    then="stop",
+                    verdict=_KIT_APPLIED_RE,
+                    message=(
+                        "the kit was applied and this playbook, which is autonomous, has no "
+                        "[series] kickoff to send next (§31)"
+                    ),
+                )
+            ]
+        return [
+            Rule(
+                index=ENGINE_RULE_INDEX,
+                on="builder.done",
+                then="send",
+                verdict=_KIT_APPLIED_RE,
+                role="builder",
+                context="clear",
+                prompt=book.kickoff,
+            )
+        ]
+
+    async def _approve_architect_hold(self, book: Playbook, job: Job | None) -> bool:
+        """§31: release a held apply the architect filed, `decided_by: playbook`.
+
+        True when the engine answered this `job.held` and no rule should fire for
+        it. False when it is not the engine's — another origin, or a playbook that
+        is not `architect = "role"` with `autonomous = true` — and the hold then
+        takes exactly the path it takes today: the playbook's `job.held` rule if it
+        has one, and otherwise a stop, so the human is asked.
+
+        A paused pipeline approves nothing: §10 says a paused pipeline fires
+        nothing, and this is the pipeline acting. The human being asked about the
+        stop is the human who would decide the hold anyway.
+        """
+        if job is None or job.origin != ARCHITECT_ORIGIN or not book.architect_is_autonomous:
+            return False
+        where = _payload("job.held", job)
+        if self.approve is None:  # pragma: no cover - wired by the daemon and the tests
+            await self.stop(
+                f"job.held: {job.id} is the architect's apply under an autonomous playbook "
+                "and this engine has no approve seam to release it with (§31)",
+                where,
+            )
+            return True
+        try:
+            await self.approve(job=job.id, reason=AUTONOMOUS_APPROVAL)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            await self.stop(
+                f"job.held: the engine could not approve the architect's apply {job.id}: {exc}",
+                where,
+            )
+            return True
+        # No inbox event of its own: the decision is recorded exactly as every
+        # other gate decision is, by `Api._gate_decided` — one `gate.decided`
+        # carrying `decided_by: playbook` and the reason above — and, as today,
+        # a gate decision notifies nobody (`daemon.NOTIFY_KINDS`).
+        log.info("playbook: approved the architect's apply %s (decided_by: playbook, §31)", job.id)
+        return True
 
     # ------------------------------------------------------------- actions
 
@@ -1507,6 +1784,10 @@ class PlaybookEngine:
                 "rules": len(book.rules) if book else 0,
                 "loaded": book is not None,
                 "error": self.load_error,
+                # §31: which architect runs this series, and whether the engine
+                # may approve its applies.
+                "architect": book.architect if book else DEFAULT_ARCHITECT_MODE,
+                "autonomous": bool(book.autonomous) if book else False,
             },
             "paused": self.state.paused,
             "paused_by": self.state.paused_by,
