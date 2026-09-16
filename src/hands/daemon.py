@@ -363,6 +363,7 @@ class Daemon:
         files_written: list[dict[str, Any]] | None = None,
         resumed_from: str | None = None,
         playbook_sha256: str | None = None,
+        kit_id: str | None = None,
     ) -> Job:
         """Accept a send: create the record and either hold it or join the FIFO.
 
@@ -383,6 +384,7 @@ class Daemon:
             files_written=files_written or [],
             resumed_from=resumed_from,
             playbook_sha256=playbook_sha256,
+            kit_id=kit_id,
         )
         if gate is None:
             self._admit(job)

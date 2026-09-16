@@ -11,6 +11,8 @@
       "Bash(git rebase:*)",
       "Bash(git merge:*)",
       "Bash(rm:*)",
+      "Bash(zip:*)",
+      "Bash(unzip:*)",
       "Bash(tee:*)",
       "Bash(claude:*)",
       "Bash(hands send:*)",
@@ -45,8 +47,6 @@
       "Bash(mkdir:*)",
       "Bash(cp:*)",
       "Bash(mv:*)",
-      "Bash(zip:*)",
-      "Bash(unzip:*)",
       "Bash(date:*)",
       "Bash(echo:*)"
     ]

@@ -22,6 +22,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import secrets
 import time
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import MISSING, dataclass, field, fields
@@ -50,6 +51,7 @@ __all__ = [
     "flat_layout",
     "migrate_flat",
     "new_job_id",
+    "new_kit_id",
     "resolve_kinds",
     "resolve_under_roots",
 ]
@@ -102,12 +104,13 @@ CONTEXTS = frozenset({"clear", "keep"})  # §2
 #: job hands files for itself when a rate limit resets (H-004).
 #: §26 adds `phone`: the job a `go <secret>` on `cmd_topic` files (H-018 gap 1);
 #: §27 adds `kit`: the held apply handsd files when a kit arrives from the phone;
-#: §31 adds `architect`: the held apply `hands kit file` files from the architect's
-#: own cwd, and the one origin the engine may approve on its own (§31, U4).
+#: §31 adds `architect`: the held apply handsd files for `hands kit file` (§32)
+#: from the architect's kit directory, and the one origin the engine may approve
+#: on its own (§31, U4).
 ORIGINS = frozenset(
     {"driver", "playbook", "cli", "limit", "phone", "kit", "architect"}
 )  # §6 (v3.14)
-#: §31: named, because three modules test against it — `hands kit file` writes it,
+#: §31: named, because three modules test against it — `Api.kit_file` writes it,
 #: `Api.decide_from_playbook` refuses anything else, and the engine reads it.
 ARCHITECT_ORIGIN = "architect"
 
@@ -226,6 +229,11 @@ class Job:
     #: `no_num_turns` or `spawn_error` (`hands.runner.FAILURE_REASONS`). Null for
     #: every job that is not `failed`, and for a record kept from before §23.
     failure_reason: str | None = None
+    #: §32: the id handsd mints when it files a kit's apply itself (`hands kit file`,
+    #: origin `architect`; the phone's `kit`, origin `kit`), so an approval can be
+    #: checked against the spool. Null for every job hands did not file from a kit;
+    #: no client can set it (`Api.send` takes no such parameter).
+    kit_id: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {name: getattr(self, name) for name in JOB_FIELDS}
@@ -310,6 +318,11 @@ def _b36(value: int, width: int) -> str:
         value, rem = divmod(value, 36)
         out = _B36[rem] + out
     return (out or "0").rjust(width, "0")
+
+
+def new_kit_id() -> str:
+    """§32: a fresh `kit_id` — 16 hex digits from `secrets`, minted by handsd only."""
+    return secrets.token_hex(8)
 
 
 def new_job_id(now_ms: int | None = None, suffix: str | None = None) -> str:

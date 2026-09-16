@@ -15,6 +15,7 @@ import hashlib
 import itertools
 import json
 import logging
+import re
 import threading
 import time
 from collections.abc import Iterator
@@ -1672,6 +1673,8 @@ def test_a_kit_files_a_held_builder_apply_whose_prompt_is_kit_checks_byte_for_by
             "held", "builder", "kit", "clear",
         )  # fmt: skip
         assert record["gate"]["reason"] == "apply mission-11"
+        # §32: hands itself filed this apply, so it carries a kit_id the daemon minted
+        assert re.fullmatch(r"[0-9a-f]{16}", str(record["kit_id"])), record["kit_id"]
         # the zip is never unzipped by handsd: the builder's cwd is as it was
         assert sorted(p.relative_to(workdir).as_posix() for p in workdir.rglob("*")) == [
             "meta", "meta/REVIEW-PROTOCOL.md",

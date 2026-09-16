@@ -1547,16 +1547,18 @@ def test_every_command_line_the_driver_kit_shows_passes_the_guard() -> None:
 # --- §31: ARCHITECT MODE (H-029) --------------------------------------------
 #
 # With `HANDS_ROLE=architect` the guard guards the architect ROLE: the read-only
-# table, `hands kit check` and `hands kit file`, and `mkdir|cp|mv|zip|unzip` only
-# when every path argument is under `HANDS_KITS`. It never sends, approves,
-# denies, goes, puts, pauses, resumes or opens, and it never pushes. Writes are a
+# table, `hands kit check` and `hands kit file`, and `mkdir|cp|mv` only when every
+# path argument is under `HANDS_KITS` (§32: `zip` and `unzip` left the table). It
+# never sends, approves, denies, goes, puts, pauses, resumes or opens, and it never
+# pushes. Writes are a
 # second `PreToolUse` matcher (`--write`), allowed only under `HANDS_KITS`.
 # Choices where §31 is silent, pinned here: the `hands` surface is the one
 # `architect/settings.json` allows (show, jobs, inbox, pipeline, status, kit
 # check, kit file) — the role's own shipped instruction — so `tail` and `resume`
 # are refused, `resume` being denied by those settings outright; a KITS command
-# takes at least one path argument; and the options are the minimum rule 3 needs
-# (`mkdir -p`, `cp -r`, `zip -r`, `unzip -o`, `unzip -d <dir>`).
+# takes at least one path argument; and the options are the minimum a staged
+# directory kit needs (`mkdir -p`, `cp -r`, `mv` with none), none of which names
+# another path or makes a link (§32).
 KITS = "./kits"
 ARCHITECT = {"role": "architect", "consult_role": "builder", "clone": CLONE, "kits": KITS}
 
@@ -1577,16 +1579,16 @@ ARCHITECT_MODE: list[tuple[str, bool]] = [
     ("find . -name '*.md'", False),
     ("sort -o ./kits/x ./repo/DESIGN.md", False),
     # the two `hands` commands §31 adds
-    ("hands kit check ./kits/m16.zip --repo ./repo", True),
-    ("hands kit file ./kits/m16.zip", True),
-    ("hands --json kit file ./kits/m16.zip", True),
+    ("hands kit check ./kits/m16 --repo ./repo", True),
+    ("hands kit file ./kits/m16", True),
+    ("hands --json kit file ./kits/m16", True),
     # §31 is silent; §27's reason for a role's send holds for the one command
     # that files work: the two options that leave the role's own project are
     # refused on `kit file`, and kept on the `kit check` that writes nothing.
-    ("hands --project other kit file ./kits/m16.zip", False),
-    ("hands kit file --project=other ./kits/m16.zip", False),
-    ("hands kit file --socket /tmp/other.sock ./kits/m16.zip", False),
-    ("hands --project other kit check ./kits/m16.zip", True),
+    ("hands --project other kit file ./kits/m16", False),
+    ("hands kit file --project=other ./kits/m16", False),
+    ("hands kit file --socket /tmp/other.sock ./kits/m16", False),
+    ("hands --project other kit check ./kits/m16", True),
     ("hands show job-1 --json", True),
     ("hands jobs --role builder -n 5", True),
     ("hands inbox", True),
@@ -1606,15 +1608,20 @@ ARCHITECT_MODE: list[tuple[str, bool]] = [
     ("hands cancel job-1 --reason x", False),
     ("hands kit", False),
     ("hands kit apply ./kits/m16.zip", False),
-    # the five words architect mode adds, with every path under KITS
+    # the three words architect mode adds, with every path under KITS
     ("mkdir -p ./kits/m16/meta", True),
     ("mkdir ./kits/m16", True),
     ("cp -r ./kits/m16 ./kits/m17", True),
     ("cp ./kits/a ./kits/b", True),
     ("mv ./kits/a ./kits/b", True),
-    ("zip -r ./kits/m16.zip ./kits/m16", True),
-    ("unzip -o ./kits/m16.zip -d ./kits/out", True),
-    ("unzip ./kits/m16.zip", True),
+    # §32 (REVIEW-15 blocker 2, H-030): `zip` and `unzip` left the table
+    ("zip -r ./kits/m16.zip ./kits/m16", False),
+    ("zip -r kits/m.zip kits/m16", False),
+    ("unzip -o ./kits/m16.zip -d ./kits/out", False),
+    ("unzip ./kits/m16.zip", False),
+    ("unzip -o kits/attack.zip", False),
+    ("unzip -o ./kits/attack.zip", False),
+    ("unzip kits/attack.zip", False),
     # ... and refused as soon as one path argument is not under KITS
     ("mkdir -p /tmp/evil", False),
     ("mkdir -p ./kits/../evil", False),
@@ -1627,7 +1634,8 @@ ARCHITECT_MODE: list[tuple[str, bool]] = [
     ("unzip /tmp/m16.zip", False),
     ("mkdir", False),
     ("zip -r", False),
-    # ... and with only the options the five rows list
+    # ... and with only the options the three rows list: none names another path
+    # or makes a link (§32)
     ("zip -T ./kits/m16.zip", False),
     ("zip --unzip-command=/tmp/prog ./kits/m16.zip", False),
     ("zip -r ./kits/m16.zip ./kits/m16 -x ./kits/m16/x", False),
@@ -1635,6 +1643,27 @@ ARCHITECT_MODE: list[tuple[str, bool]] = [
     ("cp --parents ./kits/a ./kits/b", False),
     ("mv -f ./kits/a ./kits/b", False),
     ("mkdir -m 777 ./kits/a", False),
+    ("mkdir --mode=777 ./kits/a", False),
+    ("mkdir -v ./kits/a", False),
+    ("cp -t ./kits/b ./kits/a", False),
+    ("cp -t./kits/b ./kits/a", False),
+    ("cp --target-directory=./kits/b ./kits/a", False),
+    ("cp --target-directory ./kits/b ./kits/a", False),
+    ("cp -rt ./kits/b ./kits/a", False),
+    ("cp -S .bak ./kits/a ./kits/b", False),
+    ("cp --suffix=.bak ./kits/a ./kits/b", False),
+    ("cp -b ./kits/a ./kits/b", False),
+    ("cp --backup=numbered ./kits/a ./kits/b", False),
+    ("cp -s ./kits/a ./kits/b", False),
+    ("cp -l ./kits/a ./kits/b", False),
+    ("cp --symbolic-link ./kits/a ./kits/b", False),
+    ("cp -L ./kits/a ./kits/b", False),
+    ("cp -r -- ./kits/a ./kits/b", False),
+    ("mv -t ./kits/b ./kits/a", False),
+    ("mv --target-directory=./kits/b ./kits/a", False),
+    ("mv -S .bak ./kits/a ./kits/b", False),
+    ("mv -b ./kits/a ./kits/b", False),
+    ("mv --backup ./kits/a ./kits/b", False),
     ("unzip -p ./kits/m16.zip", False),
     ("unzip -l ./kits/m16.zip", False),
     # ... and the mutations §31 never gives it stay refused, under KITS or not
@@ -1708,7 +1737,7 @@ def test_architect_mode_pins_git_dash_c_to_the_clone_as_role_mode_does() -> None
 ABS_KITS = "/home/u/hands-architect/hands/kits"
 KITS_PIN: list[tuple[str, str | None, bool]] = [
     (f"mkdir -p {ABS_KITS}/m16", ABS_KITS, True),
-    (f"zip -r {ABS_KITS}/m16.zip {ABS_KITS}/m16", ABS_KITS, True),
+    (f"cp -r {ABS_KITS}/m16 {ABS_KITS}/m17", ABS_KITS, True),
     (f"mkdir -p {ABS_KITS}", ABS_KITS, True),
     (f"mkdir -p {ABS_KITS}/../evil", ABS_KITS, False),
     (f"mkdir -p {ABS_KITS}/..", ABS_KITS, False),
@@ -1717,10 +1746,12 @@ KITS_PIN: list[tuple[str, str | None, bool]] = [
     ("mkdir -p ~/kits/m16", ABS_KITS, False),  # no `~` is expanded
     (f"mkdir -p {ABS_KITS}/m16", None, False),  # unset: nothing in the group passes
     (f"mkdir -p {ABS_KITS}/m16", "", False),
-    (f"zip -r {ABS_KITS}/m16.zip {ABS_KITS}/m16", None, False),
-    (f"unzip -o {ABS_KITS}/m16.zip -d {ABS_KITS}/out", ABS_KITS, True),
-    (f"unzip -o {ABS_KITS}/m16.zip -d /tmp/out", ABS_KITS, False),
-    (f"unzip -o {ABS_KITS}/m16.zip -d {ABS_KITS}/out", None, False),
+    (f"cp -r {ABS_KITS}/m16 {ABS_KITS}/m17", None, False),
+    (f"mv {ABS_KITS}/m16 {ABS_KITS}/m17", ABS_KITS, True),
+    (f"mv {ABS_KITS}/m16 {ABS_KITS}/..", ABS_KITS, False),
+    # §32: gone from the table, under the kits directory or not
+    (f"zip -r {ABS_KITS}/m16.zip {ABS_KITS}/m16", ABS_KITS, False),
+    (f"unzip -o {ABS_KITS}/m16.zip -d {ABS_KITS}/out", ABS_KITS, False),
 ]
 
 
@@ -1739,12 +1770,12 @@ def test_architect_mode_confines_every_path_argument_to_hands_kits(
 KITS_EXPANSION = [
     "mkdir -p ./kits/{a,../../evil}",
     "mkdir ./kits/{m16,../evil}",
-    "zip -r ./kits/x.zip ./kits/{a,../../etc}",
+    "cp -r ./kits/x ./kits/{a,../../etc}",
     "cp -r ./kits/{a,../../etc/passwd} ./kits/b",
     "mkdir -p ./kits/x{1..3}",
     "mkdir -p ./kits/a?b",
     "mkdir -p ./kits/*",
-    "unzip -o ./kits/m16.zip -d ./kits/{a,../../evil}",
+    "mv ./kits/m16 ./kits/{a,../../evil}",
 ]
 
 
@@ -1768,7 +1799,7 @@ def test_a_quoted_path_under_kits_is_a_path(monkeypatch: pytest.MonkeyPatch) -> 
 def test_the_kits_words_are_architect_modes_alone(
     cmd: str, kits: str | None, allowed: bool
 ) -> None:
-    """The five words exist only in architect mode: normal mode and the driver
+    """The three words exist only in architect mode: normal mode and the driver
     role refuse every one of them, whatever HANDS_KITS says."""
     for role in (None, "driver"):
         reason = guard.check(cmd, role=role, consult_role="builder", clone=CLONE, kits=kits)
@@ -1788,7 +1819,7 @@ def test_architect_mode_confinement_is_by_realpath_through_a_real_symlink(
     mode = {"role": "architect", "consult_role": "builder", "clone": CLONE, "kits": str(kits)}
     assert guard.check(f"mkdir -p {kits}/m16/meta", **mode) is None
     assert guard.check(f"mkdir -p {kits}/link/x", **mode) is not None
-    assert guard.check(f"zip -r {kits}/link/m16.zip {kits}/m16", **mode) is not None
+    assert guard.check(f"mv {kits}/m16 {kits}/link/m16", **mode) is not None
     assert guard.check(f"cp {kits}/m16/a {kits}/link/a", **mode) is not None
     monkeypatch.chdir(root)
     assert guard.check("mkdir -p kits/m16/meta", **mode) is None
@@ -1804,7 +1835,7 @@ def test_the_hook_takes_architect_mode_and_the_kits_from_the_environment(
     monkeypatch.setenv("HANDS_CLONE", ABS_CLONE)
     assert run_hook(monkeypatch, f"mkdir -p {ABS_KITS}/m16", "architect") == 0
     assert run_hook(monkeypatch, "mkdir -p /tmp/evil", "architect") == 2
-    assert run_hook(monkeypatch, f"hands kit file {ABS_KITS}/m16.zip", "architect") == 0
+    assert run_hook(monkeypatch, f"hands kit file {ABS_KITS}/m16", "architect") == 0
     assert run_hook(monkeypatch, "hands go", "architect") == 2
     assert run_hook(monkeypatch, f"mkdir -p {ABS_KITS}/m16", "driver") == 2
     assert run_hook(monkeypatch, f"mkdir -p {ABS_KITS}/m16", None) == 2
@@ -2112,6 +2143,48 @@ def _run_shipped(tmp_path: Path, cmd: str, mode: str) -> subprocess.CompletedPro
     return subprocess.run([sys.executable, str(GUARD)], input=stdin, capture_output=True,
                           text=True, env=_hook_env(tmp_path, mode), cwd=tmp_path, timeout=30,
                           check=False)
+
+
+#: REVIEW-15 blocker 2 (§32, H-030): the reviewer's three `unzip` probes, which
+#: extracted into the role's cwd — the parent of `HANDS_KITS` — over the guard and
+#: its settings, and the `zip` H-030 names, whose entries were never repository paths.
+REVIEW_15_ARCHIVE_PROBES = [
+    "unzip -o kits/attack.zip",
+    "unzip -o ./kits/attack.zip",
+    "unzip kits/attack.zip",
+    "zip -r kits/m.zip kits/m16",
+]
+
+
+@pytest.mark.parametrize("cmd", REVIEW_15_ARCHIVE_PROBES)
+def test_review_15_blocker_2_probe_is_refused_by_name_by_the_shipped_file_in_all_three_modes(
+    tmp_path: Path, cmd: str
+) -> None:
+    """As the reviewer ran them: the shipped file, hook JSON on stdin, an architect
+    directory with `kits/` under it (`HANDS_KITS=<cwd>/kits`)."""
+    (tmp_path / "kits" / "m16").mkdir(parents=True)
+    (tmp_path / "kits" / "attack.zip").write_bytes(b"PK")
+    word = cmd.split()[0]
+    for mode in MODES:
+        done = _run_shipped(tmp_path, cmd, mode)
+        assert done.returncode == 2, (mode, cmd, done.stderr)
+        assert f"command not in the guard's table: {word!r}" in done.stderr, (mode, done.stderr)
+
+
+def test_zip_and_unzip_are_rows_of_no_table_and_the_kits_rows_name_no_path() -> None:
+    """§32: `unzip` and `zip` leave the table; `mkdir`, `cp`, `mv` remain with no
+    option that names another path or makes a link. The final option lists."""
+    for word in ("zip", "unzip"):
+        assert word not in guard.COMMAND_TABLE and word not in guard.KITS_TABLE, word
+        assert word not in guard.KITS_WORDS, word
+    assert set(guard.KITS_TABLE) == {"mkdir", "cp", "mv"}
+    assert set(guard.KITS_WORDS) == set(guard.KITS_TABLE)
+    options = {name: (set(row.flags), dict(row.values)) for name, row in guard.KITS_TABLE.items()}
+    assert options == {"mkdir": ({"-p"}, {}), "cp": ({"-r"}, {}), "mv": (set(), {})}
+    assert all(row.kits for row in guard.KITS_TABLE.values())
+    selftest = dict(guard.ARCHITECT_SELFTEST)
+    for probe in REVIEW_15_ARCHIVE_PROBES:
+        assert selftest.get(probe) is False, f"the guard's self-test does not carry {probe!r}"
 
 
 #: Every probe of reviews 11–15, with the modes it is refused in. Review 11's
@@ -2541,7 +2614,7 @@ def test_role_and_architect_modes_are_strict_subsets_of_normal_mode() -> None:
                                     *HANDS_BOTH_MODES]}
     commands |= {*READS_INSIDE, *READS_OUTSIDE, *STDIN_READS, *FUZZ_TABLE_COMMANDS}
     commands |= {cmd for cmd, _, _ in ROLE_SEND}
-    # the architect's `mkdir|cp|mv|zip|unzip` rows are table rows of that mode
+    # the architect's `mkdir|cp|mv` rows are table rows of that mode
     # alone (§31, U2's), not language, so they are the one exception
     commands = {c for c in commands if c.split(" ")[0] not in guard.KITS_TABLE}
     for cmd in sorted(commands):

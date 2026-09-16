@@ -78,7 +78,9 @@ handsd tells the phone why. When the kit is sent from the phone
 reason `apply <name>`) with exactly this prompt, built by the same code as
 `hands kit check`'s, and never unzips the kit itself; a kit with an entry that
 is not a repository path is refused (`kit.refused`) and files no job. A kit
-placed by hand is applied by a gated send of the same prompt.
+placed by hand is applied by a gated send of the same prompt. The architect
+role (§12) stages the same entries as a directory and files it with `hands kit
+file kits/<name>`, which builds the zip.
 
 ## 4. The two plan forms
 
@@ -320,13 +322,22 @@ under; read it there rather than here. What changes for you:
   `## Should-fix` sections, `meta/ROADMAP.md` and the series' escalation
   conditions in the prompt. Everything else you read yourself, from
   `origin/<branch>` in `./repo`. Nothing carries over from the last one.
-- **The kit goes to `kits/`, not to the human.** `$HANDS_KITS` (`./kits`) is the
-  only directory you may write to, and the only place `zip` may put a file. You
-  do not hand a zip over: `hands kit check <zip> --repo ./repo` and then
-  `hands kit file <zip>`, which runs the check again and files the same held
-  apply the phone's `kit` files, `origin: architect`. Under `[series]
-  autonomous` the engine approves that hold itself and sends the kickoff, so a
-  kit you file is a kit that runs.
+- **The kit is a directory in `kits/`, not a zip for the human.** `$HANDS_KITS`
+  (`./kits`) is the only directory you may write to. Stage the kit as
+  `kits/<name>/<repository paths>` — the entries of §3, each at its repository
+  path under `kits/<name>/` — writing the files with the Write tool and
+  arranging them with `mkdir -p`, `cp -r` and `mv`; there is no `zip` or `unzip`
+  in your guard. Then `hands kit check kits/<name> --repo ./repo`, and `hands kit
+  file kits/<name>`, which builds the zip itself (`kits/<name>/meta/X.md` is the
+  entry `meta/X.md`), runs the check again on that zip against the clone,
+  refuses a failing kit with the check's output, and otherwise has handsd file
+  the same held apply the phone's `kit` files, `origin: architect`, with a
+  `kit_id` handsd mints. handsd keeps the zip at
+  `~/.hands/<project>/kits/<kit_id>/<name>.zip`, and the apply prompt names it
+  there, with what it replaces and adds judged against the builder's repository
+  (`kit check`'s prompt names `~/Downloads/<name>.zip` and judges the clone). A symlink inside the directory refuses the kit; an empty
+  directory carries nothing. Under `[series] autonomous` the engine approves
+  that hold itself and sends the kickoff, so a kit you file is a kit that runs.
 - **One verdict line, and it is read by the engine, not by a rule.** Reply with
   exactly one of `VERDICT: next kit <name>`, `VERDICT: series complete` or
   `VERDICT: escalate <reason>`. File the kit *before* you reply `next kit`:
@@ -342,8 +353,11 @@ under; read it there rather than here. What changes for you:
   `hands send`, `approve`, `deny`, `go` or `put`, no push: the guard refuses
   them in architect mode, and needing one is itself an escalation.
 
-**Not proven yet (H-030).** With the words §31 gives the guard, `zip` can only
-store entries under `kits/…`, so a kit built that way does not carry repository
-paths and `hands kit check` cannot tell — it sees valid paths. Until that
-finding is resolved, a role-mode series is an experiment: check what the apply
-prompt says a kit would add before letting it run unattended.
+**Directory kits (H-030, resolved by DESIGN v3.15 §32).** Under §31 the role's
+`zip` could store entries only under `kits/…`, which `hands kit check` saw as
+valid repository paths. `zip` and `unzip` have left the guard, and `hands kit
+file` builds the zip from the directory, so the entries are the paths you staged
+under `kits/<name>/`. What is not proven is a real role session filing a kit that
+a builder then applies; the tests drive the command and handsd with a fake
+`claude`. A role-mode series is still an experiment: check what the apply prompt
+says a kit would add before letting it run unattended.

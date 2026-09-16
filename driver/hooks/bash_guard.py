@@ -144,7 +144,7 @@ Everything else is refused. That covers the `hands` subcommands, by name
 table does not list, and every command word the table does not carry. Any
 other non-empty `HANDS_ROLE` fails closed.
 
-Architect mode (DESIGN §31, H-029). With `HANDS_ROLE=architect` the guard
+Architect mode (DESIGN §31, §32, H-029, H-030). With `HANDS_ROLE=architect` the guard
 guards the architect ROLE, a headless session handsd starts to write one kit:
 - the read-only rows of the table above, and read-only `git` with `-C` pinned
   to `HANDS_CLONE` exactly as role mode pins it;
@@ -154,20 +154,27 @@ guards the architect ROLE, a headless session handsd starts to write one kit:
   `tail` is not in it and `resume` (which those settings deny outright) is not
   either. Never `send`, `approve`, `deny`, `go`, `put`, `pause`, `open`, and
   never a push: the clone's push URL is disabled as the driver's is;
-- `mkdir`, `cp`, `mv`, `zip` and `unzip` — `KITS_TABLE`, this mode's rows and
-  no other mode's — with the options rule 3 of `architect/CLAUDE.md` needs
-  (`mkdir -p`, `cp -r`, `zip -r`, `unzip -o`, `unzip -d <dir>`) and **every
-  path argument** under `HANDS_KITS`. `zip -T` and `--unzip-command` run a
-  program and `unzip -d` names a directory, so the first two are refused by
-  not being listed and the third's value is a path like any other. "Under
+- `mkdir`, `cp` and `mv` — `KITS_TABLE`, this mode's rows and no other
+  mode's — with **every path argument** under `HANDS_KITS` and only the
+  options a staged directory kit needs: `mkdir -p`, `cp -r`, and `mv` with
+  none. No listed option names another path or makes a link, so `cp -t`,
+  `--target-directory`, `-S`/`--suffix`, `-b`/`--backup`, `-s`, `-l`, `mkdir
+  -m` and the rest are refused because they are not listed. "Under
   `HANDS_KITS`" is decided as `git -C` is: `os.path.realpath` containment,
   relative paths joined to the hook's working directory, no `~` expanded, and
   with `HANDS_KITS` unset or empty nothing in that group passes. Every word is
   a plain word, as in every row: `./kits/*` is one path here and many to bash.
+- `zip` and `unzip` are rows of no table (§32, REVIEW-15 blocker 2): an
+  `unzip` writes where its entries say, relative to the cwd — the parent of
+  `HANDS_KITS` — whatever its arguments are, so they are refused by name in
+  every mode. The architect stages a directory `kits/<name>/<repository
+  paths>` and files it with `hands kit file kits/<name>`, which builds the zip
+  itself.
 `FORBIDDEN_PATTERNS` refuses `mkdir|cp|mv|…` as a file mutation before any
-tokenizing, so that row drops exactly these five words in architect mode and
+tokenizing, so that row drops exactly these three words in architect mode and
 keeps them everywhere else (`rm`, `touch`, `chmod`, `ln` and the rest stay
-refused in every mode, under `HANDS_KITS` or not).
+refused in every mode, under `HANDS_KITS` or not). File content is created
+only through the write matcher below.
 
 The write matcher (DESIGN §31): `python3 bash_guard.py --write` is the second
 `PreToolUse` hook, for `Write|Edit|MultiEdit`. It reads the same hook JSON on
@@ -272,13 +279,13 @@ PROJECT_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}")
 # Read on the command with its quoted text removed (`unquoted`). No pattern
 # for redirection: a `<` or `>` never gets this far (§30).
 #
-# §31: the words the mutation row refuses, wherever they are written. The five
+# §31: the words the mutation row refuses, wherever they are written. The three
 # `KITS_TABLE` carries are dropped from it in architect mode — and only there —
 # because that mode judges them by their path arguments instead; everything
 # else in the row (`rm`, `touch`, `chmod`, `ln`, ...) is refused in every mode.
 MUTATION_WORDS = ("rm", "mv", "cp", "touch", "mkdir", "rmdir", "chmod", "chown",
                   "ln", "truncate", "dd", "install")
-KITS_WORDS = ("mkdir", "cp", "mv", "zip", "unzip")
+KITS_WORDS = ("mkdir", "cp", "mv")  # §32: `zip` and `unzip` left the table
 
 
 def _mutation_row(words):
@@ -1037,20 +1044,20 @@ COMMAND_TABLE = {
     "kill": Command(flags={"-0"}, words=a_pid),
 }
 
-# §31, architect mode only: the five words that write, each with the minimum
-# `architect/CLAUDE.md` rule 3 needs to build a zip of repository-path entries
-# under `HANDS_KITS`, and no more. Every path argument is confined to that
-# directory (`Command.kits`), including `unzip -d`'s, which is a directory like
-# any other. Nothing here takes a value that names a program: `zip -T` and
-# `zip --unzip-command=P` run one, and both are refused because they are not
-# listed. These rows exist in no other mode, where the five words remain what
-# `FORBIDDEN_PATTERNS` calls them — a file mutation.
+# §31, §32, architect mode only: the three words that arrange a staged directory
+# kit under `HANDS_KITS` (`kits/<name>/<repository paths>`, whose file content
+# the write matcher creates), each with the minimum that needs and no more.
+# Every path argument is confined to that directory (`Command.kits`). No option
+# here takes a value, so none names another path (`cp -t`, `--target-directory`,
+# `-S`), and none makes a link (`cp -s`, `-l`): each is refused because it is
+# not listed. `zip` and `unzip` are not rows (§32, REVIEW-15 blocker 2): `unzip`
+# wrote into the cwd, the parent of `HANDS_KITS`, and `hands kit file` builds
+# the zip itself. These rows exist in no other mode, where the three words
+# remain what `FORBIDDEN_PATTERNS` calls them — a file mutation.
 KITS_TABLE = {
     "mkdir": Command(flags={"-p"}, kits=True),
     "cp": Command(flags={"-r"}, kits=True),
     "mv": Command(kits=True),
-    "zip": Command(flags={"-r"}, kits=True),
-    "unzip": Command(flags={"-o"}, values={"-d": any_value}, kits=True),
 }
 
 
@@ -1151,7 +1158,7 @@ def judge(words, marks, cmd, role, consult_role, clone=None, kits=None, reads=No
     name = words[0]
     row = COMMAND_TABLE.get(name)
     if row is None and role == ARCHITECT_ROLE:
-        row = KITS_TABLE.get(name)  # §31: these five rows exist in this mode only
+        row = KITS_TABLE.get(name)  # §31, §32: these three rows exist in this mode only
     if row is None:
         table = dict(COMMAND_TABLE, **KITS_TABLE) if role == ARCHITECT_ROLE else COMMAND_TABLE
         who = "the architect" if role == ARCHITECT_ROLE else "the driver"
@@ -1265,6 +1272,16 @@ REVIEW_14_PROBES = [
 # §32: REVIEW-15 blocker 1, verbatim — a `for` segment went unjudged and `${c@P}`
 # ran a `$(…)`; `$o` carried an option past its row — and the U1 sub-agent's
 # `cat`/`ls` variants. Each is refused before tokenizing, in every mode.
+#: REVIEW-15 blocker 2 (§32, H-030): `unzip` extracted into the role's cwd, the
+#: parent of `HANDS_KITS`, over this file and its settings; `zip` stored entries
+#: under `kits/…`, never at repository paths. Refused by name in every mode.
+REVIEW_15_ARCHIVE_PROBES = [
+    "unzip -o kits/attack.zip",
+    "unzip -o ./kits/attack.zip",
+    "unzip kits/attack.zip",
+    "zip -r kits/m.zip kits/m16",
+]
+
 REVIEW_15_PROBES = [
     "for a in '$x'; do echo; done; for c in ${a%x}'(touch${IFS}/tmp/rev15-tip/PWN)'; do echo ${c@P}; done",
     "for a in '$x'; do echo; done; for c in ${a%x}'(touch${IFS}/tmp/rev15-tip/PWN)'; do cat ${c@P}; done",
@@ -1608,11 +1625,11 @@ ARCHITECT_SELFTEST = [
     ("cat -n ./repo/DESIGN.md", False),
     ("pwd", False),
     # the two `hands` commands §31 adds, and the reads the settings allow
-    ("hands kit check ./kits/m16.zip --repo ./repo", True),
-    ("hands kit file ./kits/m16.zip", True),
-    ("hands --project other kit file ./kits/m16.zip", False),
-    ("hands kit file --socket /tmp/other.sock ./kits/m16.zip", False),
-    ("hands --project other kit check ./kits/m16.zip", True),
+    ("hands kit check ./kits/m16 --repo ./repo", True),
+    ("hands kit file ./kits/m16", True),
+    ("hands --project other kit file ./kits/m16", False),
+    ("hands kit file --socket /tmp/other.sock ./kits/m16", False),
+    ("hands --project other kit check ./kits/m16", True),
     ("hands show job-1 --json", True),
     ("hands jobs --role builder -n 5", True),
     ("hands inbox", True),
@@ -1630,30 +1647,36 @@ ARCHITECT_SELFTEST = [
     ("hands open job-1", False),
     ("hands tail --role builder -n 20", False),
     ("hands kit apply ./kits/m16.zip", False),
-    # the five words this mode adds, every path argument under HANDS_KITS
+    # the three words this mode adds, every path argument under HANDS_KITS
     ("mkdir -p ./kits/m16/meta", True),
     ("cp -r ./kits/m16 ./kits/m17", True),
     ("mv ./kits/m16/BRIEF.md ./kits/m16/meta/BRIEF.md", True),
-    ("zip -r ./kits/m16.zip ./kits/m16", True),
-    ("unzip -o ./kits/m16.zip -d ./kits/out", True),
     ("mkdir -p /tmp/evil", False),
     ("mkdir -p ./kits/../evil", False),
     ("cp ./repo/DESIGN.md ./kits/DESIGN.md", False),
     ("mv ./kits/a ../a", False),
-    ("zip -r /tmp/m16.zip ./kits/m16", False),
-    ("unzip -o ./kits/m16.zip -d /tmp/out", False),
     ("mkdir", False),
+    # §32 (REVIEW-15 blocker 2, H-030): `zip` and `unzip` are rows of no table
+    *[(probe, False) for probe in REVIEW_15_ARCHIVE_PROBES],
+    ("zip -r ./kits/m16.zip ./kits/m16", False),
+    ("unzip -o ./kits/m16.zip -d ./kits/out", False),
     # §28: a word the shell would still expand is not the path the guard read
     ("mkdir -p ./kits/{m16,../evil}", False),
     ("mkdir -p ./kits/*", False),
     ("mkdir -p './kits/m16 x'", True),
     ("mkdir -p './kits/{m16,x}'", False),  # §32: a brace anywhere
     # ... with only the options those rows list
-    ("zip -T ./kits/m16.zip", False),
-    ("zip --unzip-command=/tmp/prog ./kits/m16.zip", False),
     ("cp -a ./kits/a ./kits/b", False),
     ("mkdir -m 777 ./kits/a", False),
-    ("unzip -p ./kits/m16.zip", False),
+    # §32: no option that names another path or makes a link
+    ("cp -t ./kits/b ./kits/a", False),
+    ("cp --target-directory=./kits/b ./kits/a", False),
+    ("cp -S .bak ./kits/a ./kits/b", False),
+    ("cp --backup=numbered ./kits/a ./kits/b", False),
+    ("cp -s ./kits/a ./kits/b", False),
+    ("cp -l ./kits/a ./kits/b", False),
+    ("mv -t ./kits/b ./kits/a", False),
+    ("mv -S .bak ./kits/a ./kits/b", False),
     # ... and the mutations §31 never gives it, under the kits directory or not
     ("rm -rf ./kits/m16", False),
     ("touch ./kits/m16/x", False),
@@ -1758,7 +1781,9 @@ def main() -> int:
               f"file, and {', '.join(sorted(set(COMMAND_TABLE) - {'hands', 'git'}))} with "
               f"the options their rows list — plus "
               f"{', '.join(sorted(KITS_TABLE))} with every path argument under "
-              f"${KITS_ENV}. Its reads are confined to the clone and the spool "
+              f"${KITS_ENV} — never zip or unzip (§32): stage kits/<name> and file it "
+              f"with `hands kit file kits/<name>`, which builds the zip. Its reads are "
+              f"confined to the clone and the spool "
               f"({spool or 'none named'}) and ${KITS_ENV}, and the command is one line of "
               f"words, quotes and ; && || | & (§32). It never sends, approves, denies, "
               f"goes, puts or pushes. If the "

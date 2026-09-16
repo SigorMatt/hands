@@ -50,8 +50,9 @@ the download has ended.
 zip's entries — never extracting one, reading only a root `KIT.md` — by
 `hands.kit.apply_from_zip`, the path rules and the prompt builder `hands kit
 check` uses, against the builder's cwd. It then files the §3 apply prompt
-through `Api.send` as a `clear` builder job with `origin: kit` and gate reason
-`apply <name>` (the kit's file name without `.zip`), so the job is born `held`
+through `Api.file_apply` (§32: `Api.send`'s path, with a `kit_id` handsd mints
+and records on the job) as a `clear` builder job with `origin: kit` and gate
+reason `apply <name>` (the kit's file name without `.zip`), so the job is born `held`
 and its `job.held` notification carries the Approve/Deny buttons. The prompt
 names the file where it was written: `~/…` when `kit_dir` is under `$HOME`, else
 its absolute path. A zip that cannot be read, holds no files, or has an entry
@@ -117,10 +118,10 @@ from urllib.parse import quote
 
 from hands import notify as notify_mod
 from hands.api import ApiError
-from hands.kit import KitError, apply_from_zip, apply_params, home_shown
+from hands.kit import KitError, apply_from_zip, home_shown
 from hands.notify import PAIR_SPACING_S
 from hands.playbook import PlaybookError, load_playbook, playbook_path
-from hands.spool import PathEscape, SpoolError, resolve_under_roots
+from hands.spool import PathEscape, SpoolError, new_kit_id, resolve_under_roots
 
 if TYPE_CHECKING:  # pragma: no cover
     from hands.daemon import Daemon
@@ -456,9 +457,9 @@ class PhoneChannel:
         except KitError as exc:
             return self._refuse_kit(f"the apply was not filed: {exc}")
         try:
-            # §31: the same params `hands kit file` sends, with this route's
-            # origin — the one statement of what a kit apply is (`apply_params`).
-            job = await self.daemon.api.send(**apply_params(plan, "kit"))
+            # §31, §32: the one path `hands kit file` takes too (`Api.file_apply`),
+            # with this route's origin, and a `kit_id` handsd mints here.
+            job = await self.daemon.api.file_apply(plan, "kit", new_kit_id())
         except ApiError as exc:
             return self._refuse_kit(f"the apply was not filed: the send was refused ({exc})")
         log.info("phone: kit apply filed as builder job %s (%s)", job["id"], job["state"])

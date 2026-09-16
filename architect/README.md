@@ -2,7 +2,7 @@
 
 One directory per project, outside any repository:
 
-    mkdir -p ~/hands-architect/<project>/kits   # kits/<name>/<repository paths>, filed with hands kit file && cd ~/hands-architect/<project>
+    mkdir -p ~/hands-architect/<project>/kits && cd ~/hands-architect/<project>   # a kit is kits/<name>/<repository paths>, filed with hands kit file kits/<name>
     cp ~/git/hands/architect/CLAUDE.md ./CLAUDE.md        # fill the Parameters block
     mkdir -p .claude/hooks
     cp ~/git/hands/architect/settings.json .claude/settings.json

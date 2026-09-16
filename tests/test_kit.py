@@ -1380,12 +1380,15 @@ def test_the_missions_template_with_the_held_rule_added_back_still_passes(
     assert code == 0, out + err
 
 
-# ------------------------------------------------- `hands kit file` (§31, U3)
+# ------------------------------------- `hands kit file <dir>` (§31, §32; U2)
 #
-# The architect's own route to the phone's `kit`: a zip under `$HANDS_KITS`,
-# checked against the role's clone (`$HANDS_CLONE`) first, and — only when every
-# check passes — filed as the same held builder apply, with `origin: architect`.
-# Unlike `kit check` it reaches the daemon, so it needs a config and a socket.
+# The architect's own route to the phone's `kit` (§32, H-030): a DIRECTORY
+# `kits/<name>/<repository paths>` under `$HANDS_KITS`. The client builds the zip
+# from it (entries at their paths relative to the directory), checks that zip
+# against the role's clone (`$HANDS_CLONE`), and — only when every check passes —
+# sends the zip's bytes to the daemon's `kit_file`, which stores them in the
+# spool, mints the `kit_id`, and files the held builder apply with `origin:
+# architect`. Unlike `kit check` it reaches the daemon, so it needs a config.
 
 
 @pytest.fixture
@@ -1411,6 +1414,16 @@ def run_file(kit: Path, *extra: str) -> tuple[int, str, str]:
     return code, out.getvalue(), err.getvalue()
 
 
+def never_send(params: dict[str, object]) -> dict[str, object]:
+    raise AssertionError(f"a refused kit reached the daemon: {sorted(params)}")
+
+
+def file_direct(kit: Path, *, send=never_send, as_json: bool = False) -> tuple[int, str]:
+    out = io.StringIO()
+    code = kit_mod.file_run(str(kit), send=send, out=out, as_json=as_json)
+    return code, out.getvalue()
+
+
 def test_hands_help_lists_kit_file(capsys: pytest.CaptureFixture[str]) -> None:
     """The mission's acceptance: `hands --help` names `kit file`."""
     with pytest.raises(SystemExit) as exc:
@@ -1428,20 +1441,29 @@ def test_hands_kit_help_lists_both_subcommands(capsys: pytest.CaptureFixture[str
     assert re.search(r"^\s+file\s", out, re.MULTILINE), out
 
 
+def test_hands_kit_file_help_says_directory_not_zip(capsys: pytest.CaptureFixture[str]) -> None:
+    with pytest.raises(SystemExit) as exc:
+        main(["kit", "file", "--help"])
+    assert exc.value.code == 0
+    out = " ".join(capsys.readouterr().out.split())
+    assert "build the zip of a kit directory" in strip_paths(out), out
+    assert "a .zip under" not in strip_paths(out), out
+
+
 @pytest.mark.parametrize("where", ["outside", "dotdot", "symlink"])
-def test_kit_file_refuses_a_path_that_is_not_under_hands_kits(
+def test_kit_file_refuses_a_directory_that_is_not_under_hands_kits(
     tmp_path: Path, repo: Path, kits: Path, write_config, where: str
 ) -> None:
-    """§31: "from a path under `HANDS_KITS`" — decided by realpath, so a `..`
-    and a symlink out of the directory are refused as an outside path is."""
+    """§31, §32: a directory under `HANDS_KITS`, decided by realpath, so a `..` and
+    a symlink out of the directory are refused as an outside path is."""
     write_config()
-    outside = zip_kit(tmp_path / "outside.zip", good_kit())
+    outside = write_tree(tmp_path / "outside" / "m16", good_kit())
     if where == "outside":
         path = outside
     elif where == "dotdot":
-        path = kits / ".." / "outside.zip"
+        path = kits / ".." / "outside" / "m16"
     else:
-        path = kits / "link.zip"
+        path = kits / "m16"
         path.symlink_to(outside)
     code, out, err = run_file(path)
     assert code != 0, out
@@ -1449,11 +1471,37 @@ def test_kit_file_refuses_a_path_that_is_not_under_hands_kits(
     assert "filed" not in strip_paths(out)
 
 
-def test_kit_file_refuses_when_hands_kits_is_unset(
-    tmp_path: Path, repo: Path, kits: Path, write_config, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize("shape", ["zip", "file", "kits-itself", "missing", "dot-name"])
+def test_kit_file_refuses_anything_but_a_kit_directory_under_hands_kits(
+    repo: Path, kits: Path, write_config, shape: str
+) -> None:
+    """§32: `hands kit file <dir>` — a zip is not filed (the architect has no `zip`
+    to make one), nor a file, nor the kits directory itself (its entries would be
+    `<name>/…`), nor a path that is not there, nor a name the apply cannot carry."""
+    write_config()
+    if shape == "zip":
+        path = zip_kit(kits / "m16.zip", good_kit())
+    elif shape == "file":
+        path = kits / "m16.md"
+        path.write_text("x")
+    elif shape == "kits-itself":
+        write_tree(kits, good_kit())
+        path = kits
+    elif shape == "missing":
+        path = kits / "m16"
+    else:
+        path = write_tree(kits / ".m16", good_kit())
+    code, out, err = run_file(path)
+    assert code != 0, out
+    assert "hands kit file" in strip_paths(err) and "kits/<name>" in strip_paths(err), err
+    assert "filed" not in strip_paths(out)
+
+
+def test_kit_file_refuses_when_hands_kits_is_unset_or_empty(
+    repo: Path, kits: Path, write_config, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     write_config()
-    kit = zip_kit(kits / "m16.zip", good_kit())
+    kit = write_tree(kits / "m16", good_kit())
     monkeypatch.delenv("HANDS_KITS")
     code, _, err = run_file(kit)
     assert code != 0 and "HANDS_KITS" in strip_paths(err), err
@@ -1467,52 +1515,125 @@ def test_kit_file_refuses_when_hands_clone_is_unset(
 ) -> None:
     """§31: the check runs "against the role's clone (`HANDS_CLONE`) as the repo"."""
     write_config()
-    kit = zip_kit(kits / "m16.zip", good_kit())
+    kit = write_tree(kits / "m16", good_kit())
     monkeypatch.delenv("HANDS_CLONE")
     code, _, err = run_file(kit)
     assert code != 0 and "HANDS_CLONE" in strip_paths(err), err
 
 
+@pytest.mark.parametrize("inside", ["file", "directory"])
+def test_kit_file_refuses_a_symlink_inside_the_kit_directory(
+    tmp_path: Path, repo: Path, kits: Path, inside: str
+) -> None:
+    """§32 is silent on a symlink inside the staged directory; the choice is to
+    refuse it, file or directory, pointing in or out: a kit is whole files, and a
+    link would carry bytes from outside `HANDS_KITS` into the zip."""
+    kit = write_tree(kits / "m16", good_kit())
+    secret = write_tree(tmp_path / "secret", {"id_rsa": "private"})
+    if inside == "file":
+        (kit / "docs").mkdir()
+        (kit / "docs" / "KEY.md").symlink_to(secret / "id_rsa")
+        named = "docs/KEY.md"
+    else:
+        (kit / "docs").symlink_to(secret)
+        named = "docs/"
+    with pytest.raises(kit_mod.KitError) as exc:
+        file_direct(kit)
+    assert "symlink" in strip_paths(str(exc.value)), exc.value
+    assert named in strip_paths(str(exc.value)), exc.value
+
+
+def test_a_directory_kits_entries_are_its_repository_paths(tmp_path: Path) -> None:
+    """§32 (H-030): `kits/m16/meta/X.md` becomes the entry `meta/X.md`. Dotfiles are
+    entries like any other; an empty directory carries nothing (a zip of files);
+    the same directory builds the same bytes (one date, sorted entries)."""
+    kit = write_tree(
+        tmp_path / "kits" / "m16",
+        {**good_kit(), "KIT.md": "plan: m16\n", ".github/workflows/ci.yml": "on: push\n"},
+    )
+    (kit / "empty" / "deeper").mkdir(parents=True)
+    data = kit_mod.build_zip(kit)
+    with zipfile.ZipFile(io.BytesIO(data)) as archive:
+        names = archive.namelist()
+        assert archive.read("meta/BUILDER-11-PROMPT.md").decode() == BRIEF
+        assert all(not info.is_dir() for info in archive.infolist())
+    assert names == sorted(
+        ["meta/BUILDER-11-PROMPT.md", "PLAYBOOK.toml", "KIT.md", ".github/workflows/ci.yml"]
+    )
+    assert not any(name.startswith(("kits/", "m16/", "/")) for name in names)
+    assert kit_mod.build_zip(kit) == data
+
+
 def test_kit_file_does_not_file_a_failing_kit_and_carries_the_checks_output(
     repo: Path, kits: Path, write_config
 ) -> None:
-    """§31: "after running the kit check itself and refusing a failing kit"."""
+    """§31, §32: "checks it … refusing a failing kit" with the check's output, and
+    nothing reaches the daemon (no daemon runs here, and none is asked)."""
     write_config()
-    broken = {**good_kit(), "../escape.md": "no"}
-    kit = zip_kit(kits / "m16.zip", broken)
-    code, out, err = run_file(kit)
-    assert code == 1, out + err
-    # the check's own output, line for line, is what the refusal carries
-    assert line(out, "paths").startswith("FAIL"), out
+    kit = write_tree(kits / "m16", {"PLAYBOOK.toml": PLAYBOOK})  # no brief
+    code, out = file_direct(kit)
+    assert code == 1, out
+    assert line(out, "brief").startswith("FAIL"), out
     for name in CHECK_NAMES:
         assert line(out, name), out
     assert "not filed" in strip_paths(out), out
     assert "apply prompt:" not in strip_paths(out), out
+    code, out, err = run_file(kit)
+    assert code == 1, out + err
+    assert line(out, "brief").startswith("FAIL") and "not filed" in strip_paths(out), out
+
+
+def test_kit_file_checks_the_zip_it_built_whose_git_entry_fails_paths(
+    repo: Path, kits: Path
+) -> None:
+    """The check reads the built zip, so a staged `.git/…` is a `paths` FAIL."""
+    kit = write_tree(kits / "m16", {**good_kit(), ".git/hooks/post-checkout": "x"})
+    code, out = file_direct(kit)
+    assert code == 1, out
+    assert line(out, "paths").startswith("FAIL"), out
+    assert ".git" in strip_paths(line(out, "paths")), out
 
 
 def test_kit_file_json_says_the_failing_kit_was_not_filed(
     repo: Path, kits: Path, write_config
 ) -> None:
     write_config()
-    kit = zip_kit(kits / "m16.zip", {**good_kit(), "/etc/passwd": "no"})
-    code, out, _ = run_file(kit, "--json")
+    kit = write_tree(kits / "m16", {"PLAYBOOK.toml": PLAYBOOK})
+    code, out = file_direct(kit, as_json=True)
     assert code == 1
     answer = json.loads(out)
     assert answer["filed"] is False and answer["ok"] is False and answer["job"] is None
     assert [check["name"] for check in answer["checks"]] == list(CHECK_NAMES)
 
 
-def test_kit_file_files_the_held_apply_the_phones_kit_files(
+def test_kit_file_sends_only_the_name_and_the_built_zip(repo: Path, kits: Path) -> None:
+    """The daemon mints the `kit_id` and builds the apply: the client sends the
+    kit's name and the bytes it checked, and nothing that names an origin, a
+    prompt, a gate or an id."""
+    import base64
+
+    kit = write_tree(kits / "m16", good_kit())
+    sent: list[dict[str, object]] = []
+
+    def send(params: dict[str, object]) -> dict[str, object]:
+        sent.append(params)
+        return {"id": "20260916-000001-abcd", "state": "held", "kit_id": "k", "prompt": "p"}
+
+    code, out = file_direct(kit, send=send)
+    assert code == 0, out
+    (params,) = sent
+    assert sorted(params) == ["name", "zip"]
+    assert params["name"] == "m16"
+    assert base64.b64decode(str(params["zip"])) == kit_mod.build_zip(kit)
+
+
+def test_kit_file_files_a_held_apply_with_a_daemon_minted_kit_id(
     tmp_home: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """§31: "files a held apply job exactly as the phone's `kit` does
-    (`origin: architect`, the same prompt from the zip's entries and `KIT.md`)".
-
-    The prompt is built by the one function the phone builds it with, from the
-    same three arguments; the job is born `held` inside `Api.send`, so the
-    `job.held` inbox event — and with it the notification and the buttons —
-    happens on the daemon's own event path, with nothing added here.
-    """
+    """§32 over a real daemon socket: a failing kit files nothing; a passing one is
+    filed as the held builder apply the phone's `kit` files, `origin: architect`,
+    with a `kit_id` the daemon minted, recorded on the job in the spool, and the
+    zip stored under the spool where the architect's writes cannot reach."""
     import asyncio
 
     from harness import config_body, drive, write_project
@@ -1527,31 +1648,106 @@ def test_kit_file_files_the_held_apply_the_phones_kit_files(
     kits_dir.mkdir()
     monkeypatch.setenv("HANDS_KITS", str(kits_dir))
     monkeypatch.setenv("HANDS_CLONE", str(clone))
-    kit = zip_kit(
-        kits_dir / "mission-16-kit.zip", {**good_kit(), "KIT.md": "plan: mission 16 kit\n"}
+    failing = write_tree(kits_dir / "broken", {"PLAYBOOK.toml": PLAYBOOK})
+    kit = write_tree(
+        kits_dir / "mission-16-kit", {**good_kit(), "KIT.md": "plan: mission 16 kit\n"}
     )
     write_project(tmp_home, config_body(tmp_home, workdir))
     answers: dict[str, object] = {}
 
     async def body(daemon) -> None:
-        code, out, err = await asyncio.to_thread(run_file, kit, "--json")
-        answers["code"], answers["out"], answers["err"] = code, out, err
+        answers["failing"] = await asyncio.to_thread(run_file, failing, "--json")
+        answers["jobs_after_failing"] = len(daemon.spool.list_jobs())
+        answers["passing"] = await asyncio.to_thread(run_file, kit, "--json")
         answers["events"] = [event.kind for event in daemon.spool.unacked()]
+        answers["spool"] = daemon.spool.root
 
     drive(body)
-    assert answers["code"] == 0, answers["out"] + answers["err"]
-    answer = json.loads(str(answers["out"]))
+    code, out, err = answers["failing"]  # type: ignore[misc]
+    assert code == 1, out + err
+    assert json.loads(out)["filed"] is False
+    assert answers["jobs_after_failing"] == 0, "a failing kit filed a job"
+
+    code, out, err = answers["passing"]  # type: ignore[misc]
+    assert code == 0, out + err
+    answer = json.loads(out)
     assert answer["filed"] is True and answer["ok"] is True
     job = answer["job"]
     assert job["role"] == "builder" and job["context"] == "clear"
     assert job["origin"] == "architect", "§31: the origin is the architect's own"
     assert job["state"] == "held", "§8: a gated job is born held"
     assert job["gate"]["reason"] == "apply mission-16-kit"
-    plan = kit_mod.apply_from_zip(kit, workdir, kit_mod.home_shown(kit))
+    kit_id = job["kit_id"]
+    assert isinstance(kit_id, str) and re.fullmatch(r"[0-9a-f]{16}", kit_id), kit_id
+    spool = Path(str(answers["spool"]))
+    on_disk = json.loads((spool / "jobs" / f"{job['id']}.json").read_text())
+    assert on_disk["kit_id"] == kit_id and on_disk["origin"] == "architect"
+    stored = spool / "kits" / kit_id / "mission-16-kit.zip"
+    assert stored.read_bytes() == kit_mod.build_zip(kit)
+    assert not any(kits_dir.glob("*.zip")), "the zip is the daemon's, not under HANDS_KITS"
+    with zipfile.ZipFile(stored) as archive:
+        names = sorted(archive.namelist())
+    assert names == ["KIT.md", "PLAYBOOK.toml", "meta/BUILDER-11-PROMPT.md"]
+    plan = kit_mod.apply_from_zip(stored, workdir, kit_mod.home_shown(stored))
     assert job["prompt"] == plan.prompt
+    shown = f"Apply ~/.hands/{spool.name}/kits/{kit_id}/mission-16-kit.zip "
+    assert job["prompt"].startswith(shown), job["prompt"]
     assert plan.commit_message == "plan: mission 16 kit"
     kinds = answers["events"]
     assert isinstance(kinds, list) and kinds[0] == "job.held", kinds
+
+
+def test_the_daemon_refuses_a_kit_id_from_the_client_and_a_bad_kit(
+    tmp_home: Path, tmp_path: Path
+) -> None:
+    """The `kit_id` is the daemon's: neither `kit_file` nor `send` takes one from
+    the wire, and `kit_file` refuses a name the apply cannot carry and bytes that
+    are not a zip of repository paths, filing nothing."""
+    import asyncio
+    import base64
+
+    from hands.cli import call
+    from harness import config_body, drive, write_project
+
+    workdir = write_tree(tmp_path / "work", {"PLAYBOOK.toml": PLAYBOOK})
+    write_project(tmp_home, config_body(tmp_home, workdir))
+    socket_path = tmp_home / ".hands" / "handsd.sock"
+    good = base64.b64encode(kit_mod.build_zip(write_tree(tmp_path / "m16", good_kit()))).decode()
+    bad_zip = io.BytesIO()
+    with zipfile.ZipFile(bad_zip, "w") as archive:
+        archive.writestr("../escape.md", "x")
+    refusals: list[str] = []
+
+    def refused(method: str, params: dict[str, object]) -> None:
+        try:
+            call(socket_path, method, params)
+        except Exception as exc:  # the client's refusal of an error answer
+            refusals.append(f"{method}: {exc}")
+            return
+        raise AssertionError(f"{method} {sorted(params)} was not refused")
+
+    async def body(daemon) -> None:
+        for method, params in (
+            ("kit_file", {"name": "m16", "zip": good, "kit_id": "forged"}),
+            ("send", {"role": "builder", "context": "clear", "prompt": "x", "kit_id": "forged"}),
+            ("kit_file", {"name": "../m16", "zip": good}),
+            ("kit_file", {"name": "m16", "zip": "not base64!"}),
+            ("kit_file", {"name": "m16", "zip": base64.b64encode(bad_zip.getvalue()).decode()}),
+            ("file_apply", {"plan": {}, "origin": "architect", "kit_id": "forged"}),
+        ):
+            await asyncio.to_thread(refused, method, params)
+        answers["jobs"] = daemon.spool.list_jobs()
+        answers["kits"] = sorted((daemon.spool.root / "kits").glob("*/*")) if (
+            daemon.spool.root / "kits").exists() else []
+
+    answers: dict[str, object] = {}
+    drive(body)
+    assert answers["jobs"] == [], refusals
+    assert answers["kits"] == [], "a refused kit stayed in the spool"
+    assert len(refusals) == 6, refusals
+    assert "kit_id" in strip_paths(refusals[0]), refusals
+    assert "kit_id" in strip_paths(refusals[1]), refusals
+    assert "no method 'file_apply'" in strip_paths(refusals[5]), refusals
 
 
 def test_the_phone_and_the_architect_file_one_apply_with_two_origins() -> None:
@@ -1582,16 +1778,13 @@ def test_kit_file_says_who_releases_the_hold_not_that_a_human_decides_it(
     `file_run` is called directly with a stand-in `send`, so this pins the words
     the architect reads, not the daemon's path (which the test above drives).
     """
-    kit = zip_kit(kits / "m16.zip", good_kit())
-    out = io.StringIO()
-    filed = {"id": "20260916-000001-abcd", "state": "held", "role": "builder"}
-    code = kit_mod.file_run(
-        str(kit), builder_cwd=repo, send=lambda params: filed, out=out, as_json=False
-    )
-    text = out.getvalue()
+    kit = write_tree(kits / "m16", good_kit())
+    filed = {"id": "20260916-000001-abcd", "state": "held", "role": "builder",
+             "kit_id": "0123456789abcdef", "prompt": "Apply it."}
+    code, text = file_direct(kit, send=lambda params: filed)
     assert code == 0, text
     assert "a human decides it" not in strip_paths(text), text
     assert "kit file: filed 20260916-000001-abcd as a held builder job" in strip_paths(text), text
-    assert "(gate: apply m16, origin: architect)" in strip_paths(text), text
+    assert "(gate: apply m16, origin: architect, kit_id: 0123456789abcdef)" in strip_paths(text)
     for said in ("hands approve", "the engine", "autonomous"):
         assert said in strip_paths(text), f"the filed line does not say {said!r}: {text}"

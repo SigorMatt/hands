@@ -701,8 +701,9 @@ and `hands send --context keep` to `$HANDS_CONSULT_ROLE` — and its `git` takes
 one `-C`, whose realpath must equal `HANDS_CLONE`'s (a second `-C` is refused,
 because git applies each `-C` relative to the one before). Architect mode
 (`HANDS_ROLE=architect`) is the same read-only table with `hands
-show|jobs|inbox|pipeline|status|kit check|kit file`, plus `mkdir -p`, `cp -r`,
-`mv`, `zip -r` and `unzip -o -d` with every path under `HANDS_KITS`. In both
+show|jobs|inbox|pipeline|status|kit check|kit file`, plus `mkdir -p`, `cp -r`
+and `mv` (no other option) with every path under `HANDS_KITS`; `zip` and `unzip`
+are in no mode's table (§32). In both
 role modes reads are confined to the clone and the spool: every path that
 `cat`, `ls` (`.` when it names none), `head`, `tail`, `wc`, `grep` (`.` under
 `-r` when it names none), `jq`, `git` (its words after the subcommand, from the
@@ -729,7 +730,7 @@ carries all of it. It reads the review and `meta/ROADMAP.md`, writes the next
 kit, checks it, files it with `hands kit file`, and replies with one verdict
 line. `architect/README.md` is the full recipe; in short:
 
-    mkdir -p ~/hands-architect/<project>/kits   # kits/<name>/<repository paths>, filed with hands kit file && cd ~/hands-architect/<project>
+    mkdir -p ~/hands-architect/<project>/kits && cd ~/hands-architect/<project>   # a kit is kits/<name>/<repository paths>, filed with hands kit file kits/<name>
     cp ~/git/hands/architect/CLAUDE.md ./CLAUDE.md        # fill the Parameters block
     mkdir -p .claude/hooks
     cp ~/git/hands/architect/settings.json .claude/settings.json
@@ -755,9 +756,13 @@ Unlike `--role driver`, a `hands send --role architect` at the laptop is not
 refused today (finding H-032).
 
 Architect mode is the driver's read-only table plus `hands kit check` and
-`hands kit file`, and `mkdir`, `cp`, `mv`, `zip` and `unzip` only with every
-path argument under `HANDS_KITS`. It never sends, approves, denies, `go`es,
-puts or pushes. Writes are judged by a **second** `PreToolUse` matcher —
+`hands kit file`, and `mkdir -p`, `cp -r` and `mv` only with every path
+argument under `HANDS_KITS` and no other option (none that names another path,
+such as `cp -t` or `--backup`, and none that makes a link). `zip` and `unzip`
+are refused by name in every mode (§32, review 15 blocker 2: an `unzip`
+extracted into the role's cwd, the parent of `HANDS_KITS`, over the guard and
+its settings). It never sends, approves, denies, `go`es, puts or pushes. Writes
+are judged by a **second** `PreToolUse` matcher —
 `Write|Edit|MultiEdit` running the same guard with `--write` — which allows a
 write only under `HANDS_KITS`; the driver has no equivalent, because the driver
 writes nothing at all.
@@ -772,20 +777,28 @@ must be judged), and on a guard whose `--selftest` is not green; a missing
 clone or a missing kits directory warns, since `HANDS_KITS` names the
 directory whether or not it exists.
 
-**What is not proven (finding H-030, resolved by DESIGN v3.15 §32; code:
-mission 16 U2).** With the code as built today, a role session that follows
-`architect/CLAUDE.md` rule 3 cannot yet file the kit that rule asks for. `zip`
-stores each entry under the path it is given, and architect mode requires every
-path argument to be under `HANDS_KITS`, so the entries come out as
-`kits/<kit>/<file>` and not as repository paths. DESIGN v3.15 §32 decides the
-resolution: `zip` and `unzip` leave architect mode, and the architect stages a
-directory `kits/<name>/<repository paths>` and files it with `hands kit file
-<dir>`, which builds the zip itself, checks it and files the held apply. That
-is designed, not built: until mission 16 U2 lands, `hands kit file` files a zip
-only. The role, its guard mode, `hands kit file`, the consult, the budget and
-the engine's approval are built and tested; an architect role filing a kit a
-builder can apply **is not proven**. Until then, run `[series] architect =
-"role"` as an experiment, not as the way a series is driven.
+**Directory kits (finding H-030, resolved by DESIGN v3.15 §32; code: mission 16
+U2).** Under §31 the architect's `zip` could store entries only under
+`kits/<kit>/…`, never at repository paths. Now the architect stages a directory
+`kits/<name>/<repository paths>` (the Write tool creates the files; `mkdir -p`,
+`cp -r` and `mv` arrange them) and files it with `hands kit file <dir>` —
+`hands kit file kits/<name>`. The command builds the zip itself, each entry at
+its path relative to the directory (`kits/m16/meta/X.md` is `meta/X.md`);
+dotfiles are entries like any other, an empty directory carries nothing, and a
+symlink anywhere inside refuses the kit. It refuses a zip, a file, the kits
+directory itself, a path outside `HANDS_KITS` by realpath, and an unset
+`HANDS_KITS`. It checks the built zip against the role's clone (`HANDS_CLONE`)
+and refuses a failing kit with the check's output; a passing kit goes to
+handsd, which stores the zip at `~/.hands/<project>/kits/<kit_id>/<name>.zip`
+(outside `HANDS_KITS`, so nothing the architect may write can change it after
+the check), mints the `kit_id`, records it on the job, and files the held apply
+the phone's `kit` files, `origin: architect`, whose prompt names that zip. The
+phone's `kit` apply records a `kit_id` handsd mints too. What the tests prove is
+that command against a real daemon socket with the fake `claude`; a real
+architect session filing a kit that a builder then applies **is not proven**,
+and review 15's other blockers (the engine's approval, the config check) are
+later units of mission 16. Until a review finds them closed, run `[series]
+architect = "role"` as an experiment, not as the way a series is driven.
 
 **The switch point.** The role takes over from the phone architect at the fully
 reviewed work plan. `architect/README.md` lists the deliverables that must be on

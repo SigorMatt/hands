@@ -361,12 +361,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     # §4 `kit check`, §26: answered by the client with no daemon, config or
     # network, so it is not a daemon method and has no `_PARAMS` entry. §31's
-    # `kit file` is the other half: it checks the kit the same way and then
-    # files the apply, which does need the daemon.
+    # `kit file` is the other half: it builds the zip of a kit directory (§32),
+    # checks it the same way and has the daemon file the apply (`kit_file`).
     kit = command(
         "kit",
         "kit check: paths, playbook, brief, verdicts, wording, protocol (§4, §26); "
-        "kit file: check a kit under $HANDS_KITS and file its held apply (§31)",
+        "kit file: build the zip of a kit directory under $HANDS_KITS, check it and file "
+        "its held apply (§31, §32)",
     )
     kit_sub = kit.add_subparsers(dest="kit_command", metavar="check|file", required=True)
     kit_check = kit_sub.add_parser(
@@ -384,19 +385,24 @@ def build_parser() -> argparse.ArgumentParser:
         help="the repository the kit lands in (default: the top level of the current "
         "git repository)",
     )
-    # §31: the architect role's own route to the phone's `kit`. The kit comes
-    # from the role's kits directory ($HANDS_KITS) and is checked against the
-    # role's clone ($HANDS_CLONE) before anything is filed.
+    # §31, §32: the architect role's own route to the phone's `kit`. The kit is a
+    # directory in the role's kits directory ($HANDS_KITS); its zip is built here
+    # and checked against the role's clone ($HANDS_CLONE) before anything is filed,
+    # and the daemon files it (`kit_file`), minting the `kit_id`.
     kit_file = kit_sub.add_parser(
         "file",
         parents=[common],
-        help="check a kit under $HANDS_KITS and file its held apply (§31)",
-        description="run `kit check` on a kit under $HANDS_KITS against the role's clone "
-        "($HANDS_CLONE) and, only when every check passes, file the same held builder "
-        "apply the phone's `kit` files, with origin architect; a failing kit is not "
-        "filed and the refusal carries the check's output",
+        help="build, check and file a kit directory under $HANDS_KITS (§31, §32)",
+        description="build the zip of a kit directory kits/<name> under $HANDS_KITS (its "
+        "entries at their paths relative to the directory), run `kit check` on that zip "
+        "against the role's clone ($HANDS_CLONE) and, only when every check passes, have "
+        "handsd file the same held builder apply the phone's `kit` files, with origin "
+        "architect and a kit_id handsd mints; a failing kit is not filed and the refusal "
+        "carries the check's output",
     )
-    kit_file.add_argument("kit", help="the kit: a .zip under $HANDS_KITS")
+    kit_file.add_argument(
+        "kit", help="the kit: a directory kits/<name> under $HANDS_KITS, laid out as the repository"
+    )
     return parser
 
 
@@ -807,13 +813,13 @@ def main(
         # transcript.
         if command == "log" and not as_json:
             return _pages(socket_path, args.job, args.offset, project=project, out=out)
-        # §31: `hands kit file` — the check in the client, the apply through the
-        # daemon's own `send`, so the job takes §8's path from `Api.send` on.
+        # §31, §32: `hands kit file <dir>` — the zip built and checked in the client,
+        # the apply filed by the daemon's `kit_file`, which mints the `kit_id` and
+        # takes `Api.send`'s path, so the job takes §8's path from there.
         if command == "kit":
             return kit_mod.file_run(
                 args.kit,
-                builder_cwd=config.role("builder").cwd,
-                send=lambda params: call(socket_path, "send", params, project=project),
+                send=lambda params: call(socket_path, "kit_file", params, project=project),
                 out=out,
                 as_json=as_json,
             )

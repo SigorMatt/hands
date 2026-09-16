@@ -1422,11 +1422,13 @@ def test_the_integration_doc_names_the_series_keys_and_the_verdicts_from_code() 
     assert "claude --resume" in section
 
 
-def test_the_integration_doc_names_h_030_until_its_code_lands() -> None:
-    """The unit's honesty clause, keyed to the ledger. While H-030 is "resolved by
-    DESIGN v3.15" and its code has not landed (mission 16 U2), the doc names the
-    finding and §32's `hands kit file <dir>`, says the role filing a kit a builder
-    can apply is not proven, and does not call H-030 open."""
+def test_the_integration_doc_says_what_h_030s_code_built() -> None:
+    """The unit's honesty clause, keyed to the ledger. H-030 is "resolved by DESIGN
+    v3.15 (code: mission 16 U2)", and that code has landed: the doc names the
+    finding and `hands kit file <dir>` as built — the zip built from the directory
+    at repository paths, the check against the clone, the daemon-minted `kit_id` —
+    says what is still not proven, and no longer says the command files a zip only
+    or that the resolution is designed but not built."""
     findings = (ROOT / "meta" / "findings" / "FINDINGS.md").read_text(encoding="utf-8")
     memo = flattened(findings.split("## H-030", 1)[1].split("\n## H-", 1)[0])
     status = memo.rsplit("Status: ", 1)[1]
@@ -1436,13 +1438,48 @@ def test_the_integration_doc_names_h_030_until_its_code_lands() -> None:
     section = flattened(integration().split(ARCHITECT_SECTION, 1)[1].split("\n## ", 1)[0])
     for said in (
         "H-030, resolved by DESIGN v3.15 §32",
-        "hands kit file <dir>",
-        "repository paths",
-        "is not proven",
         "mission 16 U2",
+        "hands kit file <dir>",
+        "`hands kit file kits/<name>`",
+        "builds the zip itself",
+        "`kits/m16/meta/X.md` is `meta/X.md`",
+        "HANDS_CLONE",
+        "kit_id",
+        "is not proven",
     ):
         assert said in section, f"the architect section does not say {said!r}"
-    assert "H-030, open" not in section, "the architect section still calls H-030 open"
+    for stale in ("H-030, open", "designed, not built", "files a zip only", "`zip -r`",
+                  "`unzip -o -d`", "`zip` and `unzip` only"):
+        assert stale not in section and stale not in flattened(integration()), stale
+
+
+def test_no_architect_doc_says_the_architect_zips_or_files_a_zip() -> None:
+    """§32: the architect stages `kits/<name>` and files it with `hands kit file
+    kits/<name>`; no doc the role or its human reads says it runs `zip`/`unzip` or
+    files a `<zip>`, and each names the directory form."""
+    docs = {
+        "architect/CLAUDE.md": ROOT / "architect" / "CLAUDE.md",
+        "architect/README.md": ARCHITECT_README,
+        "docs/ARCHITECT-HANDBOOK.md": ROOT / "docs" / "ARCHITECT-HANDBOOK.md",
+        "docs/INTEGRATION.md": ROOT / "docs" / "INTEGRATION.md",
+    }
+    stale = re.compile(r"kit file <zip>|kit file [^`\s]*\.zip|`zip -r|`unzip -o|zip:\*|unzip:\*")
+    for name, path in docs.items():
+        text = flattened(path.read_text(encoding="utf-8"))
+        assert not stale.search(text), f"{name}: {stale.search(text)}"
+        assert "hands kit file kits/<name>" in text, f"{name} does not name the directory form"
+        assert "kits/<name>/<repository path" in text, f"{name} does not say directory kits"
+
+
+def test_the_architect_setup_line_runs_its_cd() -> None:
+    """The README's first setup line: a `#` comment ends the command, so the `&& cd`
+    must come before it, in the README and in the INTEGRATION copy alike."""
+    for text in (ARCHITECT_README.read_text(encoding="utf-8"), integration()):
+        (first,) = [line.strip() for line in text.splitlines()
+                    if line.strip().startswith("mkdir -p ~/hands-architect/")]
+        command = first.split("#", 1)[0]
+        assert "&& cd ~/hands-architect/<project>" in command, first
+        assert "kits/<name>" in first.split("#", 1)[1], first
 
 
 def test_the_integration_doc_carries_the_two_project_note_to_the_role_directories() -> None:

@@ -71,8 +71,10 @@ def test_job_record_has_exactly_the_design_fields(tmp_home: Path) -> None:
     }
     # `state` and `playbook_sha256` are carried too: §6 names the states and §10
     # requires the playbook sha on every job the playbook fires. `failure_reason`
-    # is §23's (H-014): which of the failure causes made a job `failed`.
-    assert set(JOB_FIELDS) == design | {"state", "playbook_sha256", "failure_reason"}
+    # is §23's (H-014): which of the failure causes made a job `failed`. `kit_id` is
+    # §32's: the id the daemon mints for an apply it files from a kit, recorded on
+    # the job so an approval can be checked against the spool (§6's list predates it).
+    assert set(JOB_FIELDS) == design | {"state", "playbook_sha256", "failure_reason", "kit_id"}
 
     spool = Spool("~/.hands/demo")
     job = make(spool)

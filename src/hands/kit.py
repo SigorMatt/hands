@@ -78,6 +78,8 @@ The checks, in order (docs/ARCHITECT-HANDBOOK.md §11 says the same):
 
 from __future__ import annotations
 
+import base64
+import io
 import itertools
 import json
 import os
@@ -85,6 +87,7 @@ import re
 import shlex
 import stat
 import subprocess
+import tempfile
 import zipfile
 import zlib
 from collections.abc import Callable, Iterable
@@ -107,6 +110,7 @@ __all__ = [
     "CHECK_NAMES",
     "KIT_MD",
     "KIT_MD_MAX",
+    "KIT_NAME_RE",
     "MAX_ENTRY_BYTES",
     "MAX_TOTAL_BYTES",
     "NAMED_PATH_RULE",
@@ -117,10 +121,12 @@ __all__ = [
     "apply_from_zip",
     "apply_params",
     "apply_prompt",
+    "build_zip",
     "check_kit",
     "file_run",
     "final_reply_literals",
     "home_shown",
+    "kit_dir_under_kits",
     "kickoff_line",
     "kit_md_message",
     "named_paths",
@@ -176,6 +182,11 @@ PLACEHOLDER_VALUES = ("0", "1", "12")
 MAX_PLACEHOLDERS = 6
 CHECK_NAMES = ("paths", "playbook", "brief", "verdicts", "wording", "protocol")
 GIT_TIMEOUT_S = 10.0
+#: §32: a directory kit's name, which becomes `<name>.zip` and the gate `apply
+#: <name>`; hands' rule (the design names none): no leading dot, no separator.
+KIT_NAME_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._+-]{0,99}")
+#: §32: the one date every entry of a zip `hands kit file` builds carries.
+ZIP_DATE = (1980, 1, 1, 0, 0, 0)
 
 #: §29, §30: which words of a send prompt are file paths. The design says a bare
 #: relative name and a name in any punctuation are judged, but not what tells a
@@ -1183,7 +1194,7 @@ def run(kit: str, repo: str | None, *, out: TextIO, as_json: bool) -> int:
     return 0
 
 
-# ------------------------------------------- `hands kit file` (§31, the role)
+# ------------------------------------- `hands kit file <dir>` (§31, §32, the role)
 
 
 def home_shown(path: Path) -> str:
@@ -1225,12 +1236,16 @@ def _under(path: Path, root: Path) -> bool:
     return here == there or here.startswith(there + os.sep)
 
 
-def kit_under_kits(name: str) -> Path:
-    """§31: the kit's path, refused unless it resolves under `$HANDS_KITS`.
+def kit_dir_under_kits(name: str) -> Path:
+    """§31, §32: the kit directory's realpath, refused unless it is a directory
+    `kits/<name>` under `$HANDS_KITS`.
 
     `hands kit file` is the architect role's command, and the role's kits
     directory is the only place it may write; a kit somewhere else was not
-    written under this guard, so it is not filed.
+    written under this guard, so it is not filed. A zip is not a kit here (the
+    role has no `zip`, §32), nor a file, nor the kits directory itself, whose
+    entries would be `<name>/…`; the directory's name becomes `<name>.zip` and
+    the gate `apply <name>`, so it must match `KIT_NAME_RE`.
     """
     kits = os.environ.get(KITS_ENV) or ""
     if not kits:
@@ -1244,7 +1259,78 @@ def kit_under_kits(name: str) -> Path:
             f"{path} is not under ${KITS_ENV} ({kits}), compared by realpath (§31): "
             "file a kit from the role's kits directory"
         )
-    return path
+    real = Path(os.path.realpath(path))
+    usage = (
+        "hands kit file takes a kit directory kits/<name> under "
+        f"${KITS_ENV}, laid out as the repository (§32)"
+    )
+    if real == Path(os.path.realpath(kits)):
+        raise KitError(f"{usage}; {path} is the kits directory itself")
+    if not real.is_dir():
+        what = "a file (a zip is not filed: the kit is built from its directory)" if (
+            real.exists()) else "not there"  # fmt: skip
+        raise KitError(f"{usage}; {path} is {what}")
+    if not KIT_NAME_RE.fullmatch(real.name):
+        raise KitError(
+            f"{usage}; the name {real.name!r} does not match {KIT_NAME_RE.pattern} "
+            "(it becomes <name>.zip and the gate apply <name>)"
+        )
+    return real
+
+
+def build_zip(root: Path) -> bytes:
+    """§32: the zip of a directory kit, its entries at their paths relative to `root`.
+
+    `kits/m16/meta/X.md` is the entry `meta/X.md`. The choices §32 leaves open:
+    a dotfile is an entry like any other (`kit check`'s `paths` refuses `.git`);
+    an empty directory carries nothing, because a kit is files; a symlink
+    anywhere inside, to a file or a directory, and anything that is not a
+    regular file, refuse the whole kit (`KitError`), because a link would carry
+    bytes from outside `$HANDS_KITS` into the zip. The entries are sorted and
+    carry one date, so the same directory builds the same bytes.
+    """
+    problems: list[str] = []
+    entries: list[tuple[str, Path]] = []
+    total = 0
+    for dirpath, dirnames, filenames in os.walk(root):  # never follows a symlink
+        here = Path(dirpath)
+        for name in sorted(dirnames):
+            if (here / name).is_symlink():
+                problems.append(f"{(here / name).relative_to(root).as_posix()}/ (a symlink)")
+                dirnames.remove(name)
+        for name in sorted(filenames):
+            path = here / name
+            where = path.relative_to(root).as_posix()
+            try:
+                where.encode("utf-8")
+            except UnicodeEncodeError:
+                problems.append(f"{where!r} (not a UTF-8 name)")
+                continue
+            if path.is_symlink():
+                problems.append(f"{where} (a symlink)")
+            elif not path.is_file():
+                problems.append(f"{where} (not a regular file)")
+            else:
+                size = path.stat().st_size
+                total += size
+                if size > MAX_ENTRY_BYTES:
+                    problems.append(f"{where} ({size} bytes, over the {MAX_ENTRY_BYTES}-byte cap)")
+                entries.append((where, path))
+    if total > MAX_TOTAL_BYTES:
+        problems.append(f"{total} bytes in all, over the {MAX_TOTAL_BYTES}-byte cap on a kit")
+    if problems:
+        raise KitError(
+            f"hands kit file builds the zip from {root}, and refuses it (§32; a kit is "
+            "whole regular files): " + "; ".join(problems)
+        )
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
+        for where, path in sorted(entries):
+            info = zipfile.ZipInfo(where, date_time=ZIP_DATE)
+            info.compress_type = zipfile.ZIP_DEFLATED
+            info.external_attr = (stat.S_IFREG | 0o644) << 16
+            archive.writestr(info, path.read_bytes())
+    return buffer.getvalue()
 
 
 def role_clone() -> Path:
@@ -1264,21 +1350,28 @@ def role_clone() -> Path:
 def file_run(
     kit: str,
     *,
-    builder_cwd: Path,
     send: Callable[[dict[str, Any]], dict[str, Any]],
     out: TextIO,
     as_json: bool,
 ) -> int:
-    """`hands kit file <zip>`: check the kit here, then file its held apply (§31).
+    """`hands kit file <dir>`: build the zip, check it here, then have handsd file it (§32).
 
-    The path must resolve under `$HANDS_KITS` and the check runs against
-    `$HANDS_CLONE`; a kit that fails a check is not filed and the refusal
-    carries the check's own lines. A passing kit is filed by `send` — the
-    daemon's `send` method — with the params the phone's `kit` uses and
-    `origin: architect`, so it is born held and takes §8's path from there.
+    The directory must be `kits/<name>` under `$HANDS_KITS` (`kit_dir_under_kits`).
+    The zip is built from it (`build_zip`) and that zip — the bytes that will be
+    filed — is checked against `$HANDS_CLONE`; a kit that fails a check is not
+    sent and the refusal carries the check's own lines. A passing kit is sent by
+    `send` — the daemon's `kit_file` — as its name and the zip's bytes only: the
+    daemon stores them, mints the `kit_id`, and files the held apply with
+    `origin: architect`, so it takes §8's path from there.
     """
-    path = kit_under_kits(kit)
-    report = check_kit(path, role_clone())
+    root = kit_dir_under_kits(kit)
+    clone = role_clone()
+    data = build_zip(root)
+    with tempfile.TemporaryDirectory(prefix="hands-kit-") as scratch:
+        built = Path(scratch) / f"{root.name}.zip"
+        built.write_bytes(data)
+        report = check_kit(built, clone)
+    report.kit = root
     failed = [check for check in report.checks if not check.ok]
     if failed:
         if as_json:
@@ -1294,17 +1387,16 @@ def file_run(
             file=out,
         )
         return 1
-    # The apply is built against the builder's own repository, from the path as
-    # it is on disk — the two arguments the phone gives `apply_from_zip`.
-    plan = apply_from_zip(path, builder_cwd, home_shown(path))
-    job = send(apply_params(plan, "architect"))
+    job = send({"name": root.name, "zip": base64.b64encode(data).decode("ascii")})
     if as_json:
-        answer = {**report.to_dict(), "apply_prompt": plan.prompt, "filed": True, "job": job}
+        answer = {
+            **report.to_dict(), "apply_prompt": job.get("prompt"), "filed": True, "job": job,
+        }  # fmt: skip
         print(json.dumps(answer, sort_keys=True), file=out)
         return 0
     for check in report.checks:
         print(check.line(), file=out)
-    print(f"commit message: {plan.commit_message}", file=out)
+    print(f"commit message: {report.commit_message}", file=out)
     print(report.kit_md_note, file=out)
     # The state is the record as the daemon answered, and the hold's release is
     # not this command's to predict: `hands approve|deny` (or the phone's buttons)
@@ -1314,7 +1406,7 @@ def file_run(
     # false in exactly the case §31 built.
     print(
         f"kit file: filed {job['id']} as a {job['state']} builder job "
-        f"(gate: apply {plan.name}, origin: architect)",
+        f"(gate: apply {root.name}, origin: architect, kit_id: {job.get('kit_id')})",
         file=out,
     )
     print(

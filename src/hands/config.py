@@ -101,7 +101,8 @@ CONSULT_ROLE_ENV = "HANDS_CONSULT_ROLE"
 CLONE_ENV = "HANDS_CLONE"
 #: §31: the architect role's kits directory, in its job's environment (the runner
 #: sets it to `<cwd>/kits`; the guard in architect mode confines every path
-#: argument of `mkdir|cp|mv|zip|unzip` and every write to that directory).
+#: argument of `mkdir|cp|mv` and every write to that directory; §32 took `zip` and
+#: `unzip` out, and `hands kit file` refuses a kit directory outside it).
 KITS_ENV = "HANDS_KITS"
 DRIVER_ROLE = "driver"
 ARCHITECT_ROLE = "architect"

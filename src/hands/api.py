@@ -18,9 +18,12 @@ and both halves call them.
 from __future__ import annotations
 
 import asyncio
+import base64
+import binascii
 import os
 import re
 import shlex
+import shutil
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -28,6 +31,7 @@ from typing import TYPE_CHECKING, Any
 from hands import __version__, files, gates
 from hands.doctor import report as doctor_report
 from hands.doctor import run_checks as doctor_checks
+from hands.kit import KIT_NAME_RE, Apply, KitError, apply_from_zip, apply_params, home_shown
 from hands.notify import NotifyError, send_test
 from hands.runner import KeepRefused
 from hands.spool import (
@@ -37,6 +41,7 @@ from hands.spool import (
     Event,
     Job,
     SpoolError,
+    new_kit_id,
     resolve_kinds,
 )
 
@@ -101,6 +106,12 @@ _SUMMARY_FIELDS = (
     "origin", "verdict", "session_id", "pid", "resumed_from",
 )  # fmt: skip
 _PROMPT_LINE_CHARS = 120
+#: §26's `kit_max_mb` is in MiB.
+_MIB = 1024 * 1024
+#: §32: where handsd stores the zip `hands kit file` built, under the spool: one
+#: directory per `kit_id`, outside `HANDS_KITS`, so nothing the architect's guard
+#: lets it write can change the bytes after they were checked and filed.
+KITS_DIR = "kits"
 
 
 def job_summary(job: Job) -> dict[str, Any]:
@@ -127,9 +138,15 @@ class Api:
         self.config = daemon.config
         self.spool = daemon.spool
 
+    #: §31, §32: the daemon half of `hands kit file`. `kit` is one row of §4's table
+    #: and its `check` is answered by the client, so this is not in `COMMANDS` (which
+    #: §4 pins); `method()` answers it as well, because the apply and its `kit_id`
+    #: are the daemon's to create.
+    KIT_METHODS: tuple[str, ...] = ("kit_file",)
+
     def method(self, name: str) -> Any:
         """The bound coroutine for a command name, or None if there is no such command."""
-        if name not in self.COMMANDS:
+        if name not in self.COMMANDS and name not in self.KIT_METHODS:
             return None
         return getattr(self, name)
 
@@ -146,7 +163,33 @@ class Api:
         origin: str = "cli",
         playbook_sha256: str | None = None,
     ) -> dict[str, Any]:
-        """Queue a prompt for a role (§4, §6). Returns the job record."""
+        """Queue a prompt for a role (§4, §6). Returns the job record.
+
+        No `kit_id` parameter: that id is minted by handsd for an apply it files
+        itself (`file_apply`, §32), so no socket client can put one on a job.
+        """
+        return await self._send(
+            role=role,
+            context=context,
+            prompt=prompt,
+            file=file,
+            gate=gate,
+            origin=origin,
+            playbook_sha256=playbook_sha256,
+        )
+
+    async def _send(
+        self,
+        *,
+        role: str,
+        context: str,
+        prompt: str,
+        file: list[str] | None = None,
+        gate: str | None = None,
+        origin: str = "cli",
+        playbook_sha256: str | None = None,
+        kit_id: str | None = None,
+    ) -> dict[str, Any]:
         if role not in self.config.roles:
             known = ", ".join(sorted(self.config.roles))
             raise ApiError(f"unknown role {role!r}; this project configures: {known}")
@@ -188,6 +231,7 @@ class Api:
             gate=gates.new_gate(kind="send", reason=reason) if reason else None,
             files_written=written,
             playbook_sha256=playbook_sha256,
+            kit_id=kit_id,
         )
         # §10's stop → resume cycle is not closed here: a `cli` send un-pauses the
         # pipeline when its job *starts* (`PlaybookEngine.on_job_start`), because a
@@ -202,6 +246,65 @@ class Api:
             # business, and with no rule for it the pipeline stops.
             await self.daemon.playbook.on_event("job.held", job=job)
         return job.to_dict()
+
+    async def file_apply(self, plan: Apply, origin: str, kit_id: str) -> dict[str, Any]:
+        """§27, §31, §32: a kit's held apply, filed by handsd itself.
+
+        The one path both routes take — the phone's `kit` (origin `kit`) and `hands
+        kit file` (origin `architect`) — so the job is `apply_params`' and carries
+        the `kit_id` handsd minted. Not a command of §4 and in neither `COMMANDS`
+        nor `KIT_METHODS`, so no socket client reaches it.
+        """
+        return await self._send(**apply_params(plan, origin), kit_id=kit_id)
+
+    async def kit_file(self, *, name: str, zip: str) -> dict[str, Any]:
+        """§32: the daemon half of `hands kit file <dir>`. Returns the job record.
+
+        `name` is the kit directory's name and `zip` the base64 of the zip the
+        client built from that directory and checked against the role's clone.
+        handsd mints the `kit_id`, stores the bytes at
+        `<spool>/kits/<kit_id>/<name>.zip`, lists them with the phone's
+        `apply_from_zip` against the builder's cwd, and files the held apply
+        with `origin: architect`. A refusal files nothing and keeps nothing.
+        """
+        if not isinstance(name, str) or not KIT_NAME_RE.fullmatch(name):
+            raise ApiError(f"kit_file: the kit name must match {KIT_NAME_RE.pattern}")
+        if not isinstance(zip, str):
+            raise ApiError("kit_file: the zip is base64 text")
+        try:
+            data = base64.b64decode(zip, validate=True)
+        except (binascii.Error, ValueError) as exc:
+            raise ApiError("kit_file: the zip is not valid base64") from exc
+        cap = self.config.files.kit_max_mb * _MIB
+        if len(data) > cap:
+            raise ApiError(
+                f"kit_file: the zip is {len(data)} bytes, over [files] kit_max_mb = "
+                f"{self.config.files.kit_max_mb} ({cap} bytes)"
+            )
+        if "builder" not in self.config.roles:
+            raise ApiError("kit_file: this project configures no builder to apply a kit")
+        kit_id = new_kit_id()
+        directory = self.spool.root / KITS_DIR / kit_id
+        path = directory / f"{name}.zip"
+        try:
+            await asyncio.to_thread(directory.mkdir, mode=0o700, parents=True)
+        except OSError as exc:  # an existing directory included: it is not this kit's
+            raise ApiError(f"kit_file: the kit could not be stored ({type(exc).__name__})") from exc
+        try:
+            await asyncio.to_thread(_store_kit, path, data)
+            plan = await asyncio.to_thread(
+                apply_from_zip, path, self.config.role("builder").cwd, home_shown(path)
+            )
+            return await self.file_apply(plan, ARCHITECT_ORIGIN, kit_id)
+        except OSError as exc:
+            shutil.rmtree(directory, ignore_errors=True)
+            raise ApiError(f"kit_file: the kit could not be stored ({type(exc).__name__})") from exc
+        except KitError as exc:
+            shutil.rmtree(directory, ignore_errors=True)
+            raise ApiError(f"kit_file: the apply was not filed: {exc}") from exc
+        except ApiError:
+            shutil.rmtree(directory, ignore_errors=True)
+            raise
 
     def _write_files(self, specs: list[str]) -> list[dict[str, Any]]:
         try:
@@ -839,6 +942,14 @@ class Api:
         except SpoolError as exc:
             raise ApiError(str(exc)) from exc
 
+
+
+def _store_kit(path: Path, data: bytes) -> None:
+    """Write a kit's zip to a new file, flushed to disk."""
+    with path.open("xb") as out:
+        out.write(data)
+        out.flush()
+        os.fsync(out.fileno())
 
 
 def _since_cutoff(since: str | None) -> str | None:

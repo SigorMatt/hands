@@ -3922,10 +3922,11 @@ E2E_BOOK = ARCHITECT_BOOK.replace(
     ARCHITECT_KICKOFF, f"{ARCHITECT_KICKOFF}\\nFAKE:result VERDICT: mission 17 finished"
 )
 
-#: What the scripted architect runs in place of `hands kit file <zip>`: the client
-#: half of `hands.kit.file_run` — the same `send` params, `origin: architect`, over
-#: the same socket — without the sandbox its check needs (`tests/test_kit.py` drives
-#: the real command). The apply prompt carries the builder's reply.
+#: What the scripted architect runs in place of `hands kit file <dir>`: a `send`
+#: with the apply's params, `origin: architect`, over the same socket — mission
+#: 15's route. Since §32 the real command files through the daemon's `kit_file`,
+#: which mints a `kit_id` (`tests/test_kit.py` drives it); this send carries none.
+#: The apply prompt carries the builder's reply.
 FILE_APPLY = """
 import sys
 from hands.cli import call
