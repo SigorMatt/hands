@@ -583,5 +583,9 @@ known to load.
 Read it as a sentence: a clean run starts a cold review; a clean review of a
 pre-planned run starts the next run; blockers, memos, questions, tripwires,
 killed tasks and orphan processes stop and call you; failures and orphans resume themselves until `max_resumes`.
+That is §10's example as §10 writes it today. This repository's `PLAYBOOK.toml`
+and both templates only `notify` on a killed task, since the detector cannot say
+who killed it, and a job that ends `failed` is what stops (DESIGN §32; H-034
+asks §10 to follow).
 A rate limit is not in the playbook at all: §6 owns that resume and schedules
 it for the reset.

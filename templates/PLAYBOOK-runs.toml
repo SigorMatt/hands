@@ -124,7 +124,7 @@ message = "Tripwire fired"
 [[rule]]
 on = "monitor.task_killed"
 then = "notify"
-message = "The harness killed a task inside a role session"
+message = "A task inside a role job was killed"
 
 [[rule]]
 on = "monitor.orphan_processes"

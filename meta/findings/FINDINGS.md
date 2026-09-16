@@ -1766,3 +1766,95 @@ and drops the H-034 sentence from `docs/PLAYBOOK.md`'s prose and its pin in
 `tests/test_docs.py`.
 
 Status: open
+
+Correction appended 2026-09-17 (mission 17 U0, from REVIEW-16 should-fix 8): the
+tests do not pin docs/PLAYBOOK.md's closing copy to §10 byte for byte, as the
+Symptom above says; `tests/test_docs.py::test_the_playbook_doc_carries_the_section_10_example_verbatim`
+only checks that each line of the fixture appears somewhere in the doc, and only
+`tests/test_playbook.py::test_the_fixture_is_section_10s_example_verbatim`
+compares a copy (the fixture) with §10's block exactly (after removing the
+four-space indent).
+
+---
+
+## H-035 — the daemon must run the check it approves on
+
+Severity: high · Component: `src/hands/api.py` (`Api.kit_file`), the engine's
+approval of an architect apply, `hands kit check`; DESIGN §31, §32, §33
+Filed by: mission 17 U0, orchestrator, from REVIEW-16 blocker 1 (with should-fix
+1 and 5).
+
+Symptom. §32 says `hands kit file <dir>` "builds the zip itself, checks it, and
+files the held apply", and that the engine approves only an apply "from a kit
+filed by the architect role (a `kit_id` the daemon minted …)". The check runs in
+the client only. `Api.kit_file` (`src/hands/api.py:267-330` at review 16's tip)
+checks the name, the base64, the size and the entry paths (through
+`apply_from_zip`) and that an architect consultation is open; it never runs
+`check_kit`, and the job it files carries `origin: architect` and a daemon-minted
+`kit_id`, which is what the engine approves. REVIEW-16's repro: a real daemon,
+fake_claude and the committed role + autonomous playbook; while the architect
+job ran, a raw-socket `kit_file` filed two zips, `foo` and `bar`, each carrying
+`.claude/hooks/bash_guard.py`, `.claude/settings.json`, `DESIGN.md` and a
+`PLAYBOOK.toml` and no brief. Both were `decided_by=playbook`, and `check_kit`
+on each gave `ok=False failed=[playbook, brief, verdicts, wording]`. Any socket
+client can open the window (`send --role aux` whose reply is a review verdict).
+No test bound "a kit that fails `hands kit check` is not approved".
+- Should-fix 1: one consultation filed any number of kits, of any name, and the
+  engine approved each, although the verdict was `VERDICT: next kit foo`.
+- Should-fix 5: `hands kit check` passed a role-mode kit it had not judged (two
+  project configs and no `--project`/`HANDS_PROJECT`, or a config that is not
+  valid TOML): exit 0 with `PASS playbook: … is not judged against
+  [roles.architect]: no hands config resolves here`.
+
+Resolution (DESIGN v3.16 §33, "The autonomy path", 2026-09-17):
+
+> - `kit_file` runs `check_kit` on the bytes it stores, against the builder's
+>   clone, and refuses a failing kit with the check's output; the engine
+>   approves only an apply whose stored `kit_id` records a passing check;
+>   a consultation may file at most one kit, and its name must equal the
+>   name the architect's `VERDICT: next kit <name>` states, else the apply
+>   is denied by the engine and the consultation ends `escalate`.
+
+> - `kit check` on a kit that carries a role-mode playbook judges the
+>   playbook's role requirements against the repository's config the way
+>   `handsd` will at load, and says so.
+
+Status: open (code pending mission 17 U1)
+
+---
+
+## H-036 — zip entry names: the judge reads the local header, extraction reads the Unicode Path
+
+Severity: high · Component: `src/hands/kit.py` (`apply_from_zip`, `check_kit`'s
+paths rule); the daemon's `kit_file`; DESIGN §26, §32, §33
+Filed by: mission 17 U0, orchestrator, from REVIEW-16 blocker 2.
+
+Symptom. `src/hands/kit.py` judges `info.orig_filename` (`kit.py:381`, `:432`,
+`:1112`), the name in the zip's local header. `unzip` and Python's
+`ZipInfo.filename` use the Info-ZIP Unicode Path extra field (0x7075) when one
+is present. REVIEW-16 reproduced it at the tip with a zip built by Python
+3.14.6, `ZipInfo("docs/notes.md")` with extra 0x7075 naming
+`.git/hooks/pre-commit`, mode 0755:
+
+    filename= .git/hooks/pre-commit orig= docs/notes.md
+    apply_from_zip -> Apply(name='evil', adds=['docs/notes.md'], prompt="Apply ~/evil.zip to this
+      repository: unzip -o into the repo root (it adds docs/notes.md), …")
+    unzip -o ../evil.zip ->  extracting: .git/hooks/pre-commit
+
+and the next `git commit` ran the hook. Over the socket `kit_file` the same kit
+was held, origin architect, its prompt naming only `docs/notes.md`. Reach: on the
+phone's kit path a human approves a prompt naming another file than the one
+written; with H-035's hole it is engine-approved with no human. The architect's
+own `hands kit file` builds its zip itself and cannot craft this. The rule
+predates mission 16, but FINAL-REPORT-16 §2 says "the daemon refuses … an
+escaping zip", and no test covered an entry whose two names differ.
+
+Resolution (DESIGN v3.16 §33, "The autonomy path", 2026-09-17):
+
+> - Zip entries are judged by the central directory's names, which are what
+>   extraction uses; an entry whose local-header name differs from its
+>   central-directory name is refused, as is any name that resolves into
+>   `.git/`, `.claude/`, or outside the repository; both the daemon and
+>   `kit check` share the one judge.
+
+Status: open (code pending mission 17 U2)

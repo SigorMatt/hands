@@ -186,8 +186,10 @@ def test_no_doc_still_says_a_killed_task_stops_the_series() -> None:
 
 
 def test_both_docs_say_the_task_killed_cause_is_always_unknown() -> None:
-    """§25: the stream cannot tell a harness reap from a `TaskStop`; the docs say
-    so, name `cause` as always `unknown`, and say what the example maps it to."""
+    """§25: docs/PLAYBOOK.md and docs/INTEGRATION.md each name `TaskStop` and say
+    "`cause` is always `unknown`"; INTEGRATION.md also says (§31) that handsd does
+    not re-send the held buttons after a restart and that the one notification
+    lists every job still held."""
     for name in ("PLAYBOOK.md", "INTEGRATION.md"):
         doc = flattened((ROOT / "docs" / name).read_text(encoding="utf-8"))
         assert "`TaskStop`" in doc, f"docs/{name} does not name `TaskStop`"
@@ -197,6 +199,18 @@ def test_both_docs_say_the_task_killed_cause_is_always_unknown() -> None:
     integration = flattened((ROOT / "docs" / "INTEGRATION.md").read_text(encoding="utf-8"))
     assert "handsd does not re-send them" in integration
     assert "notification lists every job still held" in integration
+
+
+def test_the_sentence_under_the_verbatim_example_says_a_killed_task_notifies_here() -> None:
+    """§33 (review 16 should-fix 8), §32, H-034: the reading of §10's example under
+    its verbatim copy still says killed tasks stop (the copy is §10's), so it says
+    that this repository and the templates only `notify` on a killed task."""
+    doc = (ROOT / "docs" / "PLAYBOOK.md").read_text(encoding="utf-8")
+    after = flattened(doc.split("## The example (DESIGN §10, verbatim)", 1)[1])
+    reading = after.split("Read it as a sentence:", 1)[1]
+    assert "H-034" in reading, "the reading under the verbatim example does not name H-034"
+    assert "`notify`" in reading, "the reading under the verbatim example does not say `notify`"
+    assert "`PLAYBOOK.toml`" in reading and "templates" in reading, reading
 
 
 #: The key statements of INTEGRATION.md's optional section (§11, §24), each

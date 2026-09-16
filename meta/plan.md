@@ -1,92 +1,50 @@
-# plan — mission 16 (the guard's language finished, review 15)
+# plan — mission 17 (review 16; talking to the architect)
 
-Source: meta/BUILDER-16-PROMPT.md, DESIGN v3.15 §32 (with §6, §8, §12, §30,
-§31), meta/reviews/REVIEW-15.md, findings H-030, H-031, H-032. Units run in
-order; each ends with a commit and a push. `[x]` = done and pushed, `[b]` =
-blocked (two failures).
+Source: meta/BUILDER-17-PROMPT.md, DESIGN v3.16 §33 (with §8, §11, §26, §31,
+§32), meta/reviews/REVIEW-16.md. Units run in order; each ends with a commit
+and a push. `[x]` = done and pushed, `[b]` = blocked (two failures).
 
-Base of the mission: 31789c6 (`plan: mission 16 kit (DESIGN v3.15)`).
+Base of the mission: 0b8447e (`plan: mission 17 kit (DESIGN v3.16)`), green
+(3743 passed).
 
-- [x] U0 Plan and bookkeeping (`plan:`) (the commit that carries this line) — this file, meta/CHECKPOINT.md;
-      H-033 filed (the guard's language finished, reviews 11–15); §32's
-      resolutions appended to H-030, H-031, H-032 and their status lines set;
-      FINAL-REPORT-15 §3.1 corrected by appended dated lines (the guard's
-      `for`/`${…}` execution and `$o` option bypass, unbounded role-mode
-      reads, architect `unzip` with no `-d`)
-- [x] U1 The guard's language, finished (§32; blocker 1; should-fix 7) c7dafd2 —
-      `$`, `{`, `}` and every reserved word refused before tokenizing in
-      every mode; the tables judge every word including values; role-mode
-      reads confined to the clone and the spool's paths with a refusal that
-      says so; unreachable code removed and listed; every probe of reviews
-      11–15 blocked in all three modes; every command of driver/CLAUDE.md and
-      architect/CLAUDE.md allowed; a 10k fuzz corpus over reserved words and
-      `$`/brace shapes refused; docs/INTEGRATION.md states the whole language
-- [x] U2 Architect mode and `hands kit file <dir>` (§32; blocker 2; H-030) 7ce3189 —
-      `unzip` and `zip` rows removed; `mkdir`/`cp`/`mv` confined with no
-      option naming another path; `kit file <dir>` under `HANDS_KITS` builds
-      the zip, checks it against the clone, refuses a failing kit with the
-      check's output, files the held apply (`origin: architect`, a
-      daemon-minted `kit_id`); the reviewer's `unzip` probes refused;
-      architect/CLAUDE.md, architect/README.md, docs/ARCHITECT-HANDBOOK.md say
-      directory kits
-- [x] U3 Autonomy and origins (§32; blocker 3; should-fix 1, 2, 3;
-      H-032) f4fde48 — engine approval only for a daemon-created apply with a known
-      `kit_id` under role + autonomous; a socket client cannot set `origin:
-      architect`; the kickoff rule fires only for such an apply; `next kit`
-      waits for the filed `kit_id` within `[series] kit_wait_s` (default
-      600); the budget anchored to `[series] name`, a rename refused unless
-      `max_architect_consults` is restated; `Api.send` refuses `driver` and
-      `architect`; end-to-end tests including the reviewer's forged-origin probe
-- [x] U4 Config, doctor, prompt, notifications (§32; blocker 4; should-fix 4,
-      5, 6) 44410ea — `architect = "role"` without `[roles.architect]` refused by the
-      loader (`handsd`) and by `kit check`; doctor's architect row checks the
-      push URL, `HANDS_KITS` under the cwd, both matchers naming the guard,
-      the guard's architect-mode self-test; the consult prompt carries the
-      next unmet milestone and the roadmap's path; daemon start publishes
-      exactly one notification (count bound by a test); the INTEGRATION
-      sentence on published kinds corrected
-- [x] U5 Playbook severity (§32) e091d0b — `monitor.task_killed → notify` verified and
-      pinned in the example, this repository's playbook and both templates;
-      docs/PLAYBOOK.md says why
-- [x] U6 This repository's playbook 6939524 — `[series] kickoff` becomes BUILDER-17's
-      line; nothing else; loads; a kit of this brief checked `--repo .` exits 0
-- [x] U7 Final report (meta/FINAL-REPORT-16.md) (the commit that carries this
-      line) — drafted under meta/drafts/,
-      moved in by this commit with the mission's meta bookkeeping
+- [ ] U0 Plan and bookkeeping (`plan:`) — this file, meta/CHECKPOINT.md;
+      H-035 filed (the daemon must run the check it approves on, blocker 1)
+      and H-036 (zip names, blocker 2); FINAL-REPORT-16's review-items row
+      for REVIEW-15 blocker 3 and its §3.2 corrected by appended dated
+      lines; should-fix 8: both templates' `task_killed` messages and
+      docs/PLAYBOOK.md name no cause, the stale test docstring fixed, H-034's
+      "byte for byte" overstatement corrected by an appended line
+- [ ] U1 The daemon checks what it approves (§33; blocker 1; should-fix 1, 5)
+- [ ] U2 Zip names (§33; blocker 2)
+- [ ] U3 Architect mode and doctor (§33; should-fix 2, 3, 4)
+- [ ] U4 Prompt and notifications (§33; should-fix 6, 7)
+- [ ] U5 `reply` (§33)
+- [ ] U6 Self-hosted ntfy (§33)
+- [ ] U7 This repository's playbook (kickoff names BUILDER-18)
+- [ ] U8 Final report (meta/FINAL-REPORT-17.md)
 
-Review items by unit. REVIEW-15 blocker 1 → U1; blocker 2 → U2; blocker 3 →
-U3; blocker 4 → U4; should-fix 1, 2, 3 → U3; should-fix 4, 5, 6 → U4;
-should-fix 7 → U1.
+Review items by unit. REVIEW-16 blocker 1 → U1; blocker 2 → U2; should-fix
+1, 5 → U1; should-fix 2, 3, 4 → U3; should-fix 6, 7 → U4; should-fix 8 → U0.
 
 Scope choices (orchestrator's):
-- H-032's resolution (refuse direct sends to `driver` and `architect`) is
-  product work and goes with U3.
-- The base commit 31789c6 is red (5 failures): the kit changed
-  architect/CLAUDE.md's `kit file` line, architect/README.md's setup line,
-  DESIGN §6's `decided_by` list and PLAYBOOK.toml's `monitor.task_killed`
-  mapping, and U0's own H-030 status line trips the doc test that kept
-  INTEGRATION.md naming H-030 open. A red base makes "green three times before
-  every commit" impossible, so a sub-agent brought the four tests and
-  INTEGRATION.md's two passages in line without product code, and they are
-  folded into the U0 `plan:` commit (as mission 15 U0 did). H-031's equality
-  therefore lands in U0, not U3; U5 still verifies and pins all four playbooks.
-- architect/README.md's first setup line, as the kit shipped it, puts the
-  comment before `&& cd ~/hands-architect/<project>`, so the `cd` never runs
-  and the following `cp` lines run in the wrong directory. U2 edits that file
-  for directory kits and fixes the line (the switch-point pin in
-  tests/test_docs.py moves with it).
-- Review 15's Notes (U0's doctor brief-check gaps, doctor's matcher spellings,
-  U4's empty `escalate_on` default, limits never resuming architect jobs, the
-  commit-body wording flaws) are observations, not items, and are not taken.
+- Numbering. The brief says "file H-034 … and H-035", but H-034 already
+  exists (mission 16 U5: §10's example still says `stop`). The two new
+  findings are filed as H-035 (the daemon runs the check it approves on) and
+  H-036 (zip names). Every reference in this mission uses those numbers.
+- Should-fix 8 touches templates, docs/PLAYBOOK.md and a test docstring, not
+  src/. It is text, and the brief places it in U0; a sub-agent makes those
+  edits and they are folded into the `plan:` commit (as missions 15 and 16
+  U0 did with base fixes).
+- REVIEW-16's Notes (over-refusals, the budget's "restated", events that fire
+  nothing, U2 nested kit dirs, pushInsteadOf docstring, U6's weak gate) are
+  observations, not items, and are not taken unless a unit's own work
+  touches them.
 
-Dependencies. U1 rewrites the guard's language and U2 edits architect mode in
-the same file: U1 first. U3 files applies with a `kit_id` that U2's `kit file`
-mints through the daemon: U2 first. U4's doctor row self-tests the guard's
-architect mode as U1 and U2 leave it: after both. U5 and U6 touch playbooks
-only. U7 last.
+Dependencies. U2's shared zip judge is used by `kit_file`, which U1 changes:
+U1 then U2, each keeping the other's tests green. U3 edits the guard and
+doctor. U4 edits playbook prompt and notifier start. U5 needs the command
+channel and the escalation notification; U6 touches the same ntfy client:
+U5 before U6. U7 and U8 last.
 
-Findings. H-033 filed by U0. H-030, H-031, H-032 resolved by DESIGN v3.15
-(code: H-030 U2, H-031 U0, H-032 U3). H-027, H-001 and H-009 stay open.
-Filed during the mission: H-034 (U5 — DESIGN §10's example playbook and §24
-still map `monitor.task_killed` to `stop` while §32 says `notify`, and the
-fixture and docs copy must equal §10; open, the architect's).
+Findings. H-035, H-036 filed by U0. H-034 (§10/§24 `stop`), H-027, H-001,
+H-009 stay open.

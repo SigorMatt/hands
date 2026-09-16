@@ -164,3 +164,25 @@ phone `go` before it lands would send the builder to a missing file.
   exist yet.
 - The review §30 asks for: the driver and architect roles are enabled after a
   review finds no hole in the language U1 built.
+
+Correction appended 2026-09-17 (mission 17 U0, from REVIEW-16 blockers 1 and 2
+and should-fix 1 and 8):
+- `## Review items`, the REVIEW-15 blocker 3 row says "closed". It was not:
+  a socket client could still file a check-failing kit that the engine approved,
+  because the daemon's `kit_file` never ran `check_kit` (REVIEW-16 blocker 1).
+  Read the row as open; H-035, code in mission 17 U1.
+- §3.2 says the client's check is the check, and stops there. It did not say
+  that a kit failing the check, touching `.claude/hooks/bash_guard.py` and
+  `.claude/settings.json`, was engine-approved with no human (REVIEW-16's
+  raw-socket repro: `foo` and `bar`, both `decided_by=playbook`, `check_kit`
+  `ok=False` on each), nor that one consultation could file any number of kits
+  of any name and have each approved (should-fix 1). H-035.
+- §2's "the daemon refuses … an escaping zip" holds only for the local-header
+  names the judge read: an entry whose Unicode Path extra field (0x7075) named
+  `.git/hooks/pre-commit` while its local header named `docs/notes.md` passed
+  `apply_from_zip`, and `unzip -o` wrote the hook (REVIEW-16 blocker 2). §3.2
+  did not name that hole either. H-036, code in mission 17 U2.
+- §3.8 says docs/PLAYBOOK.md's closing copy "must equal §10 byte for byte".
+  No test binds that: `tests/test_docs.py` checks only that each fixture line
+  appears somewhere in the doc; only `tests/test_playbook.py` compares the
+  fixture with §10's block exactly (should-fix 8; H-034's appended correction).

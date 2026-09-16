@@ -3047,6 +3047,25 @@ def test_each_shipped_playbook_notifies_a_killed_task_and_stops_a_failed_job(pat
     assert thens("monitor.orphan_processes") == ["stop"], path.name
 
 
+#: Words that name who or what killed a task. §32: the detector cannot tell a reap
+#: from a `TaskStop` or from a backgrounded long foreground command that was reaped.
+CAUSE_WORDS = ("harness", "reap", "taskstop", "timeout", "timed out", " by ")
+
+
+@pytest.mark.parametrize("path", SHIPPED_PLAYBOOKS, ids=lambda path: path.name)
+def test_each_shipped_playbook_task_killed_message_names_no_cause(path: Path) -> None:
+    """§33 (review 16 should-fix 8), from §32's last paragraph: the detector cannot
+    tell who killed a task, so the `monitor.task_killed` rule's message in each
+    shipped playbook names no cause (none of `CAUSE_WORDS`)."""
+    book = load_playbook(path)
+    assert book is not None, f"{path} is missing"
+    messages = [rule.message or "" for rule in book.rules if rule.on == "monitor.task_killed"]
+    assert messages, f"{path.name} has no monitor.task_killed rule"
+    for message in messages:
+        named = [word for word in CAUSE_WORDS if word in message.lower()]
+        assert not named, f"{path.name}: {message!r} names a cause ({named})"
+
+
 @pytest.mark.parametrize("path", SHIPPED_PLAYBOOKS, ids=lambda path: path.name)
 def test_each_shipped_playbook_under_the_engine_keeps_going_on_a_killed_task(
     path: Path, tmp_home: Path, workdir: Path
