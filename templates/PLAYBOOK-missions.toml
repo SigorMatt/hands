@@ -6,8 +6,27 @@ version = 1
 name = "<project>-missions"
 kickoff = "Read meta/BUILDER-N-PROMPT.md and execute the mission below its divider."
 
+# The architect role (DESIGN §31). With `[roles.architect]` in the config, handsd
+# starts a headless architect for one consultation on each review outcome: it
+# reads the review and meta/ROADMAP.md from its own clone, writes the next kit,
+# checks it, and files it with `hands kit file`. To run the series that way,
+# uncomment every line between the `>>> architect` markers below (strip one
+# "# " from each) and read docs/INTEGRATION.md "The architect role" first:
+# approving an `autonomous` playbook approves every apply the architect files
+# under it, with no further gate.
+# >>> architect
+# architect = "role"
+# autonomous = true
+# gate_failures = 2
+# escalate_on = ["blocker-unanswered", "milestone-missing", "budget-exhausted"]
+# <<< architect
+
 [limits]
 max_resumes = 2
+
+# >>> architect
+# max_architect_consults = 12    # architect consultations per series (§31)
+# <<< architect
 
 # The builder finished a mission → cold review by aux, cold (no context).
 [[rule]]
@@ -18,7 +37,9 @@ role = "aux"
 context = "clear"
 prompt = "Read meta/REVIEW-PROTOCOL.md and review mission {n} of this repository: every commit after the last review: commit on origin/main (the protocol says how to find the base). Follow the protocol exactly, commit only meta/reviews/REVIEW-{n}.md, and begin your reply with the VERDICT line it specifies."
 
-# A kit was applied: worth a note, not a stop.
+# A kit was applied: worth a note, not a stop. Under an autonomous architect
+# series this rule does not fire: the engine sends `[series] kickoff` itself on
+# the same verdict, ahead of every rule in this file (§31).
 [[rule]]
 on = "builder.done"
 verdict = '^VERDICT: kit applied'
@@ -45,6 +66,20 @@ message = "Builder finished without a recognised verdict"
 
 # Review outcomes: no auto-continue in this series; every outcome is a stop
 # with a distinct message, so the notification says which.
+
+# The review outcome goes to the architect, which writes the next kit or
+# escalates (§31). It stands before the `aux.done` rules below on purpose: §10
+# fires the first rule that matches, and under autonomy this is the one that
+# should. The architect's own reply is not an event a rule can match — the
+# engine reads its verdict itself.
+# >>> architect
+# [[rule]]
+# on = "aux.done"
+# verdict = '^VERDICT: review mission (?P<n>\d+) blockers='
+# then = "consult"
+# role = "architect"
+# <<< architect
+
 [[rule]]
 on = "aux.done"
 verdict = '^VERDICT: review mission (?P<n>\d+) blockers=0'

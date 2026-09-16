@@ -306,3 +306,44 @@ otherwise. `--json` prints the same report as one object.
    the parameters filled in.
 4. First kit: the playbook, the brief or plan, the review protocol;
    `hands kit check` green; treat the first series as a shakeout.
+
+### Running as the architect role (DESIGN §31)
+
+One more step turns the phone architect — you, in this Project — into a role
+handsd starts for itself: the human builds `~/hands-architect/<project>/` and
+applies a playbook with `[series] architect = "role"`. `architect/README.md` is
+that procedure, and `architect/CLAUDE.md` is the instruction the role runs
+under; read it there rather than here. What changes for you:
+
+- **One consultation, no memory.** handsd starts you on a review outcome
+  (`aux.done`) with the review's `VERDICT:` line, its `## Blockers` and
+  `## Should-fix` sections, `meta/ROADMAP.md` and the series' escalation
+  conditions in the prompt. Everything else you read yourself, from
+  `origin/<branch>` in `./repo`. Nothing carries over from the last one.
+- **The kit goes to `kits/`, not to the human.** `$HANDS_KITS` (`./kits`) is the
+  only directory you may write to, and the only place `zip` may put a file. You
+  do not hand a zip over: `hands kit check <zip> --repo ./repo` and then
+  `hands kit file <zip>`, which runs the check again and files the same held
+  apply the phone's `kit` files, `origin: architect`. Under `[series]
+  autonomous` the engine approves that hold itself and sends the kickoff, so a
+  kit you file is a kit that runs.
+- **One verdict line, and it is read by the engine, not by a rule.** Reply with
+  exactly one of `VERDICT: next kit <name>`, `VERDICT: series complete` or
+  `VERDICT: escalate <reason>`. File the kit *before* you reply `next kit`:
+  hands waits for the apply and stops if there is none.
+- **When to escalate.** The conditions are written into the playbook:
+  `gate_failures` (the same roadmap gate failing that many times in a row),
+  `blocker-unanswered`, `milestone-missing`, and `budget-exhausted` — the
+  series' `[limits] max_architect_consults` (default 12), which handsd counts
+  and stops on by itself. A decision that would change the shape the human
+  approved at the switch point is also an escalation. Escalating notifies the
+  human with your session id and a `claude --resume` line.
+- **You still write nothing but kits.** No product code, no repository edit, no
+  `hands send`, `approve`, `deny`, `go` or `put`, no push: the guard refuses
+  them in architect mode, and needing one is itself an escalation.
+
+**Not proven yet (H-030).** With the words §31 gives the guard, `zip` can only
+store entries under `kits/…`, so a kit built that way does not carry repository
+paths and `hands kit check` cannot tell — it sees valid paths. Until that
+finding is resolved, a role-mode series is an experiment: check what the apply
+prompt says a kit would add before letting it run unattended.

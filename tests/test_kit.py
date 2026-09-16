@@ -1569,3 +1569,29 @@ def test_the_phone_and_the_architect_file_one_apply_with_two_origins() -> None:
         "gate": "apply m16",
         "origin": "architect",
     }
+
+
+def test_kit_file_says_who_releases_the_hold_not_that_a_human_decides_it(
+    repo: Path, kits: Path
+) -> None:
+    """U4's report (§31, §8): the printed line said "a human decides it", which is
+    false in exactly the case §31 built — under `[series] architect = "role"` with
+    `autonomous = true` the engine approves the record it has just been told about,
+    `decided_by: playbook`. The line names both releases and asserts neither.
+
+    `file_run` is called directly with a stand-in `send`, so this pins the words
+    the architect reads, not the daemon's path (which the test above drives).
+    """
+    kit = zip_kit(kits / "m16.zip", good_kit())
+    out = io.StringIO()
+    filed = {"id": "20260916-000001-abcd", "state": "held", "role": "builder"}
+    code = kit_mod.file_run(
+        str(kit), builder_cwd=repo, send=lambda params: filed, out=out, as_json=False
+    )
+    text = out.getvalue()
+    assert code == 0, text
+    assert "a human decides it" not in strip_paths(text), text
+    assert "kit file: filed 20260916-000001-abcd as a held builder job" in strip_paths(text), text
+    assert "(gate: apply m16, origin: architect)" in strip_paths(text), text
+    for said in ("hands approve", "the engine", "autonomous"):
+        assert said in strip_paths(text), f"the filed line does not say {said!r}: {text}"

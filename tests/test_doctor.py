@@ -1435,3 +1435,210 @@ def test_a_driver_role_with_a_permission_bypass_fails_doctor(
     rows = {check.name: check for check in run_checks(config)}
     assert rows["role driver"].status == FAIL
     assert "permission_flags" in strip_paths(rows["role driver"].detail)
+
+
+# -------------------------------------------- the architect role (§31, U6)
+
+ARCHITECT_SETTINGS = Path(__file__).parents[1] / "architect" / "settings.json"
+
+
+def architect_dir(
+    tmp_path: Path,
+    *,
+    clone: bool = True,
+    guard: bool = True,
+    settings: bool = True,
+    kits: bool = True,
+) -> Path:
+    """`~/hands-architect/<project>` as architect/README.md builds it (§31)."""
+    d = tmp_path / "hands-architect"
+    d.mkdir(exist_ok=True)
+    if kits:
+        (d / "kits").mkdir(exist_ok=True)
+    if clone:
+        (d / "repo" / ".git").mkdir(parents=True, exist_ok=True)
+    if guard:
+        (d / ".claude" / "hooks").mkdir(parents=True, exist_ok=True)
+        shutil.copy(GUARD, d / ".claude" / "hooks" / "bash_guard.py")
+    if settings:
+        (d / ".claude").mkdir(parents=True, exist_ok=True)
+        shutil.copy(ARCHITECT_SETTINGS, d / ".claude" / "settings.json")
+    return d
+
+
+def add_architect(path: Path, cwd: Path, extra: str = "") -> None:
+    path.write_text(path.read_text() + f'\n[roles.architect]\ncwd = "{cwd}"\n{extra}\n')
+
+
+def test_no_architect_role_is_a_row_saying_so_and_not_a_failure(
+    tmp_home: Path, tmp_path: Path, fake_mode: None
+) -> None:
+    write_config(tmp_home, tmp_path)
+    code, found = checks()
+    assert code == 0
+    row = found["role architect"]
+    assert row["status"] == "ok"
+    assert "no [roles.architect]" in strip_paths(row["detail"])
+
+
+def test_a_config_with_roles_architect_reports_the_role(
+    tmp_home: Path, tmp_path: Path, fake_mode: None
+) -> None:
+    """The mission's acceptance (§31): `hands doctor` on a config carrying
+    `[roles.architect]` and nothing else new reports the role — cwd, clone, kits,
+    both matchers and the guard's mode — as it reports the driver role."""
+    d = architect_dir(tmp_path)
+    add_architect(write_config(tmp_home, tmp_path), d)
+    code, out, err = run()
+    assert code == 0, f"{out}\n{err}"
+    row = strip_paths(text_row(out, "role architect"))
+    code, found = checks()
+    assert code == 0
+    assert found["role architect"]["status"] == "ok", found["role architect"]
+    detail = strip_paths(found["role architect"]["detail"])
+    for text in (row, detail):
+        assert "<path>/hands-architect  model opus" in strip_paths(text)
+        assert "clone <path>/hands-architect/repo" in strip_paths(text)
+        assert "kits <path>/hands-architect/kits" in strip_paths(text)
+        assert "guard <path>/hands-architect/.claude/hooks/bash_guard.py" in strip_paths(text)
+        assert "architect mode (HANDS_ROLE=architect" in strip_paths(text)
+        assert "permission_flags (none)" in strip_paths(text)
+        assert "names the hook" in strip_paths(text)
+        assert "self-test green in architect mode (HANDS_ROLE=architect)" in strip_paths(text)
+        assert "--write" in strip_paths(text)
+    # the generic role row is not printed for the architect: it has its own
+    assert list(found).count("role architect") == 1
+
+
+def test_an_architect_role_without_its_kits_directory_is_a_warning(
+    tmp_home: Path, tmp_path: Path, fake_mode: None
+) -> None:
+    """§31: `HANDS_KITS` is `<cwd>/kits` whether or not it exists — the role can
+    `mkdir -p` it — so a missing one is worth saying and is not a failure."""
+    d = architect_dir(tmp_path, kits=False)
+    add_architect(write_config(tmp_home, tmp_path), d)
+    code, found = checks()
+    assert code == 0
+    row = found["role architect"]
+    assert row["status"] == "warn", row
+    assert "no kits directory" in strip_paths(row["detail"])
+
+
+def test_an_architect_role_without_its_clone_is_a_warning(
+    tmp_home: Path, tmp_path: Path, fake_mode: None
+) -> None:
+    d = architect_dir(tmp_path, clone=False)
+    add_architect(write_config(tmp_home, tmp_path), d)
+    code, found = checks()
+    assert code == 0
+    row = found["role architect"]
+    assert row["status"] == "warn", row
+    assert "no clone" in strip_paths(row["detail"])
+
+
+def test_an_architect_role_without_its_guard_fails_doctor(
+    tmp_home: Path, tmp_path: Path, fake_mode: None
+) -> None:
+    d = architect_dir(tmp_path, guard=False)
+    add_architect(write_config(tmp_home, tmp_path), d)
+    code, found = checks()
+    assert code == 1
+    row = found["role architect"]
+    assert row["status"] == "fail", row
+    assert "no guard" in strip_paths(row["detail"])
+
+
+WRITE_GUARD = 'python3 "$CLAUDE_PROJECT_DIR"/.claude/hooks/bash_guard.py --write'
+BASH_GUARD = 'python3 "$CLAUDE_PROJECT_DIR"/.claude/hooks/bash_guard.py'
+
+
+def _architect_settings(*entries: tuple[str, str]) -> str:
+    return json.dumps({"hooks": {"PreToolUse": [
+        {"matcher": matcher, "hooks": [{"type": "command", "command": command}]}
+        for matcher, command in entries]}})  # fmt: skip
+
+
+@pytest.mark.parametrize(
+    "entries",
+    [
+        ((("Bash", BASH_GUARD),)),  # no write matcher at all
+        ((("Bash", BASH_GUARD), ("Write|Edit|MultiEdit", BASH_GUARD))),  # no --write
+        ((("Bash", BASH_GUARD), ("Write|Edit|MultiEdit", ALLOW_ALL))),
+        ((("Bash", BASH_GUARD), ("Write|Edit|MultiEdit", WRITE_GUARD + " --selftest"))),
+        ((("Bash", BASH_GUARD), ("Write", WRITE_GUARD))),  # Edit and MultiEdit unguarded
+        ((("Bash", BASH_GUARD), ("Write|Edit|MultiEdit", "python3 other_hook.py --write"))),
+    ],
+    ids=["none", "no-write-flag", "allow-all", "extra-argument", "write-only", "other-file"],
+)
+def test_an_architect_whose_write_matcher_is_not_the_guard_fails_doctor(
+    tmp_home: Path, tmp_path: Path, fake_mode: None, entries: tuple[tuple[str, str], ...]
+) -> None:
+    """§31: the second `PreToolUse` matcher (`Write|Edit|MultiEdit` running the
+    guard with `--write`) is judged with the rigour U2 gave the Bash one — a write
+    hook that is not the guard is the architect writing anywhere it likes."""
+    d = architect_dir(tmp_path, settings=False)
+    (d / ".claude" / "settings.json").write_text(_architect_settings(*entries), encoding="utf-8")
+    add_architect(write_config(tmp_home, tmp_path), d)
+    code, found = checks()
+    row = found["role architect"]
+    assert code == 1 and row["status"] == "fail", row
+    assert "--write" in strip_paths(row["detail"])
+
+
+def test_an_architect_whose_second_bash_hook_is_not_the_guard_fails_doctor(
+    tmp_home: Path, tmp_path: Path, fake_mode: None
+) -> None:
+    """§31 (review 14 should-fix 3) on the architect's row: every `PreToolUse`
+    `Bash` hook is judged here too, not only the first."""
+    d = architect_dir(tmp_path, settings=False)
+    (d / ".claude" / "settings.json").write_text(
+        _architect_settings(
+            ("Bash", BASH_GUARD),
+            ("Bash", ALLOW_ALL),
+            ("Write|Edit|MultiEdit", WRITE_GUARD),
+        ),
+        encoding="utf-8",
+    )
+    add_architect(write_config(tmp_home, tmp_path), d)
+    code, found = checks()
+    row = found["role architect"]
+    assert code == 1 and row["status"] == "fail", row
+    assert "does not name the hook" in strip_paths(row["detail"])
+    assert repr(ALLOW_ALL) in strip_paths(row["detail"])
+
+
+def test_the_shipped_architect_settings_pass_both_matchers(
+    tmp_home: Path, tmp_path: Path, fake_mode: None
+) -> None:
+    """`architect/settings.json` as it ships is what the row is written against."""
+    d = architect_dir(tmp_path)
+    add_architect(write_config(tmp_home, tmp_path), d)
+    code, found = checks()
+    assert code == 0 and found["role architect"]["status"] == "ok", found["role architect"]
+
+
+def test_an_architect_role_with_a_permission_bypass_fails_doctor(
+    tmp_home: Path, tmp_path: Path, fake_mode: None
+) -> None:
+    """§31: `permission_flags` empty, so settings.json and the guard are the law.
+    The config does not load (the `config` row fails), and a `Config` built by hand
+    with the flag fails the `role architect` row itself."""
+    d = architect_dir(tmp_path)
+    path = write_config(tmp_home, tmp_path)
+    base = path.read_text()
+    add_architect(path, d)
+    good = load_config("demo")
+    path.write_text(base)
+    add_architect(path, d, 'permission_flags = "--dangerously-skip-permissions"')
+    code, found = checks()
+    assert code == 1
+    assert found["config"]["status"] == "fail"
+    assert "permission_flags" in strip_paths(found["config"]["detail"])
+
+    bypass = dataclasses.replace(
+        good.roles["architect"], permission_flags="--dangerously-skip-permissions"
+    )
+    config = dataclasses.replace(good, roles={**good.roles, "architect": bypass})
+    rows = {check.name: check for check in run_checks(config)}
+    assert rows["role architect"].status == FAIL
+    assert "permission_flags" in strip_paths(rows["role architect"].detail)

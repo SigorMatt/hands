@@ -1306,9 +1306,21 @@ def file_run(
         print(check.line(), file=out)
     print(f"commit message: {plan.commit_message}", file=out)
     print(report.kit_md_note, file=out)
+    # The state is the record as the daemon answered, and the hold's release is
+    # not this command's to predict: `hands approve|deny` (or the phone's buttons)
+    # under an ordinary playbook, and the engine itself — `decided_by: playbook`,
+    # moments after this line is printed — under one that sets [series] architect =
+    # "role" with autonomous = true (§8, §31). Saying "a human decides it" was
+    # false in exactly the case §31 built.
     print(
         f"kit file: filed {job['id']} as a {job['state']} builder job "
-        f"(gate: apply {plan.name}, origin: architect); a human decides it",
+        f"(gate: apply {plan.name}, origin: architect)",
+        file=out,
+    )
+    print(
+        "the hold is released by a human (`hands approve|deny`, or the phone's buttons), or "
+        'by the engine itself when the playbook in force sets [series] architect = "role" '
+        "and autonomous = true (§8, §31)",
         file=out,
     )
     return 0

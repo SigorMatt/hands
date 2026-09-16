@@ -1598,3 +1598,38 @@ cli|driver|phone|playbook`, after which the assertion goes back to equality;
 DESIGN.md is the architect's file, so this unit did not make that edit.
 
 Status: open (worked around in tests/test_docs.py by mission 15 U4)
+
+---
+
+## H-032 — the driver role refuses a direct `hands send`; the architect role does not
+
+Severity: low · Component: `src/hands/api.py` (`Api.send`) against DESIGN §31
+(with §27); `docs/INTEGRATION.md`
+Filed by: mission 15 U6, from documenting how the role is started.
+
+Symptom. §27 says the driver role is "started by `handsd` only through a
+`consult` action", and `Api.send` enforces it by name: `role == "driver"` is
+refused with that sentence. §31 gives the architect the same shape — a role
+handsd starts "for one consultation" — and nothing in the code says so. A
+playbook cannot reach it (a `send` rule's role is `builder` or `aux`, checked at
+load) and the phone cannot (`go` sends the kickoff to the builder), so the one
+route is a human typing `hands send --role architect "<anything>"` at the
+laptop. That starts an architect session outside any consultation, with the
+guard's architect mode, its `HANDS_KITS` write surface and `hands kit file` —
+which, under an `autonomous` playbook, files an apply the engine then approves.
+
+Why this unit did not close it. U6 is the documentation unit; the refusal is
+product behaviour, one line in `Api.send` with a test beside the driver's, and
+§31 does not write the sentence §27 wrote, so the shape of the refusal (refuse
+outright, as the driver's is, or accept it as the human's own laptop authority)
+is a choice this unit should not make alone. `docs/INTEGRATION.md` says what is
+true today and names this memo rather than claiming a confinement that is not
+there.
+
+Direction. Simplest: extend the `role == "driver"` refusal in `Api.send` to
+`CONSULT_ROLES` (`hands.config` already names both), with §31 in the message and
+a test that both roles are refused. If instead a laptop send is meant to stay
+possible, say so in §31 and the asymmetry is closed by a sentence rather than a
+line of code.
+
+Status: open (found by mission 15 U6; no code changed)

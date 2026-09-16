@@ -51,8 +51,11 @@ from typing import Any
 import hands.monitor
 import hands.runner
 from hands.config import (
+    ARCHITECT_ROLE,
     BG_WAIT_CEILING_ENV,
     DRIVER_ROLE,
+    GUARDED_ROLES,
+    KITS_ENV,
     ROLE_ENV,
     Config,
     RoleConfig,
@@ -87,6 +90,12 @@ GUARD_HOOK = ".claude/hooks/bash_guard.py"
 #: §30: the one interpreter a driver hook command may name before the guard's
 #: path; the command driver/settings.json ships is `python3 <guard>`.
 GUARD_INTERPRETER = "python3"
+#: §31: the architect's second `PreToolUse` matcher and the one argument its hook
+#: command carries — `python3 <guard> --write`, the write judge, which the driver
+#: has no equivalent of. The matcher `architect/settings.json` ships selects all
+#: three tools; doctor asks that each of them be judged, however it is spelled.
+WRITE_FLAG = "--write"
+WRITE_TOOLS: tuple[str, ...] = ("Write", "Edit", "MultiEdit")
 #: §30: a hook command containing any of these (outside the two
 #: `$CLAUDE_PROJECT_DIR` spellings) is more than `python3 <guard>` to a shell.
 _HOOK_SHELL_CHARS = frozenset(";&|<>`()\\*?[]{}!~#$\n\r")
@@ -141,8 +150,10 @@ def run_checks(
     """
     found = [_config_check(config)]
     found += [_claude_check(config)]
-    found += [_role_check(role) for role in config.roles.values() if role.name != DRIVER_ROLE]
-    found += [_driver_check(config)]
+    found += [
+        _role_check(role) for role in config.roles.values() if role.name not in GUARDED_ROLES
+    ]
+    found += [_driver_check(config), _architect_check(config)]
     found += [_roots_check(config), _ops_check(config), _isolation_check(config)]
     found += [_playbook_check(config), _notifications_check(config), _phone_check(config)]
     found += [_go_check(config), _kit_check(config), _who_check(config)]
@@ -489,29 +500,11 @@ def _driver_check(config: Config) -> Check:
     # only when they name none is the default the one reported.
     hook = named if named is not None else role.cwd / GUARD_HOOK
     mode = f"{ROLE_ENV}={role.spawn_env[ROLE_ENV]}"
-    if not hook.is_file():
-        guard = f"no guard at {hook}: nothing narrows the role's Bash calls (driver/README.md)"
+    guard, green = _guard_selftest(
+        hook, cwd=role.cwd, env={**os.environ, **role.spawn_env}, mode=mode, words="role mode"
+    )
+    if not green:
         failures.append(guard)
-    else:
-        probe = _run_probe(
-            [shutil.which("python3") or sys.executable, str(hook), "--selftest"],
-            cwd=role.cwd,
-            env={**os.environ, **role.spawn_env},
-        )
-        if probe is not None and probe.code == 0 and not probe.timed_out:
-            guard = f"guard {hook}\nself-test green in role mode ({mode})"
-        else:
-            said = (
-                "could not be run" if probe is None
-                else "timed out" if probe.timed_out
-                else f"exit {probe.code}"
-            )
-            tail = "" if probe is None else "\n" + "\n".join(probe.text.strip().splitlines()[-5:])
-            guard = (
-                f"guard {hook}\nself-test in role mode ({mode}) is not green ({said}): "
-                f"copy driver/hooks/bash_guard.py again (§28){tail}"
-            )
-            failures.append(guard)
 
     detail = (
         f"{role.cwd}  model {role.model}; permission_flags (none)"
@@ -520,6 +513,142 @@ def _driver_check(config: Config) -> Check:
     )
     status = FAIL if failures else WARN if warnings else OK
     return Check(name, status, detail)
+
+
+def _architect_check(config: Config) -> Check:
+    """§31: the architect role — cwd, its clone, its kits directory, both hook
+    matchers and the guard's mode — and no bypass.
+
+    Written as closely to `_driver_check` as the difference allows, and reads the
+    same way in the report. Two things the driver has no equivalent of:
+
+    - `kits/` beside the clone. The runner sets `HANDS_KITS` to `<cwd>/kits`
+      whether or not it exists (the role may `mkdir -p` it), so a missing one
+      warns and never fails — but a human who never made it has not finished
+      `architect/README.md`, and the row says so.
+    - a **second** `PreToolUse` matcher: `Write|Edit|MultiEdit` running the guard
+      with `--write` (§31). It is judged with the rigour U2 gave the Bash hook —
+      every entry that selects a writing tool must run exactly `python3 <guard>
+      --write`, and each of `Write`, `Edit` and `MultiEdit` must be selected by
+      one of them — because a write hook that is not the guard is the architect
+      writing wherever it likes, which is the whole of what confines the role.
+    """
+    name = f"role {ARCHITECT_ROLE}"
+    role = config.roles.get(ARCHITECT_ROLE)
+    if role is None:
+        return Check(
+            name,
+            OK,
+            "no [roles.architect]: no consult can start an architect role (§31); the "
+            "architect the human talks to on the phone is unaffected",
+        )
+    if role.permission_flags:
+        return Check(
+            name,
+            FAIL,
+            f"{role.cwd}  permission_flags {role.permission_flags}\n§31: the architect role "
+            "runs with permission_flags empty, so settings.json and the Bash guard are "
+            "the law; remove it from [roles.architect]",
+        )
+    if not role.cwd.is_dir():
+        return Check(name, FAIL, f"cwd {role.cwd} does not exist; §31 [roles.architect] cwd")
+    warnings: list[str] = []
+    failures: list[str] = []
+    found = driver_clone(role.cwd)  # §31: the same path the job gets as HANDS_CLONE
+    if found is not None:
+        clone = f"clone {found}"
+    else:
+        clone = f"no clone: neither {role.cwd / 'repo'} nor {role.cwd} is a git repository"
+        warnings.append(clone)
+
+    # The runner's own expression (`hands.runner.job_env`), so the row names the
+    # path the job really gets as `HANDS_KITS`.
+    kits_dir = role.cwd / "kits"
+    if kits_dir.is_dir():
+        kits = f"kits {kits_dir}"
+    else:
+        kits = (
+            f"no kits directory at {kits_dir}: {KITS_ENV} still names it and the role may "
+            "`mkdir -p` it, but nothing has been written there yet (architect/README.md)"
+        )
+        warnings.append(kits)
+
+    settings_path = role.cwd / ".claude" / "settings.json"
+    named, problem = _settings_name_the_guard(settings_path, role.cwd)
+    if problem is None:
+        settings = f"settings {settings_path} names the hook"
+    else:
+        settings = (
+            f"settings {settings_path} does not name the hook ({problem}): copy "
+            "architect/settings.json again (§31)"
+        )
+        failures.append(settings)
+
+    _write_named, write_problem = _settings_name_the_write_guard(settings_path, role.cwd)
+    if write_problem is None:
+        write = f"write matcher: {', '.join(WRITE_TOOLS)} run the guard with {WRITE_FLAG}"
+    else:
+        write = (
+            f"write matcher ({write_problem}): every PreToolUse hook for "
+            f"{', '.join(WRITE_TOOLS)} must be exactly `{GUARD_INTERPRETER} <path to "
+            f"{GUARD_HOOK}> {WRITE_FLAG}`, and all three must be judged; copy "
+            "architect/settings.json again (§31)"
+        )
+        failures.append(write)
+
+    # §29: the self-test runs on the file the settings name, not on a default path.
+    hook = named if named is not None else role.cwd / GUARD_HOOK
+    mode = f"{ROLE_ENV}={role.spawn_env[ROLE_ENV]}"
+    guard, green = _guard_selftest(
+        hook,
+        cwd=role.cwd,
+        env={**os.environ, **role.spawn_env, KITS_ENV: str(kits_dir)},
+        mode=mode,
+        words="architect mode",
+    )
+    if not green:
+        failures.append(guard)
+
+    detail = (
+        f"{role.cwd}  model {role.model}; permission_flags (none)"
+        f"\n{clone}\n{kits}\n{settings}\n{write}\n{guard}"
+        f"\nguard mode: architect mode ({mode} in every architect-role job's environment; "
+        f"§31), and every write confined to {KITS_ENV}={kits_dir}"
+    )
+    status = FAIL if failures else WARN if warnings else OK
+    return Check(name, status, detail)
+
+
+def _guard_selftest(
+    hook: Path, *, cwd: Path, env: dict[str, str], mode: str, words: str
+) -> tuple[str, bool]:
+    """`<hook> --selftest`, run in the role's own environment (§28, §29, §31): the
+    `guard` lines of the row, and whether it was green.
+
+    The one place the guard's self-test is run, so the driver's row and the
+    architect's cannot drift apart in how hard they look.
+    """
+    if not hook.is_file():
+        return (
+            f"no guard at {hook}: nothing narrows the role's Bash calls (driver/README.md)",
+            False,
+        )
+    probe = _run_probe(
+        [shutil.which("python3") or sys.executable, str(hook), "--selftest"], cwd=cwd, env=env
+    )
+    if probe is not None and probe.code == 0 and not probe.timed_out:
+        return f"guard {hook}\nself-test green in {words} ({mode})", True
+    said = (
+        "could not be run" if probe is None
+        else "timed out" if probe.timed_out
+        else f"exit {probe.code}"
+    )
+    tail = "" if probe is None else "\n" + "\n".join(probe.text.strip().splitlines()[-5:])
+    return (
+        f"guard {hook}\nself-test in {words} ({mode}) is not green ({said}): "
+        f"copy driver/hooks/bash_guard.py again (§28){tail}",
+        False,
+    )
 
 
 def _settings_name_the_guard(path: Path, cwd: Path) -> tuple[Path | None, str | None]:
@@ -543,18 +672,9 @@ def _settings_name_the_guard(path: Path, cwd: Path) -> tuple[Path | None, str | 
     not select `Bash` (the architect's `Write|Edit|MultiEdit` hook, §31) are not
     Bash hooks and are not judged. With several Bash hooks that all run a guard
     file, the first is the one self-tested."""
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except FileNotFoundError:
-        return None, "no such file"
-    except (OSError, ValueError) as exc:
-        return None, f"not readable JSON: {type(exc).__name__}"
-    if isinstance(data, dict) and data.get("disableAllHooks") not in (None, False):
-        return None, '"disableAllHooks" is set, so no hook runs'
-    hooks = data.get("hooks") if isinstance(data, dict) else None
-    entries = hooks.get("PreToolUse") if isinstance(hooks, dict) else None
-    if not isinstance(entries, list):
-        return None, "no hooks.PreToolUse"
+    entries, unreadable = _pretooluse(path)
+    if entries is None:
+        return None, unreadable
     guards: list[Path] = []
     offenders: list[str] = []
     for entry in entries:
@@ -583,8 +703,78 @@ def _settings_name_the_guard(path: Path, cwd: Path) -> tuple[Path | None, str | 
     return guards[0], None
 
 
-def _guard_command_path(command: str, cwd: Path) -> Path | None:
-    """The guard file `command` runs as `python3 <guard>` and nothing else (§30), or None."""
+def _settings_name_the_write_guard(path: Path, cwd: Path) -> tuple[Path | None, str | None]:
+    """§31: the architect's second matcher — `Write|Edit|MultiEdit` running
+    `python3 <guard> --write` — and the guard file it names; or None and why not.
+
+    The Bash rule of `_settings_name_the_guard`, applied to the tools that write:
+    *every* `PreToolUse` hook whose matcher selects one of `WRITE_TOOLS` must be
+    exactly the guard with `--write` (one that is not is a second answer to the
+    same tool call), and each of the three must be selected by one of them (a
+    matcher naming only `Write` leaves `Edit` and `MultiEdit` unjudged, and the
+    architect edits a file it has already written). A matcher that selects
+    everything (`*`) selects Bash too, where the guard takes no `--write`; such a
+    hook cannot satisfy both rules, and failing is the safe direction.
+    """
+    entries, unreadable = _pretooluse(path)
+    if entries is None:
+        return None, unreadable
+    guards: list[Path] = []
+    offenders: list[str] = []
+    covered: set[str] = set()
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        matcher = entry.get("matcher")
+        selects = [tool for tool in WRITE_TOOLS if _matches_tool(matcher, tool)]
+        if not selects:
+            continue
+        for hook in entry.get("hooks") or []:
+            if not (
+                isinstance(hook, dict)
+                and hook.get("type") == "command"
+                and isinstance(hook.get("command"), str)
+            ):
+                continue
+            command: str = hook["command"]
+            named = _guard_command_path(command, cwd, flag=WRITE_FLAG)
+            if named is None:
+                offenders.append(command)
+            else:
+                guards.append(named)
+                covered.update(selects)
+    if offenders:
+        return None, f"the hook command {offenders[0]!r} does not run the guard with {WRITE_FLAG}"
+    missing = [tool for tool in WRITE_TOOLS if tool not in covered]
+    if missing:
+        return None, (
+            f"no PreToolUse command hook for {', '.join(missing)} runs {GUARD_HOOK} {WRITE_FLAG}"
+        )
+    return guards[0], None
+
+
+def _pretooluse(path: Path) -> tuple[list[Any] | None, str | None]:
+    """The `hooks.PreToolUse` entries of the settings file at `path`, or None and
+    why there are none to judge (§28, §30)."""
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return None, "no such file"
+    except (OSError, ValueError) as exc:
+        return None, f"not readable JSON: {type(exc).__name__}"
+    if isinstance(data, dict) and data.get("disableAllHooks") not in (None, False):
+        return None, '"disableAllHooks" is set, so no hook runs'
+    hooks = data.get("hooks") if isinstance(data, dict) else None
+    entries = hooks.get("PreToolUse") if isinstance(hooks, dict) else None
+    if not isinstance(entries, list):
+        return None, "no hooks.PreToolUse"
+    return entries, None
+
+
+def _guard_command_path(command: str, cwd: Path, *, flag: str | None = None) -> Path | None:
+    """The guard file `command` runs as `python3 <guard>` and nothing else (§30), or
+    None. With `flag` (§31's `--write`), that word and only that word follows the
+    path: the write matcher's command is `python3 <guard> --write`."""
     plain = command.replace("${CLAUDE_PROJECT_DIR}", "").replace("$CLAUDE_PROJECT_DIR", "")
     if any(char in _HOOK_SHELL_CHARS for char in plain):
         return None
@@ -592,7 +782,10 @@ def _guard_command_path(command: str, cwd: Path) -> Path | None:
         words = shlex.split(command)
     except ValueError:
         return None
-    if len(words) != 2 or words[0] != GUARD_INTERPRETER:
+    wanted = 2 if flag is None else 3
+    if len(words) != wanted or words[0] != GUARD_INTERPRETER:
+        return None
+    if flag is not None and words[2] != flag:
         return None
     word = words[1].replace("${CLAUDE_PROJECT_DIR}", str(cwd))
     word = word.replace("$CLAUDE_PROJECT_DIR", str(cwd))
@@ -604,14 +797,20 @@ def _guard_command_path(command: str, cwd: Path) -> Path | None:
 def _matches_bash(matcher: Any) -> bool:
     """A hook matcher that selects the Bash tool: absent, empty, `*`, or a pattern
     matching `Bash` whole."""
+    return _matches_tool(matcher, "Bash")
+
+
+def _matches_tool(matcher: Any, tool: str) -> bool:
+    """A hook matcher that selects `tool`: absent, empty, `*`, or a pattern matching
+    the name whole (§28, §31 — the architect's `Write|Edit|MultiEdit`)."""
     if matcher is None or matcher in ("", "*"):
         return True
     if not isinstance(matcher, str):
         return False
     try:
-        return re.fullmatch(matcher, "Bash") is not None
+        return re.fullmatch(matcher, tool) is not None
     except re.error:
-        return matcher == "Bash"
+        return matcher == tool
 
 
 def _roots_check(config: Config) -> Check:

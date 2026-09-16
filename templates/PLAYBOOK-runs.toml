@@ -6,9 +6,28 @@ version = 1
 name = "<project>-<series>"
 kickoff = "Execute WORKPLAN.md run 1"
 
+# The architect role (DESIGN §31). With `[roles.architect]` in the config, handsd
+# starts a headless architect for one consultation on each review outcome: it
+# reads the review and meta/ROADMAP.md from its own clone, writes the next kit,
+# checks it, and files it with `hands kit file`. To run the series that way,
+# uncomment every line between the `>>> architect` markers below (strip one
+# "# " from each) and read docs/INTEGRATION.md "The architect role" first:
+# approving an `autonomous` playbook approves every apply the architect files
+# under it, with no further gate.
+# >>> architect
+# architect = "role"
+# autonomous = true
+# gate_failures = 2
+# escalate_on = ["blocker-unanswered", "milestone-missing", "budget-exhausted"]
+# <<< architect
+
 [limits]
 auto_runs = [2, 3]        # runs already grouped in WORKPLAN.md §2; anything else stops
 max_resumes = 3
+
+# >>> architect
+# max_architect_consults = 12    # architect consultations per series (§31)
+# <<< architect
 
 # Run finished → cold review on the branch.
 [[rule]]
@@ -18,6 +37,19 @@ then = "send"
 role = "aux"
 context = "clear"
 prompt = "Review WORKPLAN.md commits since the last review: commit on this branch, per WORKPLAN.md §0.2. Begin your reply with: VERDICT: review run {n} blockers=<k> should-fix=<m>"
+
+# The review outcome goes to the architect, which writes the next kit or
+# escalates (§31). It stands before the `aux.done` rules below on purpose: §10
+# fires the first rule that matches, and under autonomy this is the one that
+# should. The architect's own reply is not an event a rule can match — the
+# engine reads its verdict itself.
+# >>> architect
+# [[rule]]
+# on = "aux.done"
+# verdict = '^VERDICT: review run (?P<n>\d+) blockers='
+# then = "consult"
+# role = "architect"
+# <<< architect
 
 # Review clean and the next run is pre-planned → merge and go (PR shape, §9).
 [[rule]]
@@ -47,6 +79,8 @@ verdict = '^VERDICT: (awaiting decision|question)'
 then = "stop"
 message = "The builder needs a decision"
 
+# Under an autonomous architect series this rule does not fire: the engine sends
+# `[series] kickoff` itself on the same verdict, ahead of every rule here (§31).
 [[rule]]
 on = "builder.done"
 verdict = '^VERDICT: kit applied'

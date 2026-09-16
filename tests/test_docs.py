@@ -102,9 +102,12 @@ def test_the_integration_config_block_loads(tmp_home: Path) -> None:
     config = parse_config(
         tomllib.loads(block), project="demo", path=ROOT / ".hands" / "demo.toml"
     )
-    assert sorted(config.roles) == ["aux", "builder", "driver"]
+    assert sorted(config.roles) == ["architect", "aux", "builder", "driver"]
     assert config.role("driver").permission_flags == ""  # §27
     assert config.role("driver").cwd == tmp_home / "hands-driver" / "hands"  # m11 U6
+    # §31 (mission 15 U6): the architect role's table is in the doc's config too.
+    assert config.role("architect").permission_flags == ""
+    assert config.role("architect").cwd == tmp_home / "hands-architect" / "hands"
     assert config.ops.monitor_cmd == "watch_monitor.sh"
     assert "kit_dir = " in block and "kit_max_mb = " in block  # §26's two keys
     assert config.files.kit_dir == tmp_home / "Downloads"
@@ -1215,3 +1218,348 @@ def test_the_integration_doc_says_paired_notifications_are_spaced() -> None:
     assert "1.1 s" in text, "docs/INTEGRATION.md never states the spacing (§30)"
     for said in ("per-second", "kit receipt", "resume"):
         assert said in text, f"docs/INTEGRATION.md does not say {said!r} about the spacing (§30)"
+
+
+# ------------------------------------- the templates' architect block (§31, U6)
+
+#: The markers around the lines of `templates/PLAYBOOK-*.toml` that are commented
+#: TOML rather than prose: the architect block a human uncomments (§31).
+BLOCK_START = "# >>> architect"
+BLOCK_END = "# <<< architect"
+TEMPLATES = [
+    ROOT / "templates" / "PLAYBOOK-missions.toml",
+    ROOT / "templates" / "PLAYBOOK-runs.toml",
+]
+
+
+def uncommented(text: str) -> tuple[str, int]:
+    """`text` with every architect block uncommented, and how many blocks there were.
+
+    "Uncomment" is exactly what a human does: strip one `# ` from each line between
+    the markers, and drop the markers. Nothing else in the file is touched, so what
+    the loader reads below is the human's own edit and not a rewrite of the file.
+    """
+    out: list[str] = []
+    inside, blocks = False, 0
+    for line in text.splitlines():
+        if line.strip() == BLOCK_START:
+            assert not inside, "an architect block opens inside another"
+            inside, blocks = True, blocks + 1
+            continue
+        if line.strip() == BLOCK_END:
+            assert inside, "an architect block closes without opening"
+            inside = False
+            continue
+        if inside:
+            assert line.startswith("#"), f"an architect block line is not commented: {line!r}"
+            out.append(line[2:] if line.startswith("# ") else line[1:])
+        else:
+            out.append(line)
+    assert not inside, "an architect block never closes"
+    return "\n".join(out) + "\n", blocks
+
+
+@pytest.mark.parametrize("path", TEMPLATES, ids=lambda path: path.name)
+def test_each_template_ships_a_commented_architect_block(path: Path) -> None:
+    """§31: the block is commented as shipped, so the template loads as the phone
+    architect's series (`architect = "phone"`, the default) until a human says so."""
+    from hands.playbook import parse_playbook
+
+    text = path.read_text(encoding="utf-8")
+    lines = [line.strip() for line in text.splitlines()]
+    assert lines.count(BLOCK_START) == lines.count(BLOCK_END) >= 3, path.name
+    book = parse_playbook(text, path=path)
+    assert book.architect == "phone" and book.autonomous is False
+    assert not [rule for rule in book.rules if rule.then == "consult"]
+
+
+@pytest.mark.parametrize("path", TEMPLATES, ids=lambda path: path.name)
+def test_each_template_loads_with_its_architect_block_uncommented(path: Path) -> None:
+    """The unit's gate: uncommenting the block programmatically and running the real
+    loader over the result gives the series §31 describes — role mode, autonomous,
+    the escalation conditions, the per-series budget, and one `consult` rule on
+    `aux.done` naming the architect."""
+    from hands.playbook import DEFAULT_MAX_ARCHITECT_CONSULTS, ESCALATE_ON, parse_playbook
+
+    text, blocks = uncommented(path.read_text(encoding="utf-8"))
+    assert blocks >= 3, f"{path.name} has {blocks} architect block(s)"
+    book = parse_playbook(text, path=path)
+    assert book.architect == "role" and book.autonomous is True
+    assert book.gate_failures == 2 and book.escalate_on == ESCALATE_ON
+    assert book.max_architect_consults == DEFAULT_MAX_ARCHITECT_CONSULTS
+    consults = [rule for rule in book.rules if rule.then == "consult"]
+    assert len(consults) == 1, consults
+    assert consults[0].on == "aux.done" and consults[0].role == "architect"
+    # §10: the first matching rule fires, so the consult must stand before the
+    # template's own `aux.done` stops or it would never run.
+    outcomes = [rule.index for rule in book.rules if rule.on == "aux.done"]
+    assert outcomes and min(outcomes) == consults[0].index
+
+
+# ------------------------------------- the architect role in the docs (§31, U6)
+
+ARCHITECT_SECTION = "### The architect role (§31)"
+ARCHITECT_README = ROOT / "architect" / "README.md"
+
+
+def integration() -> str:
+    return (ROOT / "docs" / "INTEGRATION.md").read_text(encoding="utf-8")
+
+
+def test_the_integration_doc_has_one_architect_role_section(
+) -> None:
+    """§31, §14 step 3: the human's manual gains the role beside the phone
+    architect it already describes, in one place."""
+    text = integration()
+    assert text.count(ARCHITECT_SECTION) == 1, f"docs/INTEGRATION.md has no {ARCHITECT_SECTION!r}"
+    section = flattened(text.split(ARCHITECT_SECTION, 1)[1].split("\n## ", 1)[0])
+    assert "[roles.architect]" in section
+    assert "permission_flags" in section
+
+
+def test_the_integration_doc_names_the_roles_environment_and_its_guard_mode() -> None:
+    """The row `hands doctor` prints and the environment the runner sets, in the
+    doc's words: the three variables an architect-role job carries (§31)."""
+    from hands.config import ARCHITECT_ROLE, CLONE_ENV, KITS_ENV, ROLE_ENV
+
+    section = flattened(integration().split(ARCHITECT_SECTION, 1)[1].split("\n## ", 1)[0])
+    for name in (f"{ROLE_ENV}={ARCHITECT_ROLE}", CLONE_ENV, KITS_ENV):
+        assert name in section, f"the architect section does not name {name}"
+    for said in (
+        "Write|Edit|MultiEdit",
+        "--write",
+        "`role architect` row",
+        "hands kit file",
+    ):
+        assert said in section, f"the architect section does not say {said!r}"
+
+
+def test_the_integration_doc_carries_the_switch_point_from_the_architect_readme() -> None:
+    """The brief: carry `architect/README.md`'s procedure across rather than
+    rewriting it, and pin the quotation so the two cannot drift.
+
+    Every indented line of the section's setup block, and each quoted sentence, is
+    in `architect/README.md` as written.
+    """
+    readme = ARCHITECT_README.read_text(encoding="utf-8")
+    section = integration().split(ARCHITECT_SECTION, 1)[1].split("\n## ", 1)[0]
+    block = [line.strip() for line in section.splitlines() if line.startswith("    ")]
+    setup = [line for line in block if line.startswith(("mkdir", "cp ", "git ", "HANDS_ROLE"))]
+    assert len(setup) >= 6, setup
+    for line in setup:
+        assert flattened(line) in flattened(readme), (
+            f"the setup line is not architect/README.md's: {line!r}"
+        )
+    for said in (
+        "The role takes over from the phone architect at the fully reviewed work",
+        "Applying that playbook (a gated job the human approves) is the switch.",
+        "One architect at a time.",
+    ):
+        assert flattened(said) in flattened(readme), f"architect/README.md no longer says {said!r}"
+        assert flattened(said) in flattened(section), f"the architect section drops {said!r}"
+
+
+def test_the_integration_doc_says_what_approving_an_autonomous_playbook_authorises() -> None:
+    """H-029, in the human's language: the standing approval is the whole of the
+    autonomy, and the gate record says the same thing (`AUTONOMOUS_APPROVAL`)."""
+    from hands.playbook import AUTONOMOUS_APPROVAL
+
+    section = flattened(integration().split(ARCHITECT_SECTION, 1)[1].split("\n## ", 1)[0])
+    said = (
+        "the human who approves an `autonomous` playbook is approving every apply the "
+        "architect files under it"
+    )
+    assert flattened(said) in section, f"the architect section does not say {said!r}"
+    assert "standing approval" in AUTONOMOUS_APPROVAL and "standing approval" in section
+
+
+def test_the_integration_doc_names_the_series_keys_and_the_verdicts_from_code() -> None:
+    """The doc's numbers and words are the code's: the escalation conditions, the
+    two defaults, the three verdicts, and the one event the architect is consulted
+    on (§31)."""
+    from hands.playbook import (
+        ARCHITECT_VERDICTS,
+        CONSULT_EVENTS,
+        DEFAULT_GATE_FAILURES,
+        DEFAULT_MAX_ARCHITECT_CONSULTS,
+        ESCALATE_ON,
+    )
+
+    section = flattened(integration().split(ARCHITECT_SECTION, 1)[1].split("\n## ", 1)[0])
+    for condition in ESCALATE_ON:
+        assert condition in section, f"the architect section does not name {condition}"
+    assert f"gate_failures = {DEFAULT_GATE_FAILURES}" in section
+    assert f"max_architect_consults` (default {DEFAULT_MAX_ARCHITECT_CONSULTS})" in section
+    for verdict in ARCHITECT_VERDICTS:
+        assert f"`{verdict}`" in section, f"the architect section does not name {verdict!r}"
+    assert CONSULT_EVENTS["architect"] == ("aux.done",)
+    assert "`aux.done`" in section
+    assert "claude --resume" in section
+
+
+def test_the_integration_doc_names_h_030_while_it_is_open() -> None:
+    """The unit's honesty clause: with the words §31 gives it, the architect cannot
+    name a zip's entries as repository paths, so the role cannot yet file a kit a
+    builder can apply. The doc says so and names the finding, for as long as the
+    ledger has it open."""
+    findings = (ROOT / "meta" / "findings" / "FINDINGS.md").read_text(encoding="utf-8")
+    memo = flattened(findings.split("## H-030", 1)[1].split("\n## H-", 1)[0])
+    assert "Status: open" in memo, "H-030 is no longer open; docs/INTEGRATION.md must be revisited"
+    section = flattened(integration().split(ARCHITECT_SECTION, 1)[1].split("\n## ", 1)[0])
+    assert "H-030" in section, "the architect section does not name the open finding"
+    for said in ("repository paths", "is not proven"):
+        assert said in section, f"the architect section does not say {said!r}"
+
+
+def test_the_integration_doc_carries_the_two_project_note_to_the_role_directories() -> None:
+    """§29, carried forward: one architect directory per project, as there is one
+    driver directory per project, and nothing shared but the subscription."""
+    text = integration()
+    section = flattened(text.split("## Two projects on one laptop (§29)", 1)[1]
+                        .split("\n## ", 1)[0])  # fmt: skip
+    for said in ("~/hands-architect/<project>/", "~/hands-driver/<project>/"):
+        assert said in section, f"the two-project section does not name {said}"
+    assert "one shared resource is the subscription" in section
+
+
+def test_the_integration_doc_names_the_playbook_as_a_gate_authority() -> None:
+    """§31, H-031: `decided_by` carries a fourth value now, and the doc that lists
+    the other three lists it."""
+    from hands.gates import DECIDED_BY
+
+    doc = flattened(integration())
+    assert "playbook" in DECIDED_BY
+    for value in DECIDED_BY:
+        assert f"`{value}`" in doc, f"docs/INTEGRATION.md does not name `{value}`"
+    assert "decided_by" in doc
+
+
+def playbook_doc(heading: str) -> str:
+    """One `## ` section of `docs/PLAYBOOK.md`, flattened."""
+    text = (ROOT / "docs" / "PLAYBOOK.md").read_text(encoding="utf-8")
+    assert text.count(heading) == 1, f"docs/PLAYBOOK.md has no {heading!r}"
+    return flattened(text.split(heading, 1)[1].split("\n## ", 1)[0])
+
+
+def test_the_playbook_doc_lists_every_series_and_limit_key() -> None:
+    """§31 adds four `[series]` keys and one `[limits]` key; the rule reference
+    names each, so a key in the code that no document explains goes red."""
+    from hands.playbook import LIMIT_KEYS, SERIES_KEYS
+
+    doc = flattened((ROOT / "docs" / "PLAYBOOK.md").read_text(encoding="utf-8"))
+    for key in SERIES_KEYS + LIMIT_KEYS:
+        assert f"`{key}`" in doc, f"docs/PLAYBOOK.md does not name `{key}` (§31)"
+
+
+def test_the_playbook_doc_describes_the_series_architect_mode() -> None:
+    """The `[series]` section carries §31's mode, its default, and what autonomy
+    means, with the numbers taken from the code."""
+    from hands.playbook import (
+        ARCHITECT_MODES,
+        DEFAULT_ARCHITECT_MODE,
+        DEFAULT_GATE_FAILURES,
+        ESCALATE_ON,
+    )
+
+    section = playbook_doc("## The series and its kickoff (`[series]`)")
+    assert ARCHITECT_MODES == ("phone", "role") and DEFAULT_ARCHITECT_MODE == "phone"
+    for said in ('`architect = "phone" | "role"`', "default `phone`", "`autonomous`"):
+        assert said in section, f"the [series] section does not say {said!r}"
+    assert f"`gate_failures` (default {DEFAULT_GATE_FAILURES})" in section
+    for condition in ESCALATE_ON:
+        assert condition in section, f"the [series] section does not name {condition}"
+    for said in (
+        "approving every apply the architect files under it",
+        "no `[roles.architect]`",
+        "decided_by: playbook",
+    ):
+        assert said in section, f"the [series] section does not say {said!r}"
+
+
+def test_the_playbook_doc_says_the_kickoff_rule_is_the_engines_and_not_written() -> None:
+    """§31: "a `builder.done` rule the engine adds, not the playbook". A reader who
+    thinks it is a rule they write will write it twice."""
+    from hands.playbook import ENGINE_RULE_INDEX, KIT_APPLIED
+
+    doc = flattened((ROOT / "docs" / "PLAYBOOK.md").read_text(encoding="utf-8"))
+    assert KIT_APPLIED == "^VERDICT: kit applied" and ENGINE_RULE_INDEX == -1
+    for said in (
+        "the engine adds",
+        "not a rule anyone writes",
+        "`VERDICT: kit applied`",
+        "ahead of every rule in the file",
+    ):
+        assert said in doc, f"docs/PLAYBOOK.md does not say {said!r} (§31)"
+
+
+def test_the_playbook_doc_no_longer_calls_consult_driver_only() -> None:
+    """§31 generalises `consult` to a second role. The section says which role each
+    event may consult, from `CONSULT_EVENTS`, and carries the architect's three
+    verdicts and its own budget."""
+    from hands.playbook import ARCHITECT_VERDICTS, CONSULT_EVENTS, DEFAULT_MAX_ARCHITECT_CONSULTS
+
+    section = playbook_doc('## Consult (`then = "consult"`, DESIGN §27, §31)')
+    assert CONSULT_EVENTS["architect"] == ("aux.done",)
+    for said in (
+        '`role = "architect"`',
+        "`aux.done`",
+        "`[roles.architect]`",
+        f"`max_architect_consults` (default {DEFAULT_MAX_ARCHITECT_CONSULTS})",
+        "per series",
+    ):
+        assert said in section, f"the consult section does not say {said!r}"
+    for verdict in ARCHITECT_VERDICTS:
+        assert f"`{verdict}`" in section, f"the consult section does not name {verdict!r}"
+    assert "A consult asks the driver role instead of stopping." not in section
+
+
+def test_the_playbook_doc_says_architect_events_cannot_be_matched() -> None:
+    """§31: the architect's own end is read by the engine, and `architect.*` is not
+    in `EVENTS` — a rule naming it is refused when the file is parsed."""
+    assert not [event for event in EVENTS if event.startswith("architect.")]
+    section = playbook_doc("## Events (`on`)")
+    for said in ("`architect.*` is not an event", "The engine reads the architect's verdict"):
+        assert said in section, f"the events section does not say {said!r}"
+
+
+def test_the_playbook_doc_counters_name_the_architect_budget() -> None:
+    """`hands pipeline` prints the architect's counter in role mode; the doc that
+    lists what that command reports lists it too."""
+    section = playbook_doc("## Counters")
+    for said in ("architect", "max_architect_consults"):
+        assert said in section, f"the counters section does not say {said!r}"
+
+
+def test_the_handbook_section_12_onboards_the_architect_role() -> None:
+    """§31: the handbook's onboarding tells the architect what changes for *it* when
+    a human turns the phone architect into a role one — where its kit goes, how it
+    is filed, what it replies, and when it escalates — with the words taken from
+    the code, and without copying `architect/CLAUDE.md`."""
+    from hands.playbook import ARCHITECT_VERDICTS, DEFAULT_MAX_ARCHITECT_CONSULTS, ESCALATE_ON
+
+    handbook = (ROOT / "docs" / "ARCHITECT-HANDBOOK.md").read_text(encoding="utf-8")
+    section = flattened(handbook.split("## 12. Onboarding a project", 1)[1])
+    for said in (
+        "architect/README.md",
+        "architect/CLAUDE.md",
+        "`hands kit file",
+        "`kits/`",
+        '`[series] architect = "role"`',
+        "H-030",
+        f"max_architect_consults` (default {DEFAULT_MAX_ARCHITECT_CONSULTS})",
+    ):
+        assert said in section, f"handbook §12 does not say {said!r}"
+    for verdict in ARCHITECT_VERDICTS:
+        assert f"`{verdict}`" in section, f"handbook §12 does not name {verdict!r}"
+    for condition in ESCALATE_ON:
+        assert condition in section, f"handbook §12 does not name {condition}"
+    # Referenced, not duplicated: no long line of the role's own instruction is
+    # copied into the handbook.
+    rules = [
+        flattened(line)
+        for line in (ROOT / "architect" / "CLAUDE.md").read_text(encoding="utf-8").splitlines()
+        if len(line.strip()) >= 60
+    ]
+    assert rules
+    copied = [line for line in rules if line in section]
+    assert not copied, "handbook §12 copies architect/CLAUDE.md:\n" + "\n".join(copied)

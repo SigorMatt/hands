@@ -45,13 +45,15 @@ job does — then `hands resume`. `hands doctor`'s playbook row is `ok` with
     [limits]
     auto_runs = [2, 3]           # run numbers hands may start on its own
     max_resumes = 3              # consecutive auto-resumes before a stop
-    max_consults = 2             # consultations per mission (default 2); see consult
+    max_consults = 2             # driver consultations per mission (default 2)
+    max_architect_consults = 12  # architect consultations per series (default 12)
 
     [[rule]]
     on = "<event>"               # required
     verdict = '<regex>'          # optional; matched against the job's VERDICT: line
     then = "<action>"            # required
-    role = "builder" | "aux"     # a send needs one; a consult's is "driver" or absent
+    role = "builder" | "aux"     # a send needs one; a consult's is "driver"
+                                 # (the default) or "architect"
     context = "clear" | "keep"   # a send defaults to "clear"; a consult is always "clear"
     prompt = "<text>"            # a send needs one; placeholders allowed
     message = "<text>"           # a notify needs one; a stop may have one
@@ -65,6 +67,10 @@ Unknown keys are refused, at the top level, in `[series]`, in `[limits]` and in 
     [series]
     name = "<name>"              # optional, free text
     kickoff = "<line>"           # optional; the line `go <secret>` sends
+    architect = "phone"          # optional; "phone" (default) or "role" (§31)
+    autonomous = false           # optional; default false
+    gate_failures = 2            # optional; default 2
+    escalate_on = ["blocker-unanswered", "milestone-missing", "budget-exhausted"]
 
 `kickoff` is the series' fixed kickoff line (DESIGN §26). `go <secret>` on the
 phone's `cmd_topic` sends exactly that line to the builder as a `clear` send,
@@ -75,7 +81,9 @@ queued or held (DESIGN §27; the refusal names the job, and the builder is
 checked again once the playbook is read), when there is no playbook (or it
 cannot be loaded), and when the playbook has no `kickoff`.
 
-The series' name goes in the table as `name` when the table is used. TOML does
+The table's keys are `name`, `kickoff`, `architect`, `autonomous`,
+`gate_failures` and `escalate_on`; the last four are §31's and are described
+below. The series' name goes in the table as `name` when the table is used. TOML does
 not allow `series = "<name>"` and a `[series]` table in the same file: the
 parser refuses the second definition, so the playbook is refused as not valid
 TOML. The top-level string still loads in a file with no table (the example
@@ -86,6 +94,56 @@ H-019). Any other key in `[series]` is refused, naming it. An empty `name` or
 A `go` job or a kit's apply (`origin: kit`), like a `cli` send, un-pauses a
 stopped pipeline when it starts, not when it is filed or held (DESIGN §27). A stopped pipeline still has its playbook, so `go` is accepted
 while it is paused.
+
+### The series' architect (DESIGN §31)
+
+`architect = "phone" | "role"` (default `phone`) says which architect this
+series has. The phone architect is the human's chat Project, which emits a kit
+the human carries to the laptop; `role` is the headless architect handsd starts
+itself (`[roles.architect]`, docs/INTEGRATION.md "The architect role"). A
+playbook that sets `role` while the config has **no `[roles.architect]`** is a
+config error, named when the engine loads the file and by `hands doctor`.
+
+`autonomous` (default `false`) says the engine may release what that architect
+files. With `architect = "role"` and `autonomous = true`:
+
+- a **held** apply of `origin: architect` — the job `hands kit file` files — is
+  approved by the engine (`decided_by: playbook`), whose gate reason names the
+  approval it is acting on;
+- `[series] kickoff` is sent to the builder when that apply replies `VERDICT:
+  kit applied`.
+
+Say it in the human's words before turning it on: **the human who approves an
+`autonomous` playbook is approving every apply the architect files under it.**
+The playbook is itself a gated apply, so that approval is a real one, made once.
+
+`gate_failures` (default 2) is the number of times the same roadmap gate may
+fail in a row before the architect escalates, and `escalate_on` is the closed
+list of conditions it escalates on: `blocker-unanswered`, `milestone-missing`,
+`budget-exhausted`. Both are carried in the architect's consult prompt, and the
+first two are its judgement. hands enforces only the last: see `consult` below.
+
+### The kickoff rule the engine adds (DESIGN §31)
+
+Under `architect = "role"` with `autonomous = true`, the engine behaves as if a
+rule
+
+    [[rule]]
+    on = "builder.done"
+    verdict = '^VERDICT: kit applied'
+    then = "send"
+    role = "builder"
+    context = "clear"
+    prompt = "<[series] kickoff>"
+
+stood at the top of the file. It is **not a rule anyone writes** — it is not in
+the file, and writing it there changes nothing. It stands ahead of every rule in
+the file because §10 fires the first rule that matches, and this is the one §31
+promises will run; a playbook's own `^VERDICT: kit applied` rule (a `notify`, in
+both templates) does not fire while autonomy is on, and the inbox records the
+rule that did as `rule: -1`. The kickoff job's origin is `playbook`, like every
+other job a rule starts, so it does not clear a stop. With `autonomous` set and
+no `[series] kickoff` to send, the engine stops and says so.
 
 ## Events (`on`)
 
@@ -101,6 +159,12 @@ enforces; see `consult` below.
 
 The list is closed: anything else is not a playbook event and fires nothing. A
 job you cancelled yourself (`killed`) is not an event — you already know.
+
+There is no `architect.*` event: `architect.done`, `architect.failed` and the
+rest are how the engine names an architect consultation's end to itself, and
+`architect.*` is not an event a rule can match — a rule naming one is refused
+when the file is parsed. The engine reads the architect's verdict and follows
+it (DESIGN §31, `consult` below), and a playbook neither can nor needs to.
 
 `monitor.task_killed` (DESIGN §24) means a task inside a running role job — a
 Bash command or a sub-agent — was killed before it finished. hands reads every
@@ -182,13 +246,24 @@ notification check (§11) uses to put an event on your phone. Over a pipeline th
 stopped for, keeps that reason and its timestamp in `hands pipeline`, notifies
 nobody, and leaves only the `pipeline.stop_suppressed` record.
 
-## Consult (`then = "consult"`, DESIGN §27)
+## Consult (`then = "consult"`, DESIGN §27, §31)
 
-A consult asks the driver role instead of stopping. It needs `[roles.driver]`
-in the config (docs/INTEGRATION.md). The rule takes no `prompt` and no `run`;
-`role`, when given, is `driver`, and `context`, when given, is `clear`: every
-consultation is a fresh driver session. A consult on `driver.done` or
-`driver.failed` is refused when the file is parsed.
+A consult asks a role instead of stopping. There are two: the **driver**
+(DESIGN §27), asked to resolve one event within its authority, and the
+**architect** (DESIGN §31), asked on a review outcome to write the next kit.
+Which one a rule asks is the rule's `role`: `role = "driver"` when the key is
+absent, or `role = "architect"`. Either needs its own table in the config —
+`[roles.driver]` or `[roles.architect]` (docs/INTEGRATION.md) — and a consult
+naming a role this project does not configure is a stop, not a job.
+
+The rule takes no `prompt` and no `run`, and `context`, when given, is `clear`:
+every consultation is a fresh session with no memory of the last. Which events
+a role may be consulted on is checked when the file is parsed: the driver on any
+event but its own ends (a consult on `driver.done` or `driver.failed` is
+refused), and the architect on `aux.done` only — the review outcome §31 names,
+because its prompt is written out of a review.
+
+### The driver's consultation (DESIGN §27)
 
 When it fires, handsd starts a driver job with `origin: playbook`. It does not
 go through `hands send`, which refuses the driver role, and it is not gated.
@@ -275,6 +350,44 @@ messages:
 `hands kit check` checks a `verdict` rule on `driver.done` against those two
 lines, placeholders left as text.
 
+### The architect's consultation (DESIGN §31)
+
+    [[rule]]                  # the review outcome → the architect
+    on = "aux.done"
+    verdict = '^VERDICT: review mission (?P<n>\d+) blockers='
+    then = "consult"
+    role = "architect"
+
+handsd starts an architect job in the architect's directory, `context: clear`,
+`origin: playbook`, exactly as it starts a driver one, and files `consult.sent`
+and `consult.done` the same way. The prompt hands writes has four parts: the
+event and the job record; the review's `VERDICT:` line and its `## Blockers` and
+`## Should-fix` sections verbatim (the whole reply when a heading is missing);
+`meta/ROADMAP.md` from the builder's cwd, verbatim; and the series' escalation
+conditions (`gate_failures`, `escalate_on`, and which consultation of the budget
+this is). Then the instruction — "write the next kit from ROADMAP and the
+review, file it, or escalate" — and the three lines the reply may begin with:
+
+    VERDICT: next kit <name>
+    VERDICT: series complete
+    VERDICT: escalate <reason>
+
+The engine reads that verdict itself; no rule matches it, because `architect.*`
+is not an event. `VERDICT: next kit <name>` waits for the apply the architect
+filed with `hands kit file` during the consultation, and stops when it filed
+none. `VERDICT: series complete` stops with that reason. `VERDICT: escalate
+<reason>` stops and notifies with the reason, the architect's session id and the
+`claude --resume <id>` line. An unrecognised or missing verdict, and an
+architect job that ends `failed`, `killed`, `orphaned` or `limited`, stop too.
+
+The budget is `max_architect_consults` (default 12) in `[limits]`, counted
+**per series** — from the anchor written when the playbook loaded, not per mission as
+the driver's `max_consults` is. When it is spent the engine stops by itself,
+naming `budget-exhausted`, which is why that one condition of `escalate_on` is
+hands' and the other two are the architect's judgement. `hands pipeline` prints
+`architect <used> of max_architect_consults <n>` while the series is in role
+mode.
+
 ## Verdict matching
 
 `verdict` is a Python regex, searched against the job's `verdict` field — the
@@ -349,8 +462,10 @@ its check.
 
 `hands pipeline` reports the file (path, sha256, series, rule count), whether
 the pipeline is paused and why, the stop reason, `auto_runs` used/allowed,
-resumes used per role against `max_resumes`, consultations used against
-`max_consults`, and the last rule that fired. The
+resumes used per role against `max_resumes`, driver consultations used against
+`max_consults`, architect consultations of this series against
+`max_architect_consults` (only while `[series] architect = "role"`), and the
+last rule that fired. The
 last rule is cleared when a playbook with a different sha256 is loaded: rule 3
 of the file that fired is not rule 3 of the new one.
 

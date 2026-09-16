@@ -43,7 +43,9 @@ Without systemd, `handsd --project <project>` in a terminal is the same thing.
 
 ## Two projects on one laptop (§29)
 
-Each project has its own config, its own daemon and its own spool:
+Each project has its own config, its own daemon and its own spool, and one
+directory per role that lives outside the repository — `~/hands-driver/<project>/`
+for the driver and `~/hands-architect/<project>/` for the architect role (§31):
 
     ~/.hands/<project>.toml     the config (§13)
     ~/.hands/<project>/         the spool: jobs/, roles/, inbox.jsonl,
@@ -145,6 +147,11 @@ cwd` is optional.
                                          # (~/hands-driver/<project>; this is hands'
                                          # own); permission_flags must stay empty
 
+    [roles.architect]                    # optional (§31): the architect role
+    cwd = "~/hands-architect/hands"      # the architect directory, its repo/ clone
+                                         # and its kits/; permission_flags must stay
+                                         # empty, as for the driver
+
     [ops]
     repo = "~/<project>-ops"
     monitor_cmd = "watch_monitor.sh"     # both, or hands uses its built-in monitor
@@ -188,7 +195,7 @@ Notes that are easy to get wrong:
 - `gates.patterns` is a **union** with the defaults (`Apply ~/Downloads/`,
   `decisions-`, `playbook-`, `gh pr create`, `open the PR`). A config can only
   widen the gate, never disable it (§8).
-- `roles` are `builder`, `aux` and `driver`; `[roles.builder]` is required.
+- `roles` are `builder`, `aux`, `driver` and `architect` (§31); `[roles.builder]` is required.
 - **`[roles.driver]`** (§27) is optional and takes the same keys. Its cwd is the
   driver directory of section 5, with the fetch-only clone under `repo/`.
   `permission_flags` must be empty: a driver role with any value does not load,
@@ -271,9 +278,13 @@ Notes that are easy to get wrong:
   even over a `success` result, because the harness ended the session mid-turn
   and the result is whatever the model had said last (H-014). Only the line's
   exact shape counts: from the line start, case-sensitive.
-- **Who decided a gate** (§6, §8). A decided job's `gate.decided_by` is one of
-  `cli` (`hands approve|deny` at the laptop), `driver` (`--human-confirmed`
-  with the human's quote) or `phone` (the ntfy command channel, below).
+- **Who decided a gate** (§6, §8, §31). A decided job's `gate.decided_by` is one
+  of `cli` (`hands approve|deny` at the laptop), `driver` (`--human-confirmed`
+  with the human's quote), `phone` (the ntfy command channel, below) or
+  `playbook` — the engine releasing a held apply of `origin: architect` under a
+  playbook that sets `[series] architect = "role"` and `autonomous = true`,
+  whose gate reason names the standing approval it acted on (§31; §6's record
+  line lists the first three, finding H-031).
 - **An empty string is refused at load, for every optional key** (§20): `""` or
   blanks only is neither the key's absent meaning nor a usable value — an empty
   `ops.monitor_cmd` would have made the *ops directory* the monitor script. The
@@ -682,7 +693,122 @@ refused, because git applies each `-C` relative to the one before.
 ## 6. The architect (§14 step 3)
 
 Replace the Claude Project's instruction with `docs/ARCHITECT-INSTRUCTION.md`.
-Its outputs are files for the repo; it never sends prompts to paste.
+Its outputs are files for the repo; it never sends prompts to paste. That is
+the **phone architect** — a person in a chat Project, and what a playbook means
+when it says nothing (`[series] architect = "phone"`).
+
+### The architect role (§31)
+
+The same architect, headless: a fourth role handsd starts for **one
+consultation** on a review outcome, with no memory of earlier ones — the branch
+carries all of it. It reads the review and `meta/ROADMAP.md`, writes the next
+kit, checks it, files it with `hands kit file`, and replies with one verdict
+line. `architect/README.md` is the full recipe; in short:
+
+    mkdir -p ~/hands-architect/<project>/kits && cd ~/hands-architect/<project>
+    cp ~/git/hands/architect/CLAUDE.md ./CLAUDE.md        # fill the Parameters block
+    mkdir -p .claude/hooks
+    cp ~/git/hands/architect/settings.json .claude/settings.json
+    cp ~/git/hands/driver/hooks/bash_guard.py .claude/hooks/bash_guard.py
+    HANDS_ROLE=architect HANDS_KITS=$PWD/kits python3 .claude/hooks/bash_guard.py --selftest
+    git clone <repo url> repo && git -C repo remote set-url --push origin no_push
+    claude          # once, interactively: accept the trust dialog, then /exit
+
+and the config gains one table:
+
+    [roles.architect]
+    cwd = "~/hands-architect/<project>"     # permission_flags stays empty
+
+Every architect-role job's environment carries `HANDS_ROLE=architect` (the
+guard's architect mode), `HANDS_CLONE` — the fetch-only clone under `repo/`,
+the only path `git -C` may name — and `HANDS_KITS`, `<cwd>/kits`, the one
+directory the role may write to. `permission_flags` must be empty, as for the
+driver: a `[roles.architect]` carrying one does not load, so `settings.json`
+and the hook are the law. handsd starts the role through a playbook `consult`
+action and nothing else does: no playbook `send` can name it (a send's role is
+`builder` or `aux`), and neither the phone's `go` nor its buttons reach it.
+Unlike `--role driver`, a `hands send --role architect` at the laptop is not
+refused today (finding H-032).
+
+Architect mode is the driver's read-only table plus `hands kit check` and
+`hands kit file`, and `mkdir`, `cp`, `mv`, `zip` and `unzip` only with every
+path argument under `HANDS_KITS`. It never sends, approves, denies, `go`es,
+puts or pushes. Writes are judged by a **second** `PreToolUse` matcher —
+`Write|Edit|MultiEdit` running the same guard with `--write` — which allows a
+write only under `HANDS_KITS`; the driver has no equivalent, because the driver
+writes nothing at all.
+
+`hands doctor` prints a `role architect` row beside the `role driver` one: the
+cwd, the clone, the kits directory, the settings, the write matcher, the
+guard's self-test run in architect mode, and the mode itself. It fails on a
+permission bypass, on a settings file whose `Bash` hook or whose
+`Write|Edit|MultiEdit` hook is not the guard (the write hook must be exactly
+`python3 <path to .claude/hooks/bash_guard.py> --write`, and all three tools
+must be judged), and on a guard whose `--selftest` is not green; a missing
+clone or a missing kits directory warns, since `HANDS_KITS` names the
+directory whether or not it exists.
+
+**What is not proven (finding H-030, open).** A role session that follows
+`architect/CLAUDE.md` rule 3 cannot yet produce the kit that rule asks for.
+`zip` stores each entry under the path it is given, and architect mode requires
+every path argument to be under `HANDS_KITS`, so the entries come out as
+`kits/<kit>/<file>` and not as repository paths; `hands kit check` passes such a
+kit, because those are syntactically valid repository paths, and the apply would
+tell the builder to add files under `kits/`. The role, its guard mode, `hands
+kit file`, the consult, the budget and the engine's approval are built and
+tested; an architect role filing a kit a builder can apply **is not proven**.
+`meta/findings/FINDINGS.md` H-030 holds the three candidate resolutions. Until
+one is chosen, run `[series] architect = "role"` as an experiment, not as the
+way a series is driven.
+
+**The switch point.** The role takes over from the phone architect at the fully
+reviewed work plan. `architect/README.md` lists the deliverables that must be on
+the branch before the switch: `DESIGN.md`, `meta/ROADMAP.md` with a checkable
+gate per milestone, the first brief or run plan and the sequence of the rest,
+`PLAYBOOK.toml` with `[series] architect = "role"`, `autonomous`, the escalation
+conditions and the `consult` rule, and this directory. Applying that playbook (a
+gated job the human approves) is the switch. To hand the series back to the
+phone: `hands pause`, then the phone architect continues from the branch, and
+the next kit sets `architect = "phone"`. One architect at a time.
+
+**`[series] architect` and `autonomous`.** `architect = "role"` says which
+architect this series has; `autonomous = true` says the engine may release what
+that architect files. With both set, a held apply of `origin: architect` is
+approved by the engine itself (`decided_by: playbook`, the fourth value the gate
+record carries) and `[series] kickoff` is sent when the apply replies `VERDICT:
+kit applied` — a rule the engine adds, which no playbook writes. Read that
+plainly before you turn it on: **the human who approves an `autonomous`
+playbook is approving every apply the architect files under it.** The playbook
+is itself a gated kit apply, so that approval is a real one, made once; it is
+the standing approval for every apply that follows, and nothing else stands
+between a kit and the branch but `hands kit check` and the cold review. A
+playbook with `architect = "role"` and no `[roles.architect]` in the config is
+a config error, named in the stop and in `hands doctor`.
+
+**When it escalates.** The architect's reply begins with exactly one of
+`VERDICT: next kit <name>`, `VERDICT: series complete` or `VERDICT: escalate
+<reason>`. `next kit` waits for the apply it filed (and stops if it filed
+none); the other two stop the pipeline and notify. `architect.*` is not an
+event a playbook can match: the engine reads the verdict itself. An
+escalation's stop reason carries the architect's own reason, its session id and
+the line that re-opens it — `claude --resume <id>` — so the phone tells you the
+condition, and at the laptop you open the architect's directory, run that line,
+`/rc`, and talk to it from the Code tab; what you decide becomes a decisions
+file in its next kit. The conditions are written into the playbook rather than
+judged in the moment: `gate_failures = 2` (the same roadmap gate failing twice
+in a row, judged by the architect) and `escalate_on = ["blocker-unanswered",
+"milestone-missing", "budget-exhausted"]`. hands can see only the last of them:
+`[limits] max_architect_consults` (default 12) counts the architect
+consultations of a series, and the engine stops with `budget-exhausted` itself
+when they are spent. The consultation is fired by a `consult` rule on
+`aux.done` with `role = "architect"` — the review outcome, and no other event
+(docs/PLAYBOOK.md, "Consult").
+
+**Two projects (§29).** One architect directory per project, as there is one
+driver directory per project: `~/hands-architect/<project>/` with its own clone
+and its own `kits/`, named by that project's `[roles.architect] cwd`. Two
+projects are two directories, two configs and two daemons; they still share the
+one resource two daemons share, the subscription.
 
 ## 7. The ops repo (§14 step 4)
 
