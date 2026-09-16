@@ -222,9 +222,15 @@ taken relative to the directory. It prints one line per check,
 
 - `paths`: every entry is a repository path under the repo. That means
   relative, with no `..`, `.` or empty component, no NUL, no backslash and no
-  drive letter. Nothing may sit under `.git` in any letter case (`.GIT`), no
-  entry may be a symlink, no zip entry name may appear twice, and nothing may
-  land outside the repo through one of the repo's own symlinks. No entry may
+  drive letter. Nothing may sit under `.git` or `.claude`, at any depth and in
+  any letter case (`.GIT`, `.Claude`): a kit does not write git's hooks or
+  Claude Code's settings and hooks in the repository; no entry may be a symlink, no zip entry name may
+  appear twice, and nothing may land outside the repo, or inside `.git` or
+  `.claude`, through one of the repo's own symlinks. A zip entry is judged by
+  its central-directory name, the one `unzip` extracts: an entry whose
+  local-header name or Unicode Path extra field names another file, or whose
+  non-ASCII name is not marked UTF-8, is refused (DESIGN §33). handsd judges a
+  kit from the phone or from `hands kit file` by the same rules. No entry may
   be over 16 MiB and the kit not over 64 MiB, by the sizes the zip declares,
   read before any content is.
 - `playbook`: the playbook in force is the kit's `PLAYBOOK.toml` or

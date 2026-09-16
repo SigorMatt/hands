@@ -13,6 +13,7 @@ from __future__ import annotations
 import io
 import json
 import re
+import shutil
 import subprocess
 import warnings
 import zipfile
@@ -24,6 +25,7 @@ from conftest import strip_paths
 from hands import kit as kit_mod
 from hands.cli import main
 from hands.playbook import parse_playbook
+from harness import CRAFTED_HOWS, CRAFTED_NAME, CRAFTED_TARGET, crafted_zip
 
 ROOT = Path(__file__).parents[1]
 MISSION_10_KIT = ROOT / "tests" / "fixtures" / "kit-mission-10"
@@ -288,9 +290,10 @@ def test_plan_apply_computes_replaced_and_added_against_the_repo(tmp_path: Path)
         ([("../x.md", b"x")], "a .. component"),
         ([("/etc/x.md", b"x")], "an absolute path"),
         ([(".GIT/config", b"x")], "a path inside .git"),
+        ([(".claude/settings.json", b"{}")], "a path inside .claude"),
         ([("docs/N.md", b"1"), ("docs/N.md", b"2")], "a duplicate entry"),
     ],
-    ids=["dotdot", "absolute", "git", "duplicate"],
+    ids=["dotdot", "absolute", "git", "claude", "duplicate"],
 )
 def test_apply_from_zip_refuses_by_kit_checks_path_rules_without_naming_entries(
     tmp_path: Path, repo: Path, entries: list[tuple[str, bytes]], said: str
@@ -365,7 +368,8 @@ def test_a_kit_that_does_not_exist_is_an_error(tmp_path: Path, repo: Path) -> No
     "name",
     [
         "../escape.md", "/etc/passwd", "meta/../../x.md", "a\\b.md", "C:/x.md", ".git/config",
-        ".GIT/config", "docs/.Git/hooks/post-checkout",
+        ".GIT/config", "docs/.Git/hooks/post-checkout", ".claude/settings.json",
+        ".Claude/hooks/bash_guard.py", "docs/.claude/settings.json",
     ],
 )
 def test_a_zip_entry_that_is_not_a_repository_path_fails(
@@ -462,6 +466,115 @@ def test_an_entry_that_lands_outside_the_repo_through_a_repo_symlink_fails(
     kit = write_tree(tmp_path / "k", {**good_kit(), "docs/NOTE.md": "x"})
     code, out, _ = run_check(kit, repo)
     assert "docs/NOTE.md" in strip_paths(assert_failed_only(code, out, "paths"))
+
+
+# §33 (REVIEW-16 blocker 2, H-036): the names extraction uses, and one judge of them.
+
+#: Why `kit check` and `apply_from_zip` refuse each `crafted_zip` entry.
+DISAGREE = {
+    "unicode": "a Unicode Path extra field naming another file",
+    "local-unicode": "a Unicode Path extra field naming another file",
+    "local": "a local-header name that differs from the central directory's",
+}
+
+
+@pytest.mark.parametrize("how", CRAFTED_HOWS)
+def test_a_zip_entry_whose_names_disagree_fails_paths(
+    tmp_path: Path, repo: Path, how: str
+) -> None:
+    """The reviewer's zip: `docs/notes.md` in both headers, `.git/hooks/pre-commit`
+    in its Unicode Path field. `paths` fails naming the entry and why."""
+    kit = tmp_path / "evil.zip"
+    kit.write_bytes(crafted_zip(dict(good_kit()), how))
+    failed = assert_failed_only(*run_check(kit, repo)[:2], "paths")
+    assert f"{CRAFTED_NAME} ({DISAGREE[how]})" in strip_paths(failed), failed
+
+
+@pytest.mark.parametrize("how", CRAFTED_HOWS)
+def test_apply_from_zip_refuses_an_entry_whose_names_disagree(
+    tmp_path: Path, repo: Path, how: str
+) -> None:
+    """The phone's kit path and `kit_file` list the zip with `apply_from_zip`: it
+    files no apply whose prompt names another file than the one unzip writes."""
+    kit = tmp_path / "evil.zip"
+    kit.write_bytes(crafted_zip(dict(good_kit()), how))
+    with pytest.raises(kit_mod.KitError) as exc:
+        kit_mod.apply_from_zip(kit, repo, "~/Downloads/evil.zip")
+    said = strip_paths(str(exc.value))
+    assert said == f"1 of 3 entries are not repository paths ({DISAGREE[how]})", said
+
+
+@pytest.mark.skipif(shutil.which("unzip") is None, reason="needs Info-ZIP unzip")
+def test_unzip_writes_the_unicode_path_of_the_crafted_zip(tmp_path: Path) -> None:
+    """The crafted zip is the attack: `unzip -o` writes `.git/hooks/pre-commit`,
+    not `docs/notes.md`, and `ZipInfo.filename` says the same."""
+    kit = tmp_path / "evil.zip"
+    kit.write_bytes(crafted_zip(dict(good_kit()), "unicode"))
+    with zipfile.ZipFile(kit) as archive:
+        (info,) = [each for each in archive.infolist() if each.orig_filename == CRAFTED_NAME]
+        assert info.filename == CRAFTED_TARGET
+    into = tmp_path / "into"
+    into.mkdir()
+    subprocess.run(["unzip", "-q", "-o", str(kit)], cwd=into, check=True)
+    assert (into / CRAFTED_TARGET).is_file()
+    assert not (into / CRAFTED_NAME).exists()
+
+
+def test_a_zip_with_a_unicode_path_field_that_agrees_passes(tmp_path: Path, repo: Path) -> None:
+    """A Unicode Path field naming the entry's own name is no disagreement."""
+    import struct
+    import zlib
+
+    raw = b"docs/NOTE.md"
+    kit = tmp_path / "agree.zip"
+    with zipfile.ZipFile(kit, "w") as archive:
+        for good, text in good_kit().items():
+            archive.writestr(good, text)
+        info = zipfile.ZipInfo(raw.decode())
+        info.extra = struct.pack("<HHBL", 0x7075, 5 + len(raw), 1, zlib.crc32(raw)) + raw
+        archive.writestr(info, "x")
+    code, out, _ = run_check(kit, repo)
+    assert code == 0, out
+    adds = kit_mod.apply_from_zip(kit, repo, "~/Downloads/agree.zip").adds
+    assert adds == ["docs/NOTE.md", "meta/BUILDER-11-PROMPT.md"], adds
+
+
+def test_a_zip_entry_name_that_is_not_ascii_passes_only_marked_utf8(
+    tmp_path: Path, repo: Path
+) -> None:
+    """A name not marked UTF-8 is read as cp437 by zipfile and in the host's charset
+    by other unzips, so a non-ASCII one has no one name: refused. Marked, it passes."""
+    marked = zipped(tmp_path / "marked.zip", [("docs/\u00e9.md", b"x")])
+    code, out, _ = run_check(marked, repo)
+    assert code == 0, out
+    unmarked = zipped(tmp_path / "unmarked.zip", [("docs/X.md", b"x")])
+    unmarked.write_bytes(unmarked.read_bytes().replace(b"docs/X.md", b"docs/\x82.md"))
+    failed = assert_failed_only(*run_check(unmarked, repo)[:2], "paths")
+    assert "(a name that is not ASCII and not marked UTF-8)" in strip_paths(failed), failed
+    with pytest.raises(kit_mod.KitError, match="not marked UTF-8"):
+        kit_mod.apply_from_zip(unmarked, repo, "~/Downloads/unmarked.zip")
+
+
+def test_a_dir_kit_entry_inside_claude_fails(tmp_path: Path, repo: Path) -> None:
+    kit = write_tree(tmp_path / "k", {**good_kit(), ".claude/settings.json": "{}"})
+    failed = assert_failed_only(*run_check(kit, repo)[:2], "paths")
+    assert ".claude/settings.json (a path inside .claude)" in strip_paths(failed), failed
+
+
+@pytest.mark.parametrize("into", [".claude", ".git"])
+def test_an_entry_that_lands_inside_claude_or_git_through_a_repo_symlink_fails(
+    tmp_path: Path, repo: Path, into: str
+) -> None:
+    """`cfg -> .claude` in the repo: the entry `cfg/settings.json` resolves into it."""
+    (repo / into).mkdir()
+    (repo / "cfg").symlink_to(into)
+    kit = zipped(tmp_path / "link.zip", [("cfg/settings.json", b"{}")])
+    failed = assert_failed_only(*run_check(kit, repo)[:2], "paths")
+    assert "cfg/settings.json (lands inside .git or .claude through a symlink)" in strip_paths(
+        failed
+    ), failed
+    with pytest.raises(kit_mod.KitError, match="lands inside .git or .claude"):
+        kit_mod.apply_from_zip(kit, repo, "~/Downloads/link.zip")
 
 
 # ------------------------------------------------------------- b. playbook
@@ -1826,11 +1939,69 @@ def test_the_daemon_refuses_a_kit_that_fails_the_check_with_the_checks_output(
     drive(body)
     said = strip_paths(str(answers.get("refused")))
     assert "hands kit check" in strip_paths(said) and "§33" in strip_paths(said), said
-    for check in ("playbook", "brief", "verdicts", "wording"):
+    # §33 (H-036): the kit's `.claude/` entries fail `paths` too, since mission 17 U2.
+    for check in ("paths", "playbook", "brief", "verdicts", "wording"):
         assert f"FAIL {check}: " in said, (check, said)
-    assert "PASS paths: " in strip_paths(said), said
+    assert ".claude/settings.json (a path inside .claude)" in strip_paths(said), said
     assert answers["jobs"] == [], "a kit that fails the check was filed"
     assert answers["kits"] == [], "a refused kit stayed in the spool"
+
+
+@pytest.mark.parametrize("how", CRAFTED_HOWS)
+def test_the_daemon_refuses_a_kit_whose_entry_names_disagree_and_files_a_clean_one(
+    tmp_home: Path, tmp_path: Path, how: str
+) -> None:
+    """§33 (REVIEW-16 blocker 2, H-036): the reviewer's zip over a raw socket
+    `kit_file` during an open consultation — refused with the check's `paths` FAIL,
+    nothing filed or kept — and the same kit without that entry is filed, held."""
+    import asyncio
+    import base64
+
+    from hands.cli import call
+    from harness import (
+        architect_table,
+        close_consultation,
+        config_body,
+        drive,
+        open_consultation,
+        write_project,
+    )
+
+    workdir = write_tree(
+        tmp_path / "work", {"PLAYBOOK.toml": PLAYBOOK, "meta/REVIEW-PROTOCOL.md": PROTOCOL}
+    )
+    write_project(tmp_home, config_body(tmp_home, workdir, extra=architect_table(tmp_home)))
+    socket_path = tmp_home / ".hands" / "handsd.sock"
+    evil = base64.b64encode(crafted_zip(dict(good_kit()), how)).decode()
+    clean = base64.b64encode(kit_mod.build_zip(write_tree(tmp_path / "m17", good_kit())))
+    answers: dict[str, object] = {}
+
+    async def body(daemon) -> None:
+        consulting = open_consultation(daemon)
+        try:
+            await asyncio.to_thread(call, socket_path, "kit_file", {"name": "evil", "zip": evil})
+        except Exception as exc:  # the client's refusal of an error answer
+            answers["refused"] = str(exc)
+        answers["jobs_after_evil"] = [
+            job for job in daemon.spool.list_jobs() if job.role != "architect"
+        ]
+        kits = daemon.spool.root / "kits"
+        answers["kits_after_evil"] = sorted(kits.glob("*")) if kits.exists() else []
+        answers["filed"] = await asyncio.to_thread(
+            call, socket_path, "kit_file", {"name": "m17", "zip": clean.decode()}
+        )
+        close_consultation(daemon, consulting)
+
+    drive(body)
+    said = strip_paths(str(answers.get("refused")))
+    assert "FAIL paths: " in strip_paths(said), said
+    assert f"{CRAFTED_NAME} ({DISAGREE[how]})" in strip_paths(said), said
+    assert answers["jobs_after_evil"] == [], "a kit whose names disagree was filed"
+    assert answers["kits_after_evil"] == [], "a refused kit stayed in the spool"
+    filed = answers["filed"]
+    assert isinstance(filed, dict) and filed["state"] == "held", filed
+    assert filed["origin"] == "architect", filed
+    assert ".git" not in strip_paths(filed["prompt"]), filed
 
 
 @pytest.mark.parametrize("configured", [True, False], ids=["no consultation", "no role"])

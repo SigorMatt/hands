@@ -28,11 +28,17 @@ under that name, and differs in that location for any other `kit_dir`.
 The checks, in order (docs/ARCHITECT-HANDBOOK.md §11 says the same):
 
 * `paths` — every entry is a repository path: relative, no `..`, `.` or empty
-  component, no NUL, no backslash, no drive letter, nothing under `.git` in any
-  letter case, no symlink entry (a kit is whole files), no zip entry name twice,
-  and it lands inside `--repo` once the repo's own symlinks are resolved. No
-  entry is over `MAX_ENTRY_BYTES` and the kit is not over `MAX_TOTAL_BYTES`, by
-  the sizes the zip's directory declares, read before any byte is (§27).
+  component, no NUL, no backslash, no drive letter, nothing under `.git` or
+  `.claude` at any depth in any letter case, no symlink entry (a kit is whole
+  files), no zip entry name twice, and it lands inside `--repo`, and not inside
+  `.git` or `.claude`, once the repo's own symlinks are resolved. No entry is over
+  `MAX_ENTRY_BYTES` and the kit is not over `MAX_TOTAL_BYTES`, by the sizes the
+  zip's directory declares, read before any entry's content is (§27). §33: a zip
+  entry is judged by its central-directory name, the one `unzip` extracts; an
+  entry whose local-header name, or a Unicode Path extra field (0x7075) in either
+  header, names anything else, or whose non-ASCII name is not marked UTF-8, is
+  refused. `_zip_entries` is that one judge, and handsd's `apply_from_zip` (the
+  phone's kit, `kit_file`) uses it too.
 * `playbook` — the playbook in force is the kit's `PLAYBOOK.toml` or
   `meta/PLAYBOOK.toml` (DESIGN §10's two spellings; there is no config to name
   another path), else the repo's at the same paths. It is parsed by
@@ -97,6 +103,7 @@ import os
 import re
 import shlex
 import stat
+import struct
 import subprocess
 import tempfile
 import zipfile
@@ -356,6 +363,96 @@ def _path_problem(name: str) -> str | None:
     return None
 
 
+#: §33: the directories no kit entry may write into, compared case-folded (`.GIT` is
+#: `.git`, `.Claude` is `.claude`, where the filesystem folds case), at any depth.
+TOOLING_DIRS = (".git", ".claude")
+
+
+def _entry_problem(name: str) -> str | None:
+    """Why `name` — the name extraction writes — is refused as a kit entry, or None.
+
+    A repository path (`_path_problem`) that is not inside `.claude` at any depth
+    in any letter case (§33); `.git` is already `_path_problem`'s. A send prompt's
+    named paths are judged by `_path_problem` alone: naming a hook is not writing it.
+    """
+    problem = _path_problem(name)
+    if problem is None and any(part.lower() == ".claude" for part in name.split("/")):
+        problem = "a path inside .claude"
+    return problem
+
+
+#: §33: why a zip entry whose names disagree is refused (`_names_problem`).
+UNICODE_NAME = "a Unicode Path extra field naming another file"
+LOCAL_NAME = "a local-header name that differs from the central directory's"
+UNMARKED_NAME = "a name that is not ASCII and not marked UTF-8"
+_UTF8_FLAG = 0x800
+_UNICODE_PATH_ID = 0x7075
+_LOCAL_SIGNATURE = b"PK\x03\x04"
+#: A local file header: signature, versions, flags, method, time, date, CRC,
+#: sizes, then the name's length (field 10) and the extra field's (field 11).
+_LOCAL_HEADER = struct.Struct("<4s2B4HL2L2H")
+
+
+def _unicode_paths(extra: bytes) -> list[str] | None:
+    """The names the Info-ZIP Unicode Path fields (0x7075) of `extra` give, or None
+    when a field overruns the extra data or does not decode. Fewer than four
+    trailing bytes are ignored, as zipfile ignores them."""
+    names: list[str] = []
+    while len(extra) >= 4:
+        kind, size = struct.unpack("<HH", extra[:4])
+        if 4 + size > len(extra):
+            return None
+        if kind == _UNICODE_PATH_ID:
+            if size < 5:
+                return None
+            try:
+                names.append(extra[9 : 4 + size].decode("utf-8"))
+            except UnicodeDecodeError:
+                return None
+        extra = extra[4 + size :]
+    return names
+
+
+def _names_problem(archive: zipfile.ZipFile, info: zipfile.ZipInfo) -> str | None:
+    """Why the names a reader of the zip may take for `info` disagree, or None when
+    every one is the central directory's (§33).
+
+    The names: the central directory's raw name, `ZipInfo.filename` (which takes a
+    Unicode Path field whose CRC matches, as `unzip` does), every Unicode Path field
+    of the central directory and of the local header whatever its CRC, and the local
+    header's raw name, read from the file at `header_offset`. A non-ASCII name not
+    marked UTF-8 is refused: zipfile reads it as cp437, other tools in their charset.
+    """
+    name = info.orig_filename
+    utf8 = bool(info.flag_bits & _UTF8_FLAG)
+    if not name.isascii() and not utf8:
+        return UNMARKED_NAME
+    central = _unicode_paths(info.extra)
+    if central is None or info.filename != name or any(other != name for other in central):
+        return UNICODE_NAME
+    fp = archive.fp
+    if fp is None:
+        return LOCAL_NAME
+    try:
+        fp.seek(info.header_offset)
+        header = _LOCAL_HEADER.unpack(fp.read(_LOCAL_HEADER.size))
+        local_name = fp.read(header[10])
+        local_extra = fp.read(header[11])
+    except (OSError, ValueError, struct.error):
+        return LOCAL_NAME
+    if (
+        header[0] != _LOCAL_SIGNATURE
+        or local_name != name.encode("utf-8" if utf8 else "cp437")
+        or (not name.isascii() and not header[3] & _UTF8_FLAG)
+        or len(local_extra) != header[11]
+    ):
+        return LOCAL_NAME
+    local = _unicode_paths(local_extra)
+    if local is None or any(other != name for other in local):
+        return UNICODE_NAME
+    return None
+
+
 def _shown(name: str) -> str:
     """A name fit for a report line: a NUL is written `\\0`."""
     return name.replace("\0", "\\0")
@@ -363,12 +460,18 @@ def _shown(name: str) -> str:
 
 def _zip_entries(
     archive: zipfile.ZipFile,
-) -> tuple[list[zipfile.ZipInfo], list[tuple[str | None, str]], bool]:
-    """The zip's file entries that are repository paths, the problems, and whether
-    the declared total is under the cap — from its directory alone, no byte read.
+) -> tuple[list[tuple[str, zipfile.ZipInfo]], list[tuple[str | None, str]], bool]:
+    """The one judge of a zip's entries (§33), shared by `kit check` (`_read_zip`)
+    and handsd (`apply_from_zip`, for the phone's kit and `kit_file`): the file
+    entries that are repository paths, by the name extraction writes, the problems,
+    and whether the declared total is under the cap — from the central directory
+    and each entry's local header, no entry's content read.
 
-    A problem is `(the entry's name, why)`, or `(None, why)` for the kit's total.
-    A directory entry is checked and never a file.
+    An entry is judged by its central-directory name, which is what `unzip`
+    extracts; any other name a reader may take (`_names_problem`) that differs
+    refuses it, so the name judged is the name written. A problem is `(the entry's
+    name, why)`, or `(None, why)` for the kit's total. A directory entry is checked
+    and never a file.
     """
     infos = archive.infolist()
     # The sizes the zip's directory declares, before any byte is read; zipfile
@@ -382,20 +485,22 @@ def _zip_entries(
             f"the entries declare {declared} bytes, over the {MAX_TOTAL_BYTES}-byte cap "
             "on a kit's total",
         ))  # fmt: skip
-    good: list[zipfile.ZipInfo] = []
+    good: list[tuple[str, zipfile.ZipInfo]] = []
     seen: set[str] = set()
     for info in infos:
-        name = info.orig_filename  # `filename` is cut at a NUL; this is the name stored
+        # The central directory's name: `filename` is cut at a NUL and may be a
+        # Unicode Path field's; `_names_problem` refuses any name that differs.
+        name = info.orig_filename
         if name in seen:  # zipfile would keep only one of them
             problems.append((name, "a duplicate entry"))
             continue
         seen.add(name)
         if name.endswith("/"):
-            problem = _path_problem(name.rstrip("/"))
+            problem = _entry_problem(name.rstrip("/")) or _names_problem(archive, info)
             if problem:
                 problems.append((name, problem))
             continue
-        problem = _path_problem(name)
+        problem = _entry_problem(name) or _names_problem(archive, info)
         if problem is None and stat.S_ISLNK(info.external_attr >> 16):
             problem = "a symlink"
         elif problem is None and info.file_size > MAX_ENTRY_BYTES:
@@ -403,7 +508,7 @@ def _zip_entries(
         if problem:
             problems.append((name, problem))
             continue
-        good.append(info)
+        good.append((name, info))
     return good, problems, whole
 
 
@@ -433,12 +538,12 @@ def _read_zip(path: Path) -> _Kit:
     with archive:
         good, found, whole = _zip_entries(archive)
         problems = [_problem_text(name, problem) for name, problem in found]
-        for info in good if whole else []:
+        for name, info in good if whole else []:
             data = _read_entry(archive, info)
             if isinstance(data, str):
-                problems.append(_problem_text(info.orig_filename, data))
+                problems.append(_problem_text(name, data))
             else:
-                files[info.orig_filename] = data
+                files[name] = data
     return _Kit(filename=path.name, files=files, problems=problems)
 
 
@@ -456,7 +561,7 @@ def _read_dir(root: Path) -> _Kit:
         for name in sorted(filenames):
             path = here / name
             where = path.relative_to(root).as_posix()
-            problem = _path_problem(where)
+            problem = _entry_problem(where)
             if problem is None and path.is_symlink():
                 problem = "a symlink"
             elif problem is None and not path.is_file():
@@ -575,13 +680,29 @@ def _inside(repo: Path, name: str) -> bool:
     return landed == real_repo or landed.startswith(real_repo + os.sep)
 
 
-#: Why an entry that is a repository path is still refused (`_check_paths`).
+#: Why an entry that is a repository path is still refused (`_landing_problem`).
 OUTSIDE = "lands outside the repo through a symlink"
+INSIDE_TOOLING = "lands inside .git or .claude through a symlink"
+
+
+def _landing_problem(repo: Path, name: str) -> str | None:
+    """Why the entry `name` lands where no kit writes once the repo's own symlinks
+    are resolved — outside the repo, or inside `TOOLING_DIRS` (§33) — or None."""
+    if not _inside(repo, name):
+        return OUTSIDE
+    real_repo = os.path.realpath(repo)
+    landed = os.path.relpath(os.path.realpath(repo / name), real_repo)
+    if any(part.lower() in TOOLING_DIRS for part in landed.split(os.sep)):
+        return INSIDE_TOOLING
+    return None
 
 
 def _check_paths(kit: _Kit, repo: Path) -> Check:
     problems = list(kit.problems)
-    problems += [f"{name} ({OUTSIDE})" for name in sorted(kit.files) if not _inside(repo, name)]
+    for name in sorted(kit.files):
+        landing = _landing_problem(repo, name)
+        if landing:
+            problems.append(f"{name} ({landing})")
     total = len(kit.files) + len(kit.problems)
     if problems:
         return Check(
@@ -1116,7 +1237,7 @@ def apply_from_zip(path: Path, repo: Path, location: str) -> Apply:
     """handsd's apply for a kit received from the phone (§27), or `KitError` saying why not.
 
     The zip's directory is listed, never extracted: the entries are checked by
-    `kit check`'s path rules (`_zip_entries`, `_inside`), and only a `KIT.md`
+    `kit check`'s one judge (`_zip_entries`, `_landing_problem`), and only a `KIT.md`
     entry is read. The refusal names the kinds of problem and their count, never
     an entry's name (text the sender chose). Only `KIT.md` is decompressed, so a
     corrupt other entry is found by the builder's unzip, not here.
@@ -1132,9 +1253,9 @@ def apply_from_zip(path: Path, repo: Path, location: str) -> Apply:
             raise KitError("the kit is not a readable zip") from exc
         if not whole:
             raise KitError(next(problem for name, problem in found if name is None))
-        names = [info.orig_filename for info in good]
+        names = [name for name, _ in good]
         kinds = [problem for name, problem in found if name is not None]
-        kinds += [OUTSIDE for name in names if not _inside(repo, name)]
+        kinds += [landing for name in names if (landing := _landing_problem(repo, name))]
         total = len(names) + len(found)
         if kinds:
             listed = "; ".join(dict.fromkeys(kinds))
@@ -1144,8 +1265,8 @@ def apply_from_zip(path: Path, repo: Path, location: str) -> Apply:
         if not names:
             raise KitError("the kit holds no files")
         kit_md = None
-        for info in good:
-            if info.orig_filename == KIT_MD:
+        for name, info in good:
+            if name == KIT_MD:
                 data = _read_entry(archive, info)
                 if isinstance(data, str):
                     raise KitError(f"the kit's {KIT_MD} is {data}")
@@ -1350,7 +1471,8 @@ def build_zip(root: Path) -> bytes:
     """§32: the zip of a directory kit, its entries at their paths relative to `root`.
 
     `kits/m16/meta/X.md` is the entry `meta/X.md`. The choices §32 leaves open:
-    a dotfile is an entry like any other (`kit check`'s `paths` refuses `.git`);
+    a dotfile is an entry like any other (`kit check`'s `paths` refuses `.git`
+    and `.claude`, §33);
     an empty directory carries nothing, because a kit is files; a symlink
     anywhere inside, to a file or a directory, and anything that is not a
     regular file, refuse the whole kit (`KitError`), because a link would carry

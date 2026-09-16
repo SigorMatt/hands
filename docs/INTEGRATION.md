@@ -563,9 +563,11 @@ when all of that holds, and says what is missing when it does not.
    1-65535, or holds whitespace is refused before any fetch, as `kit.refused`
    naming the check.
    The job is held, not run. A zip that cannot be read, holds no files, or has
-   an entry that is not a repository path (absolute, `..`, under `.git`, a
-   duplicate, over the size caps, or landing outside the repo through a
-   symlink) files no job: the inbox gets `kit.refused` ("the apply was not
+   an entry that is not a repository path (absolute, `..`, under `.git` or
+   `.claude`, a duplicate, over the size caps, landing outside the repo or
+   inside `.git` or `.claude` through a symlink, or whose local-header name or
+   Unicode Path extra field names another file than the central directory's,
+   the name `unzip` extracts — DESIGN §33) files no job: the inbox gets `kit.refused` ("the apply was not
    filed: …", the kinds of problem, never an entry's name), and the kit stays
    in `kit_dir`, so `hands kit check` on it names the entry. A builder that is
    busy does not refuse the apply; it waits, held, for your decision.

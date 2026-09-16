@@ -28,7 +28,8 @@ plan-only builder job that handsd creates when you file them.
    anything; `templates/` are your forms.
 3. Your output is one kit: a directory under KITS laid out as the
    repository (`kits/<name>/<repository path>`), which `hands kit file`
-   zips and files for you; its entries are repository paths (the next brief or run plan, `DESIGN.md` when the design changes,
+   zips and files for you; its entries are repository paths, never under
+   `.git/` or `.claude/` (the next brief or run plan, `DESIGN.md` when the design changes,
    `PLAYBOOK.toml` when rules or the kickoff change, `KIT.md` with the
    commit message, decisions when memos are answered). Whole files, never
    patches. Every mission file is self-contained: the sub-agent brief and

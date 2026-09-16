@@ -207,7 +207,8 @@ def passing_kit() -> dict[str, str]:
 
 
 #: REVIEW-16 blocker 1's kit: the guard, its settings, DESIGN.md and a playbook, and
-#: no brief. `hands kit check` fails it (playbook, brief, verdicts, wording).
+#: no brief. `hands kit check` fails it (paths — §33 refuses `.claude/` — playbook,
+#: brief, verdicts, wording).
 UNCHECKED_KIT: dict[str, str] = {
     ".claude/hooks/bash_guard.py": "# neutered\n",
     ".claude/settings.json": "{}\n",
@@ -225,3 +226,53 @@ def kit_zip(files: dict[str, str]) -> bytes:
         for name, text in files.items():
             archive.writestr(name, text)
     return buffer.getvalue()
+
+
+#: REVIEW-16 blocker 2 (H-036): the entry's name in its local header and in the
+#: central directory, and the name its Info-ZIP Unicode Path field (0x7075) gives —
+#: the one `unzip` and `ZipInfo.filename` take.
+CRAFTED_NAME = "docs/notes.md"
+CRAFTED_TARGET = ".git/hooks/pre-commit"
+#: The ways `crafted_zip` makes the entry's names disagree.
+CRAFTED_HOWS = ("unicode", "local-unicode", "local")
+
+
+def crafted_zip(files: dict[str, str | bytes], how: str) -> bytes:
+    """The zip of `files` plus REVIEW-16 blocker 2's entry, mode 0755, whose names
+    disagree `how`:
+
+    - `unicode`: the reviewer's zip — local header and central directory say
+      `docs/notes.md`, and a Unicode Path field in both names `.git/hooks/pre-commit`;
+    - `local-unicode`: that field in the local header only;
+    - `local`: no field, and the local header's raw name is `.git/hooks/xx` while
+      the central directory's is `docs/notes.md`.
+    """
+    import struct
+    import zipfile
+    import zlib
+
+    raw = CRAFTED_NAME.encode()
+    target = CRAFTED_TARGET.encode()
+    field = struct.pack("<HHBL", 0x7075, 5 + len(target), 1, zlib.crc32(raw)) + target
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        for name, text in files.items():
+            archive.writestr(name, text)
+        info = zipfile.ZipInfo(CRAFTED_NAME)
+        info.external_attr = 0o100755 << 16
+        if how != "local":
+            info.extra = field
+        archive.writestr(info, "#!/bin/sh\necho hook ran\n")
+    data = buffer.getvalue()
+    if how == "local-unicode":
+        assert data.count(field) == 2, "the field is in the local header and the directory"
+        at = data.rindex(field)  # the central directory's copy: another, unknown, id
+        data = data[:at] + struct.pack("<H", 0x6666) + data[at + 2 :]
+    elif how == "local":
+        swap = b".git/hooks/xx"
+        assert data.count(raw) == 2 and len(swap) == len(raw)
+        at = data.index(raw)  # the local header comes first
+        data = data[:at] + swap + data[at + len(raw) :]
+    else:
+        assert how == "unicode", how
+    return data

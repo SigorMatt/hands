@@ -1793,10 +1793,12 @@ def test_a_kit_files_a_held_builder_apply_whose_prompt_is_kit_checks_byte_for_by
         ([("meta/../../x.md", b"x")], "1 of 4 entries are not repository paths (a .. component)"),
         ([(".git/hooks/post-checkout", b"x")],
          "1 of 4 entries are not repository paths (a path inside .git)"),
+        ([(".claude/settings.json", b"{}")],
+         "1 of 4 entries are not repository paths (a path inside .claude)"),
         ([("docs/N.md", b"1"), ("docs/N.md", b"2")],
          "1 of 5 entries are not repository paths (a duplicate entry)"),
     ],
-    ids=["dotdot", "absolute", "inner-dotdot", "git", "duplicate"],
+    ids=["dotdot", "absolute", "inner-dotdot", "git", "claude", "duplicate"],
 )  # fmt: skip
 def test_a_kit_with_an_entry_outside_the_repo_is_refused_with_no_job(
     kit_project: str,
@@ -1823,6 +1825,44 @@ def test_a_kit_with_an_entry_outside_the_repo_is_refused_with_no_job(
     assert_kit_refused(caplog, ": the apply was not filed: ")
     for name, _ in entries:
         assert name not in strip_paths(caplog.text)
+
+
+@pytest.mark.parametrize(
+    "how,why",
+    [
+        ("unicode", "a Unicode Path extra field naming another file"),
+        ("local-unicode", "a Unicode Path extra field naming another file"),
+        ("local", "a local-header name that differs from the central directory's"),
+    ],
+)
+def test_a_kit_whose_entry_names_disagree_is_refused_with_no_job(
+    kit_project: str,
+    workdir: Path,
+    downloads: Path,
+    kit_server: KitServer,
+    caplog: pytest.LogCaptureFixture,
+    how: str,
+    why: str,
+) -> None:
+    """§33 (REVIEW-16 blocker 2, H-036): the reviewer's zip from the phone — the
+    apply would have named `docs/notes.md` while unzip writes `.git/hooks/pre-commit`
+    — is `kit.refused`, no job, and names neither."""
+    from harness import CRAFTED_NAME, CRAFTED_TARGET, crafted_zip
+
+    caplog.set_level(logging.DEBUG)
+    body_zip = crafted_zip(dict(good_entries(None)), how)
+
+    async def body(daemon: Daemon, fake: FakeNtfy) -> None:
+        assert await kit_jobs(daemon, fake, kit_server.attach("evil.zip", body_zip)) == []
+        assert kit_refusals(daemon) == [
+            {"reason": f"the apply was not filed: 1 of 4 entries are not repository paths ({why})"}
+        ]
+        assert list(workdir.iterdir()) == []
+
+    phone_drive(body)
+    assert_kit_refused(caplog, ": the apply was not filed: ")
+    assert CRAFTED_NAME not in strip_paths(caplog.text)
+    assert CRAFTED_TARGET not in strip_paths(caplog.text)
 
 
 def test_a_kit_entry_that_lands_outside_the_repo_through_a_symlink_is_refused(
