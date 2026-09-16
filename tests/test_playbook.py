@@ -447,16 +447,18 @@ def test_a_series_string_and_a_series_table_together_is_not_toml(tmp_path: Path)
     assert "is not valid TOML" in strip_paths(str(caught.value))
 
 
-def test_the_repositorys_own_playbook_stops_on_the_mission_8_detectors() -> None:
-    """§24: `monitor.task_killed` and `monitor.orphan_processes` map to `stop`.
-    Read through the real loader."""
+def test_the_repositorys_own_playbook_maps_the_mission_8_detectors() -> None:
+    """§24: `monitor.orphan_processes` maps to `stop`. §32: `monitor.task_killed`
+    maps to `notify` in this repository's playbook — the detector cannot tell a
+    reap from a `TaskStop` or a reaped long foreground command, and a job that
+    ends `failed` is what stops. Read through the real loader."""
     path = Path(__file__).parents[1] / "PLAYBOOK.toml"
     book = load_playbook(path)
     assert book is not None, "the repository's PLAYBOOK.toml is missing"
-    for event in ("monitor.task_killed", "monitor.orphan_processes"):
+    for event, then in (("monitor.task_killed", "notify"), ("monitor.orphan_processes", "stop")):
         rules = [rule for rule in book.rules if rule.on == event]
         assert rules, f"PLAYBOOK.toml has no rule for {event}"
-        assert [rule.then for rule in rules] == ["stop"], (event, rules)
+        assert [rule.then for rule in rules] == [then], (event, rules)
         assert rules[0].verdict is None, "a monitor event has no verdict to match"
 
 

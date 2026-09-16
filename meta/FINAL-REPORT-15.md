@@ -112,6 +112,26 @@ sleep date echo kill -0` now read in the driver role, where they were refused
 before. That is §31's instruction ("Role mode is the same table"), it is the
 one loosening in the mission, and it has no operational evidence behind it.
 
+Correction appended 2026-09-16 (mission 16 U0, from REVIEW-15 blockers 1 and 2
+and should-fix 7):
+- "The listed commands take only the listed options" is false: `for o in -f;
+  do tail $o /etc/hostname; done` exits 0 in normal and driver mode, because
+  the row judges the literal `$o` and bash expands it after the guard allows
+  it; `wc --files0-from=`, `grep -f` and `date --set` got through the same way.
+- The guard ran an arbitrary program in all three modes: `for a in '$x'; do
+  echo; done; for c in ${a%x}'(touch${IFS}/tmp/PWN)'; do echo ${c@P}; done`
+  exits 0 and creates the file under bash. The `for` segment was not judged
+  and `${…}` was checked only in the `git` and `hands` rows. In role mode this
+  is a regression of U1's widening; the parent refused it. H-033.
+- Role mode's widened reads have no path bound: `cat ~/.ssh/id_rsa`, `cat
+  /proc/self/environ` and `grep -r x /` exit 0 in driver and architect mode.
+  "Read in the driver role" understated it.
+- §1's U3 row lists `unzip` among the `HANDS_KITS`-confined words. Only its
+  path arguments were confined: `unzip -o kits/attack.zip` with no `-d`
+  extracted into the role's cwd, the parent of `HANDS_KITS`, and overwrote
+  `.claude/settings.json` and `.claude/hooks/bash_guard.py`. §31 never listed
+  `unzip`; DESIGN v3.15 §32 removes it and `zip` (H-030).
+
 **3.2 The architect role cannot yet file a usable kit (H-030).** With the
 words §31 gives it, the architect can write a zip under `HANDS_KITS` but
 cannot make the zip's entries repository paths: `zip` has no chdir option,

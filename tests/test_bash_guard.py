@@ -1968,7 +1968,8 @@ def test_every_command_line_the_architect_kit_shows_passes_the_guard(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     """`architect/CLAUDE.md` is the role's contract (§31): a line it shows that
-    the guard refuses is a line the architect cannot run at all."""
+    the guard refuses is a line the architect cannot run at all. Since DESIGN
+    v3.15 §32 a kit is a directory, `kits/<name>`, filed with `hands kit file <dir>`."""
     import re as _re
 
     monkeypatch.chdir(tmp_path)
@@ -1976,7 +1977,7 @@ def test_every_command_line_the_architect_kit_shows_passes_the_guard(
     spans = [span.strip() for span in _re.findall(r"`([^`\n]+)`", text)]
     lines = []
     for span in spans:
-        span = span.replace("<zip>", "./kits/m16.zip").replace("KITS", "./kits")
+        span = span.replace("kits/<name>", "kits/m16").replace("KITS", "./kits")
         head = span.split(" ", 1)[0]
         if head not in guard.COMMAND_TABLE and head not in guard.KITS_TABLE:
             continue
@@ -1984,6 +1985,7 @@ def test_every_command_line_the_architect_kit_shows_passes_the_guard(
             continue
         lines.append(span)
     assert "git -C ./repo fetch" in lines
-    assert "hands kit file ./kits/m16.zip" in lines
+    assert "hands kit file kits/m16" in lines
+    assert "hands kit check kits/m16 --repo ./repo" in lines
     for line in lines:
         assert guard.check(line, **ARCHITECT) is None, f"the kit shows a refused line: {line}"

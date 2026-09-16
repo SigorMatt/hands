@@ -1566,7 +1566,18 @@ Direction — three candidates, none of them this unit's to choose:
 Until one is decided, an architect role that reaches rule 3 will either file a
 kit whose entries are wrong or escalate.
 
-Status: open (found while building mission 15 U3; U3 implements §31 as written)
+Resolution appended 2026-09-16 (mission 16 U0, from DESIGN v3.15 §32). The
+first candidate is chosen. `unzip` and `zip` leave the architect's table; the
+architect stages a directory `kits/<name>/<repository paths>` and files it with
+`hands kit file <dir>`, which builds the zip itself, checks it against the
+role's clone, refuses a failing kit with the check's output, and files the held
+apply (`origin: architect`). `mkdir`, `cp` and `mv` remain, every path argument
+under `HANDS_KITS` and no option that names another path. The Write/Edit
+matcher remains the only way to create file content. The removal of `unzip`
+also closes REVIEW-15 blocker 2 (an `unzip` with no `-d` extracted into the
+role's cwd, the parent of `HANDS_KITS`, over the guard and its settings).
+
+Status: resolved by DESIGN v3.15 (code: mission 16 U2)
 
 ---
 
@@ -1597,7 +1608,12 @@ for. The tidy resolution is a §6 line that reads `decided_by:
 cli|driver|phone|playbook`, after which the assertion goes back to equality;
 DESIGN.md is the architect's file, so this unit did not make that edit.
 
-Status: open (worked around in tests/test_docs.py by mission 15 U4)
+Resolution appended 2026-09-16 (mission 16 U0, from DESIGN v3.15 §32). §6 now
+reads `decided_by: cli|driver|phone|playbook`; `playbook` is a `decided_by`
+value. The work-around in `tests/test_docs.py` goes back to equality with §6's
+list (mission 16 U0, because the base commit was red on it).
+
+Status: resolved by DESIGN v3.15 (code: mission 16 U0)
 
 ---
 
@@ -1643,4 +1659,54 @@ except from the phone's `reply` origin (which mission 16 builds), or leave the
 laptop send as the human's own authority and say so in §31. Mission 15 chose
 neither and left the asymmetry, which is why this stays open.
 
-Status: open (found by mission 15 U6; no code changed; it meets mission 16)
+Resolution appended 2026-09-16 (mission 16 U0, from DESIGN v3.15 §32). The
+refusal is chosen: `Api.send` refuses a direct send to any role whose start is
+the engine's (`driver`, `architect`); they are started by `consult` only. A
+laptop `hands send --role architect` is refused as `--role driver` is.
+
+Status: resolved by DESIGN v3.15 (code: mission 16 U3)
+
+---
+
+## H-033 — the guard's language, finished: `$`, braces and reserved words leave it
+
+Severity: high · Component: `driver/hooks/bash_guard.py` (all three modes);
+DESIGN §12, §30, §31, §32; `docs/INTEGRATION.md`
+Filed by: mission 16 U0, orchestrator, from REVIEW-15 blocker 1 (and should-fix
+7).
+
+History, reviews 11–15:
+- Review 11 blocker 1: separators the scanner misread hid a command; mission 12 patched the scanner.
+- Review 12 blocker 1: a `'` inside a `#` comment desynchronised quotes; mission 13 refused `#`.
+- Review 13 blocker 1: a heredoc body did the same; mission 14 made the shell one line (§30, H-026).
+- Review 14 blocker 1: allowed words wrote and ran programs through their options; mission 15 added the command table (§31, H-028).
+- Review 15 blocker 1: a `for` segment went unjudged and `${c@P}` ran `$(…)`, in role mode too; `for o in -f; do tail $o F; done` passed the option tables.
+
+Symptom. Reproduced by REVIEW-15 at 17b12fe, shipped file, hook JSON on stdin:
+
+    for a in '$x'; do echo; done; for c in ${a%x}'(touch${IFS}/tmp/rev15-tip/PWN)'; do echo ${c@P}; done
+      normal exit=0 · HANDS_ROLE=driver exit=0 · HANDS_ROLE=architect exit=0 ; PWN created under bash
+    for o in -f; do tail $o /etc/hostname; done                    -> exit 0 (normal, driver)
+
+§30 refused `$(` and `$'` but not `$` or `${`, and §28's `$`/`{` check applied
+to the `git` and `hands` rows only; the `for` segment was skipped rather than
+judged, so its body's words were never looked up. The option tables compared
+the literal `$o`, which bash expands after the guard has approved it. Role mode
+had refused the probe at 1a48e11 (`'echo'` not allowed) and mission 15 U1's
+widening let it in. Should-fix 7: the widened role-mode reads reach any path the
+user can read (`cat ~/.ssh/id_rsa`, `grep -r x /`), undisclosed.
+
+Resolution (DESIGN v3.15 §32, 2026-09-16): besides §30's refusals the guard
+refuses `$` anywhere, `{` and `}` anywhere, and every reserved word of the shell
+appearing as a word (`for while until if then else elif fi do done case esac
+select function in time coproc ! [[ ]]`), in every mode, before tokenizing.
+What remains is words, `'…'` and `"…"` quotes and the separators `; && || | &`:
+no expansion, no control flow, no redirection, no comment. The option tables
+judge every word including values, and a value that is not a plain word is
+refused. Role and architect modes are strict subsets; role-mode reads are
+confined to the clone and the spool's own paths, and the refusal says so.
+`docs/INTEGRATION.md` states the whole language in one paragraph and lists the
+tables. §30's condition stands: the driver and architect roles are enabled
+after a review finds no hole in this language.
+
+Status: resolved by DESIGN v3.15 (code: mission 16 U1)

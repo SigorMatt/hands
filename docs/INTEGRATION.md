@@ -705,7 +705,7 @@ carries all of it. It reads the review and `meta/ROADMAP.md`, writes the next
 kit, checks it, files it with `hands kit file`, and replies with one verdict
 line. `architect/README.md` is the full recipe; in short:
 
-    mkdir -p ~/hands-architect/<project>/kits && cd ~/hands-architect/<project>
+    mkdir -p ~/hands-architect/<project>/kits   # kits/<name>/<repository paths>, filed with hands kit file && cd ~/hands-architect/<project>
     cp ~/git/hands/architect/CLAUDE.md ./CLAUDE.md        # fill the Parameters block
     mkdir -p .claude/hooks
     cp ~/git/hands/architect/settings.json .claude/settings.json
@@ -748,18 +748,20 @@ must be judged), and on a guard whose `--selftest` is not green; a missing
 clone or a missing kits directory warns, since `HANDS_KITS` names the
 directory whether or not it exists.
 
-**What is not proven (finding H-030, open).** A role session that follows
-`architect/CLAUDE.md` rule 3 cannot yet produce the kit that rule asks for.
-`zip` stores each entry under the path it is given, and architect mode requires
-every path argument to be under `HANDS_KITS`, so the entries come out as
-`kits/<kit>/<file>` and not as repository paths; `hands kit check` passes such a
-kit, because those are syntactically valid repository paths, and the apply would
-tell the builder to add files under `kits/`. The role, its guard mode, `hands
-kit file`, the consult, the budget and the engine's approval are built and
-tested; an architect role filing a kit a builder can apply **is not proven**.
-`meta/findings/FINDINGS.md` H-030 holds the three candidate resolutions. Until
-one is chosen, run `[series] architect = "role"` as an experiment, not as the
-way a series is driven.
+**What is not proven (finding H-030, resolved by DESIGN v3.15 §32; code:
+mission 16 U2).** With the code as built today, a role session that follows
+`architect/CLAUDE.md` rule 3 cannot yet file the kit that rule asks for. `zip`
+stores each entry under the path it is given, and architect mode requires every
+path argument to be under `HANDS_KITS`, so the entries come out as
+`kits/<kit>/<file>` and not as repository paths. DESIGN v3.15 §32 decides the
+resolution: `zip` and `unzip` leave architect mode, and the architect stages a
+directory `kits/<name>/<repository paths>` and files it with `hands kit file
+<dir>`, which builds the zip itself, checks it and files the held apply. That
+is designed, not built: until mission 16 U2 lands, `hands kit file` files a zip
+only. The role, its guard mode, `hands kit file`, the consult, the budget and
+the engine's approval are built and tested; an architect role filing a kit a
+builder can apply **is not proven**. Until then, run `[series] architect =
+"role"` as an experiment, not as the way a series is driven.
 
 **The switch point.** The role takes over from the phone architect at the fully
 reviewed work plan. `architect/README.md` lists the deliverables that must be on

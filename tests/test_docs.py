@@ -223,13 +223,10 @@ def test_the_code_vocabularies_are_section_6s_lists() -> None:
     ]
     assert set(FAILURE_REASONS) == set(reasons) and len(FAILURE_REASONS) == len(reasons)
     deciders = section_6_vocabulary("decided_by")
-    assert deciders == ["cli", "driver", "phone"]
-    # §31 adds a fourth authority — `decided_by: playbook`, the engine releasing a
-    # held apply of origin `architect` under an autonomous playbook — without
-    # restating §6's record line, which still lists three. So the vocabulary in
-    # code is §6's plus that one, and no more (H-031).
-    assert set(DECIDED_BY) == {*deciders, "playbook"}
-    assert len(DECIDED_BY) == len(deciders) + 1
+    assert deciders == ["cli", "driver", "phone", "playbook"]
+    # H-031, resolved by DESIGN v3.15: §6 now lists §31's `playbook`, so the
+    # vocabulary in code is §6's list exactly.
+    assert set(DECIDED_BY) == set(deciders) and len(DECIDED_BY) == len(deciders)
 
 
 def test_the_integration_doc_names_both_vocabularies_and_the_precedence() -> None:
@@ -1397,18 +1394,27 @@ def test_the_integration_doc_names_the_series_keys_and_the_verdicts_from_code() 
     assert "claude --resume" in section
 
 
-def test_the_integration_doc_names_h_030_while_it_is_open() -> None:
-    """The unit's honesty clause: with the words §31 gives it, the architect cannot
-    name a zip's entries as repository paths, so the role cannot yet file a kit a
-    builder can apply. The doc says so and names the finding, for as long as the
-    ledger has it open."""
+def test_the_integration_doc_names_h_030_until_its_code_lands() -> None:
+    """The unit's honesty clause, keyed to the ledger. While H-030 is "resolved by
+    DESIGN v3.15" and its code has not landed (mission 16 U2), the doc names the
+    finding and §32's `hands kit file <dir>`, says the role filing a kit a builder
+    can apply is not proven, and does not call H-030 open."""
     findings = (ROOT / "meta" / "findings" / "FINDINGS.md").read_text(encoding="utf-8")
     memo = flattened(findings.split("## H-030", 1)[1].split("\n## H-", 1)[0])
-    assert "Status: open" in memo, "H-030 is no longer open; docs/INTEGRATION.md must be revisited"
+    status = memo.rsplit("Status: ", 1)[1]
+    assert status.startswith("resolved by DESIGN v3.15 (code: mission 16 U2)"), (
+        f"H-030's status changed ({status[:60]!r}); docs/INTEGRATION.md must be revisited"
+    )
     section = flattened(integration().split(ARCHITECT_SECTION, 1)[1].split("\n## ", 1)[0])
-    assert "H-030" in section, "the architect section does not name the open finding"
-    for said in ("repository paths", "is not proven"):
+    for said in (
+        "H-030, resolved by DESIGN v3.15 §32",
+        "hands kit file <dir>",
+        "repository paths",
+        "is not proven",
+        "mission 16 U2",
+    ):
         assert said in section, f"the architect section does not say {said!r}"
+    assert "H-030, open" not in section, "the architect section still calls H-030 open"
 
 
 def test_the_integration_doc_carries_the_two_project_note_to_the_role_directories() -> None:
