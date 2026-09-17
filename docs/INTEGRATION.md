@@ -116,6 +116,9 @@ cwd` is optional.
     [notify]                             # the two ntfy keys are also read from
     ntfy_topic = "hands-<something-random>"  # [server], where older configs have
     ntfy_url = "https://ntfy.sh"         # them (default); never in both places
+    # ntfy_token = "tk_<…>"                     # optional: a self-hosted ntfy's access
+    #                                           # token, sent as a bearer (§33); see
+    #                                           # "Self-hosted ntfy over Tailscale"
     # cmd_topic = "hands-cmd-<another-random>"  # optional: the command channel,
     # cmd_secret = "<one long random word>"     # required with cmd_topic
     # who_topic = "hands-who-<random>"          # optional: the who view, and
@@ -377,8 +380,9 @@ Three uses of ntfy, each on its own random topic in `[notify]` (DESIGN §11,
 §24). ntfy is never shipped with hands, only spoken to: hands publishes to
 `ntfy_url` (ntfy.sh by default, or your own server), and handsd and `handswho`
 read their command topics by outbound long polls, so nothing listens on this
-machine. All three are off unless configured, and hands runs without any of
-them:
+machine. With `ntfy_token` set, every publish and every subscription carries it
+as a bearer ("Self-hosted ntfy over Tailscale", below). All three are off unless
+configured, and hands runs without any of them:
 
 | what | on when | who reads the topic |
 |---|---|---|
@@ -387,7 +391,8 @@ them:
 | the who view | `who_topic` is set | your phone; `handswho` publishes it |
 
 `hands doctor` reports each of the three as on or off, never as a failure: its
-`notifications`, `phone` and `who` rows. Its `go` and `kit transport` rows
+`notifications`, `phone` and `who` rows; the `notifications` row also says
+`ntfy token on` or `ntfy token off`, never the token. Its `go` and `kit transport` rows
 (§26) are on/off the same way: `go` is on when the command channel is on and
 the playbook in force loads with a `[series] kickoff`, which the row prints —
 and it warns, still green, when that kickoff plainly names a file the builder's
@@ -705,6 +710,132 @@ nothing: the only answer is the same picture. The picture does carry the first
 line of each running job's prompt and of the commands under each session, so
 keep `who_topic` as private as `ntfy_topic`. Without `who_topic`, `handswho`
 exits 1 and names the key.
+
+### Self-hosted ntfy over Tailscale (§33)
+
+On ntfy.sh a topic is only as private as its name, and everything hands
+publishes crosses a public broker: held-job reasons, `status` answers, the
+architect's replies, the who picture, a kit. DESIGN §33's alternative is an ntfy
+server of your own, in a container on the laptop, whose topics require a token,
+reached by the phone through the Tailscale tunnel. Once hands and the phone use
+only that server, free text about a project stops going to a public broker.
+
+What hands does (tested against stand-in servers, see the end of this section):
+`[notify] ntfy_token` is sent as `Authorization: Bearer <token>` on every publish
+(handsd's notifications and answers, `handswho`'s pushes, `hands notify --test`)
+and on every subscription (handsd's `cmd_topic` long poll, `handswho`'s
+`who_cmd_topic`). A kit attachment is fetched with the bearer only when its URL
+has the same scheme, host and port as `ntfy_url`; an attachment anywhere else is
+fetched without it. With no `ntfy_token`, no request carries an
+`Authorization` header. The token must be one word of visible ASCII; anything
+else does not load, and the refusal names `[notify] ntfy_token` without
+printing it. `hands doctor` says `ntfy token on` or `ntfy token off`.
+
+The server setup below is a sketch of ntfy's and Tailscale's own documented
+commands. It was written from their documentation, not run for this repository;
+check each step against the version you install.
+
+**1. The server, in a container.** A config with access control, the
+`binwiloo/ntfy` image, and a port on the laptop's loopback only:
+
+    mkdir -p ~/ntfy/etc ~/ntfy/cache
+    cat > ~/ntfy/etc/server.yml <<'YML'
+    base-url: "https://<laptop>.<tailnet>.ts.net"
+    listen-http: ":80"
+    behind-proxy: true
+    cache-file: "/var/cache/ntfy/cache.db"
+    auth-file: "/var/cache/ntfy/user.db"
+    auth-default-access: "deny-all"
+    attachment-cache-dir: "/var/cache/ntfy/attachments"
+    YML
+    docker run -d --name ntfy --restart unless-stopped \
+      -v ~/ntfy/etc:/etc/ntfy -v ~/ntfy/cache:/var/cache/ntfy \
+      -p 127.0.0.1:2586:80 binwiloo/ntfy serve
+
+`podman run` takes the same arguments. `auth-default-access: "deny-all"` is what
+makes every topic require a user or a token. `attachment-cache-dir` is what lets
+the server take a kit at all. `base-url` is the address the phone uses, and ntfy
+builds attachment URLs from it, so set it to exactly the `ntfy_url` you give
+hands: a kit's URL then has `ntfy_url`'s origin and is fetched with the bearer.
+
+**2. A user, its access, and a token.** One user for hands and the phone:
+
+    docker exec -it ntfy ntfy user add hands          # asks for a password
+    docker exec ntfy ntfy access hands 'hands-*' read-write
+    docker exec ntfy ntfy token add hands             # prints tk_…
+
+`ntfy access` with `hands-*` covers every topic whose name starts with `hands-`,
+which the fresh names in step 5 do. Grant each topic by name instead if you
+prefer. The printed `tk_…` is the token.
+
+**3. Through the Tailscale tunnel.** The phone joins the same tailnet (the
+Tailscale app, signed in to your account). Then either:
+
+- `tailscale serve` on the laptop, which puts `https://<laptop>.<tailnet>.ts.net`
+  in front of `http://127.0.0.1:2586` for tailnet devices only (HTTPS
+  certificates must be enabled for the tailnet). Its arguments, and how it keeps
+  running after the terminal closes, differ between releases: see
+  `tailscale serve --help`. Or
+- publish the container's port on the laptop's tailnet address instead of
+  loopback (`-p 100.x.y.z:2586:80`, from `tailscale ip -4`), with `base-url` and
+  `ntfy_url` set to `http://100.x.y.z:2586`. Traffic inside the tailnet is
+  encrypted by the tunnel, but the container can only bind that address after
+  `tailscaled` is up.
+
+Do not use Tailscale Funnel: it publishes the server to the internet.
+
+**4. Tell hands.** In `~/.hands/<project>.toml`:
+
+    [notify]
+    ntfy_url = "https://<laptop>.<tailnet>.ts.net"
+    ntfy_token = "tk_<the token from step 2>"
+
+`ntfy_url` must be the address the *phone* reaches, not `127.0.0.1`: a held
+job's Approve and Deny buttons carry `ntfy_url` and `cmd_topic`, and the phone
+presses them. Keep the config file private (`chmod 600`). It already holds
+`cmd_secret`.
+
+**5. Move the topics off the public broker.** Every topic hands uses:
+`ntfy_topic`, `cmd_topic`, `who_topic` and `who_cmd_topic`, whichever you set.
+Make each name fresh, because an old name may already be known to whoever read
+it on ntfy.sh:
+
+    python3 -c 'import secrets; print("hands-" + secrets.token_urlsafe(16))'
+
+Once per topic. Then:
+
+1. Put the new names in `[notify]` beside `ntfy_url` and `ntfy_token`. Keep
+   `cmd_secret` if only you have seen it; if it was ever typed on a topic
+   someone else could read, make a new one too.
+2. Restart: `systemctl --user restart handsd@<project>`, and
+   `handswho@<project>` if you run it. `hands doctor` should show
+   `ntfy token on`.
+3. `hands notify --test "self-hosted"` should print `ntfy 200` and your
+   server's URL. A `401` or `403` means the token or its access in step 2 is
+   wrong.
+4. In the ntfy app, add the server and sign in with the same token (or with
+   the `hands` user and password if your app release has no token field). Then
+   subscribe to the new topics on it.
+5. Unsubscribe the old topics on ntfy.sh in the app. What was already published
+   there stays in ntfy.sh's cache until that server expires it, and hands
+   cannot delete it.
+
+From then on handsd, `handswho` and the phone talk only to your server. A
+command typed in the app publishes as the user the app signed in with.
+
+**Not proven here.** No ntfy server, container or Tailscale tunnel was run for
+this section. The tests stand in a server that answers 401 to any request
+without the bearer (`tests/test_ntfy_token.py`): publish, `hands notify --test`,
+handsd's command channel, `handswho`'s push and subscription, and a kit fetched
+from a local HTTP server. Three things were not checked:
+
+- whether the ntfy app signs in with an access token or only with a password;
+- whether a real ntfy asks for authorization on an attachment download;
+- whether the app adds its sign-in to a button's HTTP request.
+
+hands does not put the token in a button. If Approve or Deny does nothing on
+this server and handsd's journal shows no command, decide with a typed
+`approve <job> <secret>` from the app, or `hands approve <job>` at the laptop.
 
 ## 5. The driver session (§14 step 2)
 
@@ -1211,3 +1342,8 @@ of this terminal. The driver does not: it arms nothing, and your message
   `~/.claude/sessions/<pid>.json` (§27, H-020), a file read only as the tests
   write it. Nor has
   `handswho` pushed a picture to, or read a command from, a real topic.
+- **No self-hosted ntfy has been run.** `[notify] ntfy_token` is only proven
+  against stand-in servers that refuse a request without the bearer. The
+  container, the Tailscale tunnel, the phone app's sign-in with a token, and the
+  buttons on a server whose topics require one are unproven ("Self-hosted ntfy
+  over Tailscale").

@@ -139,6 +139,8 @@ from hands.playbook import PlaybookError, load_playbook, playbook_path
 from hands.spool import Job, PathEscape, SpoolError, new_kit_id, resolve_under_roots
 
 if TYPE_CHECKING:  # pragma: no cover
+    import httpx
+
     from hands.daemon import Daemon
 
 __all__ = [
@@ -191,7 +193,7 @@ class PhoneChannel:
         self,
         daemon: Daemon,
         *,
-        stream: Callable[[str], AsyncIterator[str]] | None = None,
+        stream: Callable[..., AsyncIterator[str]] | None = None,
         clock: Callable[[], float] = time.time,
         sleep: Callable[[float], Awaitable[None]] | None = None,
     ) -> None:
@@ -256,7 +258,8 @@ class PhoneChannel:
         while True:
             stream = self.stream if self.stream is not None else notify_mod.http_stream
             try:
-                async for line in stream(self.url()):
+                token = notify_mod.token_kwargs(self.notify.ntfy_token)
+                async for line in stream(self.url(), **token):
                     failures = 0
                     await self._line(line)
                 why = "the stream ended"
@@ -479,7 +482,12 @@ class PhoneChannel:
             return self._refuse_kit("[files] kit_dir is not a directory")
         try:
             written, total, digest = await fetch_kit(
-                url, directory, name, cap=cap, expected=size
+                url,
+                directory,
+                name,
+                cap=cap,
+                expected=size,
+                token=attachment_token(url, self.notify.ntfy_url, self.notify.ntfy_token),
             )
         except _KitRefused as exc:
             return self._refuse_kit(str(exc))
@@ -666,6 +674,40 @@ def url_problem(url: object) -> str | None:
     return None
 
 
+def attachment_token(url: str, ntfy_url: str, token: str | None) -> str | None:
+    """§33's bearer for a kit attachment: the token when `url` is on `ntfy_url`'s own
+    origin (scheme, host and port), else None.
+
+    §33 names publish and subscribe; it is silent on an attachment, which a server
+    whose topics require a token may serve under the same rule. The simplest
+    thing that neither breaks that server nor hands the token to a host it is not
+    for: the attachment URL is whatever the message says, so the bearer goes only
+    where `[notify] ntfy_url` already sends it.
+    """
+    import httpx
+
+    if not token:
+        return None
+    try:
+        ours, theirs = httpx.URL(ntfy_url), httpx.URL(url)
+        same = (
+            ours.scheme == theirs.scheme
+            and ours.host == theirs.host
+            and _port(ours) == _port(theirs)
+        )
+    except Exception:  # a URL that does not parse is no origin of ours
+        return None
+    return token if same else None
+
+
+def _port(url: httpx.URL) -> int | None:
+    """An URL's port, with the scheme's default filled in (`https://h` is `:443`)."""
+    port = url.port
+    if port is not None:
+        return int(port)
+    return {"http": 80, "https": 443}.get(url.scheme)
+
+
 def _is_kit_name(name: object) -> bool:
     """§26's "sanitized to a basename; `.zip` only", as a refusal, not a rewrite.
 
@@ -686,7 +728,13 @@ def _is_kit_name(name: object) -> bool:
 
 
 async def fetch_kit(
-    url: str, directory: Path, name: str, *, cap: int, expected: int
+    url: str,
+    directory: Path,
+    name: str,
+    *,
+    cap: int,
+    expected: int,
+    token: str | None = None,
 ) -> tuple[str, int, str]:
     """Stream `url` into `directory` under `name` (or its first free suffix).
 
@@ -696,6 +744,7 @@ async def fetch_kit(
     or the attachment said, and a body that does not end at `expected` bytes is
     refused. `Accept-Encoding: identity` keeps the bytes counted the bytes
     stored. On any refusal the temp file is removed and nothing is written.
+    `token`, when given, is sent as a bearer (§33; `attachment_token` decides).
     """
     import httpx
 
@@ -708,9 +757,11 @@ async def fetch_kit(
             try:
                 async with asyncio.timeout(KIT_DEADLINE_S):
                     async with httpx.AsyncClient(timeout=httpx.Timeout(KIT_TIMEOUT_S)) as client:
-                        async with client.stream(
-                            "GET", url, headers={"Accept-Encoding": "identity"}
-                        ) as response:
+                        headers = {
+                            "Accept-Encoding": "identity",
+                            **notify_mod.auth_headers(token),
+                        }
+                        async with client.stream("GET", url, headers=headers) as response:
                             response.raise_for_status()
                             async for chunk in response.aiter_raw():
                                 total += len(chunk)

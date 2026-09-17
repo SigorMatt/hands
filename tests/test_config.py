@@ -372,6 +372,12 @@ OPTIONAL_STRING_KEYS = [
         "who_cmd_topic",
     ),
     (
+        "notify.ntfy_token",
+        "[notify]\nntfy_token = {v}\n[roles.builder]\ncwd = '~/g'\n",
+        "[notify]",
+        "ntfy_token",
+    ),
+    (
         "roles.builder.model",
         "[roles.builder]\ncwd = '~/g'\nmodel = {v}\n",
         "[roles.builder]",
@@ -886,6 +892,7 @@ cmd_topic = "  hands-cmd-abc  "
 cmd_secret = "  s3cret-word  "
 who_topic = "  hands-who-abc  "
 who_cmd_topic = "  hands-who-cmd-abc  "
+ntfy_token = "  tk_padded0token  "
 
 [roles.builder]
 cwd = "  ~/g  "
@@ -954,6 +961,7 @@ def test_every_accepted_string_value_is_stored_stripped(write_config, ops_repo: 
     # …and the stripped values are the ones the rest of hands then uses.
     assert cfg.role("builder").resume_line == "Resume WORKPLAN.md"
     assert cfg.role("builder").env == {"HANDS_PADDED": "1"}
+    assert cfg.notify.ntfy_token == "tk_padded0token"  # §33 through §21's helper
     assert cfg.playbook.path == "P.toml"
     assert cfg.ops.monitor_path == ops_repo / "watch_monitor.sh"
     assert cfg.role("builder").cwd.is_absolute()

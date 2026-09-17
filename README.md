@@ -123,6 +123,10 @@ Off unless configured in `[notify]`; `docs/INTEGRATION.md` has the setup.
 
 - **Notifications**: with `ntfy_topic` set, handsd publishes a `stop`, a held
   job, an exhausted `max_resumes` and daemon start/crash to ntfy.
+- **Self-hosted ntfy**: `ntfy_url` names your own server and `ntfy_token` its
+  access token, sent as a bearer on every publish and subscription; `hands
+  doctor` shows the token on or off. `docs/INTEGRATION.md` sketches ntfy in a
+  container reached through Tailscale; none of that has been run here.
 - **The command channel**: with `cmd_topic` and `cmd_secret` set, handsd takes
   `approve`, `deny`, `pause`, `resume` and `status` from your phone, and a held
   job's notification carries Approve/Deny buttons. A decision taken that way is

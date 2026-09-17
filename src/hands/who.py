@@ -841,8 +841,9 @@ class WhoPusher:
         topic: str,
         cmd_topic: str | None,
         ntfy_url: str,
+        token: str | None = None,
         post: Callable[..., Awaitable[int]] | None = None,
-        stream: Callable[[str], AsyncIterator[str]] | None = None,
+        stream: Callable[..., AsyncIterator[str]] | None = None,
         sleep: Callable[[float], Awaitable[None]] | None = None,
         clock: Callable[[], float] = time.time,
         interval: float = DEFAULT_INTERVAL_S,
@@ -852,6 +853,9 @@ class WhoPusher:
         self.topic = topic
         self.cmd_topic = cmd_topic
         self.ntfy_url = ntfy_url.rstrip("/")
+        #: §33: `[notify] ntfy_token`, the bearer on every publish and on the
+        #: `who_cmd_topic` subscription; None sends no Authorization header.
+        self.token = token
         #: None means `hands.notify.http_post` / `http_stream`, looked up at call time.
         self.post = post
         self.stream = stream
@@ -885,7 +889,9 @@ class WhoPusher:
         post = self.post if self.post is not None else notify_mod.http_post
         url = f"{self.ntfy_url}/{self.topic}"
         try:
-            status = await post(url, title=title, message=text)
+            status = await post(
+                url, title=title, message=text, **notify_mod.token_kwargs(self.token)
+            )
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # best effort: the next change or request tries again
@@ -915,7 +921,7 @@ class WhoPusher:
     async def subscribe_once(self) -> None:
         """One long-poll connection, read to its end."""
         stream = self.stream if self.stream is not None else notify_mod.http_stream
-        async for line in stream(self.cmd_url()):
+        async for line in stream(self.cmd_url(), **notify_mod.token_kwargs(self.token)):
             try:
                 event = json.loads(line) if line.strip() else None
             except json.JSONDecodeError:
@@ -989,6 +995,7 @@ def watch(config: Config, socket_path: Path) -> int:
         topic=notify.who_topic,
         cmd_topic=notify.who_cmd_topic,
         ntfy_url=notify.ntfy_url,
+        token=notify.ntfy_token,
     )
     try:
         asyncio.run(pusher.run())

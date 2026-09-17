@@ -38,9 +38,11 @@ __all__ = [
     "PAIR_SPACING_S",
     "accepted",
     "actions_header",
+    "auth_headers",
     "http_post",
     "http_stream",
     "send_test",
+    "token_kwargs",
 ]
 
 log = logging.getLogger("hands.notify")
@@ -67,12 +69,29 @@ TEST_TITLE = "hands: notify --test"
 # ------------------------------------------------------------ the transport
 
 
+def auth_headers(token: str | None) -> dict[str, str]:
+    """§33: `Authorization: Bearer <token>` when `[notify] ntfy_token` is set, else
+    nothing — a server whose topics are open (ntfy.sh) sees the request it always
+    did."""
+    return {"Authorization": f"Bearer {token}"} if token else {}
+
+
+def token_kwargs(token: str | None) -> dict[str, str]:
+    """What a caller hands its transport: `token=` only when there is one.
+
+    A transport injected in place of `http_post` / `http_stream` (a test's
+    recorder, a fake stream) needs no `token` parameter until a config sets one.
+    """
+    return {"token": token} if token else {}
+
+
 async def http_post(
     url: str,
     *,
     title: str,
     message: str,
     actions: list[dict[str, str]] | None = None,
+    token: str | None = None,
     transport: Any = None,
 ) -> int:
     """Publish one ntfy message; answer with the HTTP status ntfy gave back.
@@ -85,6 +104,7 @@ async def http_post(
     `--test` prints it and exits 1). Only a request that got no response at all
     raises here.
 
+    `token` is §33's `[notify] ntfy_token`, sent as a bearer when given.
     `transport` is a test seam and nothing more: it is handed to the client
     unchanged, so a test can drive this very function through
     `httpx.MockTransport` and prove the status plumbing without a network.
@@ -94,7 +114,7 @@ async def http_post(
     """
     import httpx
 
-    headers = {"Title": title, "Tags": "robot"}
+    headers = {"Title": title, "Tags": "robot", **auth_headers(token)}
     if actions:
         headers["Actions"] = actions_header(actions)
     async with httpx.AsyncClient(timeout=POST_TIMEOUT_S, transport=transport) as client:
@@ -115,19 +135,22 @@ def actions_header(actions: list[dict[str, str]]) -> str:
     )
 
 
-async def http_stream(url: str, *, transport: Any = None) -> AsyncIterator[str]:
+async def http_stream(
+    url: str, *, token: str | None = None, transport: Any = None
+) -> AsyncIterator[str]:
     """One long-poll GET of an ntfy `/json` stream, line by line (§24).
 
     The command channel's only transport: an outbound connection, no ingress.
     A non-2xx raises; so does a connection that goes quiet for longer than
     `STREAM_READ_TIMEOUT_S` (ntfy sends a keepalive well inside it). The caller
-    reconnects. `transport` is the same test seam `http_post` has.
+    reconnects. `token` and `transport` are what `http_post` takes: §33's bearer
+    on the subscription, and the test seam.
     """
     import httpx
 
     timeout = httpx.Timeout(POST_TIMEOUT_S, read=STREAM_READ_TIMEOUT_S)
     async with httpx.AsyncClient(timeout=timeout, transport=transport) as client:
-        async with client.stream("GET", url) as response:
+        async with client.stream("GET", url, headers=auth_headers(token)) as response:
             response.raise_for_status()
             async for line in response.aiter_lines():
                 yield line
@@ -180,7 +203,9 @@ async def send_test(
     url = f"{config.server.ntfy_url.rstrip('/')}/{topic}"
     send = post if post is not None else http_post
     try:
-        status = await send(url, title=TEST_TITLE, message=message)
+        status = await send(
+            url, title=TEST_TITLE, message=message, **token_kwargs(config.notify.ntfy_token)
+        )
     except asyncio.CancelledError:
         raise
     except Exception as exc:
@@ -306,7 +331,8 @@ class Notifier:
         url = f"{self.config.server.ntfy_url.rstrip('/')}/{self.config.server.ntfy_topic}"
         post = self.post if self.post is not None else http_post
         try:
-            extra = {"actions": note.actions} if note.actions else {}
+            extra: dict[str, Any] = {"actions": note.actions} if note.actions else {}
+            extra.update(token_kwargs(self.config.notify.ntfy_token))
             status = await post(url, title=note.title, message=note.message, **extra)
         except asyncio.CancelledError:
             raise

@@ -159,6 +159,10 @@ class NotifyConfig:
     cmd_secret: str | None = field(default=None, repr=False)
     who_topic: str | None = None
     who_cmd_topic: str | None = None
+    #: §33: the access token of a self-hosted ntfy whose topics require one, sent
+    #: as `Authorization: Bearer` on every publish and every subscription. Kept out
+    #: of `repr` like the secret, and never printed by a refusal.
+    ntfy_token: str | None = field(default=None, repr=False)
 
     @property
     def channel(self) -> bool:
@@ -517,7 +521,15 @@ def parse_config(data: dict[str, Any], *, project: str, path: Path) -> Config:
     notify_t = _table(data, "notify", path)
     _check_keys(
         notify_t,
-        ("ntfy_url", "ntfy_topic", "cmd_topic", "cmd_secret", "who_topic", "who_cmd_topic"),
+        (
+            "ntfy_url",
+            "ntfy_topic",
+            "cmd_topic",
+            "cmd_secret",
+            "who_topic",
+            "who_cmd_topic",
+            "ntfy_token",
+        ),
         "[notify]",
         path,
     )
@@ -566,6 +578,7 @@ def parse_config(data: dict[str, Any], *, project: str, path: Path) -> Config:
             path,
             blank=_omit("the who view then takes no commands", "topic"),
         ),
+        ntfy_token=_ntfy_token(notify_t, path),
     )
     _check_channel(notify, path)
     server = ServerConfig(
@@ -804,6 +817,35 @@ def _role(name: str, table: Any, path: Path) -> RoleConfig:
             ),
         ),
     )
+
+
+def _ntfy_token(notify_t: dict[str, Any], path: Path) -> str | None:
+    """§33's `[notify] ntfy_token`: what goes after `Bearer ` in a header, or None.
+
+    Read through `_opt_str` like every string key (§21: padding is stripped, a
+    blank value is refused with both choices named), after a type check of its
+    own, because `_str`'s refusal quotes the value and no refusal prints a token.
+    What is left must be one run of visible ASCII: a blank, a newline or a byte
+    outside ASCII inside it cannot travel in an HTTP header, so it is refused here
+    rather than as a failed publish at the first notification.
+    """
+    where = f"{path}: [notify] ntfy_token"
+    if "ntfy_token" in notify_t and not isinstance(notify_t["ntfy_token"], str):
+        raise ConfigError(f"{where} must be a string (the value is not printed)")
+    token = _opt_str(
+        notify_t,
+        "ntfy_token",
+        "[notify]",
+        path,
+        blank=_omit("publishes and subscriptions then carry no Authorization header", "token"),
+    )
+    if token is not None and not all("!" <= char <= "~" for char in token):
+        raise ConfigError(
+            f"{where} must be one word of visible ASCII, with no blank, newline or other "
+            "character inside: it is sent as `Authorization: Bearer <token>` (§33); "
+            "the value is not printed"
+        )
+    return token
 
 
 def _check_channel(notify: NotifyConfig, path: Path) -> None:

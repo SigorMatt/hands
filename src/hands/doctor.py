@@ -219,20 +219,37 @@ def _notifications_check(config: Config) -> Check:
 
     Off is already a warning on the `config` row, which says what is lost; this
     row is the on/off answer §24 asks doctor for. The topic is not printed.
+
+    §33: the row's second line says whether `[notify] ntfy_token` is set — on or
+    off, never the token.
     """
+    token = _token_line(config)
     if not config.notify.ntfy_topic:
         return Check(
             "notifications",
             OK,
             "notifications off: no ntfy_topic ([notify], or [server]), so handsd "
-            "notifies nobody (§11, §24)",
+            f"notifies nobody (§11, §24)\n{token}",
         )
     return Check(
         "notifications",
         OK,
         "notifications on: handsd publishes stop, job.held, an exhausted max_resumes "
         "and daemon start/crash to ntfy_topic (§11); `hands notify --test` proves "
-        "the transport",
+        f"the transport\n{token}",
+    )
+
+
+def _token_line(config: Config) -> str:
+    """§33: `[notify] ntfy_token` on or off. The value is never part of it."""
+    if config.notify.ntfy_token:
+        return (
+            "ntfy token on: [notify] ntfy_token is sent as a bearer on every publish "
+            "and subscription (handsd, handswho, `hands notify --test`) (§33)"
+        )
+    return (
+        "ntfy token off: no [notify] ntfy_token, so publishes and subscriptions carry "
+        "no Authorization header; a server whose topics require a token refuses them (§33)"
     )
 
 
