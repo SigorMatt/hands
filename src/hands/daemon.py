@@ -90,7 +90,9 @@ HEARTBEAT_S = 3600.0
 #: it — for at most this long. A job still running then does not hold it any further.
 #: It is also the bound on the rest: any notification raised in that window, related or
 #: not, is folded into the start's one (named in its message, never dropped), so none
-#: waits longer than this. Five seconds covers a job that fails at once (0.2 s under the
+#: waits longer than this. §34: except a `job.held`, which is never folded — it is
+#: published at once with its buttons, and the start's one names it by title only.
+#: Five seconds covers a job that fails at once (0.2 s under the
 #: fake claude) with room for a real CLI's startup, and keeps the start notification
 #: near the start. A parameter, so a test can close it sooner.
 START_FOLD_S = 5.0
@@ -198,6 +200,8 @@ class Daemon:
         #: re-admitted (`START_FOLD_S`).
         self.start_fold_s = float(start_fold_s)
         self._start_notice: asyncio.Task[None] | None = None
+        #: The start notification's message and held ids, until it is published.
+        self._start_pending: tuple[str, list[str]] | None = None
         #: One queue per armed `hands wait --for` (§11). The spool tells the
         #: daemon about every event it appends, so a wait is a subscription and
         #: never a poll of the inbox file.
@@ -223,6 +227,11 @@ class Daemon:
         the one notification is published then, with what was raised meanwhile folded
         in (`_start_notice_after`). With no queued job it is published before this
         returns.
+
+        §34 (review 17 blocker 1): a `job.held` is never folded. It is published at
+        once with its buttons, whether the job was held before the start (re-published
+        here, `_publish_held`) or during it (`_on_event`), and the start notification
+        lists it by title only.
         """
         # §32 (review 15 blocker 4): `[series] architect = "role"` without
         # `[roles.architect]` is a config error at load, so handsd refuses to start on
@@ -235,7 +244,8 @@ class Daemon:
             await self._start()
         except BaseException:
             for note in self.notifier.release():
-                self.notifier.notify(note.title, note.payload, actions=note.actions)
+                if not note.published:  # §34: a `job.held` is already out
+                    self.notifier.notify(note.title, note.payload, actions=note.actions)
             raise
 
     async def _start(self) -> None:
@@ -266,33 +276,43 @@ class Daemon:
         await self.limits.reschedule_pending()
         if self.phone is not None:
             self.phone.start()
-        # §31 (review 14 should-fix 1): the nonces are re-minted first, so the one
-        # notification below can list the jobs they belong to.
-        still_held = self._remint_held()
+        # §34: every job still held is published at once with fresh buttons, and the
+        # start notification names each by title.
+        still_held = self._publish_held()
         message = f"{self.config.project} on {self.socket_path}"
-        if still_held:
-            message += (
-                f"\n{len(still_held)} job(s) still held for a human: "
-                f"{', '.join(still_held)}"
-                "\nA restart leaves no live buttons: decide with `hands approve <job>` "
-                "or `hands deny <job>`, or with the secret on the command topic."
-            )
         log.info(
             "handsd %s listening on %s (project %s)",
             __version__, self.socket_path, self.config.project,
         )
+        self._start_pending = (message, still_held)
         if readmitted:
             # §33: the queued jobs this start re-admitted end inside the fold window.
             self._start_notice = asyncio.create_task(
-                self._start_notice_after(readmitted, message, still_held),
-                name="hands-start-notification",
+                self._start_notice_after(readmitted), name="hands-start-notification"
             )
         else:
-            self._publish_start(message, still_held)
+            self._publish_start()
 
-    def _publish_start(self, message: str, still_held: list[str]) -> None:
-        """§32: the one publish of a start; what was held since the start is folded in."""
-        folded = self.notifier.release()
+    def _publish_start(self) -> None:
+        """§32: the one publish of a start; what was held since the start is folded in.
+
+        §34: a note the hold did not keep (a `job.held`, already published with its
+        buttons) is named by its title only. Published once: a second call is a no-op.
+        """
+        if self._start_pending is None:
+            return
+        message, still_held = self._start_pending
+        self._start_pending = None
+        notes = self.notifier.release()
+        published = [note for note in notes if note.published]
+        folded = [note for note in notes if not note.published]
+        if published:
+            message += (
+                f"\nWhile starting, handsd published {len(published)} notification(s) "
+                "on their own:"
+            )
+            for note in published:
+                message += f"\n{note.title}"
         if folded:
             message += f"\nWhile starting, handsd raised {len(folded)} more notification(s):"
             for note in folded:
@@ -307,9 +327,7 @@ class Daemon:
             },
         )
 
-    async def _start_notice_after(
-        self, job_ids: list[str], message: str, still_held: list[str]
-    ) -> None:
+    async def _start_notice_after(self, job_ids: list[str]) -> None:
         """§33: publish the start's one notification once every job in `job_ids` has
         ended — left `queued` and `running`, and its worker is done with it, which is
         after the engine decided its end — or `start_fold_s` has passed. A daemon
@@ -329,7 +347,7 @@ class Daemon:
                     with contextlib.suppress(TimeoutError):
                         await asyncio.wait_for(self._changed.wait(), remaining)
         finally:
-            self._publish_start(message, still_held)
+            self._publish_start()
 
     def _all_ended(self, job_ids: list[str]) -> bool:
         """§33: has every one of these jobs ended, with its worker done with it?"""
@@ -341,28 +359,29 @@ class Daemon:
                 return False
         return True
 
-    def _remint_held(self) -> list[str]:
-        """Every job still `held` at this start, by id, its phone nonce re-minted.
+    def _publish_held(self) -> list[str]:
+        """Every job still `held` at this start, by id, each published at once.
 
-        §25 re-published a `job.held` notification per held job, with fresh
-        buttons. §31 (review 14 should-fix 1) replaces that: N held jobs made N+1
-        publishes inside one second at every start, which is the ordering problem
-        §30 exists to remove. The ids are listed inside the one `handsd started`
-        notification instead.
-
-        What that loses, plainly: an ntfy notification carries the buttons of one
-        job, so a summary of N carries none. After a restart a held job is decided
-        by `hands approve|deny <job>` or by `approve <job> <secret>` on the command
-        topic — never by a button, until the job is held again. The nonces are
-        still minted here (the same `PhoneChannel.actions` a hold uses), so a later
-        notification for one of these jobs carries a nonce this daemon knows.
-        Without the command channel there is nothing to mint, and the ids are
-        listed all the same.
+        §25 re-minted a nonce per held job; §31 (review 14 should-fix 1) listed the
+        jobs inside the one `handsd started` notification without buttons. §34
+        (review 17 blocker 1) reverses the second half: "A `job.held` is never
+        folded: it is published at once, with its buttons, whether the job was held
+        before or during the start". So each held job's notification is published
+        again here — its payload rebuilt from the job record, as `send` shapes it,
+        and its buttons carrying the nonce minted now — and the start notification
+        names it by title (`_publish_start`). Without the command channel there is
+        nothing to mint, and the notification goes out without buttons.
         """
         held = [job for job in self.spool.list_jobs() if job.state == "held"]
-        if self.phone is not None:
-            for job in held:
-                self.phone.actions(job.id)
+        for job in held:
+            gate = job.gate or {}
+            payload: dict[str, Any] = {"job": job.id, "role": job.role, "state": "held"}
+            if gate.get("reason"):
+                payload["reason"] = gate["reason"]
+            if gate.get("kind"):
+                payload["gate"] = gate["kind"]
+            actions = self.phone.actions(job.id) if self.phone is not None else None
+            self.notifier.notify(NOTIFY_KINDS["job.held"], payload, actions=actions, fold=False)
         return [job.id for job in held]
 
     async def serve_forever(self) -> None:
@@ -379,6 +398,15 @@ class Daemon:
         # handler has not started yet would otherwise be left with a transport
         # attached to a server that is already closed.
         await asyncio.sleep(0)
+        # §34 (review 17 should-fix 6): a start notification still waiting for its
+        # queued jobs is published first, with what the fold kept, so the hold does
+        # not outlive the daemon; and nothing queued to publish is cancelled below.
+        if self._start_notice is not None:
+            self._start_notice.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._start_notice
+            self._start_notice = None
+        self._publish_start()  # a no-op once published; covers a task that never ran
         # Before anything else: a resume scheduled for hours from now must not
         # fire into a daemon that is going down (§6), and neither must a rule
         # still being decided (§10).
@@ -388,13 +416,6 @@ class Daemon:
         # nonces of its held jobs die with it (§24).
         if self.phone is not None:
             await self.phone.stop()
-        # §33: a start notification still waiting for its queued jobs is published now,
-        # so the hold does not outlive the daemon.
-        if self._start_notice is not None:
-            self._start_notice.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await self._start_notice
-            self._start_notice = None
         if self._beat is not None:
             self._beat.cancel()
             with contextlib.suppress(asyncio.CancelledError):
@@ -434,9 +455,10 @@ class Daemon:
 
         await self._close_conns()
 
-        # Anything ntfy has not taken by now goes down with the daemon (§11): a
-        # notification is a message to a human, not a durable queue.
-        self.notifier.cancel_all()
+        # §34 (review 17 should-fix 6): what was queued to publish is delivered, not
+        # cancelled — the start notification flushed above among it. Each publish is
+        # bounded by its own POST timeout; the wait is bounded as the jobs' is.
+        await self.notifier.drain(timeout=_SHUTDOWN_GRACE_S)
         # A stopped daemon hears no more events, and the spool stops holding it
         # alive: the listener is a bound method, so leaving it there would keep
         # this daemon (and its socket) reachable for as long as the spool is.
@@ -722,7 +744,10 @@ class Daemon:
             actions = None
             if self.phone is not None and event.kind == "job.held" and job_id:
                 actions = self.phone.actions(str(job_id))
-            self.notifier.notify(title, event.payload, actions=actions)
+            # §34: a `job.held` is never folded into the start notification.
+            self.notifier.notify(
+                title, event.payload, actions=actions, fold=event.kind != "job.held"
+            )
 
     async def wait_for_event(
         self, kinds: frozenset[str], *, timeout: float | None = None

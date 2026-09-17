@@ -87,11 +87,9 @@ an event, the spool or a log line — and it authorizes a decision on that one
 job only. It is spent by the decision it authorizes; a wrong token spends
 nothing. It is dropped when the job is decided by any route (the daemon calls
 `discard` on every `gate.decided`), and with the daemon. A restarted daemon
-mints a fresh nonce for every job still held (§25; `Daemon._remint_held`), but
-publishes no notification per job: §31 lists those jobs inside the one `handsd
-started` notification, which carries no buttons, so after a restart a held job
-is decided by `hands approve|deny` or by a command with the secret until it is
-held again. `pause`, `resume`,
+mints a fresh nonce for every job still held (§25; `Daemon._publish_held`) and
+publishes each job's held notification again with those buttons (§34, reversing
+§31's no-re-send); the `handsd started` notification names each by title. `pause`, `resume`,
 `status` and `go` take the secret only. The secret is compared with
 `hmac.compare_digest` and never published: a notification carries only nonces.
 

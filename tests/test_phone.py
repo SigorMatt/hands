@@ -52,6 +52,7 @@ SECRET = "Xyzzy-PHONE-s3cret-0123456789abcdef"
 EVENTS_TOPIC = "hands-events-test"
 CMD_TOPIC = "hands-cmd-test"
 NTFY = "https://ntfy.example"
+HELD_TITLE = "hands: a job is held for a human"
 
 NOTIFY = f"""
 [notify]
@@ -394,13 +395,15 @@ def test_the_nonce_dies_with_the_daemon(project: str) -> None:
 def test_a_restart_re_mints_every_held_jobs_nonce_and_kills_the_old_buttons(
     project: str,
 ) -> None:
-    """§25 as §31 amends it: "nonces are re-minted for every job still `held`",
-    but the notification is no longer re-sent per job (review 14 should-fix 1).
+    """§25: "nonces are re-minted for every job still `held`"; §34 (review 17
+    blocker 1) re-publishes each held job's notification with its buttons again,
+    reversing §31's no-re-send.
 
     Two daemons over the same spool. The first leaves two jobs held, one approved
     (decided, then done) and one never gated (done). The second has a fresh nonce
-    in memory for each held job and for nothing else; the dead daemon's button
-    decides nothing, and the secret still does.
+    in memory for each held job and for nothing else; a live nonce is published
+    only in the buttons of its own job's notification; the dead daemon's button
+    decides nothing, and the fresh one and the secret do.
     """
     kept: dict[str, Any] = {}
 
@@ -423,8 +426,11 @@ def test_a_restart_re_mints_every_held_jobs_nonce_and_kills_the_old_buttons(
             assert minted[job] != kept["old"][job]
         for item in daemon.notifier.post.sent:
             assert SECRET not in strip_paths(json.dumps(item))  # §24: never the secret
-            for value in minted.values():
-                assert value not in strip_paths(json.dumps(item))  # nor a live nonce
+            for job, value in minted.items():
+                assert value not in strip_paths(item["title"] + item["message"])
+                for action in item.get("actions") or []:  # a nonce only on its own job
+                    body = action["body"]
+                    assert (value in strip_paths(body)) == (job in strip_paths(body)), action
 
         one, two = kept["held"]
         await say(daemon, fake, f"approve {one} {kept['old'][one]}")  # the dead button
@@ -442,16 +448,18 @@ def test_a_restart_re_mints_every_held_jobs_nonce_and_kills_the_old_buttons(
     phone_drive(second)
 
 
-def test_a_daemon_start_publishes_one_notification_listing_the_re_minted_held_jobs(
+def test_a_daemon_start_publishes_each_held_job_with_fresh_buttons_named_by_title(
     project: str,
 ) -> None:
-    """§31 (review 14 should-fix 1): "daemon start publishes one notification, and
-    re-minted held jobs are listed inside it rather than each published".
+    """§34 (review 17 blocker 1; this test pinned §31's opposite until mission 18):
+    "A `job.held` is never folded: it is published at once, with its buttons,
+    whether the job was held before or during the start; the start notification
+    lists it by title only."
 
     Two daemons over one spool. The first leaves two jobs held. The second
-    publishes exactly one notification at start — `hands: handsd started`, naming
-    both held ids — and no `job.held` and no buttons. The nonces are still
-    re-minted, so the buttons of the dead daemon are dead."""
+    publishes one `job.held` per held job, each with Approve/Deny buttons carrying
+    that job's freshly minted nonce (not the dead daemon's), and one `handsd
+    started` that names each by title and carries no buttons."""
     kept: dict[str, Any] = {}
 
     async def first(daemon: Daemon, fake: FakeNtfy) -> None:
@@ -462,14 +470,20 @@ def test_a_daemon_start_publishes_one_notification_listing_the_re_minted_held_jo
     async def second(daemon: Daemon, fake: FakeNtfy) -> None:
         posts = daemon.notifier.post
         await daemon.notifier.drain()
-        assert posts.titled("held") == [], posts.sent
-        assert [item.get("actions") for item in posts.sent] == [None] * len(posts.sent)
-        (started,) = posts.titled("started")
+        notes = posts.titled("held")
+        assert sorted(re.findall(r"job: (\S+)", " ".join(n["message"] for n in notes))) == (
+            kept["held"]
+        ), notes
+        assert daemon.phone is not None
         for job in kept["held"]:
-            assert job in strip_paths(started["message"]), started
-            assert daemon.phone is not None
-            assert daemon.phone.nonces[job] not in (None, kept["old"][job])
-        assert len(posts.sent) == 1, posts.sent
+            nonce = daemon.phone.nonces[job]
+            assert nonce not in (None, kept["old"][job])
+            assert await nonce_for(daemon, job) == nonce  # the button carries it
+        (started,) = posts.titled("started")
+        assert started.get("actions") is None, started
+        lines = strip_paths(started["message"]).splitlines()
+        assert lines.count(HELD_TITLE) == 2, started
+        assert len(posts.sent) == 3, posts.sent
 
     phone_drive(first)
     phone_drive(second)
@@ -486,11 +500,14 @@ def test_a_daemon_start_publishes_one_notification_listing_the_re_minted_held_jo
     ],
     ids=["plain", "held", "orphaned-driver", "orphaned-architect", "all-three"],
 )
-def test_a_daemon_start_publishes_exactly_one_notification(
+def test_a_daemon_start_publishes_exactly_one_start_notification(
     tmp_home: Path, workdir: Path, present: tuple[str, ...]
 ) -> None:
     """§32 (review 15 should-fix 5): "daemon start publishes exactly one notification
-    and a test binds the count". The reviewer's case was an orphaned consult driver
+    and a test binds the count". §34 (review 17 blocker 1) takes a held job out of
+    that count: its own notification is published too, named in the start's by
+    title. Until mission 18 this test expected the held job's id in the start's one.
+    The reviewer's case was an orphaned consult driver
     job: its consultation's end stopped the pipeline inside the start, and `hands:
     the pipeline stopped` was published 7 ms before `hands: handsd started`. The stop
     is folded into the one start notification, whose message carries its reason.
@@ -532,11 +549,14 @@ def test_a_daemon_start_publishes_exactly_one_notification(
         await daemon.notifier.drain()
         await asyncio.sleep(0.2)  # anything the start scheduled has had its turn
         await daemon.notifier.drain()
-        titles = [item["title"] for item in posts.sent]
-        assert titles == ["hands: handsd started"], posts.sent
-        message = strip_paths(posts.sent[0]["message"])
+        titles = sorted(item["title"] for item in posts.sent)
+        assert titles == [HELD_TITLE] * len(held_ids) + ["hands: handsd started"], posts.sent
+        (started,) = posts.titled("started")
+        message = strip_paths(started["message"])
         for job in held_ids:
-            assert job in strip_paths(message)
+            (note,) = posts.titled("held")
+            assert f"job: {job}" in note["message"], note
+            assert message.splitlines().count(HELD_TITLE) == 1, message
         if "driver" in present or "architect" in present:
             stopped = (await ok("pipeline"))["stop_reason"]
             assert stopped and "orphaned" in strip_paths(stopped)
@@ -643,6 +663,107 @@ def test_a_queued_job_still_running_does_not_hold_the_start_notification_past_it
     phone_drive(body, start_fold_s=0.5)
 
 
+class TimedRecorder(Recorder):
+    """REVIEW-17's probe publisher: each call is logged with its time, takes `latency`
+    seconds, and only then counts as delivered."""
+
+    def __init__(self, latency: float = 0.0) -> None:
+        super().__init__()
+        self.latency = latency
+        self.began = time.monotonic()
+        self.called: list[tuple[float, str]] = []
+        self.delivered: list[dict[str, Any]] = []
+
+    async def __call__(self, url: str, **kwargs: Any) -> int:
+        at = time.monotonic() - self.began
+        self.called.append((at, kwargs["title"]))
+        await asyncio.sleep(self.latency)
+        item = {"url": url, "at": at, **kwargs}
+        self.sent.append(item)
+        self.delivered.append(item)
+        return 200
+
+
+def test_a_job_held_inside_the_start_fold_window_is_published_at_once_with_its_buttons(
+    tmp_home: Path, workdir: Path
+) -> None:
+    """§34 (REVIEW-17 blocker 1, H-038): "A `job.held` is never folded: it is published
+    at once, with its buttons … the start notification lists it by title only."
+
+    The reviewer's probe A: a real Daemon, a queued builder job (`FAKE:sleep 3`), and
+    an aux job gated at 0.3 s. At c6380ab the hold was published only inside `handsd
+    started`, at 3.2 s, with `actions=False`. Here the held notification is published
+    before the start notification, with Approve and Deny buttons for that job; the
+    start notification names it by title, without its message; and the stop the hold
+    raised (no rule) is still folded into the start notification, not published."""
+    queued = queued_at_start(tmp_home, workdir, "builder", "FAKE:sleep 3\nFAKE:result ok")
+    posts = TimedRecorder()
+
+    async def body(daemon: Daemon, fake: FakeNtfy) -> None:
+        await asyncio.sleep(0.3)
+        job = await held()
+
+        async def published() -> Any:
+            return posts.delivered
+
+        note, *_ = await poll(published, "the first notification after the hold")
+        assert note["title"] == HELD_TITLE, posts.called  # first, inside the window
+        assert note.get("actions"), note
+        assert (await ok("show", queued))["state"] == "running"
+        bodies = sorted(action["body"].split()[0] for action in note["actions"])
+        assert bodies == ["approve", "deny"], note
+        assert all(action["body"].split()[1] == job["id"] for action in note["actions"])
+
+        assert (await ok("wait", queued))["state"] == "done"
+
+        async def started() -> Any:
+            return posts.titled("started")
+
+        (start,) = await poll(started, "the start notification")
+        assert start["at"] > note["at"], posts.called
+        assert not start.get("actions"), start
+        # the title alone, on its own line; never the folded `title: message` form
+        assert f"\n{HELD_TITLE}\n" in strip_paths(start["message"] + "\n"), start
+        assert f"{HELD_TITLE}:" not in strip_paths(start["message"]), start
+        await daemon.playbook.drain()
+        await daemon.notifier.drain()
+        titles = sorted(item["title"] for item in posts.sent)
+        assert titles == [HELD_TITLE, "hands: handsd started"], posts.called
+        assert "hands: the pipeline stopped" in strip_paths(start["message"]), start
+
+    phone_drive(body, posts)
+
+
+def test_a_stop_inside_the_start_fold_window_delivers_the_start_notification(
+    tmp_home: Path, workdir: Path
+) -> None:
+    """§34 (REVIEW-17 should-fix 6): "A `stop` inside the fold window flushes the fold
+    first and cancels nothing that was already queued to publish".
+
+    The reviewer's probe B2: a queued aux job that fails at once (so the pipeline
+    stops), a queued builder job that blocks (so the window stays open), a publish
+    that takes 0.5 s, and the daemon stopped at 1.0 s. At c6380ab `handsd started` was
+    called at 1.03 s and nothing was delivered. Here it is delivered, with the stop
+    folded into it."""
+    from hands.spool import Spool
+
+    aux = queued_at_start(tmp_home, workdir, "aux", "FAKE:exit 1")
+    spool = Spool(tmp_home / ".hands" / PROJECT)
+    builder = spool.create_job(role="builder", context="clear", prompt="FAKE:block", origin="cli")
+    posts = TimedRecorder(latency=0.5)
+
+    async def body(daemon: Daemon, fake: FakeNtfy) -> None:
+        assert (await ok("wait", aux))["state"] == "failed"
+        await asyncio.sleep(max(0.0, 1.0 - (time.monotonic() - posts.began)))
+        assert (await ok("show", builder.id))["state"] == "running"
+        assert posts.called == [], posts.called  # the window is still open
+
+    phone_drive(body, posts)
+    titles = [item["title"] for item in posts.delivered]
+    assert titles == ["hands: handsd started"], posts.called
+    assert "hands: the pipeline stopped" in strip_paths(posts.delivered[0]["message"]), posts
+
+
 def test_a_restart_without_held_jobs_re_sends_nothing(project: str) -> None:
     async def first(daemon: Daemon, fake: FakeNtfy) -> None:
         job = await held()
@@ -658,12 +779,15 @@ def test_a_restart_without_held_jobs_re_sends_nothing(project: str) -> None:
     phone_drive(second)
 
 
-def test_without_the_channel_a_restart_re_sends_no_held_notification(
+def test_without_the_channel_a_restart_re_sends_the_held_notification_without_buttons(
     tmp_home: Path, workdir: Path
 ) -> None:
-    """The simplest consistent reading of §25 where it is silent: the re-send
-    replaces buttons that died with the old daemon. Without `cmd_topic` the held
-    notification never had buttons, nothing died, and nothing is re-sent."""
+    """§34: "A `job.held` is never folded: it is published at once … whether the job
+    was held before or during the start". §34 is silent on a daemon without the
+    command channel; the simplest reading is one path: the held notification is
+    re-published all the same, with no buttons (there are none to carry), and the
+    start names it by title. Until mission 18 this test (§25's reading) expected
+    no re-send."""
     body_text = config_body(tmp_home, workdir, extra=NOTIFY.split("cmd_topic")[0])
     (tmp_home / ".hands" / f"{PROJECT}.toml").write_text(body_text)
 
@@ -683,8 +807,10 @@ def test_without_the_channel_a_restart_re_sends_no_held_notification(
     before = asyncio.run(once(hold=True))
     assert len(before.titled("held")) == 1
     after = asyncio.run(once(hold=False))
-    assert after.titled("held") == [], after.sent
-    assert after.titled("started"), after.sent
+    (note,) = after.titled("held")
+    assert note.get("actions") is None, note
+    (started,) = after.titled("started")
+    assert f"\n{HELD_TITLE}\n" in strip_paths(started["message"] + "\n"), started
 
 
 def test_pause_resume_and_status_refuse_a_nonce(project: str) -> None:

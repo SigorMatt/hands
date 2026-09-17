@@ -239,6 +239,10 @@ class Notification:
     #: `payload` on purpose: a failed delivery inboxes the payload, and the
     #: buttons carry a nonce that must never reach the spool.
     actions: list[dict[str, str]] | None = None
+    #: §34: raised during a `hold` but published at once rather than kept (a
+    #: `job.held`, with its buttons); `release` hands it back so the start
+    #: notification can list it by title, and nobody publishes it a second time.
+    published: bool = False
 
 
 class Notifier:
@@ -269,32 +273,42 @@ class Notifier:
         payload: dict[str, Any] | None = None,
         *,
         actions: list[dict[str, str]] | None = None,
+        fold: bool = True,
     ) -> None:
         """Raise a notification and return at once (§11: never blocking a job).
 
         This is the seam the playbook engine and the daemon hold; it is
         deliberately synchronous so neither has to know that delivery is async.
+
+        §34: `fold=False` is a notification a `hold` may not keep — a `job.held`,
+        whose buttons a folded line cannot carry. It is published now, hold or not,
+        and a hold records it (`published`) so the start can name it.
         """
         payload = dict(payload or {})
         note = Notification(
             title=title, message=_message(payload), payload=payload, actions=actions
         )
         if self._held is not None:
+            if fold:
+                self._held.append(note)
+                return
+            note.published = True
             self._held.append(note)
-            return
         if self._has_topic(note):
             self._spawn(self._publish(note), "hands-notify")
 
     def hold(self) -> None:
-        """§32: from now until `release`, `notify` publishes nothing and keeps each
-        notification instead. Only the daemon's start holds: "daemon start publishes
-        exactly one notification", so what the start itself raises — the stop an
-        orphaned consultation's end makes — is folded into that one."""
+        """§32: from now until `release`, `notify` keeps each notification instead of
+        publishing it. Only the daemon's start holds: "daemon start publishes exactly
+        one notification", so what the start itself raises — the stop an orphaned
+        consultation's end makes — is folded into that one. §34: a `notify(...,
+        fold=False)` (a `job.held`) is published all the same, and only recorded."""
         self._held = []
 
     def release(self) -> list[Notification]:
         """§32: end a `hold`, and hand back what `notify` kept during it, in order.
-        Nothing kept is published by this call; the caller decides."""
+        Nothing kept is published by this call; the caller decides. §34: a note
+        marked `published` is already out, and is handed back only to be named."""
         held, self._held = self._held or [], None
         return held
 
@@ -370,20 +384,22 @@ class Notifier:
         task.add_done_callback(self._tasks.discard)
         return task
 
-    async def drain(self) -> None:
-        """Wait for every scheduled delivery. For tests and for shutdown."""
+    async def drain(self, timeout: float | None = None) -> None:
+        """Wait for every scheduled delivery. For tests and for shutdown.
+
+        §34: with `timeout`, stop waiting after that long; nothing is cancelled
+        either way (`asyncio.wait` does not cancel what it waits for)."""
+        loop = asyncio.get_running_loop()
+        deadline = None if timeout is None else loop.time() + float(timeout)
         while True:
             pending = [task for task in self._tasks if not task.done()]
             if not pending:
                 await asyncio.sleep(0)  # let the done callbacks empty the set
                 return
-            await asyncio.gather(*pending, return_exceptions=True)
-
-    def cancel_all(self) -> None:
-        """Drop every scheduled delivery — the daemon is going down (§3)."""
-        for task in list(self._tasks):
-            task.cancel()
-        self._tasks.clear()
+            remaining = None if deadline is None else deadline - loop.time()
+            if remaining is not None and remaining <= 0:
+                return
+            await asyncio.wait(pending, timeout=remaining)
 
 
 def _message(payload: dict[str, Any]) -> str:

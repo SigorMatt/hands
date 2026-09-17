@@ -187,18 +187,19 @@ def test_no_doc_still_says_a_killed_task_stops_the_series() -> None:
 
 def test_both_docs_say_the_task_killed_cause_is_always_unknown() -> None:
     """§25: docs/PLAYBOOK.md and docs/INTEGRATION.md each name `TaskStop` and say
-    "`cause` is always `unknown`"; INTEGRATION.md also says (§31) that handsd does
-    not re-send the held buttons after a restart and that the one notification
-    lists every job still held."""
+    "`cause` is always `unknown`"; INTEGRATION.md also says (§34, reversing §31's
+    no-re-send) that handsd publishes every job still held again after a restart,
+    with new buttons, and names each by title in the start notification."""
     for name in ("PLAYBOOK.md", "INTEGRATION.md"):
         doc = flattened((ROOT / "docs" / name).read_text(encoding="utf-8"))
         assert "`TaskStop`" in doc, f"docs/{name} does not name `TaskStop`"
         assert "`cause` is always `unknown`" in doc, f"docs/{name} does not say cause is unknown"
-    # §31 (review 14 should-fix 1): after a restart the buttons are not re-sent;
-    # the one `handsd started` notification lists the jobs instead.
+    # §34 (review 17 blocker 1): after a restart every held job is published again
+    # with its buttons; the start notification names it by title.
     integration = flattened((ROOT / "docs" / "INTEGRATION.md").read_text(encoding="utf-8"))
-    assert "handsd does not re-send them" in integration
-    assert "notification lists every job still held" in integration
+    assert "handsd does not re-send them" not in integration
+    assert "handsd publishes every job still held again, with new buttons (§34)" in integration
+    assert "names each by title in its `handsd started` notification" in integration
 
 
 def test_the_sentence_under_the_verbatim_example_says_a_killed_task_notifies_here() -> None:
@@ -1353,16 +1354,22 @@ def test_the_inbox_kinds_hands_publishes_by_itself_are_stop_and_job_held(
 
 def test_the_start_notification_doc_says_one_and_folds_what_the_start_raised() -> None:
     """§32: "daemon start publishes exactly one notification" — the count is bound by
-    tests/test_phone.py::test_a_daemon_start_publishes_exactly_one_notification over
-    a plain start, held jobs, and orphaned driver and architect consultations; §33's
-    fold window over queued jobs, and its bound, by the two tests after it."""
+    tests/test_phone.py::test_a_daemon_start_publishes_exactly_one_start_notification
+    over a plain start, held jobs, and orphaned driver and architect consultations;
+    §33's fold window over queued jobs, and its bound, by the two tests after it;
+    §34's held job and stop inside the window by the two tests after those."""
     text = flattened((ROOT / "docs" / "INTEGRATION.md").read_text(encoding="utf-8"))
     for said in (
-        "A daemon start publishes exactly one notification, `hands: handsd started`",
+        "A daemon start publishes exactly one start notification, `hands: handsd started`",
         "is folded into its message",
         "the notification waits for them to end, for at most "
         f"{START_FOLD_S:g} seconds (DESIGN §33)",
         f"none waits longer than {START_FOLD_S:g} seconds",
+        "A held job is never folded (DESIGN §34)",
+        "published at once, with its Approve and Deny buttons",
+        "the start notification names it by title only",
+        "publishes the start notification first",
+        "instead of cancelling it",
     ):
         assert said in text, f"docs/INTEGRATION.md does not say {said!r} (§32)"
 

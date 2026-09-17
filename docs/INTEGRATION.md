@@ -419,20 +419,24 @@ would sort arbitrarily on the phone, and the second one reads as the answer to
 the first. Nothing else waits: an unrelated notification is never delayed (§11),
 and no notification queues behind another.
 
-A daemon start publishes exactly one notification, `hands: handsd started`
-(§32). The jobs still held are listed in it, and anything the start itself
-raises before it — the stop an orphaned consultation's end makes, when a daemon
-died with a driver or architect job running — is folded into its message, title
-and reason, rather than published a few milliseconds ahead of it. When the start
-picks up jobs a dead daemon left queued, the notification waits for them to end,
-for at most 5 seconds (DESIGN §33): a queued job that fails at once stops the
-pipeline inside that window, and the stop is folded in rather than published a
-quarter second after the start. The same window is the bound on everything else:
-any notification raised in it — a job held by a `hands send` in those seconds
-included — is named inside the start notification, without buttons, and none
-waits longer than 5 seconds. A queued job still running when the window closes
-does not hold the start notification; what its end raises later is published on
-its own.
+A daemon start publishes exactly one start notification, `hands: handsd started`
+(§32), and anything the start itself raises before it — the stop an orphaned
+consultation's end makes, when a daemon died with a driver or architect job
+running — is folded into its message, title and reason, rather than published a
+few milliseconds ahead of it. When the start picks up jobs a dead daemon left
+queued, the notification waits for them to end, for at most 5 seconds (DESIGN
+§33): a queued job that fails at once stops the pipeline inside that window, and
+the stop is folded in rather than published a quarter second after the start.
+The same window is the bound on everything else it folds: none waits longer than
+5 seconds. A queued job still running when the window closes does not hold the
+start notification; what its end raises later is published on its own.
+
+A held job is never folded (DESIGN §34). Its `job.held` notification is
+published at once, with its Approve and Deny buttons, whether the job was held
+before the start (every job still held is published again, with fresh buttons)
+or during it; the start notification names it by title only. Stopping handsd
+inside the window publishes the start notification first, and handsd waits for
+what is already queued to publish instead of cancelling it.
 
 A limit and its resume are not such a pair. Both are events you read with
 `hands inbox` (`limit`, `resume`), and neither is published: the inbox event
@@ -547,11 +551,10 @@ Publish a command to `cmd_topic` from the ntfy app. The last word is the token
   and kept only in handsd's memory. It can decide only that job, and only once.
   It is gone as soon as the job is decided by any route (phone, `hands
   approve`, the driver) and when handsd restarts. After a restart the old
-  buttons do nothing, and handsd does not re-send them: its one `handsd started`
-  notification lists every job still held, and a summary of several jobs can
-  carry the buttons of none. Decide those with `hands approve <job>` / `hands
-  deny <job>`, or with `approve <job> <secret>` on `cmd_topic`; a job held again
-  later gets buttons again. `pause`, `resume`,
+  buttons do nothing: handsd publishes every job still held again, with new
+  buttons (§34), and names each by title in its `handsd started` notification.
+  `hands approve <job>` / `hands deny <job>`, or `approve <job> <secret>` on
+  `cmd_topic`, decide a held job all the same. `pause`, `resume`,
   `status` and `go` take the secret only, never a nonce.
 - **Nothing is answered except `status`, an accepted `go`, a written kit and a
   `reply` whose secret was right.** A wrong secret or nonce, a command
