@@ -1956,6 +1956,40 @@ Resolution (DESIGN v3.17 §34, 2026-09-17):
 > queued to publish; `cancel_all` is removed from that path. Tests bind both
 > with the reviewer's timings.
 
-Code: mission 18 U1.
+Code (mission 18 U1, 45da318, 2026-09-17): `Notifier.notify(fold=False)` for
+`job.held`: during the start's hold the held note is published at once with its
+Approve/Deny buttons and named by title only in "handsd started"; a job held
+before the start is re-published at start with fresh buttons (`_publish_held`
+replaces `_remint_held`); `stop()` flushes the start notification first and
+drains pending publishes (bounded, 30 s) instead of `notifier.cancel_all()`,
+which is deleted. The reviewer's two probes (a job held at 0.3 s during a
+start; a stop at 1.0 s with 0.5 s publish latency) are tests, red first. Not
+proven: a real ntfy or claude; a kit apply or engine hold inside the window; a
+publish hanging past the drain bound. The fold of other kinds is H-039.
+
+Status: resolved by DESIGN v3.17 (code: mission 18 U1)
+
+---
+
+## H-039 — §34's start fold names what never reaches ntfy; the builder kept §33's fold of stops
+
+Severity: low · Component: `src/hands/daemon.py`, `src/hands/notify.py` (the
+start fold); DESIGN §33 (the start folds queued jobs' publishes into one),
+§34 ("holds back only what it may safely fold: heartbeats and
+`pipeline.resumed` of the jobs it re-admits")
+Filed by: mission 18 orchestrator, from the U1 sub-agent's report (45da318).
+
+Symptom. §34 says the fold holds back *only* heartbeats and
+`pipeline.resumed`. In this code neither is an ntfy notification; both are
+inbox events only, so there is nothing of theirs to fold. Read literally, the
+fold would hold back nothing and every publish a re-admitted job raises
+("the pipeline stopped" when a queued job fails at once) would go out on its
+own, reopening REVIEW-16 should-fix 7, which §33 closed with one notification.
+U1 read §34 as taking `job.held` out of §33's fold and kept the fold of
+everything else; §33's one-notification tests still bind it.
+
+Direction, for the architect. Either confirm the reading (the fold holds back
+everything except `job.held`), or state which other kinds must publish at
+once during the window.
 
 Status: open
