@@ -22,7 +22,9 @@ item names the mission it is scheduled for; unscheduled items say so.
 
 ## Mission 16 — DONE 2026-09-16 (review 16: blockers=2, neither the guard; driver role enabled 2026-09-17).
 
-## Mission 17 (scheduled 2026-09-17) — review 16 (the autonomy path), `reply`, self-hosted ntfy. Spec: DESIGN v3.16 §33.
+## Mission 17 — DONE 2026-09-17 (review 17: blockers=1, the start fold; autonomy path closed).
+
+## Mission 18 (scheduled 2026-09-17) — closer: review 17, who "needs you" from current state. Spec: DESIGN v3.17 §34. After its review: enable the architect role.
 
 - Review 11 blockers 1–5 and should-fix 1–9; the guard rewritten on shlex
   tokens; consult stops in the engine; H-022 resolved. Spec: DESIGN v3.11

@@ -1,13 +1,12 @@
-# hands — DESIGN v3.16
+# hands — DESIGN v3.17
 
 Machinery that replaces the human relay between the planning brain and the two
 Claude Code roles (builder, aux) on the Ubuntu laptop, and that keeps a series
 moving without a human while everything goes by plan. Working name: `hands`.
 The method it serves is described in WORKING-MODEL.md (agile-skills) and
 OPERATING-MODEL.md (spanweave); hands changes the topology, not the method.
-v3.16 (2026-09-17) folds in the mission 16 review (the guard held; the
-autonomy path did not) and specifies `reply` and self-hosted ntfy; changes
-are in §33; earlier changes in §32–§17.
+v3.17 (2026-09-17) folds in the mission 17 review; changes are in §34;
+earlier changes in §33–§17.
 
 Status: proposal, 2026-09-10. Items marked DECIDED were settled in discussion.
 
@@ -1457,3 +1456,48 @@ Mission 17, talking to the architect (backlog; ROADMAP M4c):
   `[notify] ntfy_token` (sent as a bearer on publish and subscribe); the
   phone app subscribes with the same token. Free text about a project
   never crosses a public broker once this is set.
+
+---
+
+## 34. Changes from v3.16 (mission 17 review)
+
+The start fold (review 17 blocker 1, should-fix 6): the daemon's start fold
+holds back only what it may safely fold: heartbeats and `pipeline.resumed`
+of the jobs it re-admits. A `job.held` is never folded: it is published at
+once, with its buttons, whether the job was held before or during the
+start; the start notification lists it by title only. A `stop` inside the
+fold window flushes the fold first and cancels nothing that was already
+queued to publish; `cancel_all` is removed from that path. Tests bind both
+with the reviewer's timings.
+
+The kit record (should-fix 1, 2): `kit.json` stores the sha256 of the bytes
+the check passed on, and engine approval re-hashes the stored zip and
+refuses a mismatch (`kit.refused` with both hashes); `kit_file` calls are
+serialized per consultation under a lock, the second refused as "one kit
+per consultation" before it is checked, and the report's "both denied"
+claim is replaced by what the test proves.
+
+Kits and symlinks (should-fix 3): the symlink walk under `HANDS_KITS` uses
+`os.lstat` on every path component from the root down and does not depend
+on directory read permission; a component that cannot be stat'ed is
+refused; doctor's `_kits_line` uses the same walk.
+
+Doctor's role rows (should-fix 4, 5): doctor reads every settings layer
+Claude Code reads for the role's directory (`settings.json`,
+`settings.local.json`, and the user-level file), fails the row when any
+layer disables hooks, alters the `PreToolUse` matcher, sets an `env` that
+changes `HANDS_*` or `CLAUDE_*` variables the role depends on, or names a
+different hook command; the self-test check runs the guard at the exact
+path the settings name and compares its sha256 with the guard the
+repository ships, printing both on mismatch.
+
+The token (should-fix 7): `ntfy_token` with `ntfy_url` unset or pointing
+at a public broker is refused at config load with a message naming the
+url; the token is only accepted alongside an explicit `ntfy_url`.
+
+`hands who` (backlog, mission 18 item 1): the driver's inbox line says
+"needs YOU" only when the pipeline is stopped now or a job is held now;
+unread events alone say "informational, the driver acks them on its next
+check".
+
+The architect role is enabled after this mission's review.

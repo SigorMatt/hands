@@ -60,7 +60,9 @@ then an install (`uv tool install --force`) and a driver-kit refresh.
   review 15 found the guard's `for`/`${…}` hole (role mode regressed).
   Mission 16 (closer): the guard's language finished, review 15, H-030..32
   — DONE 2026-09-16; review 16 found no guard hole; the driver role is
-  enabled. Mission 17: review 16 (the autonomy path), `reply <secret> <text>`
+  enabled. Mission 17: review 16 (the autonomy path), `reply <secret> <text>` — DONE
+  2026-09-17; review 17: one blocker (the start fold). Mission 18 (closer):
+  review 17; then the architect role is enabled. `reply <secret> <text>`
   on the command topic delivered as a `keep` to the architect's last
   session with its answer on the events topic, and self-hosted ntfy behind
   the Tailscale tunnel (free text about a project no longer crosses a
