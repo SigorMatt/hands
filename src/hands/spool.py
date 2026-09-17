@@ -41,6 +41,7 @@ __all__ = [
     "INITIAL_STATES",
     "JOB_FIELDS",
     "KIT_CHECK_PASSED",
+    "REPLY_ORIGIN",
     "STATES",
     "TERMINAL_STATES",
     "TRANSITIONS",
@@ -52,6 +53,7 @@ __all__ = [
     "Spool",
     "SpoolError",
     "flat_layout",
+    "is_architect_reply",
     "migrate_flat",
     "new_job_id",
     "kit_apply_problem",
@@ -117,6 +119,10 @@ ORIGINS = frozenset(
 #: §31: named, because three modules test against it — `Api.kit_file` writes it,
 #: `Api.decide_from_playbook` refuses anything else, and the engine reads it.
 ARCHITECT_ORIGIN = "architect"
+#: §33: the origin of a `reply <secret> <text>` from the phone to the architect's
+#: last session. An architect job of this origin is a reply, never a consultation
+#: (which the engine files with origin `playbook`): `is_architect_reply`.
+REPLY_ORIGIN = "phone"
 #: §32: where handsd stores a kit the architect role filed, under the spool: one
 #: directory per `kit_id`, outside `HANDS_KITS`, holding `<name>.zip` and the record
 #: `kit.json` — the kit's id, its name, the architect job it was filed during, and
@@ -818,6 +824,13 @@ def migrate_flat(hands_dir: str | Path) -> Path | None:
 
 
 # ------------------------------------------------------------ §32: filed kits
+
+
+def is_architect_reply(job: Job) -> bool:
+    """§33: is `job` a phone `reply` to the architect — not a consultation? `Api.send`
+    refuses the architect role from every socket client (§32), so the one route to an
+    architect job of origin `phone` is `Api.reply_architect`."""
+    return job.role == "architect" and job.origin == REPLY_ORIGIN  # `ARCHITECT_ROLE`
 
 
 def kit_apply_problem(spool: Spool, job: Job) -> str | None:

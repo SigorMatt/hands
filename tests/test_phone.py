@@ -33,8 +33,20 @@ from hands import phone as phone_mod
 from hands.config import ConfigError, load_config
 from hands.daemon import Daemon
 from hands.notify import PAIR_SPACING_S, http_post, http_stream
-from hands.phone import GO_TITLE, KIT_TITLE
-from harness import PROJECT, TIMEOUT, config_body, ok, poll, running_job
+from hands.phone import ARCHITECT_TITLE, GO_TITLE, KIT_TITLE, REPLY_TITLE
+from harness import (
+    CONSULT_HEAD,
+    PROJECT,
+    TIMEOUT,
+    architect_table,
+    close_consultation,
+    config_body,
+    ok,
+    open_consultation,
+    passing_kit,
+    poll,
+    running_job,
+)
 
 SECRET = "Xyzzy-PHONE-s3cret-0123456789abcdef"
 EVENTS_TOPIC = "hands-events-test"
@@ -970,6 +982,325 @@ def test_go_after_a_stop_un_pauses_when_its_job_starts_and_the_done_fires_a_rule
         (rule,) = [event for event in events if event["kind"] == "playbook.rule"]
         assert rule["payload"]["job"] == row["id"]
         assert (await ok("pipeline"))["paused"] is False
+
+    phone_drive(body)
+
+
+# ------------------------------------------------------------ reply (§33)
+
+#: The architect's session, as its consultation's `init` event records it.
+ARCHITECT_SESSION = "sess-arch-17"
+#: The human's reply: inner blank lines, doubled blanks and a trailing blank kept.
+REPLY_TEXT = "Keep blocker 2 as the review states.\n\n  Then  file the next kit, not two. "
+#: What the architect's resumed session answers (the scripted `claude`).
+ARCHITECT_ANSWER = "Understood: blocker 2 stands.\nThe next kit follows the next review."
+
+
+@pytest.fixture
+def architect_phone(tmp_home: Path, workdir: Path, monkeypatch: pytest.MonkeyPatch) -> str:
+    """The channel on, `[roles.architect]` configured, and the architect's resumed
+    session scripted to answer `ARCHITECT_ANSWER` (a prompt with no `FAKE:` line)."""
+    (tmp_home / ".hands" / f"{PROJECT}.toml").write_text(
+        config_body(tmp_home, workdir, extra=architect_table(tmp_home) + NOTIFY)
+    )
+    replies = tmp_home / "replies.json"
+    replies.write_text(json.dumps([ARCHITECT_ANSWER]))
+    monkeypatch.setenv("HANDS_FAKE_CLAUDE_REPLIES", str(replies))
+    return PROJECT
+
+
+async def consulted(daemon: Daemon, verdict: str = "VERDICT: series complete") -> dict[str, Any]:
+    """One architect consultation run to its end, as the engine enqueues one (§31):
+    it records the session a `reply` resumes."""
+    job = daemon.enqueue(
+        role="architect",
+        context="clear",
+        prompt=f"{CONSULT_HEAD}FAKE:session {ARCHITECT_SESSION}\nFAKE:result {verdict}",
+        origin="playbook",
+    )
+    record = await ok("wait", job.id)
+    assert record["state"] == "done", record
+    assert record["session_id"] == ARCHITECT_SESSION
+    return dict(record)
+
+
+def titled(daemon: Daemon, title: str) -> list[dict[str, Any]]:
+    return [item for item in daemon.notifier.post.sent if item["title"] == title]
+
+
+def assert_reply_refused(daemon: Daemon, caplog: pytest.LogCaptureFixture, why: str) -> None:
+    (answer,) = titled(daemon, REPLY_TITLE)
+    assert answer["message"].startswith("reply refused: "), answer
+    assert why in strip_paths(answer["message"]), answer
+    assert f"phone: command ignored (reply: {why}" in strip_paths(caplog.text), caplog.text
+    assert titled(daemon, ARCHITECT_TITLE) == []
+    assert SECRET not in strip_paths(caplog.text)
+    for item in daemon.notifier.post.sent:
+        assert SECRET not in strip_paths(json.dumps(item, default=str)), item
+
+
+def test_reply_resumes_the_architects_last_session_and_publishes_its_answer(
+    architect_phone: str, tmp_home: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """§33's round trip: `reply <secret> <text>` on cmd_topic → one architect job,
+    `context: keep`, `origin: phone`, the text verbatim as its prompt, resuming the
+    consultation's session → the architect's answer on ntfy_topic titled
+    `architect`. The reply is not a consultation: no `consult.done`, no journal
+    line, no second stop, the series' consult count unchanged, and the stopped
+    pipeline stays stopped when the reply job starts."""
+    caplog.set_level(logging.DEBUG)
+
+    async def body(daemon: Daemon, fake: FakeNtfy) -> None:
+        consultation = await consulted(daemon)
+        stopped = await poll(_paused, "the consultation's stop")
+        await daemon.notifier.drain()
+        before = len(daemon.spool.unacked())
+
+        await say(daemon, fake, f"reply {SECRET} {REPLY_TEXT}")
+        rows = [row for row in (await ok("jobs"))["jobs"] if row["id"] != consultation["id"]]
+        (row,) = rows
+        record = await ok("wait", row["id"])
+        assert (record["role"], record["context"], record["origin"]) == (
+            "architect", "keep", "phone",
+        )
+        assert record["prompt"] == REPLY_TEXT  # verbatim, trailing blank included
+        assert record["state"] == "done"
+        assert record["session_id"] == ARCHITECT_SESSION  # the resumed session
+        assert record["result"] == ARCHITECT_ANSWER
+
+        async def answered() -> list[dict[str, Any]] | None:
+            await daemon.notifier.drain()
+            return titled(daemon, ARCHITECT_TITLE) or None
+
+        (answer,) = await poll(answered, "the architect's answer on ntfy_topic")
+        assert answer["url"] == f"{NTFY}/{EVENTS_TOPIC}"
+        assert answer["message"] == ARCHITECT_ANSWER
+        assert answer.get("actions") is None
+        (accepted,) = titled(daemon, REPLY_TITLE)
+        assert accepted["message"] == f"reply: architect job {row['id']} queued"
+
+        kinds = [event.kind for event in daemon.spool.unacked()[before:]]
+        assert "consult.done" not in kinds and "stop" not in kinds, kinds
+        state = await ok("pipeline")
+        assert state["paused"] is True and state["stop_reason"] == stopped["stop_reason"]
+        assert "pipeline.resumed" not in kinds, "the reply un-paused the pipeline"
+        assert daemon.playbook.architect_consults_used() == 1
+        for item in daemon.notifier.post.sent:
+            assert SECRET not in strip_paths(json.dumps(item, default=str)), item
+
+    phone_drive(body)
+    assert SECRET not in strip_paths(caplog.text)
+    assert REPLY_TEXT.strip() not in strip_paths(caplog.text), "the reply's text was logged"
+
+
+def test_a_reply_job_under_a_running_pipeline_does_not_stop_it_as_a_consultation(
+    architect_phone: str, workdir: Path
+) -> None:
+    """§33: a reply's answer carries no `VERDICT:` line, and the engine does not read
+    one: a running pipeline is not stopped by it, and no journal line is written."""
+
+    async def body(daemon: Daemon, fake: FakeNtfy) -> None:
+        await consulted(daemon)
+        await poll(_paused, "the consultation's stop")
+        await ok("resume")
+        journal = workdir / "meta" / "journal.md"
+        lines = journal.read_text(encoding="utf-8").splitlines() if journal.exists() else []
+        await say(daemon, fake, f"reply {SECRET} {REPLY_TEXT}")
+        (row,) = [r for r in (await ok("jobs"))["jobs"] if r["origin"] == "phone"]
+        assert (await ok("wait", row["id"]))["state"] == "done"
+
+        async def answered() -> bool:
+            await daemon.notifier.drain()
+            return bool(titled(daemon, ARCHITECT_TITLE))
+
+        await poll(answered, "the architect's answer")
+        await daemon.playbook.drain()
+        assert (await ok("pipeline"))["paused"] is False
+        after = journal.read_text(encoding="utf-8").splitlines() if journal.exists() else []
+        assert after == lines
+
+    phone_drive(body)
+
+
+async def _paused() -> dict[str, Any] | None:
+    state = await ok("pipeline")
+    return dict(state) if state["paused"] else None
+
+
+def test_reply_is_refused_when_the_architect_has_no_session(
+    architect_phone: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level(logging.DEBUG)
+
+    async def body(daemon: Daemon, fake: FakeNtfy) -> None:
+        await say(daemon, fake, f"reply {SECRET} {REPLY_TEXT}")
+        await daemon.notifier.drain()
+        assert (await ok("jobs"))["jobs"] == []
+        assert_reply_refused(daemon, caplog, "the architect has no session to reply to")
+
+    phone_drive(body)
+
+
+def test_reply_is_refused_while_a_consultation_is_running(
+    architect_phone: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level(logging.DEBUG)
+
+    async def body(daemon: Daemon, fake: FakeNtfy) -> None:
+        await consulted(daemon)
+        running = open_consultation(daemon)
+        try:
+            await say(daemon, fake, f"reply {SECRET} {REPLY_TEXT}")
+            await daemon.notifier.drain()
+            assert [row["origin"] for row in (await ok("jobs"))["jobs"]] == [
+                "playbook", "playbook",
+            ]
+        finally:
+            close_consultation(daemon, running)
+        assert_reply_refused(
+            daemon, caplog, f"an architect consultation is running (job {running.id})"
+        )
+
+    phone_drive(body)
+
+
+def test_reply_is_refused_while_the_engine_waits_for_a_consultations_kit(
+    architect_phone: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    """§32's `next kit` wait is still the consultation: the architect may file its
+    kit then, so a reply is refused until the wait ends."""
+    caplog.set_level(logging.DEBUG)
+
+    async def body(daemon: Daemon, fake: FakeNtfy) -> None:
+        consultation = await consulted(daemon, "VERDICT: next kit mission-18-kit")
+
+        async def waiting() -> bool:
+            return daemon.playbook.kit_wait() == (consultation["id"], "mission-18-kit")
+
+        await poll(waiting, "the engine's wait for the consultation's kit")
+        await say(daemon, fake, f"reply {SECRET} {REPLY_TEXT}")
+        await daemon.notifier.drain()
+        assert [row["id"] for row in (await ok("jobs"))["jobs"]] == [consultation["id"]]
+        assert_reply_refused(
+            daemon,
+            caplog,
+            f"the engine waits for kit 'mission-18-kit' of consultation {consultation['id']}",
+        )
+
+    phone_drive(body)
+
+
+def test_reply_is_refused_while_an_architect_job_is_queued_one_job_per_turn(
+    architect_phone: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level(logging.DEBUG)
+
+    async def body(daemon: Daemon, fake: FakeNtfy) -> None:
+        assert daemon.phone is not None
+        await consulted(daemon)
+        await daemon.phone.command(f"reply {SECRET} first")
+        await daemon.phone.command(f"reply {SECRET} second")  # no await let the worker in
+        phone = [row for row in (await ok("jobs"))["jobs"] if row["origin"] == "phone"]
+        assert len(phone) == 1
+        await ok("wait", phone[0]["id"])
+        await daemon.notifier.drain()
+        answers = [item["message"] for item in titled(daemon, REPLY_TITLE)]
+        assert answers[0] == f"reply: architect job {phone[0]['id']} queued"
+        # The worker may have taken the first by then: queued or running, it is the turn.
+        assert re.fullmatch(
+            rf"reply refused: the architect has a job (queued|running) "
+            rf"\({phone[0]['id']}\) \(§33\)",
+            answers[1],
+        ), answers
+
+    phone_drive(body)
+
+
+def test_reply_is_refused_without_an_architect_role(
+    project: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level(logging.DEBUG)
+
+    async def body(daemon: Daemon, fake: FakeNtfy) -> None:
+        await say(daemon, fake, f"reply {SECRET} {REPLY_TEXT}")
+        await daemon.notifier.drain()
+        assert (await ok("jobs"))["jobs"] == []
+        assert_reply_refused(daemon, caplog, "this project configures no [roles.architect]")
+
+    phone_drive(body)
+
+
+def test_reply_with_a_wrong_or_missing_secret_or_no_text_is_ignored_like_any_command(
+    architect_phone: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level(logging.DEBUG)
+
+    async def body(daemon: Daemon, fake: FakeNtfy) -> None:
+        consultation = await consulted(daemon)
+        await daemon.notifier.drain()
+        published = len(daemon.notifier.post.sent)
+        for text in (
+            "reply",
+            f"reply {SECRET}",
+            f"reply {SECRET}   \n ",
+            f"reply not-the-secret {REPLY_TEXT}",
+            f"reply {REPLY_TEXT} {SECRET}",
+        ):
+            await say(daemon, fake, text)
+        await daemon.notifier.drain()
+        assert [row["id"] for row in (await ok("jobs"))["jobs"]] == [consultation["id"]]
+        assert daemon.notifier.post.sent[published:] == []
+
+    phone_drive(body)
+    assert "phone: command ignored (reply: bad secret)" in strip_paths(caplog.text)
+    assert "phone: command ignored (reply takes the secret and a text)" in strip_paths(
+        caplog.text
+    )
+    assert SECRET not in strip_paths(caplog.text)
+
+
+def test_reply_parsing_keeps_the_text_verbatim_after_the_secrets_separator() -> None:
+    """What is stripped: whitespace before `reply`, the run between `reply` and the
+    secret, and the run between the secret and the text. Nothing else."""
+    parse = phone_mod.parse_reply
+    assert parse(f"reply {SECRET} a  b \n\n c ") == (SECRET, "a  b \n\n c ")
+    assert parse(f"  Reply\t{SECRET}\n\n  text\n") == (SECRET, "text\n")
+    assert parse(f"reply {SECRET}") is None
+    assert parse(f"reply {SECRET} \n ") is None
+    assert parse(f"replying {SECRET} text") is None
+    assert parse("reply") is None
+
+
+def test_a_kit_filed_during_a_reply_job_is_refused_it_is_not_a_consultation(
+    architect_phone: str,
+) -> None:
+    """§32, §33: `kit_file` is accepted only while an architect *consultation* is
+    open; a running reply job is not one, so the kit is refused and nothing filed."""
+    from hands.api import ApiError
+    from harness import kit_zip as zip_of
+
+    async def body(daemon: Daemon, fake: FakeNtfy) -> None:
+        job = daemon.spool.create_job(
+            role="architect", context="keep", prompt=REPLY_TEXT, origin="phone"
+        )
+        job = daemon.spool.transition(job, "running")
+        daemon._running["architect"] = job.id
+        try:
+            with pytest.raises(ApiError) as refused:
+                await daemon.api.kit_file(
+                    name="mission-18-kit",
+                    zip=base64.b64encode(zip_of(passing_kit())).decode(),
+                )
+        finally:
+            daemon._running["architect"] = None
+            daemon.spool.transition(job.id, "done")
+        assert f"job {job.id} is a reply from the phone, not a consultation" in str(
+            refused.value
+        )
+        assert [record.id for record in daemon.spool.list_jobs()] == [job.id]
+        assert not (daemon.spool.root / "kits").exists() or not any(
+            (daemon.spool.root / "kits").iterdir()
+        )
 
     phone_drive(body)
 

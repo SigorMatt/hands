@@ -763,6 +763,7 @@ def test_the_command_channel_is_reported_on_and_the_secret_is_never_printed(
     assert code == 0
     found = {check["name"]: check for check in json.loads(out)["checks"]}
     assert found["phone"]["status"] == "ok"
+    assert "`reply <secret> <text>`" in strip_paths(found["phone"]["detail"])  # §33
     assert PHONE_SECRET not in strip_paths(out) and PHONE_SECRET not in strip_paths(err)
 
 

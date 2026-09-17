@@ -284,7 +284,9 @@ def _phone_check(config: Config) -> Check:
     detail = (
         "command channel on: handsd subscribes to [notify] cmd_topic and takes approve, "
         "deny, pause, resume and status; a typed command ends with cmd_secret, and a "
-        "held job's notification carries Approve/Deny buttons with a single-use nonce"
+        "held job's notification carries Approve/Deny buttons with a single-use nonce; "
+        "`reply <secret> <text>` resumes the architect's last session when "
+        "[roles.architect] is configured (§33)"
     )
     if not notify.ntfy_topic:
         return Check(

@@ -373,6 +373,14 @@ under; read it there rather than here. What changes for you:
   and stops on by itself. A decision that would change the shape the human
   approved at the switch point is also an escalation. Escalating notifies the
   human with your session id and a `claude --resume` line.
+- **The human may answer by `reply`.** `reply <secret> <text>` on `cmd_topic`
+  resumes your last session with the human's text, verbatim, as one job
+  (`origin: phone`), and your final message goes to the phone titled
+  `architect` (DESIGN §33). A reply is a conversation, not a consultation: no
+  verdict is read from it and it may not file a kit (`hands kit file` is refused
+  while it runs); what you agree on goes into the next kit, filed during the
+  next consultation. It is refused while a consultation runs or its `next kit`
+  wait is open, and before you have a session.
 - **You still write nothing but kits.** No product code, no repository edit, no
   `hands send`, `approve`, `deny`, `go` or `put`, no push: the guard refuses
   them in architect mode, and needing one is itself an escalation.

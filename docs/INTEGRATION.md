@@ -443,7 +443,7 @@ is stamped before anything the resumed job goes on to publish. An exhausted
 ### The command channel: approve from the phone
 
 With `[notify] cmd_topic` set, handsd subscribes to that topic — an outbound
-long poll to ntfy, nothing listening on this machine — and takes seven commands
+long poll to ntfy, nothing listening on this machine — and takes eight commands
 from it. Set it up once:
 
     python3 -c 'import secrets; print("hands-cmd-" + secrets.token_urlsafe(16))'
@@ -462,7 +462,8 @@ Restart handsd (`systemctl --user restart handsd@<project>`). A `cmd_topic` with
 to start. So does a secret with a blank inside it, and a `cmd_topic` equal to
 `ntfy_topic`.
 
-Publish a command to `cmd_topic` from the ntfy app. The last word is the token:
+Publish a command to `cmd_topic` from the ntfy app. The last word is the token
+(but for `reply`, whose second word is the secret):
 
     approve <job> <secret>
     deny <job> [reason words] <secret>
@@ -471,6 +472,7 @@ Publish a command to `cmd_topic` from the ntfy app. The last word is the token:
     status <secret>
     go <secret>
     kit <secret>                  (with a .zip attached to the message)
+    reply <secret> <text>
 
 - `approve` and `deny` decide a **held** job, exactly as `hands approve|deny`
   does, and the job record says `decided_by: phone`. `pause` and `resume` are
@@ -518,6 +520,22 @@ Publish a command to `cmd_topic` from the ntfy app. The last word is the token:
   <sha256>`. handsd then files the apply itself, held for your approval (DESIGN
   §27; the closed loop below says how). An ntfy server has its own attachment size limit, which
   may be lower than `kit_max_mb`.
+- `reply` talks to the architect role (DESIGN §33; "The architect role" below).
+  `reply <secret> <text>` is delivered as `hands send --role architect --context
+  keep` would be — the one send to the architect, which `hands send` itself
+  refuses (§32) — to the architect's last session: one job, `origin: phone`,
+  whose prompt is `<text>` exactly as typed after the whitespace that follows the
+  secret (inner and trailing whitespace and newlines kept). handsd answers on
+  `ntfy_topic` titled `hands: reply` with the job id and state, and when the job
+  ends it publishes the architect's final message there titled `architect`. It
+  is refused, and the refusal answered under `hands: reply`, when the config has
+  no `[roles.architect]`, while an architect job is running, queued or held (a
+  consultation, or the last reply: one job per turn), while the engine waits for
+  a consultation's `next kit`, and when the architect has no session yet. A reply
+  is not a consultation: the engine reads no verdict from it, it does not
+  un-pause a stopped pipeline, it does not count against
+  `max_architect_consults`, and a `hands kit file` while it runs is refused. The
+  text goes over ntfy: see "Old messages" and the privacy note below.
 - **The buttons.** With the channel on, a held job's notification has Approve
   and Deny buttons. Each publishes `approve <job> <nonce>` or `deny <job>
   <nonce>` to `cmd_topic`. The nonce is 32 random bytes minted for that one job
@@ -530,7 +548,8 @@ Publish a command to `cmd_topic` from the ntfy app. The last word is the token:
   deny <job>`, or with `approve <job> <secret>` on `cmd_topic`; a job held again
   later gets buttons again. `pause`, `resume`,
   `status` and `go` take the secret only, never a nonce.
-- **Nothing is answered except `status`, an accepted `go` and a written kit.** A wrong secret or nonce, a command
+- **Nothing is answered except `status`, an accepted `go`, a written kit and a
+  `reply` whose secret was right.** A wrong secret or nonce, a command
   hands does not know, or a job that is not held is logged in handsd's journal
   (`journalctl --user -u handsd@<project>`) and ignored. If a command seems to do
   nothing, look there. The log never contains the token.
@@ -922,8 +941,10 @@ event a playbook can match: the engine reads the verdict itself. An
 escalation's stop reason carries the architect's own reason, its session id and
 the line that re-opens it — `claude --resume <id>` — so the phone tells you the
 condition, and at the laptop you open the architect's directory, run that line,
-`/rc`, and talk to it from the Code tab; what you decide becomes a decisions
-file in its next kit. The conditions are written into the playbook rather than
+`/rc`, and talk to it from the Code tab. From the phone, `reply <secret> <text>`
+on `cmd_topic` resumes that same session with your text and publishes the
+architect's answer titled `architect` (DESIGN §33; the command channel above).
+What you decide becomes a decisions file in its next kit. The conditions are written into the playbook rather than
 judged in the moment: `gate_failures = 2` (the same roadmap gate failing twice
 in a row, judged by the architect) and `escalate_on = ["blocker-unanswered",
 "milestone-missing", "budget-exhausted"]`. hands can see only the last of them:

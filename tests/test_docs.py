@@ -555,6 +555,29 @@ def test_the_handbook_says_handsd_files_the_apply_from_a_phone_kit() -> None:
     assert "the first line of `KIT.md`" in section_11
 
 
+def test_reply_is_documented_where_the_phone_commands_and_the_architect_are() -> None:
+    """§33 (mission 17 U5): `reply <secret> <text>` is in the command channel's list
+    and its architect section in INTEGRATION, in the handbook's architect-role
+    section, in the README, and in the phone module's own command list."""
+    from hands import phone
+    from hands.phone import ARCHITECT_TITLE, REPLY_TITLE
+
+    integration = (ROOT / "docs" / "INTEGRATION.md").read_text(encoding="utf-8")
+    channel = integration.split("### The command channel: approve from the phone", 1)[1]
+    channel = flattened(channel.split("\n### ", 1)[0])
+    assert "reply <secret> <text>" in channel
+    for said in ("`origin: phone`", f"titled `{ARCHITECT_TITLE}`", f"`{REPLY_TITLE}`",
+                 "--context keep", "one job per turn", "`next kit`"):
+        assert flattened(said) in channel, f"the command channel does not say {said!r}"
+    architect = flattened(integration.split(ARCHITECT_SECTION, 1)[1].split("\n## ", 1)[0])
+    assert "`reply <secret> <text>`" in architect
+    handbook = flattened((ROOT / "docs" / "ARCHITECT-HANDBOOK.md").read_text(encoding="utf-8"))
+    role = handbook.split("### Running as the architect role", 1)[1]
+    assert "`reply <secret> <text>`" in role and "may not file a kit" in role
+    assert "`reply <secret> <text>`" in flattened((ROOT / "README.md").read_text("utf-8"))
+    assert "reply <secret> <text>" in (phone.__doc__ or "")
+
+
 def test_the_readme_names_kit_check_go_and_the_kit_transport() -> None:
     readme = flattened((ROOT / "README.md").read_text(encoding="utf-8"))
     for said in ("`hands kit check", "`go <secret>`", "`kit <secret>`", "kit_dir",

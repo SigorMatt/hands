@@ -43,10 +43,18 @@ from hands.config import CONSULT_ROLES, Config, ConfigError, load_config, resolv
 from hands.limits import LimitManager
 from hands.monitor import MonitorSupervisor
 from hands.notify import Notifier
-from hands.phone import PhoneChannel
+from hands.phone import ARCHITECT_TITLE, PhoneChannel, reply_answer
 from hands.playbook import PlaybookEngine, series_roles_problem
 from hands.runner import LINE_LIMIT, Runner, RunnerError, reconcile_orphans
-from hands.spool import TERMINAL_STATES, Event, Job, Spool, flat_layout, now_iso
+from hands.spool import (
+    TERMINAL_STATES,
+    Event,
+    Job,
+    Spool,
+    flat_layout,
+    is_architect_reply,
+    now_iso,
+)
 
 __all__ = ["Daemon", "DaemonError", "main"]
 
@@ -592,6 +600,7 @@ class Daemon:
             await self.limits.on_job_finished(finished)
             # §10: and then whatever the architect pre-planned for this outcome.
             await self.playbook.on_job(finished)
+            self._reply_ended(finished)
         except RunnerError as exc:
             # The job was accepted but cannot be spawned (a `keep` whose session
             # went away between the send and its turn, or an oversized prompt).
@@ -607,6 +616,7 @@ class Daemon:
                 # REVIEW-11 SF2: a driver job that never spawned still ends its
                 # consultation: consult.done, the journal line, the stop (§28).
                 await self._consultation_ended(killed)
+                self._reply_ended(killed)
             log.warning("job %s (%s) could not run: %s", job_id, role, exc)
         except Exception:  # pragma: no cover - a bug here must not kill the worker
             log.exception("job %s (%s) raised", job_id, role)
@@ -627,6 +637,16 @@ class Daemon:
         except Exception:  # pragma: no cover - a bug here must not kill the caller
             log.exception("job %s (%s): its consultation's end could not be decided",
                           job.id, job.role)
+
+    def _reply_ended(self, job: Job) -> None:
+        """§33: a phone `reply` to the architect ended on this worker: "the reply's
+        text is published on `ntfy_topic` with title `architect`" — the architect's
+        final message as it is, with no cap or escaping (no publish of hands applies
+        one), or which job ended how when there is none. Raised through `notify`, so
+        it never holds the worker (§11), and the message is exactly that text."""
+        if not is_architect_reply(job):
+            return
+        self.notifier.notify(ARCHITECT_TITLE, {"message": reply_answer(job)})
 
     async def _enqueue_resume(self, **fields: Any) -> Job:
         """The limit manager's way in: a resume is an ordinary send (§6).

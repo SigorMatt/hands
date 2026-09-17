@@ -68,6 +68,7 @@ from hands.spool import (
     Spool,
     SpoolError,
     atomic_write,
+    is_architect_reply,
     kit_apply_problem,
     now_iso,
 )
@@ -1388,7 +1389,8 @@ class PlaybookEngine:
         job that just started.
         """
         log.debug("playbook: reading it for job %s (%s)", job.id, job.role)
-        if job.origin in UNPAUSE_ORIGINS:
+        if job.origin in UNPAUSE_ORIGINS and not is_architect_reply(job):
+            # §33: a phone `reply` to the architect answers the architect, not the stop.
             self._unpause("start")
         await self._load()
 
@@ -1509,7 +1511,13 @@ class PlaybookEngine:
         not one of §10's events — no rule may name one — because §31 writes the
         whole follow-up itself: `next kit` waits for the apply the architect filed,
         `series complete` and `escalate` stop, and so does every other end.
+
+        §33: a phone `reply` to the architect is not a consultation. Its end is
+        nothing here — no `consult.done`, no journal line, no verdict read, no stop;
+        the daemon publishes its answer (`Daemon._reply_ended`).
         """
+        if is_architect_reply(job):
+            return
         if job.role in CONSULT_ROLES:
             self._consult_done(job)
         if job.role == ARCHITECT:
@@ -2117,7 +2125,9 @@ class PlaybookEngine:
         return sum(
             1
             for record in jobs[start:]
-            if record.role == ARCHITECT and record.resumed_from is None
+            if record.role == ARCHITECT
+            and record.resumed_from is None
+            and not is_architect_reply(record)  # §33: a reply is not a consultation
         )
 
     def consults_used(self, book: Playbook | None) -> int:

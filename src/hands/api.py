@@ -48,14 +48,19 @@ from hands.spool import (
     ARCHITECT_ORIGIN,
     KIT_CHECK_PASSED,
     ORIGINS,
+    REPLY_ORIGIN,
     TERMINAL_STATES,
     Event,
     Job,
     SpoolError,
+    is_architect_reply,
     kit_apply_problem,
     new_kit_id,
     resolve_kinds,
 )
+
+#: §31: the origin of the jobs the engine files, a consultation among them.
+ORIGIN_PLAYBOOK = "playbook"
 
 if TYPE_CHECKING:  # pragma: no cover - import cycle only matters to type checkers
     from hands.daemon import Daemon
@@ -215,11 +220,13 @@ class Api:
         origin: str = "cli",
         playbook_sha256: str | None = None,
         kit_id: str | None = None,
+        reply: bool = False,
     ) -> dict[str, Any]:
         if role not in self.config.roles:
             known = ", ".join(sorted(self.config.roles))
             raise ApiError(f"unknown role {role!r}; this project configures: {known}")
-        if role in CONSULT_ROLES:
+        # §33: `reply` is `reply_architect`'s, which no socket client reaches.
+        if role in CONSULT_ROLES and not (reply and role == ARCHITECT_ROLE):
             # §27: the driver role is "started by `handsd` only through a `consult`
             # action" — not by a send from the CLI, the phone or a playbook rule.
             # H-032, §32: so is the architect, "started by `consult` only".
@@ -273,6 +280,63 @@ class Api:
             # business, and with no rule for it the pipeline stops.
             await self.daemon.playbook.on_event("job.held", job=job)
         return job.to_dict()
+
+    async def reply_architect(self, text: str) -> dict[str, Any]:
+        """§33: the phone's `reply <secret> <text>`, "delivered as `hands send --role
+        architect --context keep` to the architect's last session". Returns the job.
+
+        The one send to the architect role (H-032: `send` refuses it to every socket
+        client, and this method is in neither `COMMANDS` nor `KIT_METHODS`, so the
+        phone channel is its only caller). It takes `send`'s own path — §8's gate
+        patterns, `keep`'s session check — with `origin: phone` and `text` as the
+        prompt, unchanged. Refused, filing nothing:
+
+        - when this project configures no `[roles.architect]` (the series' `[series]
+          architect` mode is not read: a session exists only where the role ran);
+        - while an architect job is running, queued or held — a consultation or an
+          earlier reply: one job per turn;
+        - while the engine waits for the kit a consultation's `VERDICT: next kit
+          <name>` named (§32), which is still that consultation;
+        - when the role has recorded no session.
+
+        Nothing is awaited between these checks and the enqueue.
+        """
+        if ARCHITECT_ROLE not in self.config.roles:
+            raise ApiError(
+                "this project configures no [roles.architect], so there is no architect "
+                "to reply to (§31, §33)"
+            )
+        running = self.daemon.running(ARCHITECT_ROLE)
+        if running is not None:
+            try:
+                consulting = self.spool.load_job(running).origin == ORIGIN_PLAYBOOK
+            except SpoolError:
+                consulting = False
+            if consulting:
+                raise ApiError(f"an architect consultation is running (job {running}) (§33)")
+            raise ApiError(f"the architect has a job running ({running}) (§33)")
+        queued = self.daemon.status()["roles"][ARCHITECT_ROLE]["queued"]
+        if queued:
+            raise ApiError(f"the architect has a job queued ({', '.join(queued)}) (§33)")
+        held = [job.id for job in self.spool.list_jobs()
+                if job.role == ARCHITECT_ROLE and job.state == "held"]
+        if held:
+            raise ApiError(f"the architect has a job held ({', '.join(held)}) (§33)")
+        waiting = self.daemon.playbook.kit_wait()
+        if waiting is not None:
+            consultation, name = waiting
+            raise ApiError(
+                f"the engine waits for kit {name!r} of consultation {consultation} "
+                "([series] kit_wait_s), and the consultation is open until it ends (§32, §33)"
+            )
+        if not self.spool.read_role(ARCHITECT_ROLE).last_session_id:
+            raise ApiError(
+                "the architect has no session to reply to: no architect job has recorded "
+                "one (§33)"
+            )
+        return await self._send(
+            role=ARCHITECT_ROLE, context="keep", prompt=text, origin=REPLY_ORIGIN, reply=True
+        )
 
     async def file_apply(self, plan: Apply, origin: str, kit_id: str) -> dict[str, Any]:
         """§27, §31, §32: a kit's held apply, filed by handsd itself.
@@ -375,6 +439,16 @@ class Api:
             )
         running = self.daemon.running(ARCHITECT_ROLE)
         if running is not None:
+            # §33: a phone `reply` runs the architect too, and is not a consultation.
+            try:
+                replying = is_architect_reply(self.spool.load_job(running))
+            except SpoolError:
+                replying = False
+            if replying:
+                raise ApiError(
+                    f"kit_file: architect job {running} is a reply from the phone, not a "
+                    "consultation, and a kit is filed only during a consultation (§32, §33)"
+                )
             return running
         waiting = self.daemon.playbook.kit_wait()
         if waiting is None:

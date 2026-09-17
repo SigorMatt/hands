@@ -4,8 +4,8 @@
        ▲                                                   │
        └──────────── one JSON line per message ────────────┘
 
-The daemon subscribes to `[notify] cmd_topic` with a long-poll and accepts seven
-commands, each ending in its token:
+The daemon subscribes to `[notify] cmd_topic` with a long-poll and accepts eight
+commands, each ending in its token but `reply`, whose secret is its second word:
 
     approve <job> <secret|nonce>
     deny <job> [reason words…] <secret|nonce>
@@ -14,6 +14,19 @@ commands, each ending in its token:
     status <secret>
     go <secret>
     kit <secret>        (a message that carries an ntfy attachment)
+    reply <secret> <text>
+
+**`reply`** (§33) sends `<text>` — the rest of the message after the whitespace
+that follows the secret, unchanged — to the architect's last session as one
+`keep` job of `origin: phone` (`Api.reply_architect`, the one send to the
+architect role, H-032). It is refused, and the refusal answered on `ntfy_topic`
+titled `hands: reply`, when there is no `[roles.architect]`, while an architect
+job is running, queued or held, while the engine waits for a consultation's
+`next kit`, and when the role has recorded no session. When the job ends, the
+daemon publishes the architect's final message on `ntfy_topic` titled
+`architect`. The job is not a consultation: the engine reads no verdict from it,
+it does not un-pause a stopped pipeline, it is not counted against
+`max_architect_consults`, and `kit_file` refuses a kit filed while it runs.
 
 **`go`** (§26) is the one way to start work from the phone: it sends the
 playbook's `[series] kickoff` line to the builder as a `clear` send with
@@ -83,9 +96,10 @@ held again. `pause`, `resume`,
 `hmac.compare_digest` and never published: a notification carries only nonces.
 
 **What is answered.** `status` publishes a short summary to `ntfy_topic`, an
-accepted `go` publishes the id and state of the job it filed there, and a
-written kit publishes its name, size and sha256. Nothing else
-is answered: a bad token, an unknown or malformed command, a
+accepted `go` publishes the id and state of the job it filed there, a
+written kit publishes its name, size and sha256, and a `reply` with the secret
+publishes the job it filed or why it was refused (then the architect's answer).
+Nothing else is answered: a bad token, an unknown or malformed command, a
 command for a job that is not held — each is logged (without the token, and
 without any word of the message that could be one) and ignored.
 
@@ -106,6 +120,7 @@ import itertools
 import json
 import logging
 import os
+import re
 import secrets
 import shlex
 import tempfile
@@ -121,14 +136,14 @@ from hands.api import ApiError
 from hands.kit import KitError, apply_from_zip, home_shown
 from hands.notify import PAIR_SPACING_S
 from hands.playbook import PlaybookError, load_playbook, playbook_path
-from hands.spool import PathEscape, SpoolError, new_kit_id, resolve_under_roots
+from hands.spool import Job, PathEscape, SpoolError, new_kit_id, resolve_under_roots
 
 if TYPE_CHECKING:  # pragma: no cover
     from hands.daemon import Daemon
 
 __all__ = [
-    "BACKOFF_S", "GO_TITLE", "KIT_TITLE", "NONCE_BYTES", "STATUS_TITLE", "PhoneChannel",
-    "status_summary",
+    "ARCHITECT_TITLE", "BACKOFF_S", "GO_TITLE", "KIT_TITLE", "NONCE_BYTES", "REPLY_TITLE",
+    "STATUS_TITLE", "PhoneChannel", "parse_reply", "reply_answer", "status_summary",
 ]  # fmt: skip
 
 log = logging.getLogger("hands.phone")
@@ -145,6 +160,10 @@ SEEN_IDS = 1024
 STATUS_TITLE = "hands: status"
 GO_TITLE = "hands: go"
 KIT_TITLE = "hands: kit received"
+#: §33: the channel's answer to a `reply` — accepted (the job) or refused (why).
+REPLY_TITLE = "hands: reply"
+#: §33: "the reply's text is published on `ntfy_topic` with title `architect`".
+ARCHITECT_TITLE = "architect"
 
 #: §26's size cap is in MB; hands reads that as MiB.
 MIB = 1024 * 1024
@@ -157,6 +176,11 @@ KIT_TEMP_PREFIX = ".hands-kit-"
 KIT_SUFFIX = ".zip"
 
 _SECRET_ONLY = ("pause", "resume", "status", "go", "kit")
+#: §33: `reply <secret> <text>`. The secret is the second word, not the last, and the
+#: text is the rest of the message as typed: whitespace before `reply`, the run
+#: between `reply` and the secret, and the run between the secret and the text are
+#: the separators, and nothing else is stripped.
+_REPLY_RE = re.compile(r"\A\s*reply\s+(?P<token>\S+)\s+(?P<text>.*)\Z", re.IGNORECASE | re.DOTALL)
 _DECISIONS = {"approve": "approved", "deny": "denied"}
 
 
@@ -291,6 +315,8 @@ class PhoneChannel:
         words = text.split()
         verb = words[0].lower() if words else ""
         token = words[-1] if words else ""
+        if verb == "reply":
+            return await self._reply_command(text)
         if verb in _SECRET_ONLY:
             if len(words) != 2:
                 return self._ignore(f"{verb} takes only the secret")
@@ -368,6 +394,36 @@ class PhoneChannel:
             return self._ignore(f"go: the send was refused ({exc})")
         log.info("phone: go filed builder job %s (%s)", job["id"], job["state"])
         await self.daemon.notifier.answer(GO_TITLE, f"go: builder job {job['id']} {job['state']}")
+        return None
+
+    async def _reply_command(self, text: str) -> None:
+        """§33: `reply <secret> <text>` — the text, verbatim, to the architect's last
+        session as one `keep` job of `origin: phone`.
+
+        Neither the text nor any word of it is logged. A message without a text, or
+        with a token that is not the secret, is ignored like any command; once the
+        secret is accepted, a refusal is answered on `ntfy_topic` (`REPLY_TITLE`)
+        with hands' own words, because the human on the phone is waiting for the
+        architect and would otherwise hear nothing. Every refusal is decided by
+        `Api.reply_architect`, next to the enqueue it allows, with nothing awaited
+        between them.
+        """
+        parsed = parse_reply(text)
+        if parsed is None:
+            return self._ignore("reply takes the secret and a text")
+        token, reply = parsed
+        if not self._is_secret(token):
+            return self._ignore("reply: bad secret")
+        try:
+            job = await self.daemon.api.reply_architect(reply)
+        except ApiError as exc:
+            self._ignore(f"reply: {exc}")
+            await self.daemon.notifier.answer(REPLY_TITLE, f"reply refused: {exc}")
+            return None
+        log.info("phone: reply filed architect job %s (%s)", job["id"], job["state"])
+        await self.daemon.notifier.answer(
+            REPLY_TITLE, f"reply: architect job {job['id']} {job['state']}"
+        )
         return None
 
     def _builder_busy(self) -> str | None:
@@ -533,6 +589,27 @@ def status_summary(daemon: Daemon) -> str:
     lines.append(f"pipeline: {'paused' if pipeline.get('paused') else 'running'}")
     lines.append(f"inbox: {status['inbox']['unacked']} unacked")
     return "\n".join(lines)
+
+
+def parse_reply(text: str) -> tuple[str, str] | None:
+    """§33: the token and the text of `reply <token> <text>`, or None.
+
+    Stripped: whitespace before `reply`, the whitespace between `reply` and the
+    token, and the whitespace between the token and the text. The text is the rest
+    of the message, unchanged — inner and trailing whitespace and newlines kept. A
+    text that is empty after the separator is no reply (None)."""
+    match = _REPLY_RE.match(text)
+    if match is None or not match.group("text"):
+        return None
+    return match.group("token"), match.group("text")
+
+
+def reply_answer(job: Job) -> str:
+    """§33: what the phone is told when a reply job ends — the architect's final
+    message, verbatim, or, when the job ended without one, which job ended how."""
+    if job.state == "done" and job.result:
+        return job.result
+    return f"architect job {job.id} ended {job.state} with no reply"
 
 
 class _KitRefused(Exception):

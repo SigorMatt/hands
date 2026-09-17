@@ -138,6 +138,10 @@ Off unless configured in `[notify]`; `docs/INTEGRATION.md` has the setup.
   handsd then files the apply prompt `hands kit check` prints as a held builder
   job (`origin: kit`), so the loop is phone only. `docs/INTEGRATION.md` walks
   it: kit, approve, `go`, the stop.
+- **`reply <secret> <text>`** on `cmd_topic` sends the text, verbatim, to the
+  architect role's last session (`--context keep`, `origin: phone`) and
+  publishes the architect's answer titled `architect`; refused while a
+  consultation runs or before the architect has a session.
 - **The who view**: `hands who` prints one screen of this daemon's jobs and
   every other `claude` session on the machine; `handswho` pushes it to
   `who_topic` when it changes.
