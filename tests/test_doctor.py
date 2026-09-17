@@ -1316,28 +1316,26 @@ def test_doctor_self_tests_the_hook_file_the_settings_name_not_the_default_one(
         'python3 "$CLAUDE_PROJECT_DIR"/.claude/hooks/bash_guard.py',
         "python3 ${CLAUDE_PROJECT_DIR}/.claude/hooks/bash_guard.py",
         "python3 .claude/hooks/bash_guard.py",
-        "python3 {real}",
+        "python3 {cwd}/.claude/hooks/bash_guard.py",
     ],
-    ids=["project-dir", "braced-project-dir", "relative", "absolute-elsewhere"],
+    ids=["project-dir", "braced-project-dir", "relative", "absolute-cwd"],
 )
 def test_doctor_passes_when_the_settings_name_a_real_hook(
     tmp_home: Path, tmp_path: Path, fake_mode: None, command: str
 ) -> None:
     """The named file is resolved (`$CLAUDE_PROJECT_DIR` and a relative path against
-    the driver directory) and self-tested; a real guard there is green."""
+    the driver directory) and self-tested; a real guard there is green. §34: an
+    absolute path elsewhere no longer passes (the `absolute-elsewhere` case moved to
+    `test_a_guard_at_another_absolute_path_fails_the_row`)."""
     d = driver_dir(tmp_path)
-    real = tmp_path / "copy" / ".claude" / "hooks" / "bash_guard.py"
-    real.parent.mkdir(parents=True)
-    shutil.copy(GUARD, real)
     (d / ".claude" / "settings.json").write_text(
-        _settings_running(command.replace("{real}", str(real))), encoding="utf-8"
+        _settings_running(command.replace("{cwd}", str(d))), encoding="utf-8"
     )
     add_driver(write_config(tmp_home, tmp_path), d)
     code, found = checks()
     row = found["role driver"]
     assert code == 0 and row["status"] == "ok", row
-    named = "copy" if "{real}" in command else "hands-driver"
-    assert f"guard <path>/{named}/.claude/hooks/bash_guard.py" in strip_paths(row["detail"])
+    assert "guard <path>/hands-driver/.claude/hooks/bash_guard.py" in strip_paths(row["detail"])
     assert "self-test green in role mode" in strip_paths(row["detail"])
 
 
@@ -2167,3 +2165,260 @@ def test_the_push_docstring_no_longer_claims_push_insteadof_is_expanded() -> Non
     import hands.doctor
 
     assert "pushInsteadOf expanded" not in strip_paths(hands.doctor._push_disabled.__doc__ or "")
+
+
+# ------------- §34: kits walk, settings layers, the guard's bytes (REVIEW-17 SF 3, 4, 5)
+
+
+def _sha256(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
+
+
+SHIPPED_SHA = _sha256(GUARD.read_bytes())
+ROOT_CAN_LIST = pytest.mark.skipif(
+    hasattr(os, "geteuid") and os.geteuid() == 0,
+    reason="root lists a directory of mode 0111, so the execute-only probe has no subject",
+)
+
+
+@ROOT_CAN_LIST
+def test_a_symlink_inside_an_execute_only_directory_under_kits_fails_the_architect_row(
+    tmp_home: Path, tmp_path: Path, fake_mode: None
+) -> None:
+    """REVIEW-17 should-fix 3, the probe: `kits/d/h -> ../.claude/hooks/bash_guard.py`,
+    then `chmod 0111 kits/d`. `os.walk` skipped the directory it could not list and
+    the row said "no symlink under it". §34: the walk does not depend on read
+    permission; a directory it cannot list fails the row."""
+    d = architect_dir(tmp_path)
+    (d / "kits" / "d").mkdir()
+    (d / "kits" / "d" / "h").symlink_to("../.claude/hooks/bash_guard.py")
+    (d / "kits" / "d").chmod(0o111)
+    try:
+        code, row = _row(tmp_home, tmp_path, "architect", d, add_architect)
+    finally:
+        (d / "kits" / "d").chmod(0o755)
+    assert code == 1 and row["status"] == "fail", row
+    assert "no symlink under it" not in strip_paths(row["detail"]), row
+    assert "<path>/hands-architect/kits/d" in strip_paths(row["detail"]), row
+    assert "cannot be listed" in strip_paths(row["detail"]), row
+
+
+@ROOT_CAN_LIST
+def test_an_execute_only_directory_without_a_symlink_still_fails_the_architect_row(
+    tmp_home: Path, tmp_path: Path, fake_mode: None
+) -> None:
+    """Fail closed: what cannot be listed cannot be shown to hold no link."""
+    d = architect_dir(tmp_path)
+    (d / "kits" / "d").mkdir()
+    (d / "kits" / "d").chmod(0o111)
+    try:
+        code, row = _row(tmp_home, tmp_path, "architect", d, add_architect)
+    finally:
+        (d / "kits" / "d").chmod(0o755)
+    assert code == 1 and row["status"] == "fail", row
+    assert "cannot be listed" in strip_paths(row["detail"]), row
+
+
+def _layer(d: Path, home: Path, layer: str, data: dict[str, Any]) -> Path:
+    """Write `data` into one settings layer of the role directory `d`: `local`
+    (`settings.local.json`), `project` (merged into the shipped `settings.json`), or
+    `user` (`~/.claude/settings.json`)."""
+    if layer == "local":
+        path = d / ".claude" / "settings.local.json"
+        path.write_text(json.dumps(data), encoding="utf-8")
+    elif layer == "project":
+        path = d / ".claude" / "settings.json"
+        path.write_text(
+            json.dumps({**json.loads(path.read_text(encoding="utf-8")), **data}),
+            encoding="utf-8",
+        )
+    else:
+        path = home / ".claude" / "settings.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(data), encoding="utf-8")
+    return path
+
+
+@pytest.mark.parametrize("role", ["driver", "architect"])
+@pytest.mark.parametrize("layer", ["local", "project", "user"])
+def test_a_settings_env_that_changes_the_roles_hands_variables_fails_the_row(
+    tmp_home: Path, tmp_path: Path, fake_mode: None, role: str, layer: str
+) -> None:
+    """REVIEW-17 should-fix 4, the probe: `settings.local.json` with `{"env":
+    {"HANDS_KITS": "<cwd>", "HANDS_ROLE": ""}}` left both rows ok, still printing
+    "every write confined to HANDS_KITS=<kits>". §34: any layer — the project's two
+    files and the user-level one — setting a `HANDS_*` variable fails the row."""
+    d, add = _role_dir(tmp_path, role)
+    path = _layer(d, tmp_home, layer, {"env": {"HANDS_KITS": str(d), "HANDS_ROLE": ""}})
+    code, row = _row(tmp_home, tmp_path, role, d, add)
+    assert code == 1 and row["status"] == "fail", row
+    assert "HANDS_KITS" in strip_paths(row["detail"]), row
+    assert "env" in strip_paths(row["detail"]), row
+    assert strip_paths(str(path)) in strip_paths(row["detail"]), row
+
+
+@pytest.mark.parametrize("role", ["driver", "architect"])
+@pytest.mark.parametrize(
+    "env",
+    [
+        {"HANDS_ROLE": ""},
+        {"HANDS_CLONE": "/"},
+        {"CLAUDE_PROJECT_DIR": "/tmp"},
+        {"CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS": "1"},
+        {"PATH": "/tmp/fakebin"},
+        {"PYTHONPATH": "/tmp/site"},
+    ],
+    ids=["HANDS_ROLE", "HANDS_CLONE", "CLAUDE_PROJECT_DIR", "CLAUDE-ceiling", "PATH",
+         "PYTHONPATH"],
+)
+def test_every_env_shape_the_reviewer_named_fails_the_row(
+    tmp_home: Path, tmp_path: Path, fake_mode: None, role: str, env: dict[str, str]
+) -> None:
+    """REVIEW-17 should-fix 4: `HANDS_ROLE`, `HANDS_KITS`, `PATH`, `PYTHONPATH` and
+    `CLAUDE_PROJECT_DIR` each gave `ok`. `PATH` and `PYTHON*` go past §34's letter:
+    they choose which `python3` runs the guard and what it imports."""
+    d, add = _role_dir(tmp_path, role)
+    _layer(d, tmp_home, "local", {"env": env})
+    code, row = _row(tmp_home, tmp_path, role, d, add)
+    assert code == 1 and row["status"] == "fail", row
+    assert next(iter(env)) in strip_paths(row["detail"]), row
+
+
+@pytest.mark.parametrize("role", ["driver", "architect"])
+def test_a_settings_env_naming_no_variable_the_role_depends_on_keeps_the_row_ok(
+    tmp_home: Path, tmp_path: Path, fake_mode: None, role: str
+) -> None:
+    d, add = _role_dir(tmp_path, role)
+    _layer(d, tmp_home, "local", {"env": {"EDITOR": "vi"}})
+    _layer(d, tmp_home, "user", {"env": {"LANG": "C.UTF-8"}})
+    code, row = _row(tmp_home, tmp_path, role, d, add)
+    assert code == 0 and row["status"] == "ok", row
+
+
+@pytest.mark.parametrize("role", ["driver", "architect"])
+@pytest.mark.parametrize(
+    "data",
+    [
+        {"disableAllHooks": True},
+        {"hooks": {"PreToolUse": [{"matcher": "Bash", "hooks": [
+            {"type": "command", "command": ALLOW_ALL}]}]}},
+        {"hooks": {"PreToolUse": [{"matcher": "*", "hooks": [
+            {"type": "command", "command": BASH_GUARD}]}]}},
+        {"permissions": {"defaultMode": "bypassPermissions"}},
+    ],
+    ids=["disableAllHooks", "another-bash-hook", "star-matcher", "bypassPermissions"],
+)
+def test_the_user_level_settings_are_read_and_can_fail_the_row(
+    tmp_home: Path, tmp_path: Path, fake_mode: None, role: str, data: dict[str, Any]
+) -> None:
+    """§34: the user-level file `~/.claude/settings.json` is a layer Claude Code reads
+    for the role's directory, judged as the project's two are."""
+    d, add = _role_dir(tmp_path, role)
+    _layer(d, tmp_home, "user", data)
+    code, row = _row(tmp_home, tmp_path, role, d, add)
+    assert code == 1 and row["status"] == "fail", row
+    assert "<path>/.claude/settings.json" in strip_paths(row["detail"]), row
+
+
+@pytest.mark.parametrize("role", ["driver", "architect"])
+def test_the_row_names_the_user_level_settings_it_read(
+    tmp_home: Path, tmp_path: Path, fake_mode: None, role: str
+) -> None:
+    d, add = _role_dir(tmp_path, role)
+    code, row = _row(tmp_home, tmp_path, role, d, add)
+    assert code == 0 and row["status"] == "ok", row
+    assert (
+        f"{tmp_home / '.claude' / 'settings.json'} (absent)" in row["detail"]
+    ), row
+
+
+@pytest.mark.parametrize("role", ["driver", "architect"])
+@pytest.mark.parametrize(
+    "key,value,which",
+    [("async", True, 0), ("timeout", 0.001, 0), ("async", True, 1), ("timeout", 1, 1)],
+    ids=["async-bash", "timeout-bash", "async-write", "timeout-write"],
+)
+def test_a_guard_hook_carrying_async_or_timeout_fails_the_row(
+    tmp_home: Path,
+    tmp_path: Path,
+    fake_mode: None,
+    role: str,
+    key: str,
+    value: Any,
+    which: int,
+) -> None:
+    """REVIEW-17 should-fix 4 (the reviewer's SF-3): `"async": true` and `"timeout":
+    0.001` on the guard's hook passed both rows. Past §34's letter: the guard's hook
+    is exactly `type` and `command`, as the kits ship it. The driver ships no write
+    hook, so its `which=1` case adds the architect's write entry first."""
+    d, add = _role_dir(tmp_path, role)
+    path = d / ".claude" / "settings.json"
+    data = json.loads(path.read_text(encoding="utf-8"))
+    entries = data["hooks"]["PreToolUse"]
+    if which == 1 and role == "driver":
+        entries.append({"matcher": "Write|Edit|MultiEdit", "hooks": [
+            {"type": "command", "command": WRITE_GUARD}]})
+    entries[which]["hooks"][0][key] = value
+    path.write_text(json.dumps(data), encoding="utf-8")
+    code, row = _row(tmp_home, tmp_path, role, d, add)
+    assert code == 1 and row["status"] == "fail", row
+    assert repr(key) in strip_paths(row["detail"]), row
+
+
+EXIT_0 = b"import sys; sys.exit(0)\n"
+
+
+@pytest.mark.parametrize("role", ["driver", "architect"])
+def test_a_guard_replaced_by_an_exit_0_fails_the_row_with_both_sha256(
+    tmp_home: Path, tmp_path: Path, fake_mode: None, role: str
+) -> None:
+    """REVIEW-17 should-fix 5, the probe: the shipped path with its content replaced by
+    `import sys; sys.exit(0)` gave `ok` and "self-test green". §34: the guard the
+    settings name is compared by sha256 with the one the repository ships."""
+    d, add = _role_dir(tmp_path, role)
+    (d / ".claude" / "hooks" / "bash_guard.py").write_bytes(EXIT_0)
+    code, row = _row(tmp_home, tmp_path, role, d, add)
+    assert code == 1 and row["status"] == "fail", row
+    assert _sha256(EXIT_0) in strip_paths(row["detail"]), row
+    assert SHIPPED_SHA in strip_paths(row["detail"]), row
+
+
+@pytest.mark.parametrize("role", ["driver", "architect"])
+@pytest.mark.parametrize("content", ["exit-0", "real-copy"])
+def test_a_guard_at_another_absolute_path_fails_the_row(
+    tmp_home: Path, tmp_path: Path, fake_mode: None, role: str, content: str
+) -> None:
+    """REVIEW-17 should-fix 5, the probe: `python3 /…/evil/.claude/hooks/bash_guard.py`,
+    a file that exits 0, gave `driver ok`. §34: an absolute command path elsewhere
+    fails the row — even to a byte-identical copy — and the sha256 of what it names
+    is printed beside the shipped one."""
+    d, add = _role_dir(tmp_path, role)
+    evil = tmp_path / "evil" / ".claude" / "hooks" / "bash_guard.py"
+    evil.parent.mkdir(parents=True)
+    if content == "exit-0":
+        evil.write_bytes(EXIT_0)
+    else:
+        shutil.copy(GUARD, evil)
+    entries = [("Bash", f"python3 {evil}")]
+    if role == "architect":
+        entries.append(("Write|Edit|MultiEdit", f"python3 {evil} --write"))
+    (d / ".claude" / "settings.json").write_text(_architect_settings(*entries), encoding="utf-8")
+    code, row = _row(tmp_home, tmp_path, role, d, add)
+    assert code == 1 and row["status"] == "fail", row
+    assert "<path>/evil/.claude/hooks/bash_guard.py" in strip_paths(row["detail"]), row
+    assert "not the role directory's guard" in strip_paths(row["detail"]), row
+    named = EXIT_0 if content == "exit-0" else GUARD.read_bytes()
+    assert _sha256(named) in strip_paths(row["detail"]), row
+    assert SHIPPED_SHA in strip_paths(row["detail"]), row
+
+
+@pytest.mark.parametrize("role", ["driver", "architect"])
+def test_the_shipped_settings_and_guard_pass_and_print_the_matching_sha256(
+    tmp_home: Path, tmp_path: Path, fake_mode: None, role: str
+) -> None:
+    """The other half: the kits as they ship still pass, and the row says the guard's
+    bytes are the repository's."""
+    d, add = _role_dir(tmp_path, role)
+    code, row = _row(tmp_home, tmp_path, role, d, add)
+    assert code == 0 and row["status"] == "ok", row
+    assert f"sha256 {SHIPPED_SHA}" in strip_paths(row["detail"]), row

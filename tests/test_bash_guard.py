@@ -2800,3 +2800,83 @@ def test_the_guards_selftest_carries_the_review_16_symlink_rows() -> None:
     assert any(ok for _, _, ok in guard.SYMLINK_SELFTEST)
     assert any(not ok for _, _, ok in guard.SYMLINK_SELFTEST)
     assert guard.symlink_selftest() == 0
+
+
+# --- §34: the kits walk does not depend on read permission (REVIEW-17 SF 3) ---
+#
+# `os.walk` skips a directory it cannot list and raises nothing, so a link planted
+# in `kits/d` with `chmod 0111 kits/d` was invisible: `cp -r kits/d/h kits/ && cp
+# kits/pay/h kits/` exited 0 and, under real bash, overwrote the guard.
+
+ROOT_CAN_LIST = pytest.mark.skipif(
+    hasattr(os, "geteuid") and os.geteuid() == 0,
+    reason="root lists a directory of mode 0111, so the execute-only probe has no subject",
+)
+
+
+def _execute_only_planted(tmp_path: Path) -> Path:
+    cwd = _architect_cwd(tmp_path)
+    (cwd / "kits" / "d").mkdir()
+    (cwd / "kits" / "d" / "h").symlink_to("../.claude/hooks/bash_guard.py")
+    (cwd / "kits" / "d").chmod(0o111)
+    return cwd
+
+
+@ROOT_CAN_LIST
+@pytest.mark.parametrize(
+    "cmds",
+    [
+        ["cp -r kits/d/h kits/ && cp kits/pay/h kits/"],
+        ["cp -r kits/d/h kits/", "cp kits/pay/h kits/"],
+        ["mv kits/d/h kits/", "cp kits/pay/h kits/"],
+        ["cp -r kits/pay kits/m18"],
+    ],
+    ids=["one-line", "two-calls", "mv-then-cp", "unrelated-cp"],
+)
+def test_review_17_execute_only_directory_probe_is_refused_under_real_bash(
+    tmp_path: Path, cmds: list[str]
+) -> None:
+    """The reviewer's probe, verbatim, through the shipped hook and real bash: every
+    `cp` and `mv` is refused while `kits/d` cannot be listed, and the guard file is
+    unchanged."""
+    cwd = _execute_only_planted(tmp_path)
+    try:
+        codes = [_guarded_bash(cwd, cmd) for cmd in cmds]
+        assert codes == [2] * len(cmds), codes
+        assert (cwd / ".claude" / "hooks" / "bash_guard.py").read_text(
+            encoding="utf-8") == GUARD_TEXT
+        assert not (cwd / "kits" / "h").is_symlink()
+    finally:
+        (cwd / "kits" / "d").chmod(0o755)
+
+
+@ROOT_CAN_LIST
+def test_an_unlistable_directory_under_kits_is_named_in_the_refusal(tmp_path: Path) -> None:
+    """Fail closed, and say why: with no link in it at all, a directory the walk
+    cannot list still refuses `cp`/`mv`; `mkdir` (which moves nothing) still runs."""
+    cwd = _architect_cwd(tmp_path)
+    (cwd / "kits" / "d").mkdir()
+    (cwd / "kits" / "d").chmod(0o111)
+    kits = str(cwd / "kits")
+    try:
+        reason = guard.check(f"cp {kits}/pay/h {kits}/h2", role="architect",
+                             consult_role="builder", clone=str(cwd / "repo"), kits=kits)
+        assert reason is not None and "cannot be listed" in reason, reason
+        assert f"{kits}/d" in reason, reason
+        assert guard.check(f"mkdir -p {kits}/m18", role="architect", consult_role="builder",
+                           clone=str(cwd / "repo"), kits=kits) is None
+    finally:
+        (cwd / "kits" / "d").chmod(0o755)
+
+
+def test_the_kits_walk_is_an_lstat_walk_not_os_walk() -> None:
+    """§34: the walk lstat's every component from the root down; `os.walk`, which
+    hides what it cannot list, is gone from the guard."""
+    names = guard.kits_symlink.__code__.co_names
+    assert "walk" not in names, names
+    assert "lstat" in names and "listdir" in names, names
+
+
+def test_the_guards_selftest_carries_the_review_17_execute_only_rows() -> None:
+    assert any(shape == "xonly" and not ok for shape, _, ok in guard.SYMLINK_SELFTEST)
+    assert guard.symlink_selftest() == 0

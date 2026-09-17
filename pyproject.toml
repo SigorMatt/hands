@@ -21,6 +21,11 @@ build-backend = "hatchling.build"
 [tool.hatch.build.targets.wheel]
 packages = ["src/hands"]
 
+# DESIGN §34: `hands doctor` compares the role's guard, by sha256, with the guard this
+# repository ships; an installed wheel carries that file for it (`hands/shipped/`).
+[tool.hatch.build.targets.wheel.force-include]
+"driver/hooks/bash_guard.py" = "hands/shipped/bash_guard.py"
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"

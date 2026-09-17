@@ -37,11 +37,13 @@ failed, 0 otherwise.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
 import shlex
 import shutil
+import stat
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -111,6 +113,24 @@ WHOLESALE_TOOLS: tuple[str, ...] = ("Bash", "Write", "Edit", "MultiEdit")
 #: §33 (review 16 should-fix 4): the settings files Claude Code merges in a project
 #: directory, both read — the first must exist, the second may not.
 SETTINGS_FILES: tuple[str, ...] = ("settings.json", "settings.local.json")
+#: §34 (review 17 should-fix 4): the user-level settings file, the third layer Claude
+#: Code reads for every project directory, under `$HOME`. Optional, as the local one is.
+USER_SETTINGS = Path(".claude") / "settings.json"
+#: §34: a settings `env` naming one of these fails a role row. `HANDS_*` and `CLAUDE_*`
+#: are §34's; `PATH` and `PYTHON*` go past it — they choose the `python3` that runs
+#: the guard and what that interpreter imports before the guard's first line.
+ENV_PREFIXES: tuple[str, ...] = ("HANDS_", "CLAUDE_", "PYTHON")
+ENV_NAMES: tuple[str, ...] = ("PATH",)
+#: §34 (review 17 should-fix 4): the keys a guard hook carries, exactly as the kits
+#: ship it. `async` and `timeout` are what the reviewer probed.
+GUARD_HOOK_KEYS = frozenset({"type", "command"})
+#: §34 (review 17 should-fix 5): where doctor finds the guard the repository ships —
+#: the copy a wheel carries (`pyproject.toml` force-includes it), then the
+#: repository's own file beside the source tree `uv sync` installs from.
+SHIPPED_GUARDS: tuple[Path, ...] = (
+    Path(__file__).resolve().parent / "shipped" / "bash_guard.py",
+    Path(__file__).resolve().parents[2] / "driver" / "hooks" / "bash_guard.py",
+)
 #: §33: the matchers the guard's entries carry, exactly as the kits ship them.
 BASH_MATCHER = "Bash"
 WRITE_MATCHER = "Write|Edit|MultiEdit"
@@ -502,6 +522,12 @@ def _driver_check(config: Config) -> Check:
     tool must be the guard's exact one; every remote's push is disabled
     (`_push_disabled`); and the row ends with the `verified:` lines — what it read
     and found, resolved.
+
+    §34 (review 17 should-fix 4, 5): the user-level `~/.claude/settings.json` is a
+    third layer (`_load_settings`); a layer's `env` naming a variable the role
+    depends on fails (`_settings_env`), as does a guard hook with keys beyond `type`
+    and `command` (`_guard_hook_extras`); the guard must be the role directory's
+    own file with the shipped guard's sha256 (`_guard_selftest`, `_guard_bytes`).
     """
     name = f"role {DRIVER_ROLE}"
     role = config.roles.get(DRIVER_ROLE)
@@ -547,6 +573,10 @@ def _driver_check(config: Config) -> Check:
             f"\nsettings {settings_path}: {wholesale}; copy driver/settings.json again"
         )
         failures.append(wholesale)
+    env_problem = _settings_env(loaded)  # §34
+    if env_problem is not None:
+        settings += f"\nsettings: {env_problem}; remove it"
+        failures.append(env_problem)
     # §33: the driver ships no write matcher; one that is there is judged as the
     # architect's is, so a write hook that is not the guard fails here too.
     write_named, write_problem, _ = _settings_name_the_write_guard(
@@ -658,6 +688,10 @@ def _architect_check(config: Config) -> Check:
             f"\nsettings {settings_path}: {wholesale}; copy architect/settings.json again"
         )
         failures.append(wholesale)
+    env_problem = _settings_env(loaded)  # §34
+    if env_problem is not None:
+        settings += f"\nsettings: {env_problem}; remove it"
+        failures.append(env_problem)
 
     write_named, write_problem, write_command = _settings_name_the_write_guard(
         loaded, role.cwd, required=True
@@ -763,17 +797,56 @@ def _kits_line(kits_dir: Path, cwd: Path) -> tuple[str, bool]:
             "directory under the role's cwd (§32)",
             False,
         )
-    for top, dirs, files in os.walk(kits_dir, followlinks=False):
-        for entry in sorted(dirs) + sorted(files):
-            path = os.path.join(top, entry)
-            if os.path.islink(path):
-                return (
-                    f"kits {kits_dir} holds a symlink, {path} -> {os.readlink(path)}: the "
-                    "guard refuses cp and mv until it is gone, and nothing the architect "
-                    "runs made it (§33)",
-                    False,
-                )
+    found = _kits_walk(str(kits_dir))
+    if found is not None:
+        path, why = found
+        if why is None:
+            return (
+                f"kits {kits_dir} holds a symlink, {path} -> {os.readlink(path)}: the "
+                "guard refuses cp and mv until it is gone, and nothing the architect "
+                "runs made it (§33)",
+                False,
+            )
+        return (
+            f"kits {kits_dir}: {path} {why}, so it cannot be shown to hold no symlink: the "
+            "guard refuses cp and mv until it can be walked (§34)",
+            False,
+        )
     return f"kits {kits_dir}", True
+
+
+def _kits_walk(kits: str) -> tuple[str, str | None] | None:
+    """§34 (review 17 should-fix 3): the guard's `kits_symlink` walk, the same steps
+    (`driver/hooks/bash_guard.py` is a standalone script doctor cannot import): the
+    first path under `kits` that is a symlink (`(path, None)`), or that the walk
+    cannot judge (`(path, why)`), or None.
+
+    `os.lstat` on every path from the root down decides what each one is; a
+    directory that cannot be listed (mode 0111) and a path that cannot be stat'ed
+    are returned, never skipped, so read permission cannot hide a link. A missing
+    root holds nothing, as the guard reads it; the caller has already failed it.
+    """
+    pending = [kits]
+    while pending:
+        top = pending.pop()
+        try:
+            mode = os.lstat(top).st_mode
+        except FileNotFoundError:
+            if top == kits:
+                return None
+            return top, "cannot be stat'ed: it vanished during the walk"
+        except OSError as exc:
+            return top, f"cannot be stat'ed: {exc.strerror}"
+        if stat.S_ISLNK(mode):
+            return top, None
+        if not stat.S_ISDIR(mode):
+            continue
+        try:
+            names = os.listdir(top)
+        except OSError as exc:
+            return top, f"is a directory that cannot be listed: {exc.strerror}"
+        pending.extend(os.path.join(top, name) for name in sorted(names, reverse=True))
+    return None
 
 
 def _hook_verified(kind: str, matcher: str, command: str | None, named: Path | None) -> str:
@@ -804,28 +877,74 @@ def _guard_selftest(
 
     The one place the guard's self-test is run, so the driver's row and the
     architect's cannot drift apart in how hard they look.
+
+    §34 (review 17 should-fix 5): an exit 0 is not the guard. `hook` is the exact
+    path the settings name; it must be the role directory's own guard
+    (`<cwd>/.claude/hooks/bash_guard.py`, compared by realpath), so an absolute
+    command path elsewhere fails, and its bytes must hash (sha256) to the guard the
+    repository ships (`SHIPPED_GUARDS`), with both hashes printed when they differ.
+    The self-test still runs on that same path, whatever the hashes say.
     """
     if not hook.is_file():
         return (
             f"no guard at {hook}: nothing narrows the role's Bash calls (driver/README.md)",
             False,
         )
+    lines = [f"guard {hook}"]
+    green = True
+    own = cwd / GUARD_HOOK
+    if os.path.realpath(hook) != os.path.realpath(own):
+        lines.append(
+            f"the settings run {hook}, not the role directory's guard {own}: a hook "
+            "command naming a guard elsewhere fails the row (§34)"
+        )
+        green = False
+    same, said_bytes = _guard_bytes(hook)
+    lines.append(said_bytes)
+    green = green and same
     probe = _run_probe(
         [shutil.which("python3") or sys.executable, str(hook), "--selftest"], cwd=cwd, env=env
     )
     if probe is not None and probe.code == 0 and not probe.timed_out:
-        return f"guard {hook}\nself-test green in {words} ({mode})", True
+        lines.append(f"self-test green in {words} ({mode})")
+        return "\n".join(lines), green
     said = (
         "could not be run" if probe is None
         else "timed out" if probe.timed_out
         else f"exit {probe.code}"
     )
     tail = "" if probe is None else "\n" + "\n".join(probe.text.strip().splitlines()[-5:])
-    return (
-        f"guard {hook}\nself-test in {words} ({mode}) is not green ({said}): "
-        f"copy driver/hooks/bash_guard.py again (§28){tail}",
-        False,
+    lines.append(
+        f"self-test in {words} ({mode}) is not green ({said}): "
+        f"copy driver/hooks/bash_guard.py again (§28){tail}"
     )
+    return "\n".join(lines), False
+
+
+def _guard_bytes(hook: Path) -> tuple[bool, str]:
+    """§34: whether `hook`'s bytes are the guard the repository ships, and the line
+    saying so — both sha256 on a mismatch, or why either could not be read."""
+    try:
+        named = hashlib.sha256(hook.read_bytes()).hexdigest()
+    except OSError as exc:
+        return False, f"guard {hook} cannot be read to hash it ({type(exc).__name__}) (§34)"
+    shipped = next((path for path in SHIPPED_GUARDS if path.is_file()), None)
+    if shipped is None:
+        return False, (
+            f"guard {hook} sha256 {named}; the guard the repository ships is not found "
+            f"({', '.join(str(path) for path in SHIPPED_GUARDS)}), so it is not known to "
+            "be that guard (§34)"
+        )
+    try:
+        want = hashlib.sha256(shipped.read_bytes()).hexdigest()
+    except OSError as exc:
+        return False, f"the shipped guard {shipped} cannot be read ({type(exc).__name__}) (§34)"
+    if named != want:
+        return False, (
+            f"guard {hook} sha256 {named} is not the guard the repository ships, "
+            f"{shipped} sha256 {want}: copy driver/hooks/bash_guard.py again (§34)"
+        )
+    return True, f"guard sha256 {named}, the same bytes as {shipped} (§34)"
 
 
 @dataclass(frozen=True)
@@ -843,13 +962,18 @@ class _Settings:
 
 
 def _load_settings(cwd: Path) -> _Settings:
-    """`<cwd>/.claude/settings.json` (required) and `settings.local.json` (optional),
-    each a JSON object (§28, §33). An unreadable local file is a problem, not an
-    absence: Claude Code would still try to merge it."""
+    """`<cwd>/.claude/settings.json` (required), `settings.local.json` (optional) and,
+    §34, the user-level `~/.claude/settings.json` (optional), each a JSON object
+    (§28, §33, §34). An unreadable optional file is a problem, not an absence: Claude
+    Code would still try to merge it. The user-level file is read once when the
+    role's cwd is the home directory itself."""
     loaded: list[tuple[Path, dict[str, Any]]] = []
     read: list[str] = []
-    for index, file in enumerate(SETTINGS_FILES):
-        path = cwd / ".claude" / file
+    layers = [cwd / ".claude" / file for file in SETTINGS_FILES]
+    user = Path.home() / USER_SETTINGS
+    if all(os.path.abspath(user) != os.path.abspath(layer) for layer in layers):
+        layers.append(user)
+    for index, path in enumerate(layers):
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
         except FileNotFoundError:
@@ -942,6 +1066,9 @@ def _settings_name_the_guard(
                 "under that matcher (§33)"
             ), None
         for hook in entry["hooks"]:
+            extra = _guard_hook_extras(hook, path)
+            if extra is not None:
+                return None, extra, None
             command: str = hook["command"]
             named = _guard_command_path(command, cwd)
             if named is None:
@@ -992,6 +1119,9 @@ def _settings_name_the_write_guard(
                 f"not exactly {WRITE_MATCHER!r} (§33)"
             ), None
         for hook in entry["hooks"]:
+            extra = _guard_hook_extras(hook, path)
+            if extra is not None:
+                return None, extra, None
             command: str = hook["command"]
             named = _guard_command_path(command, cwd, flag=WRITE_FLAG)
             if named is None:
@@ -1014,6 +1144,20 @@ def _settings_name_the_write_guard(
     return guards[0][0], None, guards[0][1]
 
 
+def _guard_hook_extras(hook: dict[str, Any], path: Path) -> str | None:
+    """§34 (review 17 should-fix 4): a hook under a matcher that selects a guarded
+    tool carries exactly `type` and `command`, as the kits ship it — why not, or
+    None. Past §34's letter, which names the command: `"async": true` or a short
+    `"timeout"` changes whether the guard's answer arrives before the call runs."""
+    extra = sorted(set(hook) - GUARD_HOOK_KEYS)
+    if not extra:
+        return None
+    return (
+        f"the guard's hook in {path} carries {', '.join(repr(key) for key in extra)}: a "
+        f"guard hook is exactly {sorted(GUARD_HOOK_KEYS)}, as the kits ship it (§34)"
+    )
+
+
 def _not_a_command_hook(hook: Any) -> str | None:
     """§32 (review 15 should-fix 6), §33: a hook under `PreToolUse` that is not a
     command hook (`type: prompt`, `http`, none) is a second answer to a tool call,
@@ -1029,6 +1173,35 @@ def _not_a_command_hook(hook: Any) -> str | None:
         f"a {kind!r} hook is not a command hook running the guard: every hook under "
         "PreToolUse must be a command hook (§32, §33)"
     )
+
+
+def _settings_env(settings: _Settings) -> str | None:
+    """§34 (review 17 should-fix 4): a settings layer whose `env` sets a variable the
+    role depends on — why, or None.
+
+    Claude Code applies a settings `env` to the session it starts, and the guard
+    reads `HANDS_ROLE`, `HANDS_KITS`, `HANDS_CLONE`, `HANDS_CONSULT_ROLE` and
+    `HANDS_PROJECT` from its environment, and runs as `python3
+    "$CLAUDE_PROJECT_DIR"/…`. Doctor cannot tell which `CLAUDE_*` variable Claude Code
+    passes to a hook or what it changes there, so any `HANDS_*` or `CLAUDE_*` name
+    fails — doubt fails the row, as `_may_select` reads matchers — and so do `PATH`
+    and `PYTHON*` (`ENV_PREFIXES`, `ENV_NAMES`). An `env` that is not an object is
+    not judged and fails too. A name set to the value the runner gives it still
+    fails: a settings file cannot know the role's per-directory values."""
+    for path, data in settings.loaded:
+        if "env" not in data:
+            continue
+        env = data["env"]
+        if not isinstance(env, dict):
+            return f"env in {path} is not an object, so what it sets is not known (§34)"
+        for name in sorted(env):
+            if name in ENV_NAMES or name.startswith(ENV_PREFIXES):
+                return (
+                    f"env in {path} sets {name}={env[name]!r}: a settings env must not set "
+                    f"{', '.join(prefix + '*' for prefix in ENV_PREFIXES)} or "
+                    f"{', '.join(ENV_NAMES)}, which the role and its guard depend on (§34)"
+                )
+    return None
 
 
 #: §33: an allow rule — a tool name and an optional `(specifier)`.

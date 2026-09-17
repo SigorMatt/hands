@@ -243,7 +243,18 @@ Notes that are easy to get wrong:
   nothing in the clone, as `no_push` is; and `remote.pushDefault`,
   `branch.<b>.pushRemote` and `branch.<b>.remote`, where set, name one of those
   remotes (or `.`). An unset push URL (git prints the fetch URL) and a clone git
-  cannot read fail. The row ends with `verified:` lines: the settings files read
+  cannot read fail. Since §34 (review 17 should-fix 4, 5) the settings are
+  three layers: the two above and the user-level `~/.claude/settings.json` (may
+  be absent; unreadable, it fails), every rule above applied to each; the row
+  also fails when any layer's `env` sets a `HANDS_*` or `CLAUDE_*` variable, or
+  (past §34's letter) `PATH` or a `PYTHON*` variable; when a guard hook carries
+  any key besides `type` and `command` (`async`, `timeout`); when the hook
+  command names a guard other than the role directory's own
+  `.claude/hooks/bash_guard.py` (an absolute path elsewhere, compared by
+  realpath); and when the named guard's sha256 is not that of the guard the
+  repository ships (`driver/hooks/bash_guard.py`, carried in the wheel as
+  `hands/shipped/bash_guard.py`) — both hashes printed — whatever its
+  `--selftest` exits. The row ends with `verified:` lines: the settings files read
   (resolved), each guard hook's matcher, command and resolved file, every
   remote's push URLs with the push-remote settings, and the clone's realpath.
 - **The consult flow** (§27, docs/PLAYBOOK.md "Consult"). A rule `then =
@@ -959,7 +970,10 @@ writes once it has moved a link (review 16 should-fix 2: `cp -r kits/a/h kits/`
 moved a relative link planted inside `kits/` so it pointed out, and `cp
 kits/pay/h kits/` wrote through it over the guard), so `cp` and `mv` are refused
 while anything under `HANDS_KITS` — walked, links not followed — is a symlink;
-the architect cannot make one, and `mkdir` still runs. A `HANDS_KITS` that is
+the architect cannot make one, and `mkdir` still runs. Since §34 (review 17
+should-fix 3: a link in a directory of mode 0111 was skipped by the walk) the
+walk is `os.lstat` on every path from `HANDS_KITS` down, and a directory it
+cannot list or a path it cannot stat refuses `cp` and `mv` as a link does. A `HANDS_KITS` that is
 itself a symlink (its realpath is not its parent's realpath joined to its name)
 refuses every `mkdir`, `cp`, `mv` and every write (§33, review 16 should-fix 3:
 `kits -> .claude` let the write matcher pass the role's own settings). `zip` and `unzip`
@@ -985,7 +999,8 @@ command hook, and both matchers must run the same guard file), on a guard whose
 green run with `HANDS_ROLE=architect` and `HANDS_KITS` set, on a clone whose
 push is not disabled (the driver row's rule, above), on a kits
 directory that is missing or does not resolve under the architect's cwd
-(§32), and (§33) on a kits directory that is a symlink or holds one, or when
+(§32), and (§33) on a kits directory that is a symlink or holds one (§34: or
+holds a directory the same walk as the guard's cannot list), or when
 `.claude`, its hooks directory, either settings file, either guard file or the
 clone resolves under the kits directory; a missing clone warns.
 

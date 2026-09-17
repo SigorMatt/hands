@@ -200,6 +200,7 @@ import json
 import os
 import re
 import shlex
+import stat
 import sys
 import unicodedata
 
@@ -545,12 +546,35 @@ def kits_link(kits):
 
 def kits_symlink(kits):
     """§33 (REVIEW-16 should-fix 2): the first symlink anywhere under `HANDS_KITS`,
-    walked without following links, or None."""
-    for top, dirs, files in os.walk(kits, followlinks=False):
-        for entry in sorted(dirs) + sorted(files):
-            path = os.path.join(top, entry)
-            if os.path.islink(path):
-                return path
+    walked without following links, or None.
+
+    §34 (REVIEW-17 should-fix 3): `os.lstat` on every path from the root down, and
+    nothing else decides what a path is. `os.walk` skipped a directory it could not
+    list (mode 0111) and hid the link inside it; here a directory that cannot be
+    listed, and a path that cannot be stat'ed, are returned as what refuses, named
+    with why, so the walk fails closed and read permission decides nothing. Doctor's
+    `_kits_line` walks the same way.
+    """
+    pending = [kits]
+    while pending:
+        top = pending.pop()
+        try:
+            mode = os.lstat(top).st_mode
+        except FileNotFoundError:
+            if top == kits:  # no kits directory holds no link; what `os.walk` did
+                return None
+            return f"{top} (cannot be stat'ed: it vanished during the walk)"
+        except OSError as e:
+            return f"{top} (cannot be stat'ed: {e.strerror})"
+        if stat.S_ISLNK(mode):
+            return top
+        if not stat.S_ISDIR(mode):
+            continue
+        try:
+            names = os.listdir(top)
+        except OSError as e:
+            return f"{top} (a directory that cannot be listed: {e.strerror})"
+        pending.extend(os.path.join(top, name) for name in sorted(names, reverse=True))
     return None
 
 
@@ -1174,7 +1198,7 @@ def option_violation(name, row, args, amasks, cmd, kits=None, reads=None):
         link = kits_symlink(kits) if row.moves else None
         if link is not None:
             return (f"`{name}` is refused while anything under {KITS_ENV} is a symlink "
-                    f"({link!r}): realpath judges where a path resolves now, and `{name}` "
+                    f"or cannot be walked ({link!r}, §34): realpath judges where a path resolves now, and `{name}` "
                     f"can move a link so the next write lands outside it (§33): {cmd!r}")
     if row.words is not None:
         reason = row.words(name, [word for word, _ in plain], cmd)
@@ -1769,8 +1793,9 @@ WRITE_SELFTEST = [
 # §33 (REVIEW-16 should-fix 2, 3): `(shape, command or "--write <path>", allowed?)`,
 # judged in a scratch directory the self-test builds and removes. `clean` is an
 # architect directory (`.claude/hooks/`, `kits/pay/h`); `planted` adds the
-# reviewer's `kits/a/h -> ../.claude/hooks/bash_guard.py`; `kits-link` makes
-# `kits` a symlink to `.claude`.
+# reviewer's `kits/a/h -> ../.claude/hooks/bash_guard.py`; `xonly` (§34, REVIEW-17
+# should-fix 3) plants the same link in `kits/d` and makes `kits/d` mode 0111;
+# `kits-link` makes `kits` a symlink to `.claude`.
 SYMLINK_SELFTEST = [
     ("clean", "cp -r kits/pay kits/m17", True),
     ("clean", "mv kits/pay/h kits/h", True),
@@ -1779,6 +1804,9 @@ SYMLINK_SELFTEST = [
     ("planted", "cp kits/pay/h kits/", False),
     ("planted", "mv kits/a/h kits/", False),
     ("planted", "mkdir -p kits/m17", True),
+    ("xonly", "cp -r kits/d/h kits/", False),
+    ("xonly", "cp kits/pay/h kits/", False),
+    ("xonly", "mv kits/d/h kits/", False),
     ("kits-link", "mkdir -p kits/x", False),
     ("kits-link", "cp kits/settings.json kits/y", False),
     ("kits-link", "--write .claude/settings.json", False),
@@ -1799,6 +1827,10 @@ def _symlink_scratch(root, shape):
     if shape == "planted":
         os.makedirs(os.path.join(root, "kits", "a"))
         os.symlink("../.claude/hooks/bash_guard.py", os.path.join(root, "kits", "a", "h"))
+    if shape == "xonly":  # §34: REVIEW-17's link in a directory of mode 0111
+        os.makedirs(os.path.join(root, "kits", "d"))
+        os.symlink("../.claude/hooks/bash_guard.py", os.path.join(root, "kits", "d", "h"))
+        os.chmod(os.path.join(root, "kits", "d"), 0o111)
 
 
 def symlink_selftest() -> int:
@@ -1824,6 +1856,8 @@ def symlink_selftest() -> int:
             reason, expected = f"the scratch directory could not be built ({e})", None
         finally:
             os.chdir(here)
+            if os.path.isdir(os.path.join(root, "kits", "d")):
+                os.chmod(os.path.join(root, "kits", "d"), 0o755)
             shutil.rmtree(root, ignore_errors=True)
         if (reason is None) != expected:
             bad += 1
