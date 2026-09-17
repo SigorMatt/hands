@@ -1819,7 +1819,19 @@ Resolution (DESIGN v3.16 §33, "The autonomy path", 2026-09-17):
 >   playbook's role requirements against the repository's config the way
 >   `handsd` will at load, and says so.
 
-Status: open (code pending mission 17 U1)
+Code (mission 17 U1, f6f7f26, 2026-09-17): `Api.kit_file` runs `check_kit` on
+the stored zip against the served repository and its config, refuses a failing
+kit with the check's output and deletes the zip; `kit.json` records `"check":
+"pass"` and the engine approves nothing without it; a kit filed while the
+architect runs is decided when the consultation's verdict is known; two or
+more kits, or a kit the verdict does not name, end the consultation `escalate`
+and every such hold is denied (`deny_from_playbook`, not a socket method); `kit
+check` fails a role-mode playbook when no config, two configs without
+`--project`, or an invalid TOML config resolves. The reviewer's raw-socket
+probe is an end-to-end acceptance test. Not proven: a daemon restart between
+the hold and the verdict; concurrent `kit_file` calls.
+
+Status: resolved by DESIGN v3.16 (code: mission 17 U1)
 
 ---
 
@@ -1857,4 +1869,52 @@ Resolution (DESIGN v3.16 §33, "The autonomy path", 2026-09-17):
 >   `.git/`, `.claude/`, or outside the repository; both the daemon and
 >   `kit check` share the one judge.
 
-Status: open (code pending mission 17 U2)
+Code (mission 17 U2, 6f05e4e, 2026-09-17): `_zip_entries` in `kit.py` is the one
+judge and the only reader of `orig_filename`: the central-directory name,
+refused when the local-header name or any 0x7075 field disagrees; `.git` and
+`.claude` refused at any depth in any letter case; a repository symlink leading
+outside or into `.git`/`.claude` refused; used by `_read_zip` and
+`apply_from_zip`, so `kit check`, `kit_file` and the phone's kit path share it.
+The reviewer's zip and two variants are refused on all three paths. Not
+proven: zips with several end-of-central-directory records; filesystem aliases
+of `.git`/`.claude` (trailing dots, ignorable characters, 8.3 names).
+
+Status: resolved by DESIGN v3.16 (code: mission 17 U2)
+
+---
+
+## H-037 — on a token-protected ntfy the Approve/Deny buttons carry no token
+
+Severity: medium · Component: `src/hands/phone.py` (`PhoneChannel.actions`);
+DESIGN §26 (the held job's buttons), §33 ("Self-hosted ntfy … `[notify]
+ntfy_token` (sent as a bearer on publish and subscribe); the phone app
+subscribes with the same token")
+Filed by: mission 17 orchestrator, from the U6 sub-agent's report (4775880).
+
+Symptom. U6 sends `Authorization: Bearer <ntfy_token>` on every publish and
+subscription hands makes. A held job's notification carries two `http` action
+buttons (`PhoneChannel.actions`) whose `url` is the command topic and whose
+`body` is `approve|deny <job> <nonce>`; the action carries no `headers`. On a
+server with `auth-default-access: deny-all`, the POST the phone app makes when
+a button is pressed is anonymous unless the app adds its own sign-in to action
+requests, which no one has verified. If it does not, the buttons fail on
+exactly the setup §33 recommends, and the human must type `approve <job>
+<secret>` instead (docs/INTEGRATION.md says so as a fallback).
+
+Why a builder did not fix it. ntfy's `http` action accepts a `headers` map, so
+the daemon could put the bearer in the action. That publishes the token inside
+every held notification's payload, to every subscriber of `ntfy_topic` and into
+the server's message cache. §33 says the token is sent as a bearer on publish
+and subscribe; it does not say the token may appear in a message body. That is
+a design choice.
+
+Direction, for the architect. Either (a) the actions carry `headers:
+{Authorization: Bearer …}` only when `ntfy_topic` and `cmd_topic` are on the
+same token-protected server (a subscriber of `ntfy_topic` already holds a token
+that reads it; state whether it may also write `cmd_topic`), or (b) a separate
+write-only token for `cmd_topic`, `[notify] ntfy_action_token`, is what the
+buttons carry, or (c) the buttons are dropped when `ntfy_token` is set and the
+notification says to type the command. A real ntfy server and phone app should
+settle whether the app signs action requests before choosing.
+
+Status: open
