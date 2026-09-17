@@ -159,3 +159,20 @@ Numbering. The brief says "file H-034 … and H-035"; H-034 already existed
 - U5's choice: `reply` refusals are published on the phone (`hands: reply`),
   while other refused commands are only logged.
 - The architect role stays off until this mission's review (§33).
+
+Correction appended 2026-09-17 (mission 18 U0, from REVIEW-17 should-fix 2):
+- §2, U1: "two kits in one consultation → both denied, `escalate`" is wider
+  than the tests. `test_a_second_kit_in_one_consultation_is_denied_and_the_consultation_escalates`
+  proves both denied only when both kits are filed while the architect job
+  runs and are decided at its verdict; when a second kit arrives after the
+  first was approved, only the second is denied. REVIEW-17 filed two
+  `kit_file foo` calls concurrently during the `next kit` wait: both were
+  held, the first was `approved by=playbook` and applied, the second denied,
+  and the consultation escalated ("filed 2 kits"). Read the claim as: a
+  consultation that files two kits escalates and the second is denied; the
+  first is not always denied. §3.3's "concurrent `kit_file` calls" is thereby
+  shown, not just untested. Mission 18 U2 serializes `kit_file` per
+  consultation (DESIGN v3.17 §34).
+- §3.7's "a hold inside the window is listed without its buttons" is a design
+  violation, not a limit (REVIEW-17 blocker 1; H-038), and "a stop during the
+  fold window may not deliver" was reproduced (should-fix 6). Mission 18 U1.

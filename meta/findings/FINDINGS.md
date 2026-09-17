@@ -1918,3 +1918,44 @@ notification says to type the command. A real ntfy server and phone app should
 settle whether the app signs action requests before choosing.
 
 Status: open
+
+---
+
+## H-038 — the start fold drops a held job's Approve/Deny buttons
+
+Severity: high · Component: `src/hands/daemon.py` (`_publish_start`, `stop`),
+`src/hands/notify.py` (the start fold); DESIGN §24 ("a held-job notification
+carries Approve/Deny action buttons"), §26 ("The held notification carries the
+buttons"), §33
+Filed by: mission 18 U0, orchestrator, from REVIEW-17 blocker 1 (with
+should-fix 6).
+
+Symptom. Mission 17 U4 (c6380ab) made a start that re-admits queued jobs hold
+back every notification for up to `START_FOLD_S` (5 s) and publish one
+"handsd started" that lists the held notes by title and message only
+(`daemon.py:293-309` at 011899e). A `job.held` raised in that window loses its
+actions. REVIEW-17's probe: a real Daemon, a queued builder job (`FAKE:sleep
+3`), an aux job gated at 0.3 s — `held job … held at 0.42`, then one publish at
+3.2 s, `title='hands: handsd started' actions=False`. The human gets no button
+and no nonce; only a typed `approve <job> <secret>` works. The "decide with
+`hands approve`" text is added only for jobs held before the start.
+FINAL-REPORT-17 §3.7 disclosed it; no finding covered it.
+- Should-fix 6: `stop()` publishes the start notification and then
+  `notifier.cancel_all()` (`daemon.py:439`) cancels the delivery still in
+  flight. With 0.5 s publish latency and a stop at 1.0 s, nothing was
+  delivered; the parent delivered "handsd started" and "the pipeline stopped".
+
+Resolution (DESIGN v3.17 §34, 2026-09-17):
+
+> The start fold (review 17 blocker 1, should-fix 6): the daemon's start fold
+> holds back only what it may safely fold: heartbeats and `pipeline.resumed`
+> of the jobs it re-admits. A `job.held` is never folded: it is published at
+> once, with its buttons, whether the job was held before or during the
+> start; the start notification lists it by title only. A `stop` inside the
+> fold window flushes the fold first and cancels nothing that was already
+> queued to publish; `cancel_all` is removed from that path. Tests bind both
+> with the reviewer's timings.
+
+Code: mission 18 U1.
+
+Status: open
