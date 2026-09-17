@@ -222,9 +222,17 @@ _SERIES_COMPLETE_RE = re.compile(r"\AVERDICT: series complete\s*\Z")
 ROADMAP = Path("meta") / "ROADMAP.md"
 #: §32: a milestone of the roadmap is a top-level list item whose text begins with
 #: a bold `M` (`- **M4c The architect role** — …`), running over the indented lines
-#: that follow it. It is marked DONE when the word `DONE` is on its first line.
+#: that follow it. §33: it is marked DONE when its *heading* is (`_heading_done`).
 _MILESTONE_RE = re.compile(r"- \*\*M")
 _DONE_RE = re.compile(r"\bDONE\b")
+#: §33: the first line's bold title, and the text after it.
+_HEADING_RE = re.compile(r"- \*\*(?P<title>.*?)\*\*(?P<rest>.*)")
+#: §33: the text after the title opens with the mark — after an optional dash, and
+#: after the milestone's own missions closed by a comma or a period, if it names
+#: them (`— DONE`, `— missions 3–7a, DONE`, `— missions 15 and 16. DONE`).
+_HEADING_MARK_RE = re.compile(
+    r"\s*(?:[—–:-]\s*)?(?:[Mm]issions?\s+(?:(?!\bDONE\b)[^,.])+[,.]\s*)?DONE\b"
+)
 #: §31: the two sections of the review the prompt carries verbatim, as headings.
 REVIEW_SECTIONS: tuple[str, ...] = ("Blockers", "Should-fix")
 #: §27, §31: the events each consulted role may be consulted on, refused at load and
@@ -654,16 +662,24 @@ class Milestones:
 
 
 def next_milestone(text: str) -> Milestones:
-    """§32: the roadmap's next unmet milestone — "the first whose gate is not marked
-    DONE" — read from the roadmap's own shape.
+    """§33: the roadmap's next unmet milestone — "the first roadmap entry whose
+    heading is not marked DONE" — read from the roadmap's own shape.
 
     A milestone is a line beginning `- **M` (a top-level list item whose bold title
     starts with `M`, `- **M4c The architect role** — …`) with the indented lines
-    that follow it; a blank line or any line that is not indented ends it. It is
-    marked DONE when the word `DONE` is on its first line — a `DONE` further down
-    an entry is a sub-mission's, not the milestone's. The first milestone not so
-    marked is returned verbatim; with none unmet, or none at all, `milestone` is
-    None and `count` tells the two apart.
+    that follow it; a blank line or any line that is not indented ends it.
+
+    Its heading is its first line's bold title `**…**` and what opens the text after
+    the title: an optional dash, then — if it names them — the milestone's own
+    missions closed by a comma or a period. The milestone is marked DONE when the
+    word `DONE` is inside the title or comes right after that opening
+    (`- **M1 Core** — DONE …`, `— missions 3–7a, DONE …`, `— missions 15 and 16.
+    DONE`). Any other `DONE` is not the heading's: `— mission 10 DONE …` marks a
+    sub-mission (review 16 should-fix 6), and so does a `DONE` further on or further
+    down. A first line whose title is never closed has no heading to mark.
+
+    The first milestone not so marked is returned verbatim; with none unmet, or none
+    at all, `milestone` is None and `count` tells the two apart.
     """
     entries: list[list[str]] = []
     current: list[str] | None = None
@@ -676,9 +692,19 @@ def next_milestone(text: str) -> Milestones:
         else:
             current = None
     for entry in entries:
-        if not _DONE_RE.search(entry[0]):
+        if not _heading_done(entry[0]):
             return Milestones("\n".join(entry), len(entries))
     return Milestones(None, len(entries))
+
+
+def _heading_done(first_line: str) -> bool:
+    """§33: is this milestone's heading marked DONE (`next_milestone` states the rule)?"""
+    heading = _HEADING_RE.match(first_line)
+    if heading is None:
+        return False
+    return bool(
+        _DONE_RE.search(heading["title"]) or _HEADING_MARK_RE.match(heading["rest"])
+    )
 
 
 def _committed_text(path: Path, cwd: Path) -> str:
@@ -2754,7 +2780,7 @@ def _architect_prompt(event: str, job: Job, brief: ArchitectBrief | None) -> str
         "----- END REVIEW -----\n"
         "\n"
         f"The roadmap is {brief.roadmap_path}; read it whole from your clone. Its next "
-        f"unmet milestone — the first milestone in {brief.roadmap_path} whose first line "
+        f"unmet milestone — the first milestone in {brief.roadmap_path} whose heading "
         "is not marked DONE — verbatim between the markers:\n"
         "----- BEGIN MILESTONE -----\n"
         f"{brief.roadmap}\n"

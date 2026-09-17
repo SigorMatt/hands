@@ -414,8 +414,12 @@ review, file it, or escalate" — and the three lines the reply may begin with.
 The roadmap is `meta/ROADMAP.md` under the builder's cwd, read as the playbook
 is, from the committed file (`git show HEAD:./meta/ROADMAP.md`), never an
 uncommitted edit. A milestone is a top-level line beginning `- **M` with the
-indented lines under it; it is marked DONE when the word `DONE` is on its first
-line, and the next unmet milestone is the first that is not. With every
+indented lines under it. Its heading is the bold title and what opens the text
+after it: the dash and, if it names them, the milestone's own missions closed by
+a comma or a period. It is marked DONE when `DONE` is inside the title or comes
+right after that (`— DONE 2026-09-11`, `— missions 3–7a, DONE`); any other
+`DONE`, such as `— mission 10 DONE`, marks a sub-mission and not the milestone
+(DESIGN §33). The next unmet milestone is the first whose heading is not marked. With every
 milestone marked DONE, or none found, or no committed file, the prompt says so
 instead, and the consultation goes ahead:
 

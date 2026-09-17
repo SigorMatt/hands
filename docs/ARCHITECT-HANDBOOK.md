@@ -331,7 +331,8 @@ under; read it there rather than here. What changes for you:
 - **One consultation, no memory.** handsd starts you on a review outcome
   (`aux.done`) with the review's `VERDICT:` line, its `## Blockers` and
   `## Should-fix` sections, the next unmet milestone of `meta/ROADMAP.md` (the
-  first whose first line is not marked `DONE`) and the series' escalation
+  first whose heading is not marked `DONE`; `— mission 10 DONE` marks a
+  sub-mission, not the milestone) and the series' escalation
   conditions in the prompt. Everything else you read yourself, from
   `origin/<branch>` in `./repo`. Nothing carries over from the last one.
 - **The kit is a directory in `kits/`, not a zip for the human.** `$HANDS_KITS`

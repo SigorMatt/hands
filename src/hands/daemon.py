@@ -76,6 +76,17 @@ _SHUTDOWN_GRACE_S = 30.0  # ceiling on waiting for cancelled jobs to write their
 #: from death)". A parameter, so a test does not wait an hour for one.
 HEARTBEAT_S = 3600.0
 
+#: §33 (review 16 should-fix 7): "daemon start publishes one notification even when a
+#: queued job starts within the same second". When the start re-admits queued jobs, its
+#: one notification waits for them to end — and for what their end raised, folded into
+#: it — for at most this long. A job still running then does not hold it any further.
+#: It is also the bound on the rest: any notification raised in that window, related or
+#: not, is folded into the start's one (named in its message, never dropped), so none
+#: waits longer than this. Five seconds covers a job that fails at once (0.2 s under the
+#: fake claude) with room for a real CLI's startup, and keeps the start notification
+#: near the start. A parameter, so a test can close it sooner.
+START_FOLD_S = 5.0
+
 #: §11's notifications, as the inbox kinds that carry them. `stop` is not here:
 #: every `stop` event goes through `PlaybookEngine.stop`, which notifies once
 #: through the same publisher (and `max_resumes` exhausted is such a stop, §6).
@@ -99,6 +110,7 @@ class Daemon:
         *,
         socket_path: Path | None = None,
         heartbeat_s: float = HEARTBEAT_S,
+        start_fold_s: float = START_FOLD_S,
     ) -> None:
         self.config = config
         # §29: the spool is the project's own: `~/.hands/<project>.toml` → `~/.hands/<project>/`.
@@ -174,6 +186,10 @@ class Daemon:
         self._stopping = False
         self.heartbeat_s = float(heartbeat_s)
         self._beat: asyncio.Task[None] | None = None
+        #: §33: the start's one notification, while it waits for the jobs the start
+        #: re-admitted (`START_FOLD_S`).
+        self.start_fold_s = float(start_fold_s)
+        self._start_notice: asyncio.Task[None] | None = None
         #: One queue per armed `hands wait --for` (§11). The spool tells the
         #: daemon about every event it appends, so a wait is a subscription and
         #: never a poll of the inbox file.
@@ -192,6 +208,13 @@ class Daemon:
         folded into its message, title and body. A start that fails publishes what
         was held as it would have been published, since there is no start
         notification to fold it into.
+
+        §33 (review 16 should-fix 7): when the start re-admits queued jobs, the hold
+        stays on after this returns, until each of those jobs has ended and the engine
+        has decided its end — or `start_fold_s` has passed, whichever is first — and
+        the one notification is published then, with what was raised meanwhile folded
+        in (`_start_notice_after`). With no queued job it is published before this
+        returns.
         """
         # §32 (review 15 blocker 4): `[series] architect = "role"` without
         # `[roles.architect]` is a config error at load, so handsd refuses to start on
@@ -229,7 +252,7 @@ class Daemon:
         self.started = now_iso()
         # §29, §30: max_consults counts from the first daemon start pipeline.json keeps
         self.playbook.daemon_start(self.started)
-        self._readmit_queued()
+        readmitted = self._readmit_queued()
         self._beat = asyncio.create_task(self._heartbeat(), name="hands-heartbeat")
         # §6: a resume scheduled by a daemon that then died is owed by this one.
         await self.limits.reschedule_pending()
@@ -246,7 +269,21 @@ class Daemon:
                 "\nA restart leaves no live buttons: decide with `hands approve <job>` "
                 "or `hands deny <job>`, or with the secret on the command topic."
             )
-        # §32: the one publish of a start; what the start raised is folded into it.
+        log.info(
+            "handsd %s listening on %s (project %s)",
+            __version__, self.socket_path, self.config.project,
+        )
+        if readmitted:
+            # §33: the queued jobs this start re-admitted end inside the fold window.
+            self._start_notice = asyncio.create_task(
+                self._start_notice_after(readmitted, message, still_held),
+                name="hands-start-notification",
+            )
+        else:
+            self._publish_start(message, still_held)
+
+    def _publish_start(self, message: str, still_held: list[str]) -> None:
+        """§32: the one publish of a start; what was held since the start is folded in."""
         folded = self.notifier.release()
         if folded:
             message += f"\nWhile starting, handsd raised {len(folded)} more notification(s):"
@@ -261,10 +298,40 @@ class Daemon:
                 "folded": [note.title for note in folded],
             },
         )
-        log.info(
-            "handsd %s listening on %s (project %s)",
-            __version__, self.socket_path, self.config.project,
-        )
+
+    async def _start_notice_after(
+        self, job_ids: list[str], message: str, still_held: list[str]
+    ) -> None:
+        """§33: publish the start's one notification once every job in `job_ids` has
+        ended — left `queued` and `running`, and its worker is done with it, which is
+        after the engine decided its end — or `start_fold_s` has passed. A daemon
+        stopped meanwhile publishes it then (`stop`), so the hold always ends."""
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + self.start_fold_s
+        try:
+            async with self._changed:
+                while not self._all_ended(job_ids):
+                    remaining = deadline - loop.time()
+                    if remaining <= 0:
+                        log.info(
+                            "start notification: queued job(s) still running after %.1fs; "
+                            "published without waiting for them", self.start_fold_s,
+                        )
+                        break
+                    with contextlib.suppress(TimeoutError):
+                        await asyncio.wait_for(self._changed.wait(), remaining)
+        finally:
+            self._publish_start(message, still_held)
+
+    def _all_ended(self, job_ids: list[str]) -> bool:
+        """§33: has every one of these jobs ended, with its worker done with it?"""
+        running = set(self._running.values())
+        for job_id in job_ids:
+            if job_id in running:
+                return False
+            if self.spool.load_job(job_id).state in ("queued", "running"):
+                return False
+        return True
 
     def _remint_held(self) -> list[str]:
         """Every job still `held` at this start, by id, its phone nonce re-minted.
@@ -313,6 +380,13 @@ class Daemon:
         # nonces of its held jobs die with it (§24).
         if self.phone is not None:
             await self.phone.stop()
+        # §33: a start notification still waiting for its queued jobs is published now,
+        # so the hold does not outlive the daemon.
+        if self._start_notice is not None:
+            self._start_notice.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._start_notice
+            self._start_notice = None
         if self._beat is not None:
             self._beat.cancel()
             with contextlib.suppress(asyncio.CancelledError):
@@ -473,12 +547,15 @@ class Daemon:
         self._waiting[job.role].append(job.id)
         self._tokens[job.role].put_nowait(job.id)
 
-    def _readmit_queued(self) -> None:
-        """Re-admit jobs left `queued` by a previous daemon, oldest first (§3)."""
+    def _readmit_queued(self) -> list[str]:
+        """Re-admit jobs left `queued` by a previous daemon, oldest first (§3); their ids."""
+        readmitted: list[str] = []
         for job in self.spool.list_jobs():
             if job.state == "queued" and job.role in self._waiting:
                 self._admit(job)
+                readmitted.append(job.id)
                 log.info("re-queued job %s (%s) from the spool", job.id, job.role)
+        return readmitted
 
     async def _worker(self, role: str) -> None:
         """One worker per role — this is the "one running job per role" rule (§6)."""

@@ -136,11 +136,11 @@ async def no_sleep(seconds: float) -> None:
     await asyncio.sleep(0)
 
 
-def phone_drive(body: Any, posts: Any = None) -> None:
+def phone_drive(body: Any, posts: Any = None, **daemon_kwargs: Any) -> None:
     """A daemon with the channel on, a fake stream and a recording publisher."""
 
     async def scenario() -> None:
-        daemon = Daemon(load_config(PROJECT))
+        daemon = Daemon(load_config(PROJECT), **daemon_kwargs)
         daemon.notifier.post = posts if posts is not None else Recorder()
         fake = FakeNtfy()
         assert daemon.phone is not None, "the channel is on in this config"
@@ -534,6 +534,101 @@ def test_a_daemon_start_publishes_exactly_one_notification(
             assert "the pipeline stopped" not in strip_paths(message), message
 
     phone_drive(body)
+
+
+def queued_at_start(tmp_home: Path, workdir: Path, role: str, prompt: str | None) -> str:
+    """§33: the spool a dead daemon left with one `role` job still `queued` — a consult
+    driver job when `prompt` is None — with the phone on and a committed playbook with
+    no rule; the queued job's id."""
+    from hands.playbook import consult_prompt
+    from hands.spool import Spool
+
+    driver = tmp_home.parent / "driver"
+    driver.mkdir(exist_ok=True)
+    extra = f'{NOTIFY}\n[roles.driver]\ncwd = "{driver}"\n'
+    (tmp_home / ".hands" / f"{PROJECT}.toml").write_text(
+        config_body(tmp_home, workdir, extra=extra)
+    )
+    commit_file(workdir, "PLAYBOOK.toml", "version = 1\n")
+    spool = Spool(tmp_home / ".hands" / PROJECT)
+    origin = "cli"
+    if prompt is None:
+        about = spool.create_job(role="builder", context="clear", prompt="p", origin="cli")
+        spool.transition(about, "running")
+        about = spool.transition(about, "done", verdict="VERDICT: question x", result="x")
+        prompt, origin = consult_prompt("builder.done", about), "playbook"
+    return spool.create_job(role=role, context="clear", prompt=prompt, origin=origin).id
+
+
+@pytest.mark.parametrize(
+    ("role", "prompt"),
+    [("driver", None), ("builder", "FAKE:exit 1"), ("aux", "FAKE:exit 1")],
+    ids=["consult-driver-no-verdict", "failing-builder", "failing-aux"],
+)
+def test_a_daemon_start_folds_what_a_queued_job_that_fails_at_once_raises(
+    tmp_home: Path, workdir: Path, role: str, prompt: str | None
+) -> None:
+    """§33 (review 16 should-fix 7): "daemon start publishes one notification even
+    when a queued job starts within the same second". The reviewer's three shapes: a
+    queued consult driver job whose reply has no verdict, a queued builder job and a
+    queued aux job that fail at once. Each stopped the pipeline ~0.2 s after `handsd
+    started` was published. The start's one notification waits for the jobs the start
+    re-admitted to end, and names the stop they raised."""
+    job_id = queued_at_start(tmp_home, workdir, role, prompt)
+
+    async def body(daemon: Daemon, fake: FakeNtfy) -> None:
+        posts = daemon.notifier.post
+        assert (await ok("wait", job_id))["state"] in ("done", "failed")
+
+        async def started() -> Any:
+            return posts.titled("started")
+
+        await poll(started, "the start notification")
+        await asyncio.sleep(0.5)  # anything the job's end raised has had its turn
+        await daemon.playbook.drain()
+        await daemon.notifier.drain()
+        titles = [item["title"] for item in posts.sent]
+        assert titles == ["hands: handsd started"], posts.sent
+        message = strip_paths(posts.sent[0]["message"])
+        stopped = (await ok("pipeline"))["stop_reason"]
+        assert stopped, "the queued job's end stops a playbook with no rule"
+        assert "hands: the pipeline stopped" in strip_paths(message), message
+        assert strip_paths(stopped) in message, message
+
+    phone_drive(body)
+
+
+def test_a_queued_job_still_running_does_not_hold_the_start_notification_past_its_bound(
+    tmp_home: Path, workdir: Path
+) -> None:
+    """§33: the fold is bounded. A queued job that is still running when the window
+    (`start_fold_s`) closes does not hold the start notification: it is published
+    while the job runs, and what the job's end raises later is its own publish,
+    neither swallowed nor folded. The job fails after 2 s; the window is 0.5 s."""
+    job_id = queued_at_start(tmp_home, workdir, "builder", "FAKE:sleep 2\nFAKE:exit 1")
+
+    async def body(daemon: Daemon, fake: FakeNtfy) -> None:
+        loop = asyncio.get_running_loop()
+        began = loop.time()
+        posts = daemon.notifier.post
+
+        async def started() -> Any:
+            return posts.titled("started")
+
+        await poll(started, "the start notification")
+        assert loop.time() - began < 3.0  # the window given, not a default
+        assert (await ok("show", job_id))["state"] == "running"
+        assert "the pipeline stopped" not in strip_paths(posts.sent[0]["message"])
+        assert (await ok("wait", job_id))["state"] == "failed"
+
+        async def stopped() -> Any:
+            return posts.titled("stopped")
+
+        await poll(stopped, "the stop the failed job raised")
+        titles = [item["title"] for item in posts.sent]
+        assert titles == ["hands: handsd started", "hands: the pipeline stopped"], posts.sent
+
+    phone_drive(body, start_fold_s=0.5)
 
 
 def test_a_restart_without_held_jobs_re_sends_nothing(project: str) -> None:

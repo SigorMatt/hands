@@ -51,6 +51,7 @@ from hands.playbook import (
     JOB_PLACEHOLDERS,
     LIMIT_KEYS,
     ROADMAP,
+    Milestones,
     PipelineState,
     PlaceholderError,
     PlaybookEngine,
@@ -3996,11 +3997,11 @@ Milestones are gated by a clean cold review. A DONE here is not a milestone.
 """
 
 
-def test_the_next_milestone_is_the_first_whose_first_line_is_not_marked_done() -> None:
-    """§32: "the first whose gate is not marked DONE". A milestone is a top-level
-    list item beginning `- **M`, running over its indented continuation lines; it
-    is marked DONE when the word `DONE` is on its first line. M2's continuation says
-    DONE of a sub-mission, which is not its mark."""
+def test_the_next_milestone_is_the_first_whose_heading_is_not_marked_done() -> None:
+    """§33: "the first roadmap entry whose heading is not marked DONE". A milestone
+    is a top-level list item beginning `- **M`, running over its indented
+    continuation lines. M2's continuation says DONE of a sub-mission, which is not
+    its mark."""
     found = next_milestone(ROADMAP_WRAPPED)
     assert found.milestone == (
         "- **M2 Shakeout** — mission 2. A run chained into a cold review;\n"
@@ -4008,6 +4009,66 @@ def test_the_next_milestone_is_the_first_whose_first_line_is_not_marked_done() -
         "  Gate: ntfy proven."
     )
     assert found.count == 5
+
+
+#: §33 (review 16 should-fix 6): a fixture roadmap in `meta/ROADMAP.md`'s shape whose
+#: headings are marked DONE every way the rule reads — in the title, after the dash,
+#: after the milestone's own missions set off by a comma or a period — and whose M4b
+#: carries a sub-mission's `mission 10 DONE` on its first line with its heading unmarked.
+ROADMAP_HEADINGS = Path(__file__).parent / "fixtures" / "roadmap_headings.md"
+
+
+def test_a_sub_missions_done_on_the_first_line_does_not_mark_the_milestone() -> None:
+    """§33: "the 'next unmet milestone' is the first roadmap entry whose heading is
+    not marked DONE, and a test pins it on a fixture roadmap". Review 16's case: M4b's
+    first line says `mission 10 DONE`, its heading is not marked, so it is named."""
+    found = next_milestone(ROADMAP_HEADINGS.read_text(encoding="utf-8"))
+    assert found.milestone == (
+        "- **M4b The closed loop** — mission 10 DONE 2026-09-13 (go, kit transport,\n"
+        "  kit check, handbook); mission 11 DONE (apply from kit, driver role, consult).\n"
+        "  Gate: one mission of hands run end to end with no Code tab opened."
+    )
+    assert found.count == 6
+
+
+def test_a_fixture_roadmap_whose_headings_are_all_marked_has_no_unmet_milestone() -> None:
+    text = ROADMAP_HEADINGS.read_text(encoding="utf-8")
+    text = text.replace("— mission 10 DONE 2026-09-13", "— DONE 2026-09-14; mission 10 DONE")
+    text = text.replace("— missions 15 and 16. Mission", "— missions 15 and 16, DONE. Mission")
+    assert next_milestone(text) == Milestones(None, 6)
+
+
+def test_a_roadmap_with_no_milestone_entry_has_none_and_counts_none() -> None:
+    text = ROADMAP_HEADINGS.read_text(encoding="utf-8").replace("- **M", "- **Step ")
+    assert next_milestone(text) == Milestones(None, 0)
+
+
+@pytest.mark.parametrize(
+    ("first_line", "done"),
+    [
+        ("- **M1 Core** — DONE 2026-09-11 (mission 1).", True),
+        ("- **M1 Core DONE** — mission 1.", True),
+        ("- **M1 Core** DONE", True),
+        ("- **M3 Hardening** — missions 3–7a, DONE 2026-09-12: the", True),
+        ("- **M4c The architect** — missions 15 and 16. DONE.", True),
+        ("- **M4 Detectors** — mission 8. Harness-killed tasks; DONE later", False),
+        ("- **M4b The closed loop** — mission 10 DONE 2026-09-13 (go, kit", False),
+        ("- **M4b The closed loop** — missions 10 and 11 DONE", False),
+        ("- **M4c The architect** — missions 15 and 16. Mission 16 — DONE", False),
+        ("- **M5 spanweave** — INSTRUCTION PASTE DUE: DONE", False),
+        ("- **M6 Unclosed title — DONE", False),
+    ],
+)
+def test_only_a_heading_marked_done_marks_the_milestone(first_line: str, done: bool) -> None:
+    """§33: the heading is the entry's bold title and what opens the text after it —
+    its dash and, if it has one, the milestone's own missions closed by a comma or a
+    period. `DONE` there marks the milestone; `DONE` anywhere else is a sub-mission's
+    or prose. A line whose title is never closed has no heading to mark."""
+    text = f"# ROADMAP\n\n{first_line}\n  continued, DONE.\n- **M9 Last** — next.\n"
+    found = next_milestone(text)
+    assert found.count == 2
+    named = "- **M9 Last** — next." if done else f"{first_line}\n  continued, DONE."
+    assert found.milestone == named
 
 
 def test_the_architect_prompt_carries_only_the_next_unmet_milestone(
@@ -4020,7 +4081,7 @@ def test_the_architect_prompt_carries_only_the_next_unmet_milestone(
     assert "  Gate: ntfy proven." in strip_paths(prompt)
     for other in ("**M1 Core**", "**M3 Hardening**", "**M4 Detectors**", "Milestones are gated"):
         assert other not in strip_paths(prompt), other
-    assert f"first milestone in {ROADMAP} whose first line is not marked DONE" in prompt
+    assert f"first milestone in {ROADMAP} whose heading is not marked DONE" in prompt
 
 
 def test_a_roadmap_whose_milestones_are_all_done_says_so(tmp_home: Path, workdir: Path) -> None:

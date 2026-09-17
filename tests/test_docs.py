@@ -21,7 +21,7 @@ import pytest
 
 from hands.api import Api
 from hands.config import parse_config
-from hands.daemon import NOTIFY_KINDS
+from hands.daemon import NOTIFY_KINDS, START_FOLD_S
 from hands.playbook import ACTIONS, EVENTS
 
 ROOT = Path(__file__).parents[1]
@@ -1331,11 +1331,15 @@ def test_the_inbox_kinds_hands_publishes_by_itself_are_stop_and_job_held(
 def test_the_start_notification_doc_says_one_and_folds_what_the_start_raised() -> None:
     """§32: "daemon start publishes exactly one notification" — the count is bound by
     tests/test_phone.py::test_a_daemon_start_publishes_exactly_one_notification over
-    a plain start, held jobs, and orphaned driver and architect consultations."""
+    a plain start, held jobs, and orphaned driver and architect consultations; §33's
+    fold window over queued jobs, and its bound, by the two tests after it."""
     text = flattened((ROOT / "docs" / "INTEGRATION.md").read_text(encoding="utf-8"))
     for said in (
         "A daemon start publishes exactly one notification, `hands: handsd started`",
         "is folded into its message",
+        "the notification waits for them to end, for at most "
+        f"{START_FOLD_S:g} seconds (DESIGN §33)",
+        f"none waits longer than {START_FOLD_S:g} seconds",
     ):
         assert said in text, f"docs/INTEGRATION.md does not say {said!r} (§32)"
 

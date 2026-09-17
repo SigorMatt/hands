@@ -418,7 +418,16 @@ A daemon start publishes exactly one notification, `hands: handsd started`
 (§32). The jobs still held are listed in it, and anything the start itself
 raises before it — the stop an orphaned consultation's end makes, when a daemon
 died with a driver or architect job running — is folded into its message, title
-and reason, rather than published a few milliseconds ahead of it.
+and reason, rather than published a few milliseconds ahead of it. When the start
+picks up jobs a dead daemon left queued, the notification waits for them to end,
+for at most 5 seconds (DESIGN §33): a queued job that fails at once stops the
+pipeline inside that window, and the stop is folded in rather than published a
+quarter second after the start. The same window is the bound on everything else:
+any notification raised in it — a job held by a `hands send` in those seconds
+included — is named inside the start notification, without buttons, and none
+waits longer than 5 seconds. A queued job still running when the window closes
+does not hold the start notification; what its end raises later is published on
+its own.
 
 A limit and its resume are not such a pair. Both are events you read with
 `hands inbox` (`limit`, `resume`), and neither is published: the inbox event
