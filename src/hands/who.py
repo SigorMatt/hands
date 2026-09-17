@@ -102,7 +102,6 @@ SESSION_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]*")
 #: §27: how a process's transcript was found.
 BY_SESSION = "session"
 BY_DIRECTORY = "directory"
-NEEDS_YOU = {"stop", "job.held"}
 
 Proc = dict[str, Any]
 
@@ -555,6 +554,13 @@ def _state_text(ts: dict[str, Any] | None, kids: bool) -> tuple[str, str]:
     return f"thinking · {age(ts['idle_s'])} since last write", "think"
 
 
+def _needs_you_now(state: dict[str, Any]) -> bool:
+    """§34: a project needs you when its pipeline is stopped now or a job is held now."""
+    if (state.get("pipeline") or {}).get("paused"):
+        return True
+    return any(job.get("state") == "held" for job in state.get("jobs") or [])
+
+
 def _inbox_kinds(events: list[dict[str, Any]]) -> str:
     return ", ".join(sorted({str(e.get("kind", "?")) for e in events}))
 
@@ -633,6 +639,7 @@ def build_summary_all(srcs: Sequence[Sources]) -> tuple[str, list[tuple[str, str
     blocks: list[str] = []
     hands_pids: set[int] = set()
     inboxes: dict[str, list[dict[str, Any]]] = {}
+    needed: dict[str, bool] = {}
 
     for each in srcs:
         state = each.daemon()
@@ -647,6 +654,7 @@ def build_summary_all(srcs: Sequence[Sources]) -> tuple[str, list[tuple[str, str
         if inbox:
             items.append((f"{each.project}:inbox", str(len(inbox))))
             inboxes[each.project] = inbox
+        needed[each.project] = _needs_you_now(state)
         blocks.append("\n".join(lines))
 
     role_cwds = [(cwd, each.project) for each in srcs for cwd in each.role_cwds.values()]
@@ -681,8 +689,12 @@ def build_summary_all(srcs: Sequence[Sources]) -> tuple[str, list[tuple[str, str
         inbox = inboxes.get(driver) if driver is not None else None
         if inbox:
             drivers_shown.add(str(driver))
-            need = any(e.get("kind") in NEEDS_YOU for e in inbox)
-            whose = "needs YOU" if need else "informational, the driver acks it on its next check"
+            # §34: from the state now, not from the kinds of the unread events.
+            whose = (
+                "needs YOU"
+                if needed.get(str(driver))
+                else "informational, the driver acks them on its next check"
+            )
             lines.append(
                 f"  inbox: {len(inbox)} unread from handsd — {_inbox_kinds(inbox)} — {whose}"
             )

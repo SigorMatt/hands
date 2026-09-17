@@ -885,7 +885,7 @@ PADDED = """
 [server]
 socket = "  ~/.hands/handsd.sock  "
 ntfy_topic = "  hands-abc123  "
-ntfy_url = "  https://ntfy.sh  "
+ntfy_url = "  https://ntfy.tailnet.example  "
 
 [notify]
 cmd_topic = "  hands-cmd-abc  "

@@ -117,7 +117,9 @@ cwd` is optional.
     ntfy_topic = "hands-<something-random>"  # [server], where older configs have
     ntfy_url = "https://ntfy.sh"         # them (default); never in both places
     # ntfy_token = "tk_<…>"                     # optional: a self-hosted ntfy's access
-    #                                           # token, sent as a bearer (§33); see
+    #                                           # token, sent as a bearer (§33); only
+    #                                           # beside an ntfy_url naming that server,
+    #                                           # never ntfy.sh (§34); see
     #                                           # "Self-hosted ntfy over Tailscale"
     # cmd_topic = "hands-cmd-<another-random>"  # optional: the command channel,
     # cmd_secret = "<one long random word>"     # required with cmd_topic
@@ -743,7 +745,13 @@ has the same scheme, host and port as `ntfy_url`; an attachment anywhere else is
 fetched without it. With no `ntfy_token`, no request carries an
 `Authorization` header. The token must be one word of visible ASCII; anything
 else does not load, and the refusal names `[notify] ntfy_token` without
-printing it. `hands doctor` says `ntfy token on` or `ntfy token off`.
+printing it. The token is accepted only beside an explicit `ntfy_url` that is
+not a public broker (§34): with `ntfy_url` unset (so `https://ntfy.sh`), or set
+to a url whose host is `ntfy.sh` or a subdomain of it (any letter case, scheme,
+port or path), the config does not load, and the refusal names the url, not the
+token. handsd, `handswho`, every `hands` command and `hands doctor` (as its
+failed `config` row) read the config the same way. `hands doctor` says `ntfy
+token on` or `ntfy token off`.
 
 The server setup below is a sketch of ntfy's and Tailscale's own documented
 commands. It was written from their documentation, not run for this repository;

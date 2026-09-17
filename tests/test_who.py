@@ -791,6 +791,73 @@ def test_a_stopped_pipeline_says_so_and_its_reason(utc: None) -> None:
     assert ("demo:pipeline", "stopped") in items
 
 
+INFORMATIONAL = "informational, the driver acks them on its next check"
+
+
+def _driver_inbox_line(text: str) -> str:
+    (line,) = [ln for ln in text.splitlines() if ln.startswith("  inbox: ")]
+    return line
+
+
+@pytest.mark.parametrize(
+    "held,paused,kinds,whose",
+    [
+        (False, False, ["job.held", "stop"], INFORMATIONAL),
+        (False, False, ["monitor.stall"], INFORMATIONAL),
+        (True, False, ["monitor.stall"], "needs YOU"),
+        (True, False, ["job.held"], "needs YOU"),
+        (False, True, ["job.done"], "needs YOU"),
+        (False, True, ["stop"], "needs YOU"),
+    ],
+    ids=[
+        "needed_once_not_now",
+        "nothing_needed",
+        "held_now",
+        "held_now_and_its_event",
+        "stopped_now",
+        "stopped_now_and_its_event",
+    ],
+)
+def test_the_driver_inbox_needs_you_only_from_the_current_state(
+    utc: None, held: bool, paused: bool, kinds: list[str], whose: str
+) -> None:
+    """§34 (backlog mission 18 item 1): "needs YOU" only when the pipeline is
+    stopped now or a job is held now; unread events alone — even a `job.held` or a
+    `stop` whose job was since decided or whose pipeline was since resumed — are
+    informational, the driver acks them on its next check."""
+
+    def state() -> dict[str, Any]:
+        s = picture_daemon()
+        if not held:
+            s["jobs"] = [job for job in s["jobs"] if job["state"] != "held"]
+        s["pipeline"] = {"paused": paused, "stop_reason": "stop" if paused else None,
+                         "playbook": {"rules": 4}}  # fmt: skip
+        s["inbox"] = [{"id": f"e{i}", "kind": kind} for i, kind in enumerate(kinds)]
+        return s
+
+    text, _items = who.build_summary(sources(daemon=state))
+    line = _driver_inbox_line(text)
+    assert strip_paths(line).endswith(f" — {whose}"), line
+    other = "needs YOU" if whose == INFORMATIONAL else INFORMATIONAL
+    assert other not in strip_paths(line)
+
+
+def test_the_driver_inbox_of_one_project_is_not_needed_by_anothers_held_job(utc: None) -> None:
+    """§34, §29: "a job is held now" is the driver's own project's job."""
+    quiet = picture_daemon()
+    quiet["jobs"] = [job for job in quiet["jobs"] if job["state"] != "held"]
+    busy = picture_daemon()
+    busy["project"] = "other"
+    busy["inbox"] = []
+    busy["pipeline"] = {"paused": True, "stop_reason": "x", "playbook": {"rules": 4}}
+    srcs = [
+        sources(daemon=lambda: quiet),
+        replace(sources(daemon=lambda: busy), project="other", role_cwds={}),
+    ]
+    text, _items = who.build_summary_all(srcs)
+    assert strip_paths(_driver_inbox_line(text)).endswith(f" — {INFORMATIONAL}")
+
+
 def test_an_inbox_with_no_driver_session_gets_its_own_block(utc: None) -> None:
     table = picture_table()
     del table[300]

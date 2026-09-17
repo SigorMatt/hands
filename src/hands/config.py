@@ -16,6 +16,7 @@ import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 __all__ = [
     "ARCHITECT_ROLE",
@@ -71,6 +72,9 @@ DEFAULT_QUEUE_DEPTH = {"builder": 1, "aux": 4, "driver": 1, "architect": 1}
 #: §6; §27 and §31 are silent for the two roles handsd starts one job at a time
 DEFAULT_MODEL = "opus"
 DEFAULT_NTFY_URL = "https://ntfy.sh"
+#: §34: the public broker a token is never sent to. §34 does not define "a public
+#: broker"; hands' own default host and its subdomains are what it refuses.
+PUBLIC_NTFY_HOST = "ntfy.sh"
 #: §29: under the project's own spool, so two daemons' default sockets never collide.
 DEFAULT_SOCKET = "~/.hands/<project>/handsd.sock"
 DEFAULT_STALL_MINUTES = 40.0  # §5
@@ -551,6 +555,7 @@ def parse_config(data: dict[str, Any], *, project: str, path: Path) -> Config:
         ntfy_url = _str(
             server_t, "ntfy_url", DEFAULT_NTFY_URL, "[server]", path, blank=default_url
         )
+    url_set = "ntfy_url" in notify_t or "ntfy_url" in server_t
     notify = NotifyConfig(
         ntfy_url=ntfy_url,
         ntfy_topic=ntfy_topic,
@@ -581,6 +586,7 @@ def parse_config(data: dict[str, Any], *, project: str, path: Path) -> Config:
         ntfy_token=_ntfy_token(notify_t, path),
     )
     _check_channel(notify, path)
+    _check_token_url(notify, url_set, path)
     server = ServerConfig(
         socket=_path(
             server_t,
@@ -846,6 +852,44 @@ def _ntfy_token(notify_t: dict[str, Any], path: Path) -> str | None:
             "the value is not printed"
         )
     return token
+
+
+def is_public_ntfy_url(url: str) -> bool:
+    """§34: does `url` point at a public broker?
+
+    §34 is silent on which brokers are public; hands refuses the one it defaults
+    to: the host `ntfy.sh` or any subdomain of it, in any letter case, scheme,
+    port, path, or with a trailing dot. A url no host can be read from counts as
+    public, so a token is only ever sent beside a url that names another host.
+    """
+    try:
+        host = urlsplit(url if "//" in url else f"//{url}").hostname
+    except ValueError:
+        return True
+    if not host:
+        return True
+    host = host.rstrip(".")
+    return host == PUBLIC_NTFY_HOST or host.endswith("." + PUBLIC_NTFY_HOST)
+
+
+def _check_token_url(notify: NotifyConfig, url_set: bool, path: Path) -> None:
+    """§34 (review 17 should-fix 7): `ntfy_token` is accepted only alongside an
+    explicit `ntfy_url` that is not a public broker; otherwise the load is refused
+    with a message naming the url. The token is never printed (where the url
+    itself carries the token's text, that text is masked)."""
+    token = notify.ntfy_token
+    if token is None or (url_set and not is_public_ntfy_url(notify.ntfy_url)):
+        return
+    shown = notify.ntfy_url.replace(token, "<ntfy_token>")
+    if url_set:
+        which = f"ntfy_url is {shown}, a public broker"
+    else:
+        which = f"ntfy_url is not set, so it is {shown}, a public broker"
+    raise ConfigError(
+        f"{path}: [notify] ntfy_token is set but {which}; the token is accepted only "
+        "alongside an explicit ntfy_url naming your own ntfy server (§34) — set "
+        "[notify] ntfy_url to that server, or remove ntfy_token; the value is not printed"
+    )
 
 
 def _check_channel(notify: NotifyConfig, path: Path) -> None:

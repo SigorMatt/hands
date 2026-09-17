@@ -53,10 +53,10 @@ def workdir(tmp_path: Path) -> Path:
     return d
 
 
-def notify_table(*, token: str | None, url: str = NTFY) -> str:
+def notify_table(*, token: str | None, url: str | None = NTFY) -> str:
     lines = [
         "[notify]",
-        f'ntfy_url = "{url}"',
+        *([] if url is None else [f"ntfy_url = {json.dumps(url)}"]),
         f'ntfy_topic = "{EVENTS_TOPIC}"',
         f'cmd_topic = "{CMD_TOPIC}"',
         f'cmd_secret = "{SECRET}"',
@@ -69,7 +69,12 @@ def notify_table(*, token: str | None, url: str = NTFY) -> str:
 
 
 def write(
-    tmp_home: Path, workdir: Path, *, token: str | None = TOKEN, url: str = NTFY, more: str = ""
+    tmp_home: Path,
+    workdir: Path,
+    *,
+    token: str | None = TOKEN,
+    url: str | None = NTFY,
+    more: str = "",
 ) -> str:
     extra = notify_table(token=token, url=url) + more
     return write_project(tmp_home, config_body(tmp_home, workdir, extra=extra))
@@ -146,6 +151,134 @@ def test_a_token_that_cannot_be_a_bearer_is_refused_naming_the_key(
     assert "[notify] ntfy_token" in strip_paths(message)
     assert "Zq9secr" not in strip_paths(message)
     assert "90210" not in strip_paths(message)
+
+
+# §34 (review 17 should-fix 7): the token only beside an explicit, non-public ntfy_url.
+#: Where §34 is silent on what "a public broker" is: ntfy.sh (hands' default) and
+#: any subdomain of it, in any letter case, scheme, port, path or trailing dot.
+PUBLIC_URLS = [
+    "https://ntfy.sh",
+    "https://ntfy.sh/",
+    "https://NTFY.Sh",
+    "https://ntfy.sh:443",
+    "http://ntfy.sh/some/path",
+    "https://ntfy.sh./",
+    "https://docs.ntfy.sh",
+]
+SELF_HOSTED_URLS = [
+    NTFY,
+    "http://127.0.0.1:8080",
+    "https://laptop.tailnet.ts.net/ntfy",
+    "https://ntfy.sh.example",
+    "https://notntfy.sh",
+]
+
+
+def assert_refused_naming(message: str, url: str) -> None:
+    assert "[notify] ntfy_token" in strip_paths(message)
+    assert url in strip_paths(message), message
+    assert "public" in strip_paths(message)
+    assert_no_token(message)
+
+
+def test_a_token_with_no_ntfy_url_is_refused_naming_the_default_url(
+    tmp_home: Path, workdir: Path
+) -> None:
+    with pytest.raises(ConfigError) as exc:
+        load_config(write(tmp_home, workdir, url=None))
+    assert_refused_naming(str(exc.value), "https://ntfy.sh")
+    assert "ntfy_url is not set" in strip_paths(str(exc.value))
+
+
+@pytest.mark.parametrize("url", PUBLIC_URLS)
+@pytest.mark.parametrize("table", ["notify", "server"])
+def test_a_token_with_a_public_ntfy_url_is_refused_naming_it(
+    tmp_home: Path, workdir: Path, url: str, table: str
+) -> None:
+    if table == "notify":
+        project = write(tmp_home, workdir, url=url)
+    else:
+        body = config_body(tmp_home, workdir, extra=notify_table(token=TOKEN, url=None))
+        body = body.replace("[server]\n", f"[server]\nntfy_url = {json.dumps(url)}\n", 1)
+        project = write_project(tmp_home, body)
+    with pytest.raises(ConfigError) as exc:
+        load_config(project)
+    assert_refused_naming(str(exc.value), url)
+
+
+@pytest.mark.parametrize("url", SELF_HOSTED_URLS)
+def test_a_token_with_a_self_hosted_ntfy_url_loads(
+    tmp_home: Path, workdir: Path, url: str
+) -> None:
+    config = load_config(write(tmp_home, workdir, url=url))
+    assert config.notify.ntfy_token == TOKEN
+    assert config.notify.ntfy_url == url
+
+
+@pytest.mark.parametrize("url", [None, "https://ntfy.sh"], ids=["default", "explicit"])
+def test_no_token_with_the_public_url_still_loads(
+    tmp_home: Path, workdir: Path, url: str | None
+) -> None:
+    config = load_config(write(tmp_home, workdir, token=None, url=url))
+    assert config.notify.ntfy_token is None
+    assert config.notify.ntfy_url == "https://ntfy.sh"
+
+
+def test_every_loader_refuses_a_token_with_no_ntfy_url(
+    tmp_home: Path,
+    workdir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """handsd, handswho, `hands notify --test`, `hands who` and doctor all load the
+    config through `load_config`; each one refuses, names the url, never the token."""
+    from hands import daemon as daemon_mod
+
+    project = write(tmp_home, workdir, url=None)
+    sent: list[str] = []
+    # Stand-ins for what runs after a load, so a config that loads fails fast here.
+    ntfy = DenyAll()
+
+    async def serve(*_args: Any) -> int:
+        sent.append("handsd served")
+        return 0
+
+    def watch(*_args: Any) -> int:
+        sent.append("handswho watched")
+        return 0
+
+    monkeypatch.setattr(daemon_mod, "_serve", serve)
+    monkeypatch.setattr(who, "watch", watch)
+    monkeypatch.setattr("hands.notify.http_post", partial(http_post, transport=ntfy.transport))
+
+    assert daemon_mod.main(["--project", project]) == 1
+    captured = capsys.readouterr()
+    assert_refused_naming(captured.err, "https://ntfy.sh")
+    assert_no_token(captured.out)
+
+    out, err = io.StringIO(), io.StringIO()
+    assert who.main(["--project", project], stdout=out, stderr=err) == 1
+    assert_refused_naming(err.getvalue(), "https://ntfy.sh")
+    assert_no_token(out.getvalue())
+
+    for argv in (["notify", "--test", "hello"], ["who"]):
+        code, out_text, err_text = run_cli(project, *argv)
+        assert code != 0, argv
+        assert_refused_naming(err_text, "https://ntfy.sh")
+        assert_no_token(out_text)
+    assert sent == []
+    assert ntfy.requests == []
+
+    monkeypatch.setenv("HANDS_DOCTOR_FAKE", "1")
+    code, raw, raw_err = run_cli(project, "--json", "doctor")
+    rows = {check["name"]: check for check in json.loads(raw)["checks"]}
+    assert code == 1
+    assert rows["config"]["status"] == "fail"
+    assert_refused_naming(rows["config"]["detail"], "https://ntfy.sh")
+    assert_no_token(raw, raw_err)
+    code, text, text_err = run_cli(project, "doctor")
+    assert code == 1
+    assert_no_token(text, text_err)
 
 
 # ---------------------------------------------------------------- transport
