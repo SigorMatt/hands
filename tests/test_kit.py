@@ -10,6 +10,7 @@ templates filled in.
 
 from __future__ import annotations
 
+import hashlib
 import io
 import json
 import re
@@ -1812,9 +1813,10 @@ def test_kit_file_files_a_held_apply_with_a_daemon_minted_kit_id(
     assert stored.read_bytes() == kit_mod.build_zip(kit)
     # §32: the record the engine checks an approval against, naming the consultation.
     # §33: and the check handsd ran on the stored bytes, against the builder's repo.
+    # §34: and the sha256 of the bytes that check passed on.
     assert answers["record"] == {
         "kit_id": kit_id, "name": "mission-16-kit", "consultation": answers["consultation"],
-        "check": "pass",
+        "check": "pass", "sha256": hashlib.sha256(kit_mod.build_zip(kit)).hexdigest(),
     }
     assert not any(kits_dir.glob("*.zip")), "the zip is the daemon's, not under HANDS_KITS"
     with zipfile.ZipFile(stored) as archive:

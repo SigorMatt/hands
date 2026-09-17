@@ -129,15 +129,21 @@ files. With `architect = "role"` and `autonomous = true` (DESIGN §32):
 - handsd runs `hands kit check` itself on the zip it stores, against the
   builder's repository, and refuses a failing kit with the check's output, so
   the record the engine approves on says the check passed (DESIGN §33): a kit
-  that fails the check is never filed, whoever calls the socket;
+  that fails the check is never filed, whoever calls the socket. The record
+  holds the sha256 of the bytes the check passed on, and the engine re-hashes the
+  stored zip when it approves: a mismatch is not approved, and `kit.refused`
+  carries both hashes and the pipeline stops (DESIGN §34);
 - a consultation may file at most one kit, and its name must be the one its
   `VERDICT: next kit <name>` states (DESIGN §33). The kit is usually filed before
   that verdict exists, so the engine decides the hold when both are known: at the
-  consultation's end, or when the kit is filed during the `next kit` wait. A
-  second kit, or a kit of another name (a reply that is not `next kit` included),
-  is denied by the engine (`decided_by: playbook`) and the consultation ends
-  `escalate`: the pipeline stops and notifies with the reason, the architect's
-  session id and the `claude --resume <id>` line;
+  consultation's end, or when the kit is filed during the `next kit` wait.
+  `hands kit file` calls are serialized per consultation, and a second kit is
+  refused by handsd as "one kit per consultation" before it is checked (DESIGN
+  §34). A consultation that tried to file a second kit, or filed a kit of another
+  name (a reply that is not `next kit` included), ends `escalate`, and its kit, if
+  still held, is denied by the engine (`decided_by: playbook`): the pipeline stops
+  and notifies with the reason, the architect's session id and the `claude
+  --resume <id>` line;
 - `[series] kickoff` is sent to the builder when that apply, approved by the
   engine, replies `VERDICT: kit applied`.
 

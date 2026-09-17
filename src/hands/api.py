@@ -20,6 +20,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import binascii
+import hashlib
 import os
 import re
 import shlex
@@ -55,6 +56,7 @@ from hands.spool import (
     SpoolError,
     is_architect_reply,
     kit_apply_problem,
+    kits_filed_during,
     new_kit_id,
     resolve_kinds,
 )
@@ -160,6 +162,10 @@ class Api:
         self.daemon = daemon
         self.config = daemon.config
         self.spool = daemon.spool
+        #: §34: `kit_file` is serialized per consultation: architect job id → its lock.
+        #: One lock per consultation, kept for the daemon's life (a lock is dropped
+        #: only by a restart, which ends every consultation).
+        self._kit_locks: dict[str, asyncio.Lock] = {}
 
     #: §31, §32: the daemon half of `hands kit file`. `kit` is one row of §4's table
     #: and its `check` is answered by the client, so this is not in `COMMANDS` (which
@@ -363,11 +369,17 @@ class Api:
         builder's cwd, and is filed as the held apply with `origin: architect`. A
         refusal files nothing and keeps nothing.
 
-        §33's other half — one kit per consultation, named as the architect's
-        `VERDICT: next kit <name>` names it — is the engine's to enforce when it
-        decides the hold (`PlaybookEngine`), because the verdict usually arrives
-        after the kit: a second kit filed while the consultation runs is filed here,
-        held, and denied by the engine.
+        §34: calls are serialized per consultation under a lock, and a call that
+        gets the lock after its consultation has filed a kit (`kits_filed_during`) is
+        refused as "one kit per consultation" before it is stored or checked; the
+        engine is told (`PlaybookEngine.kit_refused`), and §33's minimum follows from
+        there: the consultation ends `escalate`. The kit's name against the
+        architect's `VERDICT: next kit <name>` is the engine's to judge when it
+        decides the hold, because the verdict usually arrives after the kit. A kit
+        that fails the check files nothing, so a later call may file one.
+
+        §34: the record holds the sha256 of the bytes handsd stored and ran the check
+        on; the engine re-hashes the stored zip when it approves.
 
         §32: the engine approves "a kit filed by the architect role", so a kit is
         accepted only during an architect consultation — while an architect job is
@@ -394,6 +406,25 @@ class Api:
         if "builder" not in self.config.roles:
             raise ApiError("kit_file: this project configures no builder to apply a kit")
         consultation = self._consultation_for(name)
+        async with self._kit_locks.setdefault(consultation, asyncio.Lock()):
+            filed = kits_filed_during(self.spool, consultation)
+            if filed:
+                first, first_name = filed[0]
+                await self.daemon.playbook.kit_refused(consultation)
+                raise ApiError(
+                    f"kit_file: one kit per consultation — consultation {consultation} has "
+                    f"filed kit {first_name!r} (job {first.id}), so kit {name!r} is refused "
+                    "before it is checked (§33, §34)"
+                )
+            if self._consultation_for(name) != consultation:
+                raise ApiError(
+                    f"kit_file: consultation {consultation} is no longer the one open while "
+                    "this kit waited for the call before it (§32, §34)"
+                )
+            return await self._file_kit(consultation, name, data)
+
+    async def _file_kit(self, consultation: str, name: str, data: bytes) -> dict[str, Any]:
+        """`kit_file`'s store, check, record and apply, under its consultation's lock."""
         kit_id = new_kit_id()
         directory = self.spool.kit_dir(kit_id)
         try:
@@ -415,6 +446,7 @@ class Api:
                 name=name,
                 consultation=consultation,
                 check=KIT_CHECK_PASSED,
+                sha256=hashlib.sha256(data).hexdigest(),
             )
             job = await self.file_apply(plan, ARCHITECT_ORIGIN, kit_id)
             self.daemon.playbook.kit_filed(consultation)

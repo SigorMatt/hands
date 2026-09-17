@@ -3182,13 +3182,18 @@ def consultation(spool: Spool, *, state: str = "running", verdict: str | None = 
     return spool.transition(job, state, verdict=verdict, result=verdict)
 
 
+#: The stored zip `filed_kit` files: an empty zip's end-of-central-directory record.
+KIT_BYTES = b"PK\x05\x06" + bytes(18)
+
+
 def filed_kit(
     spool: Spool, *, name: str = "m16", during: Job | None = None, **job: Any
 ) -> Job:
     """§32: a kit's held apply exactly as `Api.kit_file` leaves it — the zip stored
     under `kits/<kit_id>/` by `Spool.store_kit` and its record (`Spool.record_kit`),
     naming the consultation it was filed during and (§33) the passing check handsd
-    ran, and the held builder job carrying the kit_id.
+    ran and (§34) the sha256 of the bytes it passed on, and the held builder job
+    carrying the kit_id.
 
     By default the consultation has ended `VERDICT: next kit <name>`: §33's approval
     waits for the verdict's name, so that is the consultation whose kit the engine
@@ -3198,8 +3203,11 @@ def filed_kit(
     if during is None:
         during = consultation(spool, state="done", verdict=f"VERDICT: next kit {name}")
     kit_id = new_kit_id()
-    spool.store_kit(kit_id, name=name, data=b"PK\x05\x06" + bytes(18))
-    spool.record_kit(kit_id, name=name, consultation=during.id, check="pass")
+    spool.store_kit(kit_id, name=name, data=KIT_BYTES)
+    spool.record_kit(
+        kit_id, name=name, consultation=during.id, check="pass",
+        sha256=hashlib.sha256(KIT_BYTES).hexdigest(),
+    )
     fields: dict[str, Any] = {
         "role": "builder",
         "context": "clear",
@@ -3462,6 +3470,14 @@ def _forged(spool: Spool, case: str) -> Job:
         record = spool.kit_dir(job.kit_id) / "kit.json"
         record.write_text(record.read_text().replace('"pass"', '"fail"'))
         return job
+    if case == "the record holds no sha256":
+        job = filed_kit(spool)
+        assert job.kit_id is not None
+        record = spool.kit_dir(job.kit_id) / "kit.json"
+        data = json.loads(record.read_text())
+        del data["sha256"]
+        record.write_text(json.dumps(data))
+        return job
     raise AssertionError(case)
 
 
@@ -3476,6 +3492,7 @@ FORGED = [
     "a second job carries the kit_id",
     "not a builder job",
     "the record holds no passing check",
+    "the record holds no sha256",
 ]
 
 
@@ -3505,6 +3522,109 @@ def test_the_kit_check_accepts_a_filed_kit_and_names_every_forgery(
     assert kit_apply_problem(engine.spool, job) is None
     for case in FORGED:
         assert kit_apply_problem(engine.spool, _forged(engine.spool, case)), case
+
+
+# ---- §34: the kit record binds the bytes the check passed on
+
+
+def _flip_a_byte(spool: Spool, job: Job, name: str = "m16") -> tuple[str, str]:
+    """REVIEW-17 should-fix 1: the stored zip changed after the check. Returns the
+    sha256 the record holds and the sha256 of the bytes stored now."""
+    assert job.kit_id is not None
+    record = spool.read_kit_record(job.kit_id)
+    assert record is not None
+    path = spool.kit_dir(job.kit_id) / f"{name}.zip"
+    data = bytearray(path.read_bytes())
+    data[-1] ^= 0x01
+    path.write_bytes(bytes(data))
+    stored = hashlib.sha256(bytes(data)).hexdigest()
+    assert record["sha256"] != stored
+    return record["sha256"], stored
+
+
+@pytest.mark.parametrize("decided", ["on its hold", "at its consultation's end"])
+def test_a_stored_zip_changed_after_its_check_is_not_approved_and_kit_refused_names_both_hashes(
+    tmp_home: Path, workdir: Path, decided: str
+) -> None:
+    """§34 (REVIEW-17 should-fix 1): "`kit.json` stores the sha256 of the bytes the
+    check passed on, and engine approval re-hashes the stored zip and refuses a
+    mismatch (`kit.refused` with both hashes)". One byte of the stored zip flipped
+    after the record was written: nothing is approved, `kit.refused` carries the
+    recorded and the stored sha256, and the pipeline stops (one notification) with
+    both, so the human decides the hold."""
+    engine, recorder = architect_engine(tmp_home, workdir)
+    engine.sleep = Sleeps()
+    spool = engine.spool
+    if decided == "on its hold":
+        architect = consultation(spool, state="done", verdict="VERDICT: next kit m16")
+        job = filed_kit(spool, during=architect)
+        recorded, stored = _flip_a_byte(spool, job)
+        run(engine.on_event("job.held", job=job))
+    else:
+        architect = consultation(spool)
+        job = filed_kit(spool, during=architect)
+        run(engine.on_event("job.held", job=job))
+        recorded, stored = _flip_a_byte(spool, job)
+        architect = spool.transition(
+            architect, "done", verdict="VERDICT: next kit m16", result="VERDICT: next kit m16"
+        )
+        end_consultation(engine, architect)
+    assert recorded == hashlib.sha256(KIT_BYTES).hexdigest()
+    assert recorder.approved == []
+    assert spool.load_job(job.id).state == "held"
+    [refused] = [event.payload for event in spool.events() if event.kind == "kit.refused"]
+    assert refused["recorded_sha256"] == recorded, refused
+    assert refused["stored_sha256"] == stored, refused
+    assert refused["job"] == job.id and refused["kit_id"] == job.kit_id, refused
+    assert engine.state.paused
+    said = strip_paths(engine.state.stop_reason or "")
+    assert recorded in strip_paths(said) and stored in strip_paths(said), said
+    assert "§34" in strip_paths(said), said
+    assert [title for title, _ in recorder.notified] == ["hands: the pipeline stopped"]
+
+
+@pytest.mark.parametrize("when", ["while it ran", "after the first's approval"])
+def test_a_second_kit_kit_file_refused_makes_the_consultation_escalate(
+    tmp_home: Path, workdir: Path, when: str
+) -> None:
+    """§34 (REVIEW-17 should-fix 2): the second `kit_file` of a consultation is
+    refused "one kit per consultation" before it is checked, so it is never filed or
+    held; `Api.kit_file` tells the engine (`kit_refused`), and §33's minimum stands:
+    the consultation ends `escalate`. Refused while the architect ran, the filed kit
+    is denied at the end although the verdict names it; refused after the first was
+    approved, the approval stands and the escalate stops the pipeline."""
+    engine, recorder = architect_engine(tmp_home, workdir)
+    engine.sleep = Sleeps()
+    spool = engine.spool
+    if when == "while it ran":
+        architect = consultation(spool)
+        foo = filed_kit(spool, name="foo", during=architect)
+        run(engine.on_event("job.held", job=foo))
+        run(engine.kit_refused(architect.id))
+        assert recorder.approved == [] and recorder.denied == []
+        assert not engine.state.paused, engine.state.stop_reason
+        architect = spool.transition(
+            architect, "done", verdict="VERDICT: next kit foo", result="VERDICT: next kit foo"
+        )
+        end_consultation(engine, architect)
+        assert [call["job"] for call in recorder.denied] == [foo.id]
+    else:
+        from hands.gates import decide
+
+        architect = consultation(spool, state="done", verdict="VERDICT: next kit foo")
+        foo = filed_kit(spool, name="foo", during=architect)
+        run(engine.on_event("job.held", job=foo))
+        assert [call["job"] for call in recorder.approved] == [foo.id]
+        assert foo.gate is not None
+        spool.transition(foo, "queued", gate=decide(foo.gate, decision="approved",
+                                                    decided_by="playbook", reason="r"))
+        recorder.approved.clear()
+        run(engine.kit_refused(architect.id))
+        run(engine.kit_refused(architect.id))  # a third attempt stops nothing twice
+        assert recorder.denied == []
+    said = _kits_escalated(engine, recorder, architect)
+    assert "at most one" in strip_paths(said), said
+    assert "one kit per consultation" in strip_paths(said), said
 
 
 # ---- §32: the kickoff follows only the engine's own approved kit apply
@@ -4335,8 +4455,13 @@ def test_a_second_kit_in_one_consultation_is_denied_and_the_consultation_escalat
     approved although the verdict was `next kit foo`. §33: at most one kit. Filed while
     the job ran, neither is decided before the verdict, and then both are denied — a
     consultation that broke the rule releases nothing. A second kit that arrives after
-    the first was approved (a race `Api.kit_file` does not rule out) is denied when it
-    is held. Either way the consultation ends `escalate`."""
+    the first was approved is denied when it
+    is held. Either way the consultation ends `escalate`.
+
+    §34: `Api.kit_file` now refuses a second kit before it is checked, so these two
+    kits are put into the spool directly; this binds the engine's own rule for a
+    spool that holds two (`test_a_second_kit_kit_file_refused_makes_the_consultation_
+    escalate` binds the path `kit_file` takes)."""
     engine, recorder = architect_engine(tmp_home, workdir)
     engine.sleep = Sleeps()
     spool = engine.spool
@@ -4794,9 +4919,11 @@ def test_end_to_end_next_kit_waits_for_the_apply_the_architect_filed(
         # minted, its zip and record stored under the spool naming this consultation.
         kit_id = apply_job["kit_id"]
         assert isinstance(kit_id, str) and len(kit_id) == 16, kit_id
+        filed_zip = (tmp_home / "filed-kits" / "mission-17-kit.zip").read_bytes()
         assert daemon.spool.read_kit_record(kit_id) == {
             "kit_id": kit_id, "name": "mission-17-kit", "consultation": architect["id"],
             "check": "pass",  # §33: handsd's own check of the stored bytes
+            "sha256": hashlib.sha256(filed_zip).hexdigest(),  # §34: of those bytes
         }
         assert refusals(tmp_home) == {}
         assert (daemon.spool.kit_dir(kit_id) / "mission-17-kit.zip").is_file()
@@ -4971,7 +5098,11 @@ def test_end_to_end_a_kit_the_rule_forbids_is_denied_and_the_consultation_escala
     approved), or files only `bar` under that verdict. §33: denied by the engine
     (`decided_by: playbook`), and the consultation ends `escalate` — the stop and its
     one notification carry the reason, the architect's session id and the `claude
-    --resume` line. Nothing is applied and no kickoff follows."""
+    --resume` line. Nothing is applied and no kickoff follows.
+
+    §34 changes the two-kit case: `bar` is refused by `kit_file` as "one kit per
+    consultation" before it is checked, so it is never filed; `foo`, the one kit
+    filed, is denied and the consultation escalates, as §33 requires."""
     architect_project(tmp_home, workdir, ntfy=True)
     kits = {"foo": passing_kit(), "bar": passing_kit()} if case == "two kits" else {
         "bar": passing_kit()
@@ -4995,13 +5126,18 @@ def test_end_to_end_a_kit_the_rule_forbids_is_denied_and_the_consultation_escala
         state = await wait_for_stop()
         await daemon.notifier.drain()
 
-        assert refusals(tmp_home) == {}, "the kits pass the check; handsd filed them"
+        refused = refusals(tmp_home)
+        if case == "two kits":  # §34: the second is refused before it is checked
+            assert sorted(refused) == ["bar"], refused
+            assert "one kit per consultation" in strip_paths(refused["bar"]), refused
+        else:
+            assert refused == {}, "the kit passes the check; handsd filed it"
         rows = sorted((await ok("jobs", "-n", "50"))["jobs"], key=lambda row: row["id"])
         assert [(row["role"], row["origin"]) for row in rows] == [
             ("aux", "cli"),
             (ARCHITECT, "playbook"),
-            *[("builder", "architect")] * len(kits),
-        ], "a kit was applied, or a kickoff followed"
+            ("builder", "architect"),
+        ], "a second kit was filed, a kit was applied, or a kickoff followed"
         architect = await ok("result", rows[1]["id"])
         for row in rows[2:]:
             _denied_by_the_engine(await ok("result", row["id"]))
@@ -5017,6 +5153,175 @@ def test_end_to_end_a_kit_the_rule_forbids_is_denied_and_the_consultation_escala
                 if e["payload"]["decision"] == "approved"] == []
 
     asyncio.run(scenario())
+
+
+class CheckKitCalls:
+    """`hands.api.check_kit`, counted: which kit names `kit_file` checked (§34's
+    "refused ... before it is checked"). `after` runs once the real check returns."""
+
+    def __init__(self, after: Callable[[Path], None] | None = None) -> None:
+        from hands.kit import check_kit
+
+        self.real = check_kit
+        self.names: list[str] = []
+        self.after = after
+
+    def __call__(self, path: Path, repo: Path, **kw: Any) -> Any:
+        self.names.append(path.stem)
+        report = self.real(path, repo, **kw)
+        if self.after is not None:
+            self.after(path)
+        return report
+
+
+def test_end_to_end_two_concurrent_kit_files_during_the_wait_check_and_file_one(
+    tmp_home: Path, workdir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """REVIEW-17 should-fix 2, the reviewer's probe: two `kit_file` of the same kit
+    as concurrent tasks during the `next kit` wait. Both were held and checked, one
+    was approved. §34: serialized per consultation — the first is checked, filed and
+    (its consultation over, its name the verdict's) approved; the second is refused
+    "one kit per consultation" and `check_kit` never runs for it; only one builder
+    apply exists; and the consultation ends `escalate` (§33)."""
+    import base64
+
+    architect_project(tmp_home, workdir)
+    script(tmp_home, monkeypatch, ["VERDICT: next kit mission-17-kit",
+                                   "VERDICT: kit applied abc1234"])
+    checks = CheckKitCalls()
+    monkeypatch.setattr("hands.api.check_kit", checks)
+
+    async def body(daemon: Daemon) -> None:
+        data = base64.b64encode(kit_zip(passing_kit())).decode()
+        both: list[asyncio.Future[list[Any]]] = []
+
+        async def sleep(delay: float) -> None:
+            # Two tasks of their own: a filed kit ends the wait (`kit_filed`), which
+            # cancels this sleep, and must not cancel the calls with it.
+            both.append(asyncio.gather(
+                daemon.api.kit_file(name="mission-17-kit", zip=data),
+                daemon.api.kit_file(name="mission-17-kit", zip=data),
+                return_exceptions=True,
+            ))
+            await asyncio.shield(both[0])
+
+        daemon.playbook.sleep = sleep
+        review = await ok("send", "--role", "aux", "--context", "clear", fake_result(REVIEW))
+        await ok("wait", review["id"])
+        state = await wait_for_stop()
+        outcomes = await both[0]
+
+        assert checks.names == ["mission-17-kit"], checks.names
+        filed = [outcome for outcome in outcomes if isinstance(outcome, dict)]
+        refused = [outcome for outcome in outcomes if isinstance(outcome, ApiError)]
+        assert len(filed) == 1 and len(refused) == 1, outcomes
+        assert "one kit per consultation" in strip_paths(str(refused[0])), refused
+        rows = sorted((await ok("jobs", "-n", "50"))["jobs"], key=lambda row: row["id"])
+        assert [row["id"] for row in rows if row["origin"] == "architect"] == [filed[0]["id"]]
+        assert ("builder", "playbook") not in [(row["role"], row["origin"]) for row in rows]
+        kits = list((daemon.spool.root / "kits").iterdir())
+        assert [kit.name for kit in kits] == [filed[0]["kit_id"]], kits
+        approved = [e["payload"]["job"] for e in await _events("gate.decided")
+                    if e["payload"]["decision"] == "approved"]
+        assert approved == [filed[0]["id"]], approved
+        said = strip_paths(state["stop_reason"])
+        assert "escalate" in strip_paths(said) and "at most one" in strip_paths(said), said
+
+    drive(body)
+
+
+def test_two_concurrent_kit_files_while_the_architect_runs_check_and_file_one(
+    tmp_home: Path, workdir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """REVIEW-17 should-fix 2, while the consultation runs: `foo` and `bar` as
+    concurrent `kit_file` tasks. §34: one is checked and filed (held, undecided until
+    the verdict); the other is refused "one kit per consultation" before `check_kit`
+    runs for it, and nothing of it is stored."""
+    import base64
+
+    from harness import close_consultation, open_consultation
+
+    architect_project(tmp_home, workdir)
+    checks = CheckKitCalls()
+    monkeypatch.setattr("hands.api.check_kit", checks)
+
+    async def body(daemon: Daemon) -> None:
+        data = base64.b64encode(kit_zip(passing_kit())).decode()
+        consulting = open_consultation(daemon)
+        try:
+            outcomes = await asyncio.gather(
+                daemon.api.kit_file(name="foo", zip=data),
+                daemon.api.kit_file(name="bar", zip=data),
+                return_exceptions=True,
+            )
+        finally:
+            close_consultation(daemon, consulting)
+        filed = [outcome for outcome in outcomes if isinstance(outcome, dict)]
+        refused = [outcome for outcome in outcomes if isinstance(outcome, ApiError)]
+        assert len(filed) == 1 and len(refused) == 1, outcomes
+        assert filed[0]["state"] == "held", filed
+        assert "one kit per consultation" in strip_paths(str(refused[0])), refused
+        assert consulting.id in strip_paths(str(refused[0])), refused
+        assert checks.names == [filed[0]["gate"]["reason"].removeprefix("apply ")], checks.names
+        jobs = [job for job in daemon.spool.list_jobs() if job.role == "builder"]
+        assert [job.id for job in jobs] == [filed[0]["id"]]
+        kits = list((daemon.spool.root / "kits").iterdir())
+        assert [kit.name for kit in kits] == [filed[0]["kit_id"]], kits
+
+    drive(body)
+
+
+def test_end_to_end_a_byte_flip_between_check_and_approval_is_refused_with_both_hashes(
+    tmp_home: Path, workdir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """REVIEW-17 should-fix 1, end to end: the kit filed during the `next kit` wait
+    passes `check_kit` on the stored bytes, and one byte of the stored zip flips right
+    after the check returns — before the engine decides the hold. §34: `kit.json`
+    holds the sha256 of the bytes handsd stored and checked; the engine re-hashes
+    at approval, refuses the mismatch with `kit.refused` carrying both hashes, and
+    stops; the apply stays held and nothing is approved."""
+    import base64
+
+    architect_project(tmp_home, workdir)
+    script(tmp_home, monkeypatch, ["VERDICT: next kit mission-17-kit"])
+    zipped = kit_zip(passing_kit())
+    flipped: list[str] = []
+
+    def flip(path: Path) -> None:
+        data = bytearray(path.read_bytes())
+        data[-1] ^= 0x01
+        path.write_bytes(bytes(data))
+        flipped.append(hashlib.sha256(bytes(data)).hexdigest())
+
+    monkeypatch.setattr("hands.api.check_kit", CheckKitCalls(after=flip))
+
+    async def body(daemon: Daemon) -> None:
+        data = base64.b64encode(zipped).decode()
+        filed: list[dict[str, Any]] = []
+
+        async def sleep(delay: float) -> None:
+            filed.append(await daemon.api.kit_file(name="mission-17-kit", zip=data))
+
+        daemon.playbook.sleep = sleep
+        review = await ok("send", "--role", "aux", "--context", "clear", fake_result(REVIEW))
+        await ok("wait", review["id"])
+        state = await wait_for_stop()
+
+        [job] = filed
+        recorded = hashlib.sha256(zipped).hexdigest()
+        record = daemon.spool.read_kit_record(job["kit_id"])
+        assert record is not None and record["sha256"] == recorded, record
+        [stored] = flipped
+        assert (await ok("result", job["id"]))["state"] == "held"
+        assert [e for e in await _events("gate.decided")
+                if e["payload"]["decision"] == "approved"] == []
+        [refused] = await _events("kit.refused")
+        assert refused["payload"]["recorded_sha256"] == recorded, refused
+        assert refused["payload"]["stored_sha256"] == stored, refused
+        said = strip_paths(state["stop_reason"])
+        assert recorded in strip_paths(said) and stored in strip_paths(said), said
+
+    drive(body)
 
 
 def test_end_to_end_series_complete_stops_with_that_reason(

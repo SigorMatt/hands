@@ -70,6 +70,7 @@ from hands.spool import (
     atomic_write,
     is_architect_reply,
     kit_apply_problem,
+    kits_filed_during,
     now_iso,
 )
 
@@ -1359,6 +1360,9 @@ class PlaybookEngine:
         #: task), for each `next kit` whose kit was not filed when the job ended.
         #: In memory: a daemon restart forgets a wait (see `_architect_end`).
         self._kit_waits: dict[str, tuple[str, asyncio.Task[None]]] = {}
+        #: §34: the consultations whose second `kit_file` was refused "one kit per
+        #: consultation" (`kit_refused`). In memory, like `_kit_waits`.
+        self._second_kits: set[str] = set()
 
     def daemon_start(self, started: str) -> None:
         """§29, §30: the daemon that owns this engine started at `started`.
@@ -1731,17 +1735,30 @@ class PlaybookEngine:
 
     def _kits_of(self, consulted: Job) -> list[tuple[Job, str]]:
         """§33: every apply of origin `architect` whose kit record names the
-        consultation `consulted`, oldest first, with the kit's name — whatever its
-        state, because "a consultation may file at most one kit" counts what it
-        filed, not what is still held."""
-        kits: list[tuple[Job, str]] = []
-        for record in self.spool.list_jobs():
-            if record.kit_id is None or record.origin != ARCHITECT_ORIGIN:
-                continue
-            kit = self.spool.read_kit_record(record.kit_id)
-            if kit is not None and kit["consultation"] == consulted.id:
-                kits.append((record, kit["name"]))
-        return kits
+        consultation `consulted` (`kits_filed_during`)."""
+        return kits_filed_during(self.spool, consulted.id)
+
+    async def kit_refused(self, consultation: str) -> None:
+        """§34: `Api.kit_file` refused a kit of `consultation` as "one kit per
+        consultation", before checking it, because the consultation has filed one.
+
+        §33's minimum stands: a consultation that tries to file a second kit ends
+        `escalate`. Remembered, so `_decide_kits` escalates when the consultation
+        ends; if it has ended already, it is decided now — its filed kit denied if
+        still held, and the pipeline stopped. Only the first refusal decides, so a
+        third attempt does not stop the pipeline again. Only under a playbook in
+        role mode with `autonomous`, as every decision of a consultation's kits is.
+        """
+        if consultation in self._second_kits:
+            return
+        self._second_kits.add(consultation)
+        await self._ensure_loaded()
+        book = self.playbook
+        consulted = self._job(consultation)
+        if book is None or not book.architect_is_autonomous or consulted is None:
+            return
+        if consulted.state in TERMINAL_STATES:
+            await self._decide_kits(consulted)
 
     async def _decide_kits(self, consulted: Job) -> bool:
         """§33: decide the kits an ended consultation filed. True when it escalated.
@@ -1764,6 +1781,11 @@ class PlaybookEngine:
         if len(kits) > 1:
             shown = ", ".join(repr(name) for name in names)
             why = f"it filed {len(kits)} kits ({shown}), and a consultation may file at most one"
+        elif consulted.id in self._second_kits:
+            why = (
+                f"it filed kit {names[0]!r} and then another, which `kit_file` refused as one "
+                "kit per consultation (§34), and a consultation may file at most one"
+            )
         elif named is None:
             why = (
                 f"it filed kit {names[0]!r}, and its reply is not a `VERDICT: next kit <name>` "
@@ -1795,6 +1817,8 @@ class PlaybookEngine:
             log.warning("playbook: %s is not approved (%s; §32)", job.id, problem)
             return
         where = _payload("job.held", job)
+        if not await self._kit_bytes_unchanged(job, where):
+            return
         if self.approve is None:  # pragma: no cover - wired by the daemon and the tests
             await self.stop(
                 f"job.held: {job.id} is the architect's apply under an autonomous playbook "
@@ -1817,6 +1841,40 @@ class PlaybookEngine:
         # carrying `decided_by: playbook` and the reason above — and, as today,
         # a gate decision notifies nobody (`daemon.NOTIFY_KINDS`).
         log.info("playbook: approved the architect's apply %s (decided_by: playbook, §31)", job.id)
+
+    async def _kit_bytes_unchanged(self, job: Job, where: dict[str, Any]) -> bool:
+        """§34: "engine approval re-hashes the stored zip and refuses a mismatch
+        (`kit.refused` with both hashes)". True when the stored zip's sha256 is the
+        one `kit.json` recorded for the bytes the check passed on. Otherwise the
+        engine files `kit.refused` with both hashes and stops, naming both — the stop
+        is the one notification, and the hold stays for the human."""
+        assert job.kit_id is not None  # `kit_apply_problem` accepted it
+        record = self.spool.read_kit_record(job.kit_id)
+        assert record is not None and "sha256" in record  # likewise
+        recorded = record["sha256"]
+        stored = await asyncio.to_thread(self.spool.stored_kit_sha256, job.kit_id, record["name"])
+        if stored == recorded:
+            return True
+        shown = stored if stored is not None else "unreadable"
+        self.spool.append_event(
+            "kit.refused",
+            {
+                "job": job.id,
+                "kit_id": job.kit_id,
+                "name": record["name"],
+                "consultation": record["consultation"],
+                "recorded_sha256": recorded,
+                "stored_sha256": stored,
+                "reason": "the stored zip is not the one the kit check passed on (§34)",
+            },
+        )
+        await self.stop(
+            f"job.held: the architect's apply {job.id} is not approved: the stored zip of "
+            f"kit_id {job.kit_id} has sha256 {shown}, and the kit check passed on sha256 "
+            f"{recorded} (§34); the hold is the human's",
+            where,
+        )
+        return False
 
     async def _escalate_kits(
         self, event: str, consulted: Job, filed: list[Job], why: str, stop: str | None

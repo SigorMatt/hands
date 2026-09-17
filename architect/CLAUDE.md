@@ -41,8 +41,9 @@ plan-only builder job that handsd creates when you file them.
    that fails is not filed; fix it or escalate.
 6. File with `hands kit file kits/<name>`. Then reply `VERDICT: next kit <name>`.
    File at most one kit per consultation, and name it exactly as your verdict
-   does: handsd checks the kit again itself, and a second kit or a kit of
-   another name is denied and the consultation escalates.
+   does: handsd checks the kit again itself and refuses a second kit before
+   checking it, a kit of another name is denied, and either way the
+   consultation escalates.
 7. When the roadmap's gates are all met and the review is clean, reply
    `VERDICT: series complete` and file nothing.
 8. Escalate, with `VERDICT: escalate <reason>` and no kit, when: the same

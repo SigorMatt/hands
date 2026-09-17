@@ -1033,7 +1033,9 @@ is an apply hands filed from a kit the architect role filed (§32): the builder
 apply `hands kit file` files, whose `kit_id` handsd minted and checked against
 the spool — the stored zip and its record naming the kit and the consultation
 it was filed during, and the passing check handsd itself ran on that zip (§33)
-— never by origin alone. A socket client cannot set `origin:
+— never by origin alone; the record holds the sha256 of the bytes that check
+passed on, and the engine re-hashes the stored zip when it approves, refusing a
+mismatch with `kit.refused` carrying both hashes and a stop (§34). A socket client cannot set `origin:
 architect` (`hands send` refuses it, naming §32), handsd takes `hands kit file`
 only while an architect consultation runs or the engine waits for its `next
 kit`, and any other hold stays held for you. A kit that fails `hands kit check`
@@ -1041,9 +1043,11 @@ is refused by handsd and never filed, so the engine never approves one (§33). A
 consultation may file at most one kit, named as its `VERDICT: next kit <name>`
 names it (§33): the kit is filed while the architect runs, before that verdict,
 so the engine decides the hold at the consultation's end (or at once, for a kit
-filed during the `next kit` wait); a second kit, or a kit of another name, is
-denied by the engine (`decided_by: playbook`) and the consultation ends
-`escalate`. `[series] kickoff` is sent when
+filed during the `next kit` wait). `hands kit file` calls are serialized per
+consultation, and a second kit is refused by handsd as "one kit per
+consultation" before it is checked (§34); a consultation that tried to file a
+second kit, or filed a kit of another name, ends `escalate`, and its kit, if
+still held, is denied by the engine (`decided_by: playbook`). `[series] kickoff` is sent when
 that apply, approved by the engine, replies `VERDICT: kit applied` — a rule the
 engine adds, which no playbook writes. What this cannot tell apart is another
 process of your user calling the socket during a consultation from the

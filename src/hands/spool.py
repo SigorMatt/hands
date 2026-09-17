@@ -20,6 +20,7 @@ synchronous IO with `os.replace` is enough; no locking is needed.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
@@ -57,6 +58,7 @@ __all__ = [
     "migrate_flat",
     "new_job_id",
     "kit_apply_problem",
+    "kits_filed_during",
     "new_kit_id",
     "resolve_kinds",
     "resolve_under_roots",
@@ -135,6 +137,8 @@ KIT_RECORD = "kit.json"
 KIT_CHECK_PASSED = "pass"
 #: `new_kit_id`'s shape: 16 lowercase hex digits.
 KIT_ID_RE = re.compile(r"[0-9a-f]{16}")
+#: §34: `kit.json`'s `sha256`: 64 lowercase hex digits, as `hashlib` writes them.
+SHA256_RE = re.compile(r"[0-9a-f]{64}")
 
 # §11 event kinds. Closed on purpose: a unit that needs a new kind adds it here,
 # where `hands wait --for <kind>` and the playbook can see it.
@@ -168,7 +172,8 @@ EVENT_KINDS = frozenset(
         "heartbeat",
         "notify",  # a notification hands could not deliver (§11, U8)
         "kit.received",  # a kit sent from the phone was written to kit_dir (§26)
-        "kit.refused",  # a kit command with the secret was refused, with the check (§27)
+        "kit.refused",  # a kit command with the secret was refused, with the check (§27);
+        # or (§34) the engine refused a kit whose stored zip no longer has its recorded sha256
         "consult.sent",  # a playbook `consult` started a driver job (§27)
         "consult.done",  # that driver job ended, with its verdict line (§27)
         # §29: `hands migrate-spool` moved the flat layout into this spool. The name
@@ -496,17 +501,26 @@ class Spool:
             os.fsync(out.fileno())
         return path
 
-    def record_kit(self, kit_id: str, *, name: str, consultation: str, check: str) -> None:
-        """§32, §33: the record of a stored kit — its id, its name, the architect job
-        it was filed during (`consultation`), and the result of the kit check handsd
-        ran on the stored zip (`check`, `KIT_CHECK_PASSED` when it passed). The
-        engine reads it back (`kit_apply_problem`)."""
-        record = {"kit_id": kit_id, "name": name, "consultation": consultation, "check": check}
+    def record_kit(
+        self, kit_id: str, *, name: str, consultation: str, check: str, sha256: str
+    ) -> None:
+        """§32, §33, §34: the record of a stored kit — its id, its name, the architect
+        job it was filed during (`consultation`), the result of the kit check handsd
+        ran on the stored zip (`check`, `KIT_CHECK_PASSED` when it passed), and the
+        sha256 of the bytes that check was run on (`sha256`). The engine reads it back
+        (`kit_apply_problem`, and the re-hash at approval, `stored_kit_sha256`)."""
+        record = {
+            "kit_id": kit_id, "name": name, "consultation": consultation, "check": check,
+            "sha256": sha256,
+        }
         atomic_write(self.kit_dir(kit_id) / KIT_RECORD, json.dumps(record, sort_keys=True))
 
     def read_kit_record(self, kit_id: str) -> dict[str, Any] | None:
         """The record `store_kit` wrote for `kit_id`, or None when there is none that
-        reads as one (a bad id, no file, not JSON, a field missing or not a string)."""
+        reads as one (a bad id, no file, not JSON, a field missing or not a string,
+        a field that is not a record's). `sha256` may be missing — a record without
+        it reads, so the kit is still counted against its consultation, and
+        `kit_apply_problem` refuses it (§34)."""
         try:
             data = json.loads((self.kit_dir(kit_id) / KIT_RECORD).read_text(encoding="utf-8"))
         except (SpoolError, OSError, ValueError):
@@ -514,9 +528,23 @@ class Spool:
         if not isinstance(data, dict):
             return None
         keys = ("kit_id", "name", "consultation", "check")
-        if sorted(data) != sorted(keys) or not all(isinstance(data[key], str) for key in keys):
+        if not set(keys) <= set(data) <= {*keys, "sha256"}:
+            return None
+        if not all(isinstance(value, str) for value in data.values()):
             return None
         return data
+
+    def stored_kit_sha256(self, kit_id: str, name: str) -> str | None:
+        """§34: the sha256 of the zip stored for `kit_id` now, or None when it cannot
+        be read."""
+        digest = hashlib.sha256()
+        try:
+            with (self.kit_dir(kit_id) / f"{name}.zip").open("rb") as stored:
+                for chunk in iter(lambda: stored.read(1 << 20), b""):
+                    digest.update(chunk)
+        except (SpoolError, OSError):
+            return None
+        return digest.hexdigest()
 
     # ---------------------------------------------------------------- jobs
 
@@ -842,7 +870,9 @@ def kit_apply_problem(spool: Spool, job: Job) -> str | None:
     is one when it is a builder job of origin `architect` whose gate is `apply
     <name>`, whose `kit_id` has `new_kit_id`'s shape, whose record `kits/<kit_id>/
     kit.json` names that id and that `<name>`, whose record says the kit check handsd
-    ran on the stored zip passed (§33), whose `<name>.zip` is stored beside it, whose
+    ran on the stored zip passed (§33) and holds the sha256 of the bytes it passed on
+    (§34; compared with the stored zip at approval, not here), whose `<name>.zip` is
+    stored beside it, whose
     record names an architect job in the spool as the consultation it was filed
     during, and no other job carries that `kit_id`. It judges the record, not the
     job's state: the caller asks for `held` or `done`. Whether the consultation's
@@ -867,6 +897,8 @@ def kit_apply_problem(spool: Spool, job: Job) -> str | None:
         return f"kit_id {job.kit_id} was filed as kit {record['name']!r}, not {name!r}"
     if record["check"] != KIT_CHECK_PASSED:
         return f"the record of kit_id {job.kit_id} holds no passing kit check (§33)"
+    if not isinstance(record.get("sha256"), str) or not SHA256_RE.fullmatch(record["sha256"]):
+        return f"the record of kit_id {job.kit_id} holds no sha256 of the checked zip (§34)"
     if not (spool.kit_dir(job.kit_id) / f"{name}.zip").is_file():
         return f"the zip of kit_id {job.kit_id} is not stored"
     try:
@@ -880,3 +912,19 @@ def kit_apply_problem(spool: Spool, job: Job) -> str | None:
     if others:
         return f"kit_id {job.kit_id} is carried by another job too ({', '.join(others)})"
     return None
+
+
+def kits_filed_during(spool: Spool, consultation: str) -> list[tuple[Job, str]]:
+    """§33, §34: every apply of origin `architect` whose kit record names the
+    consultation `consultation`, oldest first, with the kit's name — whatever its
+    state, because "one kit per consultation" counts what it filed, not what is
+    still held. `Api.kit_file` asks it before a kit is checked; the engine when it
+    decides a consultation's kits."""
+    kits: list[tuple[Job, str]] = []
+    for record in spool.list_jobs():
+        if record.kit_id is None or record.origin != ARCHITECT_ORIGIN:
+            continue
+        kit = spool.read_kit_record(record.kit_id)
+        if kit is not None and kit["consultation"] == consultation:
+            kits.append((record, kit["name"]))
+    return kits

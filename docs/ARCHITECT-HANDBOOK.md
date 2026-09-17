@@ -358,8 +358,10 @@ under; read it there rather than here. What changes for you:
   file is a kit that runs.
 - **One kit per consultation, under the name your verdict gives.** File at most
   one kit, and reply `VERDICT: next kit <name>` with exactly its name. A second
-  kit, or a kit whose name your verdict does not state, is denied by the engine
-  and your consultation ends `escalate` (DESIGN §33).
+  `hands kit file` in the same consultation is refused by handsd as "one kit per
+  consultation" before it is checked (DESIGN §34); a kit whose name your verdict
+  does not state is denied by the engine; either way your consultation ends
+  `escalate` (DESIGN §33).
 - **One verdict line, and it is read by the engine, not by a rule.** Reply with
   exactly one of `VERDICT: next kit <name>`, `VERDICT: series complete` or
   `VERDICT: escalate <reason>`. File the kit *before* you reply `next kit`:
