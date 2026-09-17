@@ -1244,11 +1244,14 @@ def test_no_shipped_file_tells_a_human_to_run_an_un_templated_unit() -> None:
 
 def test_the_integration_doc_says_doctor_judges_every_bash_hook() -> None:
     """§31 (review 14 should-fix 3): the `role driver` row's rule, in the doc a
-    human reads — every `PreToolUse` Bash hook, and only the Bash ones."""
+    human reads — every `PreToolUse` Bash hook; §33 (review 16 should-fix 4): a
+    write-tool entry is judged too, as the write matcher, and both settings files
+    are read."""
     text = flattened((ROOT / "docs" / "INTEGRATION.md").read_text(encoding="utf-8"))
     for said in (
         "judges every `PreToolUse` hook whose matcher selects `Bash`, not only the first",
-        "is not a Bash hook and is not judged",
+        "is not a Bash hook; it is judged as the architect's write matcher is",
+        "`.claude/settings.json` and `.claude/settings.local.json`",
     ):
         assert said in text, f"docs/INTEGRATION.md does not say {said!r} (§31)"
 

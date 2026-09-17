@@ -104,9 +104,18 @@ WRITE_FLAG = "--write"
 WRITE_TOOLS: tuple[str, ...] = ("Write", "Edit", "MultiEdit")
 #: §31, §32: the push URL driver/README.md and architect/README.md give the clone.
 NO_PUSH = "no_push"
-#: §32 (review 15 should-fix 6): tools a settings file must not allow wholesale —
-#: bare, or as `Tool(*)` — in a guarded role's directory.
+#: §32 (review 15 should-fix 6), §33: tools a settings file must not allow
+#: wholesale — bare, or with a specifier of wildcards alone — in a guarded role's
+#: directory.
 WHOLESALE_TOOLS: tuple[str, ...] = ("Bash", "Write", "Edit", "MultiEdit")
+#: §33 (review 16 should-fix 4): the settings files Claude Code merges in a project
+#: directory, both read — the first must exist, the second may not.
+SETTINGS_FILES: tuple[str, ...] = ("settings.json", "settings.local.json")
+#: §33: the matchers the guard's entries carry, exactly as the kits ship them.
+BASH_MATCHER = "Bash"
+WRITE_MATCHER = "Write|Edit|MultiEdit"
+#: §33: permission modes that let a guarded tool call past the permission prompt.
+BYPASS_MODES: tuple[str, ...] = ("bypassPermissions", "acceptEdits")
 #: §30: a hook command containing any of these (outside the two
 #: `$CLAUDE_PROJECT_DIR` spellings) is more than `python3 <guard>` to a shell.
 _HOOK_SHELL_CHARS = frozenset(";&|<>`()\\*?[]{}!~#$\n\r")
@@ -462,11 +471,18 @@ def _driver_check(config: Config) -> Check:
     built without the loader. The clone is `<cwd>/repo`, where driver/README.md
     puts it, or `<cwd>` itself when that is the git repository; missing, it warns.
 
-    §28: the row proves the wiring, and fails otherwise: `<cwd>/.claude/settings.json`
-    names the hook (a `PreToolUse` entry whose matcher selects `Bash` and whose
-    command is exactly `python3 <.claude/hooks/bash_guard.py>`, §30, with hooks
-    not disabled), and that hook file self-tests green (`--selftest`, exit 0) run
-    with the role's own environment, so with `HANDS_ROLE=driver`.
+    §28: the row proves the wiring, and fails otherwise: the settings name the hook
+    (a `PreToolUse` entry whose matcher is exactly `Bash` and whose command is
+    exactly `python3 <.claude/hooks/bash_guard.py>`, §30, with hooks not disabled),
+    and that hook file self-tests green (`--selftest`, exit 0) run with the role's
+    own environment, so with `HANDS_ROLE=driver`.
+
+    §33 (review 16 should-fix 4): the settings are `.claude/settings.json` and
+    `.claude/settings.local.json`, the two Claude Code merges in the project
+    directory, both read (`_load_settings`); a matcher that could select a guarded
+    tool must be the guard's exact one; every remote's push is disabled
+    (`_push_disabled`); and the row ends with the `verified:` lines — what it read
+    and found, resolved.
     """
     name = f"role {DRIVER_ROLE}"
     role = config.roles.get(DRIVER_ROLE)
@@ -489,33 +505,39 @@ def _driver_check(config: Config) -> Check:
         return Check(name, FAIL, f"cwd {role.cwd} does not exist; §27 [roles.driver] cwd")
     warnings: list[str] = []
     failures: list[str] = []
-    found = driver_clone(role.cwd)  # §29: the same path the job gets as HANDS_CLONE
-    if found is not None:
-        clone = f"clone {found}"
-        push, disabled = _push_disabled(found)  # §32: the architect's check, the same code
-        clone += f"\n{push}"
-        if not disabled:
-            failures.append(push)
-    else:
-        clone = f"no clone: neither {role.cwd / 'repo'} nor {role.cwd} is a git repository"
-        warnings.append(clone)
+    verified: list[str] = []
+    clone = _clone_lines(role.cwd, failures, warnings, verified)
 
     settings_path = role.cwd / ".claude" / "settings.json"
-    named, problem = _settings_name_the_guard(settings_path, role.cwd)
+    loaded = _load_settings(role.cwd)
+    if loaded.problem is None:
+        verified.append(f"settings read {', '.join(loaded.read)}")
+    named, problem, command = _settings_name_the_guard(loaded, role.cwd)
     if problem is None:
         settings = f"settings {settings_path} names the hook"
+        verified.append(_hook_verified("Bash", BASH_MATCHER, command, named))
     else:
         settings = (
             f"settings {settings_path} does not name the hook ({problem}): copy "
             "driver/settings.json again (§28)"
         )
         failures.append(settings)
-    wholesale = _settings_allow_wholesale(settings_path)  # §32
+    wholesale = _settings_allow_wholesale(loaded)  # §32, §33
     if wholesale is not None:
         settings += (
             f"\nsettings {settings_path}: {wholesale}; copy driver/settings.json again"
         )
         failures.append(wholesale)
+    # §33: the driver ships no write matcher; one that is there is judged as the
+    # architect's is, so a write hook that is not the guard fails here too.
+    write_named, write_problem, _ = _settings_name_the_write_guard(
+        loaded, role.cwd, required=False
+    )
+    if write_problem is None:
+        write_problem = _same_guard(named, write_named)
+    if write_problem is not None:
+        settings += f"\nwrite matcher ({write_problem}): copy driver/settings.json again (§33)"
+        failures.append(write_problem)
 
     # §29: the self-test runs on the file the settings name, not on a default path;
     # only when they name none is the default the one reported.
@@ -531,6 +553,7 @@ def _driver_check(config: Config) -> Check:
         f"{role.cwd}  model {role.model}; permission_flags (none)"
         f"\n{clone}\n{settings}\n{guard}"
         f"\nguard mode: role mode ({mode} in every driver-role job's environment; §27)"
+        + "".join(f"\nverified: {line}" for line in verified)
     )
     status = FAIL if failures else WARN if warnings else OK
     return Check(name, status, detail)
@@ -545,20 +568,21 @@ def _architect_check(config: Config) -> Check:
 
     - `kits/` beside the clone. The runner sets `HANDS_KITS` to `<cwd>/kits`;
       §32 (review 15 should-fix 6) has the row check that it exists and resolves
-      under the cwd, so a missing one, or one that is a link to elsewhere, fails.
-    - a **second** `PreToolUse` matcher: `Write|Edit|MultiEdit` running the guard
-      with `--write` (§31). It is judged with the rigour U2 gave the Bash hook —
-      every entry that selects a writing tool must run exactly `python3 <guard>
-      --write`, and each of `Write`, `Edit` and `MultiEdit` must be selected by
-      one of them — because a write hook that is not the guard is the architect
-      writing wherever it likes, which is the whole of what confines the role.
+      under the cwd. §33 (review 16 should-fix 2, 3): it is not a symlink (a link
+      to `.claude` put the role's own settings under it), nothing under it is one
+      (the guard refuses `cp` and `mv` while one is), and no path this row checks —
+      `.claude`, its hooks directory, either settings file, either guard file, the
+      clone — resolves under it, where a Write call could change it.
+    - a **second** `PreToolUse` matcher: exactly `Write|Edit|MultiEdit`, running the
+      guard with `--write` (§31). Every entry whose matcher could select a writing
+      tool must be that one, running exactly `python3 <guard> --write`, because a
+      write hook that is not the guard is the architect writing wherever it likes.
 
     §32 adds, to both this row and the driver's where they share code: the clone's
-    push URL is disabled (`_push_disabled`); every hook under either matcher is a
-    command hook (`_not_a_command_hook`); no permission setting allows a guarded
-    tool wholesale (`_settings_allow_wholesale`); and here, both matchers run the
-    same guard file, the one self-tested with `HANDS_ROLE=architect` and
-    `HANDS_KITS` set.
+    push URL is disabled (`_push_disabled`); every hook under `PreToolUse` is a
+    command hook; no permission setting allows a guarded tool wholesale
+    (`_settings_allow_wholesale`); and here, both matchers run the same guard file,
+    the one self-tested with `HANDS_ROLE=architect` and `HANDS_KITS` set.
     """
     name = f"role {ARCHITECT_ROLE}"
     role = config.roles.get(ARCHITECT_ROLE)
@@ -581,76 +605,76 @@ def _architect_check(config: Config) -> Check:
         return Check(name, FAIL, f"cwd {role.cwd} does not exist; §31 [roles.architect] cwd")
     warnings: list[str] = []
     failures: list[str] = []
-    found = driver_clone(role.cwd)  # §31: the same path the job gets as HANDS_CLONE
-    if found is not None:
-        clone = f"clone {found}"
-        push, disabled = _push_disabled(found)  # §32 (a)
-        clone += f"\n{push}"
-        if not disabled:
-            failures.append(push)
-    else:
-        clone = f"no clone: neither {role.cwd / 'repo'} nor {role.cwd} is a git repository"
-        warnings.append(clone)
+    verified: list[str] = []
+    clone = _clone_lines(role.cwd, failures, warnings, verified)
 
     # The runner's own expression (`hands.runner.job_env`), so the row names the
-    # path the job really gets as `HANDS_KITS`. §32 (b): it exists, and is under
-    # the cwd once both are resolved.
+    # path the job really gets as `HANDS_KITS`.
     kits_dir = role.cwd / "kits"
-    if not kits_dir.is_dir():
-        kits = (
-            f"no kits directory at {kits_dir}: {KITS_ENV} names it, and §32 asks that it "
-            "exist under the cwd; `mkdir -p` it (architect/README.md)"
+    kits, kits_ok = _kits_line(kits_dir, role.cwd)
+    if kits_ok:
+        verified.append(
+            f"kits realpath {os.path.realpath(kits_dir)}, not a symlink, and no symlink under it"
         )
-        failures.append(kits)
-    elif not _under_realpath(kits_dir, role.cwd):
-        kits = (
-            f"kits {kits_dir} resolves to {os.path.realpath(kits_dir)}, not under "
-            f"{os.path.realpath(role.cwd)}: {KITS_ENV} must be a directory under the "
-            "role's cwd (§32)"
-        )
-        failures.append(kits)
     else:
-        kits = f"kits {kits_dir}"
+        failures.append(kits)
 
     settings_path = role.cwd / ".claude" / "settings.json"
-    named, problem = _settings_name_the_guard(settings_path, role.cwd)
+    loaded = _load_settings(role.cwd)
+    if loaded.problem is None:
+        verified.append(f"settings read {', '.join(loaded.read)}")
+    named, problem, command = _settings_name_the_guard(loaded, role.cwd)
     if problem is None:
         settings = f"settings {settings_path} names the hook"
+        verified.append(_hook_verified("Bash", BASH_MATCHER, command, named))
     else:
         settings = (
             f"settings {settings_path} does not name the hook ({problem}): copy "
             "architect/settings.json again (§31)"
         )
         failures.append(settings)
-    wholesale = _settings_allow_wholesale(settings_path)  # §32
+    wholesale = _settings_allow_wholesale(loaded)  # §32, §33
     if wholesale is not None:
         settings += (
             f"\nsettings {settings_path}: {wholesale}; copy architect/settings.json again"
         )
         failures.append(wholesale)
 
-    write_named, write_problem = _settings_name_the_write_guard(settings_path, role.cwd)
-    if (
-        write_problem is None
-        and named is not None
-        and write_named is not None
-        and os.path.realpath(named) != os.path.realpath(write_named)
-    ):
-        # §32 (c): both matchers name *the* guard — one file, the one self-tested.
-        write_problem = (
-            f"the Bash hook runs {named} and the write hook runs {write_named}: both must "
-            "run the same guard file"
-        )
+    write_named, write_problem, write_command = _settings_name_the_write_guard(
+        loaded, role.cwd, required=True
+    )
+    if write_problem is None:
+        write_problem = _same_guard(named, write_named)  # §32 (c)
     if write_problem is None:
         write = f"write matcher: {', '.join(WRITE_TOOLS)} run the guard with {WRITE_FLAG}"
+        verified.append(_hook_verified("write", WRITE_MATCHER, write_command, write_named))
     else:
         write = (
             f"write matcher ({write_problem}): every PreToolUse hook for "
             f"{', '.join(WRITE_TOOLS)} must be exactly `{GUARD_INTERPRETER} <path to "
-            f"{GUARD_HOOK}> {WRITE_FLAG}`, and all three must be judged; copy "
-            "architect/settings.json again (§31)"
+            f"{GUARD_HOOK}> {WRITE_FLAG}` under the matcher {WRITE_MATCHER!r}, and all "
+            "three must be judged; copy architect/settings.json again (§31, §33)"
         )
         failures.append(write)
+
+    # §33: nothing this row checks may resolve under kits, where the role writes.
+    checked = [
+        role.cwd / ".claude",
+        role.cwd / ".claude" / "hooks",
+        *(role.cwd / ".claude" / file for file in SETTINGS_FILES),
+        *(path for path in (named, write_named, driver_clone(role.cwd)) if path is not None),
+    ]
+    exposed = [
+        path for path in checked
+        if (path.exists() or path.is_symlink()) and _under_realpath(path, kits_dir)
+    ]  # fmt: skip
+    if kits_dir.exists() and exposed:
+        inside = (
+            f"{exposed[0]} resolves to {os.path.realpath(exposed[0])}, under kits "
+            f"{os.path.realpath(kits_dir)}: the architect's writes would reach it (§33)"
+        )
+        kits += f"\n{inside}"
+        failures.append(inside)
 
     # §29: the self-test runs on the file the settings name, not on a default path.
     hook = named if named is not None else role.cwd / GUARD_HOOK
@@ -670,9 +694,87 @@ def _architect_check(config: Config) -> Check:
         f"\n{clone}\n{kits}\n{settings}\n{write}\n{guard}"
         f"\nguard mode: architect mode ({mode} in every architect-role job's environment; "
         f"§31), and every write confined to {KITS_ENV}={kits_dir}"
+        + "".join(f"\nverified: {line}" for line in verified)
     )
     status = FAIL if failures else WARN if warnings else OK
     return Check(name, status, detail)
+
+
+def _clone_lines(
+    cwd: Path, failures: list[str], warnings: list[str], verified: list[str]
+) -> str:
+    """The clone's lines of a role row (§29, §31, §32, §33), shared by both rows."""
+    found = driver_clone(cwd)  # §29, §31: the same path the job gets as HANDS_CLONE
+    if found is None:
+        clone = f"no clone: neither {cwd / 'repo'} nor {cwd} is a git repository"
+        warnings.append(clone)
+        return clone
+    push, disabled, shown = _push_disabled(found)
+    if disabled:
+        verified.append(shown)
+    else:
+        failures.append(push)
+    return f"clone {found}\n{push}"
+
+
+def _kits_line(kits_dir: Path, cwd: Path) -> tuple[str, bool]:
+    """§32, §33: the architect's kits line, and whether it holds.
+
+    `kits` exists, is not a symlink, resolves under the cwd, and nothing under it
+    (walked, links not followed) is a symlink.
+    """
+    real, base = os.path.realpath(kits_dir), os.path.realpath(cwd)
+    if kits_dir.is_symlink():
+        where = "" if _under_realpath(kits_dir, cwd) else f", not under {base}"
+        return (
+            f"kits {kits_dir} is a symlink resolving to {real}{where}: {KITS_ENV} must be "
+            "a plain directory under the role's cwd, and the guard refuses every "
+            "architect write through a link (§32, §33)",
+            False,
+        )
+    if not kits_dir.is_dir():
+        return (
+            f"no kits directory at {kits_dir}: {KITS_ENV} names it, and §32 asks that it "
+            "exist under the cwd; `mkdir -p` it (architect/README.md)",
+            False,
+        )
+    if not _under_realpath(kits_dir, cwd):
+        return (
+            f"kits {kits_dir} resolves to {real}, not under {base}: {KITS_ENV} must be a "
+            "directory under the role's cwd (§32)",
+            False,
+        )
+    for top, dirs, files in os.walk(kits_dir, followlinks=False):
+        for entry in sorted(dirs) + sorted(files):
+            path = os.path.join(top, entry)
+            if os.path.islink(path):
+                return (
+                    f"kits {kits_dir} holds a symlink, {path} -> {os.readlink(path)}: the "
+                    "guard refuses cp and mv until it is gone, and nothing the architect "
+                    "runs made it (§33)",
+                    False,
+                )
+    return f"kits {kits_dir}", True
+
+
+def _hook_verified(kind: str, matcher: str, command: str | None, named: Path | None) -> str:
+    """§33: one `verified:` line for a guard hook — matcher, command, resolved file."""
+    real = os.path.realpath(named) if named is not None else "(none)"
+    return f"{kind} hook, matcher {matcher!r}, runs {command!r} (guard realpath {real})"
+
+
+def _same_guard(named: Path | None, write_named: Path | None) -> str | None:
+    """§32 (c): both matchers name *the* guard — one file, the one self-tested."""
+    if (
+        named is not None
+        and write_named is not None
+        and os.path.realpath(named) != os.path.realpath(write_named)
+    ):
+        return (
+            f"the Bash hook runs {named} and the write hook runs {write_named}: both must "
+            "run the same guard file"
+        )
+    return None
 
 
 def _guard_selftest(
@@ -707,9 +809,87 @@ def _guard_selftest(
     )
 
 
-def _settings_name_the_guard(path: Path, cwd: Path) -> tuple[Path | None, str | None]:
-    """The hook file `path` wires as a `PreToolUse` command hook for `Bash` (§28,
-    §29, §30), and None; or None and why not, in a few words.
+@dataclass(frozen=True)
+class _Settings:
+    """§33: the settings files of a role's directory, as Claude Code merges them.
+
+    `loaded` is each file that exists, with its JSON object; `read` names every
+    file for the `verified:` line (`<path>`, `<path> -> <realpath>`, or `<path>
+    (absent)`); `problem` is why they cannot be judged, or None.
+    """
+
+    loaded: list[tuple[Path, dict[str, Any]]]
+    read: list[str]
+    problem: str | None
+
+
+def _load_settings(cwd: Path) -> _Settings:
+    """`<cwd>/.claude/settings.json` (required) and `settings.local.json` (optional),
+    each a JSON object (§28, §33). An unreadable local file is a problem, not an
+    absence: Claude Code would still try to merge it."""
+    loaded: list[tuple[Path, dict[str, Any]]] = []
+    read: list[str] = []
+    for index, file in enumerate(SETTINGS_FILES):
+        path = cwd / ".claude" / file
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            if index == 0:
+                return _Settings(loaded, read, "no such file")
+            read.append(f"{path} (absent)")
+            continue
+        except (OSError, ValueError) as exc:
+            return _Settings(loaded, read, f"{path} is not readable JSON: {type(exc).__name__}")
+        if not isinstance(data, dict):
+            return _Settings(loaded, read, f"{path} is not a JSON object")
+        real = os.path.realpath(path)
+        read.append(str(path) if real == str(path) else f"{path} -> {real}")
+        loaded.append((path, data))
+    return _Settings(loaded, read, None)
+
+
+def _pretooluse(settings: _Settings) -> tuple[list[tuple[Path, Any]] | None, str | None]:
+    """The `hooks.PreToolUse` entries of every settings file, each with its file, or
+    None and why there are none to judge (§28, §30, §33).
+
+    §33: `"disableAllHooks"` set to anything but false in either file runs no hook;
+    an entry that is not an object, a `hooks` that is not a list, and any hook
+    anywhere under `PreToolUse` that is not a command hook (`type: prompt`, `http`,
+    none) fail, whatever its matcher — a second answer to a tool call, not the
+    guard's.
+    """
+    if settings.problem is not None:
+        return None, settings.problem
+    entries: list[tuple[Path, Any]] = []
+    for path, data in settings.loaded:
+        if data.get("disableAllHooks") not in (None, False):
+            return None, f'"disableAllHooks" is set in {path}, so no hook runs'
+        hooks = data.get("hooks")
+        if hooks is None:
+            continue
+        found = hooks.get("PreToolUse") if isinstance(hooks, dict) else None
+        if found is None and isinstance(hooks, dict):
+            continue
+        if not isinstance(found, list):
+            return None, f"hooks.PreToolUse in {path} is not a list"
+        for entry in found:
+            if not isinstance(entry, dict) or not isinstance(entry.get("hooks"), list):
+                return None, f"a PreToolUse entry in {path} is not a matcher and a hook list"
+            for hook in entry["hooks"]:
+                other = _not_a_command_hook(hook)
+                if other is not None:
+                    return None, f"{other} (in {path})"
+            entries.append((path, entry))
+    if not entries:
+        return None, "no hooks.PreToolUse"
+    return entries, None
+
+
+def _settings_name_the_guard(
+    settings: _Settings, cwd: Path
+) -> tuple[Path | None, str | None, str | None]:
+    """The hook file the settings wire as the `PreToolUse` command hook for `Bash`
+    (§28, §29, §30), None, and its command; or None, why not, and None.
 
     §30: the command must run the file *as the guard*. `shlex` splits it into
     exactly two words, `python3` (the interpreter driver/settings.json ships) and
@@ -718,101 +898,107 @@ def _settings_name_the_guard(path: Path, cwd: Path) -> tuple[Path | None, str | 
     `${CLAUDE_PROJECT_DIR}`) standing for `cwd` and a relative path read against
     `cwd`, where Claude Code runs the hook. Any other `$`, a shell operator,
     redirection, glob, escape or newline anywhere in the command, a further
-    argument (`--selftest`), or another interpreter does not run the guard, and
-    `"disableAllHooks"` set to anything but false runs no hook at all.
+    argument (`--selftest`), or another interpreter does not run the guard.
 
-    §31 (review 14 should-fix 3): *every* `PreToolUse` hook whose matcher selects
-    `Bash` is judged, and one that is not the guard fails the row — settings
-    carrying the real guard plus a second Bash hook answering `allow` used to pass,
-    because the first hook that ran a guard returned. Entries whose matcher does
-    not select `Bash` (the architect's `Write|Edit|MultiEdit` hook, §31) are not
-    Bash hooks and are not judged. With several Bash hooks that all run a guard
-    file, the first is the one self-tested."""
-    entries, unreadable = _pretooluse(path)
+    §31 (review 14 should-fix 3): *every* `PreToolUse` hook for `Bash` is judged.
+    §33 (review 16 should-fix 4): "for `Bash`" is read broadly — every entry whose
+    matcher *could* select Bash (`_may_select`: absent, empty, `*`, an alternative
+    equal to `Bash` in any case, or a regular expression that finds `Bash`
+    unanchored and case-insensitively, or one that does not compile) — and such an
+    entry's matcher must be exactly `Bash`, the shipped one. With several Bash
+    hooks that all run the guard file, the first is the one self-tested."""
+    entries, unreadable = _pretooluse(settings)
     if entries is None:
-        return None, unreadable
-    guards: list[Path] = []
+        return None, unreadable, None
+    guards: list[tuple[Path, str]] = []
     offenders: list[str] = []
-    for entry in entries:
-        if not isinstance(entry, dict) or not _matches_bash(entry.get("matcher")):
+    for path, entry in entries:
+        matcher = entry.get("matcher")
+        if not _may_select(matcher, "Bash"):
             continue
-        for hook in entry.get("hooks") or []:
-            other = _not_a_command_hook(hook)
-            if other is not None:
-                return None, other
+        if matcher != BASH_MATCHER:
+            return None, (
+                f"the matcher {matcher!r} in {path} could select Bash and is not exactly "
+                f"{BASH_MATCHER!r}: the guard's entry is the only one that selects Bash, "
+                "under that matcher (§33)"
+            ), None
+        for hook in entry["hooks"]:
             command: str = hook["command"]
             named = _guard_command_path(command, cwd)
             if named is None:
                 offenders.append(command)
             else:
-                guards.append(named)
+                guards.append((named, command))
     if offenders:
         return None, (
             f"the hook command {offenders[0]!r} does not run the guard: every PreToolUse "
             f"Bash hook must be exactly `{GUARD_INTERPRETER} <path to {GUARD_HOOK}>` (§31)"
-        )
+        ), None
     if not guards:
-        return None, f"no PreToolUse command hook for Bash runs {GUARD_HOOK}"
-    if len({os.path.realpath(guard) for guard in guards}) > 1:
+        return None, f"no PreToolUse command hook for Bash runs {GUARD_HOOK}", None
+    if len({os.path.realpath(guard) for guard, _ in guards}) > 1:
         return None, (
             "the PreToolUse Bash hooks run more than one guard file (§32: the same guard file)"
-        )
-    return guards[0], None
+        ), None
+    return guards[0][0], None, guards[0][1]
 
 
-def _settings_name_the_write_guard(path: Path, cwd: Path) -> tuple[Path | None, str | None]:
-    """§31: the architect's second matcher — `Write|Edit|MultiEdit` running
-    `python3 <guard> --write` — and the guard file it names; or None and why not.
+def _settings_name_the_write_guard(
+    settings: _Settings, cwd: Path, *, required: bool
+) -> tuple[Path | None, str | None, str | None]:
+    """§31: the architect's second matcher — exactly `Write|Edit|MultiEdit`, running
+    `python3 <guard> --write` — the guard file it names, None, and its command; or
+    None, why not, and None.
 
     The Bash rule of `_settings_name_the_guard`, applied to the tools that write:
-    *every* `PreToolUse` hook whose matcher selects one of `WRITE_TOOLS` must be
-    exactly the guard with `--write` (one that is not is a second answer to the
-    same tool call), and each of the three must be selected by one of them (a
-    matcher naming only `Write` leaves `Edit` and `MultiEdit` unjudged, and the
-    architect edits a file it has already written). A matcher that selects
-    everything (`*`) selects Bash too, where the guard takes no `--write`; such a
-    hook cannot satisfy both rules, and failing is the safe direction.
+    every entry whose matcher could select one of `WRITE_TOOLS` (`_may_select`)
+    must carry exactly the matcher `Write|Edit|MultiEdit` (§33) and run exactly the
+    guard with `--write`. With `required` (the architect) there must be one; without
+    (the driver, whose settings ship none) none is fine, and one that is there is
+    judged the same way.
     """
-    entries, unreadable = _pretooluse(path)
+    entries, unreadable = _pretooluse(settings)
     if entries is None:
-        return None, unreadable
-    guards: list[Path] = []
+        return None, unreadable, None
+    guards: list[tuple[Path, str]] = []
     offenders: list[str] = []
-    covered: set[str] = set()
-    for entry in entries:
-        if not isinstance(entry, dict):
-            continue
+    for path, entry in entries:
         matcher = entry.get("matcher")
-        selects = [tool for tool in WRITE_TOOLS if _matches_tool(matcher, tool)]
+        selects = [tool for tool in WRITE_TOOLS if _may_select(matcher, tool)]
         if not selects:
             continue
-        for hook in entry.get("hooks") or []:
-            other = _not_a_command_hook(hook)
-            if other is not None:
-                return None, other
+        if matcher != WRITE_MATCHER:
+            return None, (
+                f"the matcher {matcher!r} in {path} could select {', '.join(selects)} and is "
+                f"not exactly {WRITE_MATCHER!r} (§33)"
+            ), None
+        for hook in entry["hooks"]:
             command: str = hook["command"]
             named = _guard_command_path(command, cwd, flag=WRITE_FLAG)
             if named is None:
                 offenders.append(command)
             else:
-                guards.append(named)
-                covered.update(selects)
+                guards.append((named, command))
     if offenders:
-        return None, f"the hook command {offenders[0]!r} does not run the guard with {WRITE_FLAG}"
-    missing = [tool for tool in WRITE_TOOLS if tool not in covered]
-    if missing:
         return None, (
-            f"no PreToolUse command hook for {', '.join(missing)} runs {GUARD_HOOK} {WRITE_FLAG}"
-        )
-    if len({os.path.realpath(guard) for guard in guards}) > 1:
-        return None, "the write hooks run more than one guard file (§32: the same guard file)"
-    return guards[0], None
+            f"the hook command {offenders[0]!r} does not run the guard with {WRITE_FLAG}"
+        ), None
+    if not guards:
+        if not required:
+            return None, None, None
+        return None, (
+            f"no PreToolUse command hook for {', '.join(WRITE_TOOLS)} runs {GUARD_HOOK} "
+            f"{WRITE_FLAG}"
+        ), None
+    if len({os.path.realpath(guard) for guard, _ in guards}) > 1:
+        return None, "the write hooks run more than one guard file (§32: the same guard file)", None
+    return guards[0][0], None, guards[0][1]
 
 
 def _not_a_command_hook(hook: Any) -> str | None:
-    """§32 (review 15 should-fix 6): a hook under a matcher the guard judges that is
-    not a command hook (`type: prompt`, `http`, none) is a second answer to the same
-    tool call, and not the guard's; why, or None for a command hook."""
+    """§32 (review 15 should-fix 6), §33: a hook under `PreToolUse` that is not a
+    command hook (`type: prompt`, `http`, none) is a second answer to a tool call,
+    and not the guard's; why, or None for a command hook."""
     if (
         isinstance(hook, dict)
         and hook.get("type") == "command"
@@ -821,49 +1007,60 @@ def _not_a_command_hook(hook: Any) -> str | None:
         return None
     kind = hook.get("type") if isinstance(hook, dict) else None
     return (
-        f"a {kind!r} hook is not a command hook running the guard: every hook under a "
-        "matcher the guard judges must be the guard (§32)"
+        f"a {kind!r} hook is not a command hook running the guard: every hook under "
+        "PreToolUse must be a command hook (§32, §33)"
     )
 
 
-def _settings_allow_wholesale(path: Path) -> str | None:
-    """§32 (review 15 should-fix 6): the permission settings that let a guarded role
-    past its settings wholesale — `permissions.defaultMode: "bypassPermissions"`, or
-    an allow entry naming one of `WHOLESALE_TOOLS` bare or as `Tool(*)` — why, or
-    None. Only these shapes: a narrower allow (`Bash(git log:*)`) is the settings'
+#: §33: an allow rule — a tool name and an optional `(specifier)`.
+_ALLOW_RULE = re.compile(r"\s*(\w+)\s*(?:\((.*)\))?\s*", re.DOTALL)
+
+
+def _allows_wholesale(entry: str) -> bool:
+    """§32, §33: an allow entry naming one of `WHOLESALE_TOOLS` (in any case) bare,
+    or with a specifier that holds no letter or digit — `Tool(*)`, `Write(**)`,
+    `Edit(/**)`, `Edit(~/**)`, `Bash(*:*)`, `Bash(:*)` — which names no command or
+    path, only wildcards and roots."""
+    match = _ALLOW_RULE.fullmatch(entry)
+    if match is None:
+        return False
+    tool, specifier = match.group(1), match.group(2)
+    if tool.lower() not in {name.lower() for name in WHOLESALE_TOOLS}:
+        return False
+    return specifier is None or re.search(r"[A-Za-z0-9]", specifier) is None
+
+
+def _settings_allow_wholesale(settings: _Settings) -> str | None:
+    """§32 (review 15 should-fix 6), §33 (review 16 should-fix 4): the permission
+    settings, in either settings file, that let a guarded role past its settings
+    wholesale — `permissions.defaultMode` of `bypassPermissions` or `acceptEdits`,
+    or an allow entry `_allows_wholesale` reads as a guarded tool with no command or
+    path named — why, or None. A narrower allow (`Bash(git log:*)`) is the settings'
     own business, and the guard still judges every call."""
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return None  # `_pretooluse` has already said so
-    permissions = data.get("permissions") if isinstance(data, dict) else None
-    if not isinstance(permissions, dict):
-        return None
-    if permissions.get("defaultMode") == "bypassPermissions":
-        return 'permissions.defaultMode is "bypassPermissions" (§32)'
-    wholesale = set(WHOLESALE_TOOLS) | {f"{tool}(*)" for tool in WHOLESALE_TOOLS}
-    for entry in permissions.get("allow") or []:
-        if isinstance(entry, str) and entry.strip() in wholesale:
-            return f"permissions.allow names {entry!r}, allowing the tool wholesale (§32)"
+    for path, data in settings.loaded:
+        permissions = data.get("permissions")
+        if not isinstance(permissions, dict):
+            continue
+        mode = permissions.get("defaultMode")
+        if mode in BYPASS_MODES:
+            return f"permissions.defaultMode is {mode!r} in {path} (§32, §33)"
+        allow = permissions.get("allow")
+        for entry in allow if isinstance(allow, list) else []:
+            if isinstance(entry, str) and _allows_wholesale(entry):
+                return (
+                    f"permissions.allow in {path} names {entry!r}, allowing the tool "
+                    "wholesale (§32, §33)"
+                )
     return None
 
 
-def _push_disabled(clone: Path) -> tuple[str, bool]:
-    """§31, §32 (review 15 should-fix 6): the clone's push URL is disabled, as
-    driver/README.md and architect/README.md set it (`git remote set-url --push
-    origin no_push`). The row's line, and whether it is.
-
-    Disabled means `git -C <clone> remote get-url --push --all origin` (insteadOf
-    and pushInsteadOf expanded by git) answers, and every URL it prints is a plain
-    word — no `/`, `\\`, `:` or `@`, so no URL, host or path — that names nothing
-    in the clone's directory. An unset push URL prints the fetch URL, which is not
-    such a word. Git not answering, or no `origin`, is not known to be disabled.
-    Other remotes are not read."""
+def _git(clone: Path, *args: str) -> subprocess.CompletedProcess[str] | str:
+    """`git -C <clone> <args>` with the git variables cleared; the result, or why it
+    could not run."""
     env = {name: value for name, value in os.environ.items() if name not in GIT_ENV_CLEARED}
-    fix = f"set it with `git -C {clone} remote set-url --push origin {NO_PUSH}` (§31, §32)"
     try:
-        proc = subprocess.run(
-            ["git", "-C", str(clone), "remote", "get-url", "--push", "--all", "origin"],
+        return subprocess.run(
+            ["git", "-C", str(clone), *args],
             env=env,
             stdin=subprocess.DEVNULL,
             capture_output=True,
@@ -872,47 +1069,96 @@ def _push_disabled(clone: Path) -> tuple[str, bool]:
             check=False,
         )
     except (OSError, subprocess.SubprocessError) as exc:
-        return f"push URL of origin not known to be disabled (git: {exc}): {fix}", False
-    if proc.returncode != 0:
-        said = _tail(proc.stderr, 1) or f"exit {proc.returncode}"
-        return (
-            f"push URL of origin not known to be disabled (`git remote get-url --push "
-            f"origin`: {said}): {fix}",
-            False,
-        )
-    urls = [line.strip() for line in proc.stdout.splitlines() if line.strip()]
-    live = [
-        url for url in urls
-        if any(char in url for char in "/\\:@") or (clone / url).exists()
-    ]  # fmt: skip
-    if not urls or live:
-        shown = ", ".join(live or urls) or "(none)"
-        return f"push URL of origin is live ({shown}): {fix}", False
-    return f"push URL disabled ({', '.join(urls)})", True
+        return str(exc)
+
+
+def _said(proc: subprocess.CompletedProcess[str] | str) -> str:
+    """What a `_git` call that did not answer said."""
+    if isinstance(proc, str):
+        return proc
+    return _tail(proc.stderr, 1) or f"exit {proc.returncode}"
+
+
+#: §33: the config keys that choose where a plain `git push` goes.
+_PUSH_KEYS = r"^(remote\.pushdefault|branch\..*\.(pushremote|remote))$"
+
+
+def _push_disabled(clone: Path) -> tuple[str, bool, str]:
+    """§31, §32, §33 (review 16 should-fix 4): no push from the clone reaches a
+    repository. The row's line, whether that holds, and the `verified:` line.
+
+    The rule: `origin` exists; every remote git lists (`git remote`) has push URLs
+    (`git remote get-url --push --all <remote>`) that are each a plain word — no
+    `/`, `\\`, `:` or `@`, so no URL, host or path — naming nothing in the clone's
+    directory, as `no_push` is (driver/README.md and architect/README.md set it
+    with `git remote set-url --push origin no_push`); and `remote.pushDefault`,
+    `branch.<b>.pushRemote` and `branch.<b>.remote`, where set, each name one of
+    those remotes (or `.`, the clone itself), since a name that is not a remote is
+    pushed to as a URL or a path. An unset push URL prints the fetch URL, which is
+    not a plain word. Git not answering is not known to be disabled. A
+    `pushInsteadOf` rewrite is not read: git ignores it for an explicit push URL."""
+    fix = f"set it with `git -C {clone} remote set-url --push <remote> {NO_PUSH}` (§31, §32, §33)"
+    listed = _git(clone, "remote")
+    if isinstance(listed, str) or listed.returncode != 0:
+        said = _said(listed)
+        return f"push URL of origin not known to be disabled (git remote: {said}): {fix}", False, ""
+    remotes = [line.strip() for line in listed.stdout.splitlines() if line.strip()]
+    if "origin" not in remotes:
+        return f"push URL of origin not known to be disabled (no origin remote): {fix}", False, ""
+    shown: list[str] = []
+    origin: list[str] = []
+    for remote in ["origin", *sorted(name for name in remotes if name != "origin")]:
+        proc = _git(clone, "remote", "get-url", "--push", "--all", remote)
+        if isinstance(proc, str) or proc.returncode != 0:
+            return (
+                f"push URL of {remote} not known to be disabled (`git remote get-url --push "
+                f"{remote}`: {_said(proc)}): {fix}",
+                False,
+                "",
+            )
+        urls = [line.strip() for line in proc.stdout.splitlines() if line.strip()]
+        live = [
+            url for url in urls
+            if any(char in url for char in "/\\:@") or (clone / url).exists()
+        ]  # fmt: skip
+        if not urls or live:
+            return (
+                f"push URL of {remote} is live ({', '.join(live or urls) or '(none)'}): {fix}",
+                False,
+                "",
+            )
+        if remote == "origin":
+            origin = urls
+        shown.append(f"{remote}={','.join(urls)}")
+    keys = _git(clone, "config", "-z", "--get-regexp", _PUSH_KEYS)
+    if isinstance(keys, str) or keys.returncode not in (0, 1):
+        return f"push remote not known (git config: {_said(keys)}): {fix}", False, ""
+    chosen: list[str] = []
+    for item in keys.stdout.split("\0") if keys.returncode == 0 else []:
+        if not item:
+            continue
+        key, _, value = item.partition("\n")
+        if value != "." and value not in remotes:
+            return (
+                f"push goes elsewhere: {key} is {value!r}, which is not a remote of the clone, "
+                f"so a plain `git push` pushes to it as a URL or a path: {fix}",
+                False,
+                "",
+            )
+        chosen.append(f"{key}={value}")
+    others = f"; other remotes {', '.join(shown[1:])} disabled too" if shown[1:] else ""
+    return (
+        f"push URL disabled ({', '.join(origin)}){others}",
+        True,
+        f"push URLs {' '.join(shown)}; push remote settings {', '.join(chosen) or '(none set)'}; "
+        f"clone realpath {os.path.realpath(clone)}",
+    )
 
 
 def _under_realpath(path: Path, root: Path) -> bool:
     """`path` is `root` or below it once both are resolved (§32)."""
     real, base = os.path.realpath(path), os.path.realpath(root)
     return real == base or real.startswith(base.rstrip(os.sep) + os.sep)
-
-
-def _pretooluse(path: Path) -> tuple[list[Any] | None, str | None]:
-    """The `hooks.PreToolUse` entries of the settings file at `path`, or None and
-    why there are none to judge (§28, §30)."""
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except FileNotFoundError:
-        return None, "no such file"
-    except (OSError, ValueError) as exc:
-        return None, f"not readable JSON: {type(exc).__name__}"
-    if isinstance(data, dict) and data.get("disableAllHooks") not in (None, False):
-        return None, '"disableAllHooks" is set, so no hook runs'
-    hooks = data.get("hooks") if isinstance(data, dict) else None
-    entries = hooks.get("PreToolUse") if isinstance(hooks, dict) else None
-    if not isinstance(entries, list):
-        return None, "no hooks.PreToolUse"
-    return entries, None
 
 
 def _guard_command_path(command: str, cwd: Path, *, flag: str | None = None) -> Path | None:
@@ -938,23 +1184,20 @@ def _guard_command_path(command: str, cwd: Path, *, flag: str | None = None) -> 
     return cwd / word  # an absolute word replaces cwd
 
 
-def _matches_bash(matcher: Any) -> bool:
-    """A hook matcher that selects the Bash tool: absent, empty, `*`, or a pattern
-    matching `Bash` whole."""
-    return _matches_tool(matcher, "Bash")
-
-
-def _matches_tool(matcher: Any, tool: str) -> bool:
-    """A hook matcher that selects `tool`: absent, empty, `*`, or a pattern matching
-    the name whole (§28, §31 — the architect's `Write|Edit|MultiEdit`)."""
-    if matcher is None or matcher in ("", "*"):
+def _may_select(matcher: Any, tool: str) -> bool:
+    """§33 (review 16 should-fix 4): could this hook matcher select `tool`? Read
+    broadly, so that doubt fails the row rather than passing it: absent, empty or
+    `*`; not a string; an `|`-alternative equal to the name in any case; a regular
+    expression that finds the name unanchored and case-insensitively (`ulti.dit|as`
+    finds `Bash`); or one that does not compile."""
+    if matcher is None or matcher in ("", "*") or not isinstance(matcher, str):
         return True
-    if not isinstance(matcher, str):
-        return False
+    if any(part.strip().lower() == tool.lower() for part in matcher.split("|")):
+        return True
     try:
-        return re.fullmatch(matcher, tool) is not None
+        return re.search(matcher, tool, re.IGNORECASE) is not None
     except re.error:
-        return matcher == tool
+        return True
 
 
 def _roots_check(config: Config) -> Check:

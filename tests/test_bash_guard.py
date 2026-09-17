@@ -2649,3 +2649,154 @@ def test_no_kit_command_line_uses_what_section_32_refuses() -> None:
     for span in spans:
         if span.split(" ", 1)[0] in guard.COMMAND_TABLE and len(span.split()) >= 2:
             assert guard.language_problem(span) is None, span
+
+
+# --- §33: architect-mode cp/mv and a symlink (REVIEW-16 should-fix 2, 3) ----
+#
+# The guard resolved the destination directory, not the file `cp` writes: with a
+# relative symlink already inside `kits/` (planted by something else — the
+# architect cannot make one), `cp -r kits/a/h kits/` moved it up a level so it
+# pointed out of kits, and `cp kits/pay/h kits/` then wrote through it over the
+# guard. And a `kits` that is itself a link to `.claude` let the write matcher
+# pass `<cwd>/.claude/settings.json`.
+GUARD_TEXT = GUARD.read_text(encoding="utf-8")
+
+
+def _architect_cwd(tmp_path: Path) -> Path:
+    """An architect directory as the reviewer built it: the guard under
+    `.claude/hooks/`, a `kits/pay/h` whose content would neuter it."""
+    cwd = tmp_path / "arch"
+    (cwd / ".claude" / "hooks").mkdir(parents=True)
+    (cwd / ".claude" / "hooks" / "bash_guard.py").write_text(GUARD_TEXT, encoding="utf-8")
+    (cwd / ".claude" / "settings.json").write_text("{}", encoding="utf-8")
+    (cwd / "kits" / "pay").mkdir(parents=True)
+    (cwd / "kits" / "pay" / "h").write_text("# NEUTERED\n", encoding="utf-8")
+    return cwd
+
+
+def _architect_hook(cwd: Path, data: dict[str, object], *argv: str) -> int:
+    base = {k: v for k, v in os.environ.items() if not k.startswith("HANDS_")}
+    env = {**base, "HANDS_ROLE": "architect", "HANDS_KITS": str(cwd / "kits"),
+           "HANDS_CLONE": str(cwd / "repo")}
+    done = subprocess.run([sys.executable, str(cwd / ".claude" / "hooks" / "bash_guard.py"),
+                           *argv], input=json.dumps(data), capture_output=True, text=True,
+                          env=env, cwd=cwd, timeout=30, check=False)
+    return done.returncode
+
+
+def _guarded_bash(cwd: Path, cmd: str) -> int:
+    """The shipped hook judges `cmd`; only when it allows it does real bash run it,
+    in the architect's cwd, as Claude Code would."""
+    code = _architect_hook(cwd, {"tool_name": "Bash", "tool_input": {"command": cmd}})
+    if code == 0:
+        subprocess.run(["bash", "-c", cmd], cwd=cwd, capture_output=True, timeout=30,
+                       check=False)
+    return code
+
+
+REVIEW_16_CP_PROBES = ["cp -r kits/a/h kits/", "cp kits/pay/h kits/"]
+
+
+def test_review_16_should_fix_2_probe_is_refused_and_the_guard_file_is_unchanged(
+    tmp_path: Path,
+) -> None:
+    """The reviewer's sequence, verbatim, under real bash: `kits/a/h ->
+    ../.claude/hooks/bash_guard.py` planted (dangling, inside kits), then the two
+    `cp` commands. Both are refused and the guard is still the guard."""
+    cwd = _architect_cwd(tmp_path)
+    (cwd / "kits" / "a").mkdir()
+    (cwd / "kits" / "a" / "h").symlink_to("../.claude/hooks/bash_guard.py")
+    codes = [_guarded_bash(cwd, cmd) for cmd in REVIEW_16_CP_PROBES]
+    assert codes == [2, 2], codes
+    assert (cwd / ".claude" / "hooks" / "bash_guard.py").read_text(encoding="utf-8") == GUARD_TEXT
+    assert not (cwd / "kits" / "h").is_symlink()
+
+
+#: `(planted link under kits, its target, command)`: every way the probe's class
+#: writes or moves through a link — a link pointing out already, a link inside a
+#: directory `cp -r` or `mv` carries, and a link inside the tree `cp -r` merges into.
+KITS_LINK_SHAPES = [
+    ("h", "../.claude/hooks/bash_guard.py", "cp kits/pay/h kits/"),
+    ("h", "../.claude/hooks/bash_guard.py", "cp kits/pay/h kits/h"),
+    ("h", "../.claude/hooks/bash_guard.py", "mv kits/pay/h kits/h"),
+    ("a/h", "../.claude/hooks/bash_guard.py", "mv kits/a/h kits/"),
+    ("a/h", "../.claude/hooks/bash_guard.py", "cp -r kits/a kits/b"),
+    ("a/h", "../.claude/hooks/bash_guard.py", "mv kits/a kits/pay/a"),
+    ("dst/pay/h", "../../../.claude/hooks/bash_guard.py", "cp -r kits/pay kits/dst"),
+    ("link", "../.claude", "cp -r kits/pay kits/other"),
+]
+
+
+@pytest.mark.parametrize("link,target,cmd", KITS_LINK_SHAPES)
+def test_architect_cp_and_mv_are_refused_while_kits_holds_a_symlink(
+    tmp_path: Path, link: str, target: str, cmd: str
+) -> None:
+    """§33, the rule stated: in architect mode `cp` and `mv` are refused while
+    anything under `HANDS_KITS` is a symlink, wherever it sits and wherever it
+    points; `mkdir` still runs (it moves nothing and writes no file content)."""
+    cwd = _architect_cwd(tmp_path)
+    planted = cwd / "kits" / link
+    planted.parent.mkdir(parents=True, exist_ok=True)
+    planted.symlink_to(target)
+    assert _guarded_bash(cwd, cmd) == 2, cmd
+    assert (cwd / ".claude" / "hooks" / "bash_guard.py").read_text(encoding="utf-8") == GUARD_TEXT
+    kits = str(cwd / "kits")
+    reason = guard.check(f"{cmd.replace('kits/', kits + '/')}", role="architect",
+                         consult_role="builder", clone=str(cwd / "repo"), kits=kits)
+    # a link already pointing out is refused by realpath; the rest by §33's rule
+    assert reason is not None and ("symlink" in reason or "not '" in reason), reason
+    assert guard.check(f"mkdir -p {kits}/m17", role="architect", consult_role="builder",
+                       clone=str(cwd / "repo"), kits=kits) is None
+
+
+def test_architect_cp_and_mv_run_on_a_kits_tree_without_a_symlink(tmp_path: Path) -> None:
+    """The other half: a clean kits tree stages a kit as before, under real bash."""
+    cwd = _architect_cwd(tmp_path)
+    for cmd in ("mkdir -p kits/m17/meta", "cp -r kits/pay kits/m17/pay",
+                "cp kits/pay/h kits/m17/meta/h", "mv kits/m17/meta/h kits/m17/h"):
+        assert _guarded_bash(cwd, cmd) == 0, cmd
+    assert (cwd / "kits" / "m17" / "h").read_text(encoding="utf-8") == "# NEUTERED\n"
+    assert (cwd / "kits" / "m17" / "pay" / "h").is_file()
+
+
+@pytest.mark.parametrize("spelling", ["kits", "kits/", "./kits", "sub/../kits"])
+def test_a_hands_kits_that_is_a_symlink_refuses_every_kits_row_and_the_write_matcher(
+    tmp_path: Path, spelling: str
+) -> None:
+    """REVIEW-16 should-fix 3: `ln -s .claude kits`, then the write matcher for
+    `<cwd>/.claude/settings.json` exited 0. §33: `HANDS_KITS` must not be a
+    symlink; with one, `mkdir`, `cp`, `mv` and every write are refused."""
+    cwd = tmp_path / "arch"
+    (cwd / ".claude" / "hooks").mkdir(parents=True)
+    (cwd / ".claude" / "hooks" / "bash_guard.py").write_text(GUARD_TEXT, encoding="utf-8")
+    (cwd / ".claude" / "settings.json").write_text("{}", encoding="utf-8")
+    (cwd / "sub").mkdir()
+    (cwd / "kits").symlink_to(".claude")
+    settings = str(cwd / ".claude" / "settings.json")
+    write = {"tool_name": "Write", "tool_input": {"file_path": settings}}
+    assert _architect_hook(cwd, write, "--write") != 0
+    kits = os.path.join(str(cwd), spelling)
+    assert guard.write_violation(
+        {"tool_name": "Write", "tool_input": {"file_path": f"{cwd}/kits/settings.json"}},
+        role="architect", kits=kits) is not None
+    for cmd in (f"mkdir -p {cwd}/kits/x", f"cp {cwd}/kits/settings.json {cwd}/kits/y",
+                f"mv {cwd}/kits/settings.json {cwd}/kits/y"):
+        reason = guard.check(cmd, role="architect", consult_role="builder",
+                             clone=str(cwd / "repo"), kits=kits)
+        assert reason is not None and "symlink" in reason, (spelling, cmd, reason)
+    # reads under it are not what §33 names; the refusal is of the kits rows
+    assert guard.check("hands status", role="architect", consult_role="builder",
+                       clone=str(cwd / "repo"), kits=kits) is None
+
+
+def test_the_guards_selftest_carries_the_review_16_symlink_rows() -> None:
+    """The guard's own self-test (which doctor runs) plants both shapes in a
+    scratch directory and judges them, so a copy of the guard without the rule
+    is not green."""
+    names = {cmd for _, cmd, _ in guard.SYMLINK_SELFTEST}
+    assert any(cmd.startswith("cp") for cmd in names)
+    assert any(cmd.startswith("mv") for cmd in names)
+    assert any(cmd.startswith("--write") for cmd in names)
+    assert any(ok for _, _, ok in guard.SYMLINK_SELFTEST)
+    assert any(not ok for _, _, ok in guard.SYMLINK_SELFTEST)
+    assert guard.symlink_selftest() == 0

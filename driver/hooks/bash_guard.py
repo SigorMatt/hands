@@ -164,6 +164,18 @@ guards the architect ROLE, a headless session handsd starts to write one kit:
   relative paths joined to the hook's working directory, no `~` expanded, and
   with `HANDS_KITS` unset or empty nothing in that group passes. Every word is
   a plain word, as in every row: `./kits/*` is one path here and many to bash.
+- a symlink (§33, REVIEW-16 should-fix 2, 3). Realpath containment judges where
+  a path resolves now, not where `cp` or `mv` will write once they have moved a
+  link: a relative link inside `kits/`, moved up a level by `cp -r`, points out of
+  it, and the next `cp` writes through it. The architect cannot make a link (`ln`,
+  `cp -s`, `cp -l` are refused), so one under `HANDS_KITS` was planted by
+  something else, and the rule is the simplest that closes the class: `cp` and
+  `mv` are refused while **anything** under `HANDS_KITS` (walked, links not
+  followed) is a symlink, wherever it sits and wherever it points. `mkdir` still
+  runs: it moves no link and writes no file content. And `HANDS_KITS` itself
+  must not be a symlink: when its realpath is not its parent's realpath joined
+  to its own last name (a link, or a `..` through one), every `mkdir`, `cp`,
+  `mv` and every write the matcher below judges is refused.
 - `zip` and `unzip` are rows of no table (§32, REVIEW-15 blocker 2): an
   `unzip` writes where its entries say, relative to the cwd — the parent of
   `HANDS_KITS` — whatever its arguments are, so they are refused by name in
@@ -515,11 +527,42 @@ def under(value: str, root: str) -> bool:
     return here == there or here.startswith(there + os.sep)
 
 
+def kits_link(kits):
+    """§33 (REVIEW-16 should-fix 3): why `HANDS_KITS` itself is a symlink, or None.
+
+    It is one when its realpath is not its parent's realpath joined to its own last
+    name: the last component is a link, or a `..` in the spelling passes through
+    one. A link to `.claude` put the role's own settings and hook under it.
+    """
+    lexical = os.path.abspath(kits)
+    parent = os.path.realpath(os.path.dirname(lexical))
+    real = os.path.realpath(kits)
+    if real != os.path.join(parent, os.path.basename(lexical)):
+        return (f"{KITS_ENV}={kits!r} is a symlink (it resolves to {real!r}), and every "
+                f"architect write is refused until it is a plain directory (§33)")
+    return None
+
+
+def kits_symlink(kits):
+    """§33 (REVIEW-16 should-fix 2): the first symlink anywhere under `HANDS_KITS`,
+    walked without following links, or None."""
+    for top, dirs, files in os.walk(kits, followlinks=False):
+        for entry in sorted(dirs) + sorted(files):
+            path = os.path.join(top, entry)
+            if os.path.islink(path):
+                return path
+    return None
+
+
 def kits_problem(value: str, kits, name: str):
-    """§31: why `name`'s path argument `value` is not under `HANDS_KITS`, or None."""
+    """§31: why `name`'s path argument `value` is not under `HANDS_KITS`, or None.
+    §33: nothing is under a `HANDS_KITS` that is itself a symlink."""
     if not kits:
         return (f"architect mode runs `{name}` only on paths under the role's kits "
                 f"directory, and {KITS_ENV} is not set (§31), so {value!r} is refused")
+    linked = kits_link(kits)
+    if linked is not None:
+        return f"`{name}` {value!r}: {linked}"
     if not under(value, kits):
         return (f"`{name}` takes only path arguments under the role's kits directory "
                 f"({KITS_ENV}={kits!r}, compared by realpath, §31), not {value!r}")
@@ -917,7 +960,7 @@ class Command:
     """
 
     def __init__(self, flags=(), values=(), words=None, count=False, judge=None,
-                 kits=False, reads=None, private=None):
+                 kits=False, reads=None, private=None, moves=False):
         self.flags = frozenset(flags)
         self.values = dict(values)
         self.words = words
@@ -933,6 +976,9 @@ class Command:
         # since all of those name a path too — must be under `HANDS_KITS`, and
         # it takes at least one.
         self.kits = kits
+        # §33: a `KITS_TABLE` row that moves or copies what is already there (`cp`,
+        # `mv`), refused while a symlink is anywhere under `HANDS_KITS`.
+        self.moves = moves
 
     def listed(self) -> str:
         return ", ".join(sorted(self.flags | set(self.values))) or "no options"
@@ -1056,8 +1102,8 @@ COMMAND_TABLE = {
 # remain what `FORBIDDEN_PATTERNS` calls them — a file mutation.
 KITS_TABLE = {
     "mkdir": Command(flags={"-p"}, kits=True),
-    "cp": Command(flags={"-r"}, kits=True),
-    "mv": Command(kits=True),
+    "cp": Command(flags={"-r"}, kits=True, moves=True),
+    "mv": Command(kits=True, moves=True),
 }
 
 
@@ -1125,6 +1171,11 @@ def option_violation(name, row, args, amasks, cmd, kits=None, reads=None):
             problem = kits_problem(word, kits, name)
             if problem is not None:
                 return f"{problem}: {cmd!r}"
+        link = kits_symlink(kits) if row.moves else None
+        if link is not None:
+            return (f"`{name}` is refused while anything under {KITS_ENV} is a symlink "
+                    f"({link!r}): realpath judges where a path resolves now, and `{name}` "
+                    f"can move a link so the next write lands outside it (§33): {cmd!r}")
     if row.words is not None:
         reason = row.words(name, [word for word, _ in plain], cmd)
         if reason is not None:
@@ -1715,6 +1766,72 @@ WRITE_SELFTEST = [
 ]
 
 
+# §33 (REVIEW-16 should-fix 2, 3): `(shape, command or "--write <path>", allowed?)`,
+# judged in a scratch directory the self-test builds and removes. `clean` is an
+# architect directory (`.claude/hooks/`, `kits/pay/h`); `planted` adds the
+# reviewer's `kits/a/h -> ../.claude/hooks/bash_guard.py`; `kits-link` makes
+# `kits` a symlink to `.claude`.
+SYMLINK_SELFTEST = [
+    ("clean", "cp -r kits/pay kits/m17", True),
+    ("clean", "mv kits/pay/h kits/h", True),
+    ("clean", "--write kits/pay/KIT.md", True),
+    ("planted", "cp -r kits/a/h kits/", False),
+    ("planted", "cp kits/pay/h kits/", False),
+    ("planted", "mv kits/a/h kits/", False),
+    ("planted", "mkdir -p kits/m17", True),
+    ("kits-link", "mkdir -p kits/x", False),
+    ("kits-link", "cp kits/settings.json kits/y", False),
+    ("kits-link", "--write .claude/settings.json", False),
+    ("kits-link", "--write kits/settings.json", False),
+]
+
+
+def _symlink_scratch(root, shape):
+    os.makedirs(os.path.join(root, ".claude", "hooks"))
+    with open(os.path.join(root, ".claude", "settings.json"), "w", encoding="utf-8") as f:
+        f.write("{}")
+    if shape == "kits-link":
+        os.symlink(".claude", os.path.join(root, "kits"))
+        return
+    os.makedirs(os.path.join(root, "kits", "pay"))
+    with open(os.path.join(root, "kits", "pay", "h"), "w", encoding="utf-8") as f:
+        f.write("x")
+    if shape == "planted":
+        os.makedirs(os.path.join(root, "kits", "a"))
+        os.symlink("../.claude/hooks/bash_guard.py", os.path.join(root, "kits", "a", "h"))
+
+
+def symlink_selftest() -> int:
+    """Judge `SYMLINK_SELFTEST` in scratch directories; the number that failed."""
+    import shutil
+    import tempfile
+
+    bad, here = 0, os.getcwd()
+    for shape, cmd, expected in SYMLINK_SELFTEST:
+        root = os.path.realpath(tempfile.mkdtemp(prefix="bash-guard-selftest-"))
+        try:
+            _symlink_scratch(root, shape)
+            os.chdir(root)
+            kits = os.path.join(root, "kits")
+            if cmd.startswith("--write "):
+                data = {"tool_name": "Write", "tool_input": {WRITE_PATH_KEY: cmd.split(" ", 1)[1]}}
+                reason = write_violation(data, role=ARCHITECT_ROLE, kits=kits)
+            else:
+                reason = check(cmd, role=ARCHITECT_ROLE, consult_role=SELFTEST_CONSULT_ROLE,
+                               clone=os.path.join(root, "repo"), kits=kits,
+                               spool=SELFTEST_SPOOL)
+        except OSError as e:
+            reason, expected = f"the scratch directory could not be built ({e})", None
+        finally:
+            os.chdir(here)
+            shutil.rmtree(root, ignore_errors=True)
+        if (reason is None) != expected:
+            bad += 1
+            want = "allow" if expected else "block" if expected is False else "a scratch dir"
+            print(f"FAIL expected {want} [{ROLE_ENV}=architect, {shape}]: {cmd!r}  -> {reason}")
+    return bad
+
+
 def selftest() -> int:
     bad = 0
     cases = [(cmd, expected, None) for cmd, expected in SELFTEST]
@@ -1735,7 +1852,8 @@ def selftest() -> int:
             bad += 1
             print(f"FAIL expected {'allow' if expected else 'block'} [--write]: "
                   f"{tool} {path!r}  -> {reason}")
-    total = len(cases) + len(WRITE_SELFTEST)
+    bad += symlink_selftest()
+    total = len(cases) + len(WRITE_SELFTEST) + len(SYMLINK_SELFTEST)
     print(f"selftest: {total - bad}/{total} ok")
     return 1 if bad else 0
 

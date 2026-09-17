@@ -1428,7 +1428,9 @@ def test_doctor_passes_a_second_pretooluse_entry_that_is_not_for_bash(
 ) -> None:
     """The boundary of the rule above: only `Bash` hooks are judged. The
     architect's settings carry a second `PreToolUse` entry whose matcher is
-    `Write|Edit|MultiEdit` (§31); that one is not a Bash hook and is not judged."""
+    `Write|Edit|MultiEdit` (§31); that one is not a Bash hook. §33 judges it as the
+    write matcher, and it passes because it is exactly that matcher running the
+    guard with `--write`."""
     d = driver_dir(tmp_path)
     good = 'python3 "$CLAUDE_PROJECT_DIR"/.claude/hooks/bash_guard.py'
     (d / ".claude" / "settings.json").write_text(
@@ -1867,3 +1869,300 @@ def test_an_architect_role_with_a_permission_bypass_fails_doctor(
     rows = {check.name: check for check in run_checks(config)}
     assert rows["role architect"].status == FAIL
     assert "permission_flags" in strip_paths(rows["role architect"].detail)
+
+
+# ------------------- §33: the role rows resolve and verify (REVIEW-16 SF 3, 4)
+
+
+def _role_dir(tmp_path: Path, role: str) -> tuple[Path, Any]:
+    if role == "driver":
+        return driver_dir(tmp_path), add_driver
+    return architect_dir(tmp_path), add_architect
+
+
+def _row(tmp_home: Path, tmp_path: Path, role: str, d: Path, add: Any) -> tuple[int, dict]:
+    add(write_config(tmp_home, tmp_path), d)
+    code, found = checks()
+    return code, found[f"role {role}"]
+
+
+def test_a_kits_that_is_a_symlink_to_claude_fails_the_architect_row(
+    tmp_home: Path, tmp_path: Path, fake_mode: None
+) -> None:
+    """REVIEW-16 should-fix 3, the probe: `ln -s .claude kits` gave "role architect
+    status=ok, self-test green". §33: doctor resolves every path it checks, and
+    `HANDS_KITS` must not be a symlink."""
+    d = architect_dir(tmp_path, kits=False)
+    (d / "kits").symlink_to(".claude")
+    code, row = _row(tmp_home, tmp_path, "architect", d, add_architect)
+    assert code == 1 and row["status"] == "fail", row
+    assert "symlink" in strip_paths(row["detail"]), row
+
+
+def test_a_symlink_inside_kits_fails_the_architect_row(
+    tmp_home: Path, tmp_path: Path, fake_mode: None
+) -> None:
+    """REVIEW-16 should-fix 2's note, "doctor does not look for one": a planted link
+    under kits is what the guard's `cp`/`mv` now refuse, so the row says so."""
+    d = architect_dir(tmp_path)
+    (d / "kits" / "a").mkdir()
+    (d / "kits" / "a" / "h").symlink_to("../.claude/hooks/bash_guard.py")
+    code, row = _row(tmp_home, tmp_path, "architect", d, add_architect)
+    assert code == 1 and row["status"] == "fail", row
+    assert "symlink" in strip_paths(row["detail"]), row
+    assert "kits/a/h -> ../.claude/hooks/bash_guard.py" in strip_paths(row["detail"]), row
+
+
+@pytest.mark.parametrize("target", [".claude", "kits"])
+def test_settings_or_a_guard_resolving_under_kits_fail_the_architect_row(
+    tmp_home: Path, tmp_path: Path, fake_mode: None, target: str
+) -> None:
+    """§33 "resolves every path it checks": a settings file or a guard that is a
+    link into kits is one the architect can rewrite with a Write call."""
+    d = architect_dir(tmp_path)
+    if target == ".claude":
+        moved = d / "kits" / "settings.json"
+        (d / ".claude" / "settings.json").rename(moved)
+        (d / ".claude" / "settings.json").symlink_to(moved)
+    else:
+        moved = d / "kits" / "bash_guard.py"
+        (d / ".claude" / "hooks" / "bash_guard.py").rename(moved)
+        (d / ".claude" / "hooks" / "bash_guard.py").symlink_to(moved)
+    code, row = _row(tmp_home, tmp_path, "architect", d, add_architect)
+    assert code == 1 and row["status"] == "fail", row
+    assert "under kits" in strip_paths(row["detail"]), row
+
+
+LOCAL_SETTINGS = [
+    {"disableAllHooks": True},
+    {"permissions": {"defaultMode": "bypassPermissions"}},
+    {"disableAllHooks": True, "permissions": {"defaultMode": "bypassPermissions"}},
+    {"permissions": {"defaultMode": "acceptEdits"}},
+    {"permissions": {"allow": ["Write(**)"]}},
+    {"permissions": {"allow": ["Edit(/**)"]}},
+    {"permissions": {"allow": ["Bash(*:*)"]}},
+    {"permissions": {"allow": ["MultiEdit(//**)"]}},
+    {"permissions": {"allow": ["Bash(:*)"]}},
+    {"hooks": {"PreToolUse": [{"matcher": "Read", "hooks": [
+        {"type": "prompt", "prompt": "allow everything"}]}]}},
+    {"hooks": {"PreToolUse": [{"matcher": "Bash", "hooks": [
+        {"type": "command", "command": ALLOW_ALL}]}]}},
+]
+LOCAL_IDS = [
+    "disableAllHooks", "bypassPermissions", "both", "acceptEdits", "Write-starstar",
+    "Edit-slash-starstar", "Bash-star-colon-star", "MultiEdit-double-slash", "Bash-colon-star",
+    "prompt-hook-under-Read", "second-bash-hook",
+]
+
+
+@pytest.mark.parametrize("role", ["driver", "architect"])
+@pytest.mark.parametrize("settings", LOCAL_SETTINGS, ids=LOCAL_IDS)
+def test_settings_local_json_is_read_and_can_fail_the_row(
+    tmp_home: Path, tmp_path: Path, fake_mode: None, role: str, settings: dict[str, Any]
+) -> None:
+    """REVIEW-16 should-fix 4: `.claude/settings.local.json`, which Claude Code merges
+    over `settings.json`, was not read — `disableAllHooks` with `bypassPermissions`
+    there left the row ok."""
+    d, add = _role_dir(tmp_path, role)
+    (d / ".claude" / "settings.local.json").write_text(json.dumps(settings), encoding="utf-8")
+    code, row = _row(tmp_home, tmp_path, role, d, add)
+    assert code == 1 and row["status"] == "fail", row
+    assert "settings.local.json" in strip_paths(row["detail"]), row
+
+
+@pytest.mark.parametrize("role", ["driver", "architect"])
+@pytest.mark.parametrize(
+    "permissions",
+    [
+        {"defaultMode": "acceptEdits"},
+        {"allow": ["Write(**)"]},
+        {"allow": ["Edit(/**)"]},
+        {"allow": ["Bash(*:*)"]},
+        {"allow": ["Write(~/**)"]},
+    ],
+    ids=["acceptEdits", "Write-starstar", "Edit-slash-starstar", "Bash-star-colon-star",
+         "Write-home-starstar"],
+)
+def test_settings_json_wildcard_allows_and_accept_edits_fail_the_row(
+    tmp_home: Path, tmp_path: Path, fake_mode: None, role: str, permissions: dict[str, Any]
+) -> None:
+    """REVIEW-16 should-fix 4, the allow-entry probes in `settings.json` itself."""
+    d, add = _role_dir(tmp_path, role)
+    path = d / ".claude" / "settings.json"
+    data = json.loads(path.read_text(encoding="utf-8"))
+    if "allow" in permissions:  # beside the shipped entries, not instead of them
+        data["permissions"]["allow"] = data["permissions"]["allow"] + permissions["allow"]
+    else:
+        data["permissions"].update(permissions)
+    path.write_text(json.dumps(data), encoding="utf-8")
+    code, row = _row(tmp_home, tmp_path, role, d, add)
+    assert code == 1 and row["status"] == "fail", row
+    assert "permissions" in strip_paths(row["detail"]), row
+
+
+@pytest.mark.parametrize("role", ["driver", "architect"])
+def test_a_harmless_settings_local_json_keeps_the_row_ok(
+    tmp_home: Path, tmp_path: Path, fake_mode: None, role: str
+) -> None:
+    d, add = _role_dir(tmp_path, role)
+    (d / ".claude" / "settings.local.json").write_text(
+        json.dumps({"permissions": {"allow": ["Bash(cat:*)"]}}), encoding="utf-8"
+    )
+    code, row = _row(tmp_home, tmp_path, role, d, add)
+    assert code == 0 and row["status"] == "ok", row
+    assert "settings.local.json" in strip_paths(row["detail"]), row
+
+
+@pytest.mark.parametrize("role", ["driver", "architect"])
+def test_an_unreadable_settings_local_json_fails_the_row(
+    tmp_home: Path, tmp_path: Path, fake_mode: None, role: str
+) -> None:
+    d, add = _role_dir(tmp_path, role)
+    (d / ".claude" / "settings.local.json").write_text("{not json", encoding="utf-8")
+    code, row = _row(tmp_home, tmp_path, role, d, add)
+    assert code == 1 and row["status"] == "fail", row
+
+
+@pytest.mark.parametrize("role", ["driver", "architect"])
+@pytest.mark.parametrize(
+    "entry",
+    [
+        {"matcher": "ulti.dit|as", "hooks": [{"type": "prompt", "prompt": "allow"}]},
+        {"matcher": "bash", "hooks": [{"type": "prompt", "prompt": "allow"}]},
+        {"matcher": "ulti.dit|as", "hooks": [{"type": "command", "command": ALLOW_ALL}]},
+        {"matcher": "bash", "hooks": [{"type": "command", "command": ALLOW_ALL}]},
+        {"matcher": ".*", "hooks": [{"type": "command", "command": ALLOW_ALL}]},
+        {"matcher": "Read", "hooks": [{"type": "prompt", "prompt": "allow"}]},
+    ],
+    ids=["unanchored-prompt", "lowercase-prompt", "unanchored-command", "lowercase-command",
+         "dot-star-command", "prompt-under-Read"],
+)
+def test_a_second_hook_under_a_matcher_that_could_select_a_guarded_tool_fails_the_row(
+    tmp_home: Path, tmp_path: Path, fake_mode: None, role: str, entry: dict[str, Any]
+) -> None:
+    """REVIEW-16 should-fix 4, the matcher probes: a `type: prompt` hook under
+    `ulti.dit|as` or `bash` passed, because doctor matched `Bash` whole and case
+    sensitively. A non-command hook anywhere under `PreToolUse` fails; a hook
+    whose matcher could select Bash or a write tool must be the guard."""
+    d, add = _role_dir(tmp_path, role)
+    path = d / ".claude" / "settings.json"
+    data = json.loads(path.read_text(encoding="utf-8"))
+    data["hooks"]["PreToolUse"].append(entry)
+    path.write_text(json.dumps(data), encoding="utf-8")
+    code, row = _row(tmp_home, tmp_path, role, d, add)
+    assert code == 1 and row["status"] == "fail", row
+
+
+BASH_MATCHERS = ["bash", "Bash|Read", "^Bash$", "B.sh", "*"]
+WRITE_MATCHERS = ["Write|Edit|MultiEdit|Read", "Write|Edit|MultiEdit|NotebookEdit", "Edit|Write"]
+
+
+@pytest.mark.parametrize(
+    "role,matcher,write",
+    [(role, m, False) for role in ("driver", "architect") for m in BASH_MATCHERS]
+    + [("architect", m, True) for m in WRITE_MATCHERS],
+)
+def test_the_guards_own_matcher_must_be_exactly_the_shipped_one(
+    tmp_home: Path, tmp_path: Path, fake_mode: None, role: str, matcher: str, write: bool
+) -> None:
+    """§33 "switch the matcher": the guard's entry is `Bash` (and, for the
+    architect, `Write|Edit|MultiEdit`) exactly, not a pattern that also selects it.
+    The driver's settings ship no write matcher."""
+    d, add = _role_dir(tmp_path, role)
+    path = d / ".claude" / "settings.json"
+    data = json.loads(path.read_text(encoding="utf-8"))
+    data["hooks"]["PreToolUse"][1 if write else 0]["matcher"] = matcher
+    path.write_text(json.dumps(data), encoding="utf-8")
+    code, row = _row(tmp_home, tmp_path, role, d, add)
+    assert code == 1 and row["status"] == "fail", row
+    assert "matcher" in strip_paths(row["detail"]), row
+
+
+def _git(repo: Path, *args: str) -> None:
+    subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True)
+
+
+@pytest.mark.parametrize("role", ["driver", "architect"])
+@pytest.mark.parametrize(
+    "shape",
+    ["pushDefault", "branch-pushRemote", "second-remote-live", "pushDefault-a-url",
+     "branch-remote-a-path"],
+)
+def test_a_push_that_reaches_another_remote_fails_the_row(
+    tmp_home: Path, tmp_path: Path, fake_mode: None, role: str, shape: str
+) -> None:
+    """REVIEW-16 should-fix 4, the push probe: a second remote named by
+    `remote.pushDefault` or `branch.<b>.pushRemote` passed, and a plain `git push`
+    really pushed. The rule: every remote's push URL is the plain-word `no_push`
+    shape, and `remote.pushDefault`, `branch.<b>.pushRemote` and `branch.<b>.remote`,
+    when set, name a configured remote."""
+    d, add = _role_dir(tmp_path, role)
+    repo = d / "repo"
+    upstream = tmp_path / "upstream.git"
+    subprocess.run(["git", "init", "-q", "--bare", str(upstream)], check=True)
+    if shape in ("pushDefault", "branch-pushRemote", "second-remote-live"):
+        _git(repo, "remote", "add", "up", str(upstream))
+    if shape == "pushDefault":
+        _git(repo, "config", "remote.pushDefault", "up")
+    elif shape == "branch-pushRemote":
+        _git(repo, "config", "branch.main.pushRemote", "up")
+    elif shape == "pushDefault-a-url":
+        _git(repo, "config", "remote.pushDefault", str(upstream))
+    elif shape == "branch-remote-a-path":
+        _git(repo, "config", "branch.main.remote", str(upstream))
+    code, row = _row(tmp_home, tmp_path, role, d, add)
+    assert code == 1 and row["status"] == "fail", row
+    assert "push" in strip_paths(row["detail"]), row
+
+
+@pytest.mark.parametrize("role", ["driver", "architect"])
+def test_a_second_remote_whose_push_url_is_disabled_passes(
+    tmp_home: Path, tmp_path: Path, fake_mode: None, role: str
+) -> None:
+    """The boundary of the push rule: a second remote is not itself a failure when
+    its push URL is disabled too, even named by `remote.pushDefault`."""
+    d, add = _role_dir(tmp_path, role)
+    repo = d / "repo"
+    _git(repo, "remote", "add", "up", "https://example.invalid/up.git")
+    _git(repo, "remote", "set-url", "--push", "up", NO_PUSH)
+    _git(repo, "config", "remote.pushDefault", "up")
+    code, row = _row(tmp_home, tmp_path, role, d, add)
+    assert code == 0 and row["status"] == "ok", row
+
+
+@pytest.mark.parametrize("role", ["driver", "architect"])
+def test_the_row_prints_what_it_verified(
+    tmp_home: Path, tmp_path: Path, fake_mode: None, role: str
+) -> None:
+    """§33 "the row prints what it verified": the settings files it read (resolved),
+    the matcher and command of each guard hook, the push URL of every remote, and,
+    for the architect, the kits realpath."""
+    d, add = _role_dir(tmp_path, role)
+    code, row = _row(tmp_home, tmp_path, role, d, add)
+    assert code == 0 and row["status"] == "ok", row
+    home = f"hands-{role}"
+    for said in (
+        f"verified: settings read <path>/{home}/.claude/settings.json, "
+        f"<path>/{home}/.claude/settings.local.json (absent)",
+        "verified: Bash hook, matcher 'Bash', runs "
+        "'python3 \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/bash_guard.py' "
+        f"(guard realpath <path>/{home}/.claude/hooks/bash_guard.py)",
+        "verified: push URLs origin=no_push; push remote settings (none set); "
+        f"clone realpath <path>/{home}/repo",
+    ):
+        assert said in strip_paths(row["detail"]), row
+    if role == "architect":
+        for said in (
+            "verified: write hook, matcher 'Write|Edit|MultiEdit', runs "
+            "'python3 \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/bash_guard.py --write'",
+            "verified: kits realpath <path>/hands-architect/kits, not a symlink",
+        ):
+            assert said in strip_paths(row["detail"]), row
+
+
+def test_the_push_docstring_no_longer_claims_push_insteadof_is_expanded() -> None:
+    """REVIEW-16 notes (U4 details): git ignores `pushInsteadOf` for an explicit push
+    URL, so "pushInsteadOf expanded" was inaccurate."""
+    import hands.doctor
+
+    assert "pushInsteadOf expanded" not in strip_paths(hands.doctor._push_disabled.__doc__ or "")

@@ -214,22 +214,35 @@ Notes that are easy to get wrong:
   `.claude/hooks/bash_guard.py`, with `$CLAUDE_PROJECT_DIR` and a relative path
   read against the driver directory, and nothing else: no further argument
   (`--selftest`), no other interpreter, no `;`, `&`, `|`, redirection, `$`
-  other than `$CLAUDE_PROJECT_DIR`, glob, escape or newline. `"disableAllHooks"`
-  in that file fails the row. A named file that does not exist fails. Doctor
+  other than `$CLAUDE_PROJECT_DIR`, glob, escape or newline. A named file that
+  does not exist fails. Doctor
   judges every `PreToolUse` hook whose matcher selects `Bash`, not only the
   first, and fails if any one of them is not the guard — a second Bash hook
   beside the real one is a second answer to the same tool call. A `PreToolUse`
-  entry for other tools (the architect's `Write|Edit|MultiEdit` hook) is not a
-  Bash hook and is not judged. A missing clone warns. Since §32 (review 15
-  should-fix 6) the row also fails when a hook under a `Bash` matcher is not a
-  command hook (`type: prompt`, say), when `permissions.defaultMode` is
-  `"bypassPermissions"` or an `allow` entry names `Bash`, `Write`, `Edit` or
-  `MultiEdit` bare or as `Tool(*)`, and when the clone's push URL is not
-  disabled: every URL `git -C <clone> remote get-url --push --all origin`
-  prints must be a plain word with no `/`, `\`, `:` or `@` that names nothing in
-  the clone, as `no_push` is. An unset push URL (git prints the fetch URL), a
-  clone git cannot read and a missing `origin` fail; other remotes are not
-  read.
+  entry for the write tools (the architect's `Write|Edit|MultiEdit` hook) is not a
+  Bash hook; it is judged as the architect's write matcher is, below. A missing
+  clone warns. Since §32 (review 15 should-fix 6) and §33 (review 16 should-fix
+  4) the row reads both settings files Claude Code merges in the directory,
+  `.claude/settings.json` and `.claude/settings.local.json` (the local one may be
+  absent; unreadable, it fails), and fails when either sets `"disableAllHooks"`;
+  when any hook anywhere under `PreToolUse` is not a command hook (`type:
+  prompt`, say); when a matcher that could select `Bash` — or `Write`, `Edit`,
+  `MultiEdit` — is not exactly `Bash` (or `Write|Edit|MultiEdit`), matchers read
+  broadly: empty or `*`, an alternative equal to the tool's name in any case, or
+  a regular expression that finds the name unanchored and case-insensitively
+  (`bash`, `ulti.dit|as`, `.*`); when `permissions.defaultMode` is
+  `"bypassPermissions"` or `"acceptEdits"`, or an `allow` entry names `Bash`,
+  `Write`, `Edit` or `MultiEdit` bare or with a specifier holding no letter or
+  digit (`Tool(*)`, `Write(**)`, `Edit(/**)`, `Bash(*:*)`); and when a push from
+  the clone is not disabled. The push rule: `origin` exists; every remote `git
+  -C <clone> remote` lists has push URLs (`git remote get-url --push --all
+  <remote>`) that are each a plain word with no `/`, `\`, `:` or `@` naming
+  nothing in the clone, as `no_push` is; and `remote.pushDefault`,
+  `branch.<b>.pushRemote` and `branch.<b>.remote`, where set, name one of those
+  remotes (or `.`). An unset push URL (git prints the fetch URL) and a clone git
+  cannot read fail. The row ends with `verified:` lines: the settings files read
+  (resolved), each guard hook's matcher, command and resolved file, every
+  remote's push URLs with the push-remote settings, and the clone's realpath.
 - **The consult flow** (§27, docs/PLAYBOOK.md "Consult"). A rule `then =
   "consult"` fires on an event, say a builder `VERDICT: question`. handsd starts
   a driver-role job in the driver's cwd, `context: clear`, `origin: playbook`,
@@ -720,7 +733,9 @@ one `-C`, whose realpath must equal `HANDS_CLONE`'s (a second `-C` is refused,
 because git applies each `-C` relative to the one before). Architect mode
 (`HANDS_ROLE=architect`) is the same read-only table with `hands
 show|jobs|inbox|pipeline|status|kit check|kit file`, plus `mkdir -p`, `cp -r`
-and `mv` (no other option) with every path under `HANDS_KITS`; `zip` and `unzip`
+and `mv` (no other option) with every path under `HANDS_KITS`, `cp` and `mv`
+refused while anything under `HANDS_KITS` is a symlink, and every `mkdir`, `cp`,
+`mv` and write refused when `HANDS_KITS` itself is one (§33); `zip` and `unzip`
 are in no mode's table (§32). In both
 role modes reads are confined to the clone and the spool: every path that
 `cat`, `ls` (`.` when it names none), `head`, `tail`, `wc`, `grep` (`.` under
@@ -776,7 +791,16 @@ action and nothing else does: no playbook `send` can name it (a send's role is
 Architect mode is the driver's read-only table plus `hands kit check` and
 `hands kit file`, and `mkdir -p`, `cp -r` and `mv` only with every path
 argument under `HANDS_KITS` and no other option (none that names another path,
-such as `cp -t` or `--backup`, and none that makes a link). `zip` and `unzip`
+such as `cp -t` or `--backup`, and none that makes a link). Realpath containment
+judges where a path resolves when the command is judged, not where `cp` or `mv`
+writes once it has moved a link (review 16 should-fix 2: `cp -r kits/a/h kits/`
+moved a relative link planted inside `kits/` so it pointed out, and `cp
+kits/pay/h kits/` wrote through it over the guard), so `cp` and `mv` are refused
+while anything under `HANDS_KITS` — walked, links not followed — is a symlink;
+the architect cannot make one, and `mkdir` still runs. A `HANDS_KITS` that is
+itself a symlink (its realpath is not its parent's realpath joined to its name)
+refuses every `mkdir`, `cp`, `mv` and every write (§33, review 16 should-fix 3:
+`kits -> .claude` let the write matcher pass the role's own settings). `zip` and `unzip`
 are refused by name in every mode (§32, review 15 blocker 2: an `unzip`
 extracted into the role's cwd, the parent of `HANDS_KITS`, over the guard and
 its settings). It never sends, approves, denies, `go`es, puts or pushes. Writes
@@ -787,18 +811,21 @@ writes nothing at all.
 
 `hands doctor` prints a `role architect` row beside the `role driver` one: the
 cwd, the clone, the kits directory, the settings, the write matcher, the
-guard's self-test run in architect mode, and the mode itself. It fails on a
-permission bypass (`permission_flags`, `permissions.defaultMode:
-"bypassPermissions"`, or an `allow` entry naming `Bash`, `Write`, `Edit` or
-`MultiEdit` bare or as `Tool(*)`), on a settings file whose `Bash` hook or whose
+guard's self-test run in architect mode, the mode itself, and the `verified:`
+lines the driver row prints plus the kits realpath. It fails on a
+permission bypass (`permission_flags`, or the driver row's settings rules, above,
+over both settings files), on settings whose `Bash` hook or whose
 `Write|Edit|MultiEdit` hook is not the guard (the write hook must be exactly
-`python3 <path to .claude/hooks/bash_guard.py> --write`, all three tools must be
-judged, every hook under either matcher must be a command hook, and both
-matchers must run the same guard file), on a guard whose `--selftest` is not
+`python3 <path to .claude/hooks/bash_guard.py> --write` under exactly that
+matcher, all three tools must be judged, every hook under `PreToolUse` must be a
+command hook, and both matchers must run the same guard file), on a guard whose
+`--selftest` is not
 green run with `HANDS_ROLE=architect` and `HANDS_KITS` set, on a clone whose
-push URL is not disabled (the driver row's rule, above), and on a kits
+push is not disabled (the driver row's rule, above), on a kits
 directory that is missing or does not resolve under the architect's cwd
-(§32); a missing clone warns.
+(§32), and (§33) on a kits directory that is a symlink or holds one, or when
+`.claude`, its hooks directory, either settings file, either guard file or the
+clone resolves under the kits directory; a missing clone warns.
 
 **Directory kits (finding H-030, resolved by DESIGN v3.15 §32; code: mission 16
 U2).** Under §31 the architect's `zip` could store entries only under

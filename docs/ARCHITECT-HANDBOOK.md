@@ -339,7 +339,9 @@ under; read it there rather than here. What changes for you:
   `kits/<name>/<repository paths>` — the entries of §3, each at its repository
   path under `kits/<name>/` — writing the files with the Write tool and
   arranging them with `mkdir -p`, `cp -r` and `mv`; there is no `zip` or `unzip`
-  in your guard. Then `hands kit check kits/<name> --repo ./repo`, and `hands kit
+  in your guard. `cp` and `mv` are refused while anything under `kits/` is a
+  symlink, and every write is refused if `kits` itself is one (DESIGN §33); you
+  cannot make one, so if the refusal names one, escalate. Then `hands kit check kits/<name> --repo ./repo`, and `hands kit
   file kits/<name>`, which builds the zip itself (`kits/<name>/meta/X.md` is the
   entry `meta/X.md`), runs the check again on that zip against the clone,
   refuses a failing kit with the check's output, and otherwise has handsd file
