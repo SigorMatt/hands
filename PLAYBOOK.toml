@@ -4,7 +4,7 @@ version = 1
 # lives in the table: TOML cannot hold `series = "…"` beside `[series]` (H-019).
 [series]
 name = "hands-missions"
-kickoff = "Read meta/BUILDER-17-PROMPT.md and execute the mission below its divider."
+kickoff = "Read meta/BUILDER-18-PROMPT.md and execute the mission below its divider."
 # §31: the architect is the human in a chat Project, not a role handsd starts.
 # That is the default; this series states it.
 architect = "phone"
