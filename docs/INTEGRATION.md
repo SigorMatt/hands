@@ -21,6 +21,30 @@ are the whole of its state.
 
 Python ≥ 3.11 and `uv`. The only runtime dependency is `httpx`, for ntfy.
 
+### `gh`, for a pull request per mission (DESIGN §35)
+
+A project whose missions run as pull requests (docs/ARCHITECT-HANDBOOK.md §9)
+needs the GitHub CLI: the builder opens the PR with `gh pr create`, and the
+review finds it with `gh pr list`, reads the hosted review with `gh api` and
+merges a clean one with `gh pr merge --merge`. hands itself never runs `gh`
+except for doctor's row. Three things, for **the user handsd runs as** (every role
+job runs as that user, so it is that user's login that counts):
+
+- `gh` installed and on that user's PATH;
+- `gh auth login` run as that user;
+- a token with the `repo` scope (`gh auth status` lists the token's scopes;
+  `gh auth login --scopes repo` asks for it).
+
+`hands doctor` checks all three (step 4). A project whose briefs say
+"direct" commits to `main` and needs none of it.
+
+The working tree must be on `main` between missions: the next kit apply and
+the next kickoff run in the builder's cwd, on whatever branch it is on. The
+builder returns it at the end of a mission, and the review after a merge,
+with `git checkout main && git pull --ff-only`. A tree left on `mission-N`
+(a blocked mission, a review with blockers, a hand edit) is yours to put back
+the same way before the next `go`.
+
 ## 2. Run handsd (once per machine, per project)
 
     install -Dm644 ~/git/hands/systemd/handsd@.service ~/.config/systemd/user/handsd@.service
@@ -349,6 +373,19 @@ notifications, the command channel, `go`, the kit transport and the who view
 are on, and whether handsd is answering. A daemon
 that is not running is a **warning**, not a failure — this step comes before
 you have to have started one. Exit code 1 means a check failed.
+
+The `gh` row (DESIGN §35) runs `gh --version` and `gh auth status` as the
+user doctor runs as — handsd's user when the daemon answers `doctor` — and
+reports the version, the path, the login and whether the token's scopes
+include `repo`:
+
+    ok    gh   gh version 2.92.0 (2026-04-28)  (/usr/bin/gh)
+               logged in as <login> (user <user>); token scopes include `repo`
+
+No `gh` on PATH, a `gh --version` that does not answer, not logged in, or a
+token without `repo` is a `warn` naming the remedy — run `gh auth login` as
+this user (and grant the `repo` scope) — and is a warning, not a failure,
+because a project may commit direct.
 
 A config that will not load at all is reported the same way, not as a crash:
 doctor prints its usual report with a failed `config` row carrying the error

@@ -29,6 +29,7 @@ DOCS = [
     ROOT / "README.md",
     ROOT / "docs" / "INTEGRATION.md",
     ROOT / "docs" / "PLAYBOOK.md",
+    ROOT / "docs" / "ARCHITECT-HANDBOOK.md",  # mission 19 U4: §9 now shows commands
     ROOT / "driver" / "CLAUDE.md",
     ROOT / "driver" / "README.md",
 ]
@@ -1976,3 +1977,138 @@ def test_this_repositorys_claude_md_commits_to_the_missions_branch() -> None:
     ):
         assert said in text, f"CLAUDE.md does not say {said!r}"
     assert "Push immediately." not in text
+
+
+# ------------------------------------------------ mission 19 U4: the docs of §35
+
+
+def handbook_section(number: int) -> str:
+    """`## <number>.` of docs/ARCHITECT-HANDBOOK.md, flattened."""
+    text = (ROOT / "docs" / "ARCHITECT-HANDBOOK.md").read_text(encoding="utf-8")
+    heads = re.findall(rf"^## {number}\. .*$", text, flags=re.M)
+    assert len(heads) == 1, f"the handbook has no single `## {number}.` heading"
+    return flattened(text.split(heads[0], 1)[1].split("\n## ", 1)[0])
+
+
+def test_the_handbook_section_6_lists_every_series_key_with_its_default() -> None:
+    """HF-004 (discotrade): §6 said `[series]` holds two keys while the code takes
+    seven. Each of `SERIES_KEYS` is named in §6, with the default the code uses,
+    and the escalation vocabulary is the code's."""
+    from hands.playbook import (
+        DEFAULT_ARCHITECT_MODE,
+        DEFAULT_GATE_FAILURES,
+        DEFAULT_KIT_WAIT_S,
+        ESCALATE_ON,
+        SERIES_KEYS,
+    )
+
+    section = handbook_section(6)
+    assert "holds two keys" not in section
+    for key in SERIES_KEYS:
+        assert f"`{key}`" in section, f"handbook §6 does not name `[series] {key}`"
+    for said in (
+        f"`architect` (default `{DEFAULT_ARCHITECT_MODE}`)",
+        "`autonomous` (default `false`)",
+        f"`gate_failures` (default {DEFAULT_GATE_FAILURES})",
+        "`escalate_on` (default none)",
+        f"`kit_wait_s` (default {DEFAULT_KIT_WAIT_S})",
+    ):
+        assert said in section, f"handbook §6 does not say {said!r}"
+    for condition in ESCALATE_ON:
+        assert f"`{condition}`" in section, f"handbook §6 does not name {condition}"
+
+
+def test_the_handbook_section_9_is_the_pull_request_flow_of_section_35() -> None:
+    """§35: the builder's branch and PR, the review that finds the PR, reads the
+    hosted review, commits its file to `main` first and merges with a merge
+    commit on `blockers=0`; the standing approval; the direct shape. The old
+    squash-merge rule of §9 is gone from the whole handbook."""
+    section = handbook_section(9)
+    for said in (
+        "`mission-N`",
+        "`VERDICT: mission N finished pr=<number>`",
+        "`gh pr create --base main --head mission-N",
+        "`gh pr list --head mission-N --state open --json number,baseRefName,headRefOid`",
+        "`## Hosted review`",
+        "`reviewed: <sha>`",
+        "committed to `main` before any merge",
+        "`blockers=0`",
+        '`gh pr merge <number> --merge --subject "merge: mission N (PR #<number>)"`',
+        "never a squash",
+        "the per-unit commits are what the next cold review's sub-agents work on",
+        "standing approval of every merge it makes",
+        "leaves the merge step out",
+        "direct",
+        "`git checkout main && git pull --ff-only`",
+    ):
+        assert said in section, f"handbook §9 does not say {said!r}"
+    handbook = (ROOT / "docs" / "ARCHITECT-HANDBOOK.md").read_text(encoding="utf-8")
+    assert "--squash" not in handbook
+    assert "auto-merge on a clean review" not in handbook
+
+
+def test_the_integration_doc_names_the_gh_prerequisite_and_doctors_gh_row() -> None:
+    """§35 `hands doctor`: `gh` installed, `gh auth login` for the user handsd runs
+    as, a `repo`-scoped token; doctor's `gh` row as OK and as WARN (the remedy is
+    the code's); the tree on `main` between missions."""
+    from hands.doctor import GH_REMEDY
+
+    text = (ROOT / "docs" / "INTEGRATION.md").read_text(encoding="utf-8")
+    install = flattened(text.split("## 1. Install", 1)[1].split("\n## ", 1)[0])
+    for said in (
+        "`gh`",
+        "`gh auth login`",
+        "the user handsd runs as",
+        "`repo` scope",
+        "on `main` between missions",
+        "`git checkout main && git pull --ff-only`",
+    ):
+        assert said in install, f"INTEGRATION §1 does not say {said!r}"
+    doctor = flattened(text.split("## 4. `hands doctor`", 1)[1].split("\n## ", 1)[0])
+    for said in (
+        "`gh` row",
+        "token scopes include `repo`",
+        "warning, not a failure",
+        GH_REMEDY,
+        "a project may commit direct",
+    ):
+        assert said in doctor, f"INTEGRATION §4 does not say {said!r}"
+
+
+def test_the_playbook_doc_describes_the_review_prompt_the_templates_ship() -> None:
+    """§35 (U2/U3): the review rule's prompt says the protocol finds the mission's
+    commits itself, its pull request or `main` since the last `review:` commit;
+    the review-base section says so in the shipped prompt's words."""
+    from hands.playbook import parse_playbook
+
+    path = ROOT / "templates" / "PLAYBOOK-missions.toml"
+    book = parse_playbook(path.read_text(encoding="utf-8"), path=path)
+    (prompt,) = [r.prompt for r in book.rules if r.prompt and "REVIEW-PROTOCOL" in r.prompt]
+    said = prompt.split(": ", 1)[1].split(". ", 1)[0]
+    assert said.startswith("the protocol finds the mission's commits itself")
+    base = flattened(
+        (ROOT / "docs" / "PLAYBOOK.md").read_text(encoding="utf-8")
+        .split("### The review base", 1)[1].split("\n## ", 1)[0]
+    )
+    assert said in base, f"docs/PLAYBOOK.md's review base does not say {said!r}"
+    for must in ("`gh pr list --head mission-N", "`reviewed: <sha>`", "DESIGN §35"):
+        assert must in base, f"docs/PLAYBOOK.md's review base does not say {must!r}"
+
+
+#: The `gh` commands §35's flow uses; the docs may show these and no other.
+GH_COMMANDS = {"pr create", "pr list", "pr merge", "api", "auth login", "auth status"}
+
+
+@pytest.mark.parametrize(
+    "name", ["docs/ARCHITECT-HANDBOOK.md", "docs/INTEGRATION.md", "docs/PLAYBOOK.md"]
+)
+def test_every_gh_command_the_docs_show_is_one_the_flow_uses(name: str) -> None:
+    """A `gh <command>` in a code span is one of §35's; `gh <cmd> --help` was checked
+    for each of these locally (gh 2.92), and the fake gh answers them in tests."""
+    found = []
+    for span in re.findall(r"`([^`]+)`", (ROOT / name).read_text(encoding="utf-8")):
+        found += re.findall(r"(?<![\w/.-])gh ([a-z]+(?: [a-z]+)?)", span)
+    for words in found:
+        assert words in GH_COMMANDS or words.split()[0] == "api", (
+            f"{name} shows `gh {words}`, which §35's flow does not use"
+        )

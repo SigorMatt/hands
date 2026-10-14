@@ -2,8 +2,8 @@
 
 For the architect of any project driven by hands. The Project instruction
 (`docs/ARCHITECT-INSTRUCTION.md`) gives the rules; this handbook gives the
-shapes. Read it once in full when onboarding a project; re-read §6 and §9
-before every kit. `hands kit check` (§11) verifies what this handbook
+shapes. Read it once in full when onboarding a project; re-read §6 (the
+playbook) and §9 (the pull-request flow) before every kit. `hands kit check` (§11) verifies what this handbook
 describes.
 
 ## 1. What hands is, from where you sit
@@ -150,29 +150,59 @@ rule stops. So: specific verdict rules first, then a catch-all `stop` per
 `failed` is what stops), then `job.held`/`job.denied` →
 `notify`.
 
-`[series]` holds two keys: `name`, the series' name, and `kickoff`, the
-fixed kickoff line that `go` from the phone sends. A top-level
-`series = "<name>"` still loads, but never beside a `[series]` table: TOML
-refuses the key twice. `[limits] auto_runs` lists the runs (or missions) that may start
+`[series]` holds seven keys, every one optional; any other key is refused,
+naming it (docs/PLAYBOOK.md "The series and its kickoff" is the reference):
+
+- `name` (no default): the series' name, free text. In role mode it is what
+  the architect's budget counts for; renaming it is refused unless `[limits]`
+  restates `max_architect_consults`.
+- `kickoff` (no default): the fixed kickoff line that `go` from the phone
+  sends, and that the engine sends after an approved apply in autonomous
+  role mode. Without it, `go` is refused.
+- `architect` (default `phone`): `phone` is you in the chat Project, emitting
+  kits the human carries; `role` is the headless architect handsd starts on a
+  review outcome (`[roles.architect]` must exist, or it is a config error).
+- `autonomous` (default `false`): with `architect = "role"`, the engine itself
+  approves the apply of the kit the architect role filed (`decided_by:
+  playbook`) and then sends `kickoff`. Approving such a playbook is approving
+  every apply it makes.
+- `gate_failures` (default 2): how many times in a row one roadmap gate may
+  fail before the architect escalates; a positive integer, stated in the
+  architect's prompt and judged by the architect.
+- `escalate_on` (default none): the escalation conditions, a list from
+  `blocker-unanswered`, `milestone-missing` and `budget-exhausted`; any other
+  name is refused. The engine stops on `budget-exhausted` itself; the other
+  two are the architect's judgement.
+- `kit_wait_s` (default 600): the seconds `VERDICT: next kit <name>` waits
+  for the architect's kit to be filed before the pipeline stops, naming the
+  key; a positive number.
+
+A top-level `series = "<name>"` still loads, but never beside a `[series]`
+table: TOML refuses the key twice. An empty `name` or `kickoff` is refused:
+leave the key out instead. `[limits] auto_runs` lists the runs (or missions) that may start
 without a human; anything not listed stops. `max_resumes` bounds automatic
 resumes. Never `quiet_hours` (refused).
 
-The review base: the review prompt tells the reviewer to find the last
-`review:` commit itself (the protocol says how); never `{job.head_at_start}`,
-which is wrong after a resume.
+The review base: the review prompt tells the reviewer that the protocol
+finds the mission's commits itself — its pull request, or `main` since the
+last `review:` commit (the protocol says how; §9); never
+`{job.head_at_start}`, which is wrong after a resume.
 
 Continuing without a human: a rule on `aux.done` with `blockers=0` may
-`send` the next kickoff (`run = "{n+1}"` checked against `auto_runs`), or,
-in the PR shape (§9), a merge prompt and then the next kickoff.
+`send` the next kickoff (`run = "{n+1}"` checked against `auto_runs`). In
+the pull-request shape (§9) the review has already merged the PR by then, so
+the next kickoff starts from a `main` that has the mission's code.
 
 ## 7. The review protocol
 
 A file the reviewer reads cold (`meta/REVIEW-PROTOCOL.md` or `WORKPLAN.md`
-§0.2): find the base (last `review:` commit), one sub-agent per unit
-commit in a worktree, prove tests go red on revert, run the gate at that
-commit, check design conformance, write `## Blockers`, `## Should-fix`,
-`## Notes`, `## Per-commit verdicts`, commit only the review file, reply
-with the verdict line. Blockers are failed gates, missing tests, design
+§0.2): find the commits (the mission's pull request, or `main` since the
+last `review:` commit; §9), read the hosted review when there is a PR, one
+sub-agent per unit commit in a worktree, prove tests go red on revert, run
+the gate at that commit, check design conformance, write `## Blockers`,
+`## Should-fix`, `## Notes`, `## Per-commit verdicts` (and
+`## Hosted review` with a PR), commit only the review file, merge a clean PR (§9),
+reply with the verdict line. Blockers are failed gates, missing tests, design
 violations, or claims the disk contradicts; a claim that overreaches is a
 blocker even when the code is right. Should-fix items wait for you.
 
@@ -182,16 +212,66 @@ Answers to memos, scope calls, corrections: `decisions-YYYY-MM-DD.md`
 applied by a gated plan-only job like any kit. A decision that lives only
 in chat does not exist; write it the same day.
 
-## 9. PR per run, auto-merge on a clean review
+## 9. A pull request per mission; the review merges a clean one (DESIGN §35)
 
-For projects with a `main` worth protecting: each run branches from `main`,
-the builder opens a PR at run end, the review runs on the branch, and on
-`blockers=0` with green checks a playbook rule has the builder merge
-(`gh pr merge --squash`) and, if listed, start the next run. The presence
-of the merge rule in an approved playbook is the human's standing approval
-of every merge it makes. Blockers, red checks, unrecognised verdicts stop.
-`WORKPLAN.md` lives on the branch of the run in flight; branch protection
-requires the checks.
+The branch logic lives in the brief and the review protocol, not in the
+engine: the playbook still reads one `VERDICT:` line and fires one rule.
+`templates/BUILDER-N-PROMPT.md` and `templates/REVIEW-PROTOCOL.md` carry
+both shapes below; keep the one the mission uses.
+
+**The builder.** The mission runs on a branch `mission-N`, created from
+`main` at U0 (a closer mission instead continues the open branch its brief
+names, merging `main` in first so the kit's plan files are there). Every
+unit commit goes to that branch and is pushed at once. The last unit opens
+the pull request — `gh pr create --base main --head mission-N --title
+"mission N: <title>" --body-file meta/FINAL-REPORT-N.md` — and the final
+reply carries its number: `VERDICT: mission N finished pr=<number>`. The
+playbook's `'^VERDICT: mission (?P<n>\d+) finished'` matches that line by
+prefix, and `hands kit check` accepts the `pr=<number>` placeholder. The
+builder then returns the tree to `main` with `git checkout main && git pull
+--ff-only`, because the next kit apply and the next kickoff run in that tree
+on `main`.
+
+**The review.** The review prompt names no PR and no commit: the protocol
+finds the mission's pull request itself (`gh pr list --head mission-N --state
+open --json number,baseRefName,headRefOid`). With a PR it reviews the PR's
+commits since the last reviewed tip (`git log <base>..origin/mission-N`: the
+merge-base with `main` for a first review, the `reviewed:` sha of the
+previous REVIEW file for a closer); without one, every commit on `main` since
+the last `review:` commit, as before. Before writing, the reviewer reads the
+hosted review on the PR (`gh api repos/<owner>/<repo>/issues/<pr>/comments`,
+`pulls/<pr>/comments`, `pulls/<pr>/reviews`), waiting in the foreground up to
+ten minutes for it, and treats it as a second cold reviewer:
+`REVIEW-N.md` gains a `## Hosted review` section listing each bot finding
+verbatim as confirmed (carried as blocker k or should-fix m) or dismissed
+(with the reason), and `reviewed: <sha>` on its first line after the title.
+
+**The merge.** The review file is committed to `main` before any merge (as
+`review: mission N`, pushed at once), so your clone reads it from `main` whatever
+happens to the branch. On `blockers=0` the reviewer merges the PR itself —
+`gh pr merge <number> --merge --subject "merge: mission N (PR #<number>)"`
+— and brings the tree level with `git checkout main && git pull
+--ff-only`. A merge commit, never a squash: the per-unit commits are what the
+next cold review's sub-agents work on, one per commit. With blockers the PR
+stays open and the reply says so; your next kit is a closer mission whose
+brief names the branch to continue, and its review merges when clean. The
+verdict line is unchanged: `VERDICT: review mission N blockers=<k>
+should-fix=<m>`. The merge is inside the review job on purpose: a human
+merging later would let the next kickoff start from a `main` without the
+mission's code.
+
+**Standing approval.** The human's approval of a playbook whose review
+protocol merges on a clean review is the standing approval of every merge it
+makes, as approving an autonomous playbook is approving every kit apply
+(DESIGN §31; §6 above). A project that wants a human on every merge leaves the merge step out
+of its protocol; the human merges from the phone's GitHub app, and the next
+kickoff waits for `go`.
+
+**Direct.** A brief that says "direct" keeps the old shape: commits go to
+`main`, the final reply is `VERDICT: mission N finished` with no `pr=`, and
+the protocol takes its "no PR" branch. `hands doctor`'s `gh` row warns, and
+does not fail, without `gh`, because a project may commit direct
+(docs/INTEGRATION.md §4).
 
 ## 10. What a stop means, and what to write next
 
