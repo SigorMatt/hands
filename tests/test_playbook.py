@@ -69,6 +69,7 @@ from harness import (
     PROJECT,
     UNCHECKED_KIT,
     architect_table,
+    as_published,
     cli,
     config_body,
     drive,
@@ -306,7 +307,8 @@ def test_the_repositorys_own_playbook_loads_and_its_review_lets_the_protocol_fin
 def test_the_repositorys_own_playbook_carries_the_series_kickoff() -> None:
     """§26 (mission 10 U2): the root playbook names its kickoff line in `[series]`.
     §27 Conventions, §34 (mission 18 U5), §35 (mission 19 U3): it is the next
-    mission's line, BUILDER-20.
+    mission's line, BUILDER-20. §36 (mission 20 U9): the mission-less line, so no
+    later kit re-issues the playbook to move a number.
     §31: this repository runs a phone architect, and says so — `architect = "phone"`
     is the default, written out, and it is the only §31 key the table sets."""
     path = Path(__file__).parents[1] / "PLAYBOOK.toml"
@@ -314,7 +316,8 @@ def test_the_repositorys_own_playbook_carries_the_series_kickoff() -> None:
     assert book is not None, "the repository's PLAYBOOK.toml is missing"
     assert book.series == "hands-missions"
     assert book.kickoff == (
-        "Read meta/BUILDER-20-PROMPT.md and execute the mission below its divider."
+        "Read the builder prompt with the highest mission number in the meta directory "
+        "and execute the mission below its divider."
     )
     assert book.architect == "phone"
     assert book.autonomous is False
@@ -1552,7 +1555,8 @@ def drive_notified(
 
 def stop_posts(posts: Posts) -> list[str]:
     """The stop notifications of §11, without the daemon's own start message."""
-    return [title for title in posts.sent if title == "hands: the pipeline stopped"]
+    stopped = as_published("hands: the pipeline stopped")
+    return [title for title in posts.sent if title == stopped]
 
 
 async def assert_pause_is_a_no_op(daemon: Daemon, posts: Posts, reason: str) -> None:
@@ -1636,7 +1640,7 @@ def test_a_limit_stop_over_a_rule_stop_keeps_the_first_reason(
         await daemon.notifier.drain()
         first = await ok("pipeline")
         assert first["stop_reason"] == "a rule said so"
-        assert stop_posts(posts) == ["hands: the pipeline stopped"]
+        assert stop_posts(posts) == [as_published("hands: the pipeline stopped")]
 
         daemon.limits.max_resumes = 0  # §6: the next limit has no resume left
         job = daemon.spool.create_job(
@@ -1665,7 +1669,7 @@ def test_a_limit_stop_over_a_rule_stop_keeps_the_first_reason(
         assert suppressed["payload"]["kept"] == "a rule said so"
         assert suppressed["payload"]["role"] == "builder"
         # one notification per stop that takes: the rule's, and no second one
-        assert stop_posts(posts) == ["hands: the pipeline stopped"]
+        assert stop_posts(posts) == [as_published("hands: the pipeline stopped")]
 
     drive_notified(tmp_home, workdir, body)
 
@@ -1696,7 +1700,7 @@ def test_a_limit_stop_with_no_stop_over_it_still_files_its_event_and_notifies(
         kinds = [event["kind"] for event in (await ok("inbox"))["events"]]
         assert kinds.count("stop") == 1
         assert "pipeline.stop_suppressed" not in kinds
-        assert stop_posts(posts) == ["hands: the pipeline stopped"]
+        assert stop_posts(posts) == [as_published("hands: the pipeline stopped")]
 
     drive_notified(tmp_home, workdir, body)
 
@@ -2836,8 +2840,8 @@ def test_end_to_end_an_escalation_over_a_paused_pipeline_is_suppressed_and_notif
         state = await ok("pipeline")
         assert state["paused"] and state["stop_reason"] == PAUSE_REASON
         await daemon.notifier.drain()
-        assert posts.sent.count("hands: the pipeline stopped") == 1  # the pause
-        assert posts.sent.count(SUPPRESSED_CONSULT) == 1
+        assert posts.sent.count(as_published("hands: the pipeline stopped")) == 1  # the pause
+        assert posts.sent.count(as_published(SUPPRESSED_CONSULT)) == 1
 
     async def scenario() -> None:
         daemon = Daemon(load_config(PROJECT))
@@ -5160,8 +5164,8 @@ def test_end_to_end_the_hold_of_a_role_filed_kit_is_decided_before_it_is_publish
 
         [apply_job] = [row for row in (await ok("jobs", "-n", "50"))["jobs"]
                        if row["origin"] == "architect"]
-        held = [note for note in posts.sent if note["title"] == HELD_TITLE]
-        approved = [note for note in posts.sent if note["title"] == APPROVED_TITLE]
+        held = [note for note in posts.sent if note["title"] == as_published(HELD_TITLE)]
+        approved = [note for note in posts.sent if note["title"] == as_published(APPROVED_TITLE)]
         if case == "approved":
             assert held == [], posts.sent
             assert len(approved) == 1, posts.sent
@@ -5367,7 +5371,8 @@ def test_end_to_end_a_kit_the_rule_forbids_is_denied_and_the_consultation_escala
         assert ("at most one" if case == "two kits" else "'bar'") in said, said
         session = architect["session_id"]
         assert session and f"claude --resume {session}" in said, said
-        stops = [message for title, message in posts.sent if title == "hands: the pipeline stopped"]
+        stopped = as_published("hands: the pipeline stopped")
+        stops = [message for title, message in posts.sent if title == stopped]
         assert len(stops) == 1, posts.sent
         assert f"claude --resume {session}" in strip_paths(stops[0])
         assert [e for e in await _events("gate.decided")
@@ -5664,7 +5669,8 @@ def test_end_to_end_escalate_notifies_with_the_reason_the_session_and_the_resume
         session = architect["session_id"]
         assert session
         assert reason in strip_paths(state["stop_reason"])
-        stops = [message for title, message in posts.sent if title == "hands: the pipeline stopped"]
+        stopped = as_published("hands: the pipeline stopped")
+        stops = [message for title, message in posts.sent if title == stopped]
         assert len(stops) == 1
         assert reason in strip_paths(stops[0])
         assert session in strip_paths(stops[0])

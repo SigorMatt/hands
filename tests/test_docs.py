@@ -23,6 +23,7 @@ from hands.api import Api
 from hands.config import parse_config
 from hands.daemon import NOTIFY_KINDS, START_FOLD_S
 from hands.playbook import ACTIONS, EVENTS
+from harness import as_published
 
 ROOT = Path(__file__).parents[1]
 DOCS = [
@@ -140,6 +141,27 @@ def test_the_playbook_doc_says_a_review_reads_from_the_last_review_commit() -> N
         "exactly the job that finished",
     ):
         assert must in prose, f"docs/PLAYBOOK.md's prose does not say {must!r} (§23)"
+
+
+def test_the_playbook_docs_review_range_is_the_protocols() -> None:
+    """§36 (mission 19 should-fix 1, 2; carried from mission 20 U2 to U9): the
+    prose names the commits under review as meta/REVIEW-PROTOCOL.md does — the
+    branch once as `<branch>`, `main`'s own history excluded — and the direct
+    shape only on a "Direct" Branch section, a branch with no PR a blocker."""
+    doc = (ROOT / "docs" / "PLAYBOOK.md").read_text(encoding="utf-8")
+    prose = flattened(doc.split("## The example (DESIGN §10, verbatim)")[0])
+    protocol = flattened((ROOT / "meta" / "REVIEW-PROTOCOL.md").read_text(encoding="utf-8"))
+    for must in (
+        "`git log <base>..origin/<branch> ^origin/main`",
+        "gh pr list --head <branch> --state open --json number,baseRefName,headRefOid",
+        "`git log --oneline <base>..origin/main`",
+        "\"no pull request for <branch>\"",
+    ):
+        assert must in protocol, f"meta/REVIEW-PROTOCOL.md no longer says {must!r}"
+        assert must in prose, f"docs/PLAYBOOK.md's prose does not say {must!r} (§36)"
+    assert "says \"Direct\"" in prose
+    assert "origin/mission-N" not in prose
+    assert "--head mission-N" not in prose
 
 
 def test_the_playbook_doc_maps_the_mission_8_detectors_and_says_the_group_is_weaker() -> None:
@@ -1369,7 +1391,10 @@ def test_the_inbox_kinds_hands_publishes_by_itself_are_stop_and_job_held(
         await daemon.notifier.drain()
 
     asyncio.run(scenario())
-    assert sorted(sent) == ["hands: a job is held for a human", "hands: the pipeline stopped"]
+    assert sorted(sent) == [
+        as_published("hands: a job is held for a human"),
+        as_published("hands: the pipeline stopped"),
+    ]
 
 
 def test_the_start_notification_doc_says_one_and_folds_what_the_start_raised() -> None:
@@ -2110,7 +2135,7 @@ def test_the_playbook_doc_describes_the_review_prompt_the_templates_ship() -> No
         .split("### The review base", 1)[1].split("\n## ", 1)[0]
     )
     assert said in base, f"docs/PLAYBOOK.md's review base does not say {said!r}"
-    for must in ("`gh pr list --head mission-N", "`reviewed: <sha>`", "DESIGN §35"):
+    for must in ("`gh pr list --head <branch>", "`reviewed:` sha", "DESIGN §35"):
         assert must in base, f"docs/PLAYBOOK.md's review base does not say {must!r}"
 
 

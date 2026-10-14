@@ -138,19 +138,22 @@ cwd` is optional.
     socket = "~/.hands/<project>/handsd.sock"  # default (§29)
 
     [notify]                             # the two ntfy keys are also read from
-    ntfy_topic = "hands-<something-random>"  # [server], where older configs have
-    ntfy_url = "https://ntfy.sh"         # them (default); never in both places
+                                         # [server], where older configs have
+                                         # them; never in both places
+    ntfy_topic = "hands-<project>-<something-random>"
+    ntfy_url = "https://ntfy.sh"         # default
     # ntfy_token = "tk_<…>"                     # optional: a self-hosted ntfy's access
     #                                           # token, sent as a bearer (§33); only
     #                                           # beside an ntfy_url naming that server,
     #                                           # never ntfy.sh (§34); see
     #                                           # "Self-hosted ntfy over Tailscale"
-    # cmd_topic = "hands-cmd-<another-random>"  # optional: the command channel,
-    # cmd_secret = "<one long random word>"     # required with cmd_topic
-    # who_topic = "hands-who-<random>"          # optional: the who view, and
-    # who_cmd_topic = "hands-who-cmd-<random>"  # its commands; see "Optional:
-    #                                           # notifications, the command
-    #                                           # channel and the who view"
+    # the command channel, optional (cmd_secret is required with cmd_topic),
+    # and the who view and its commands, optional; see "Optional:
+    # notifications, the command channel and the who view":
+    # cmd_topic = "hands-<project>-cmd-<another-random>"
+    # cmd_secret = "<one long random word>"
+    # who_topic = "who-<project>-<random>"
+    # who_cmd_topic = "whocmd-<project>-<random>"
 
     [roles.builder]
     cwd = "~/git/<project>"              # required; the only required key
@@ -441,8 +444,8 @@ It publishes one message to `ntfy_topic` through the same transport
 §11's `stop` and `job.held` notifications use, and prints the HTTP status ntfy
 answered with — **whatever that status was**:
 
-    ntfy 200  https://ntfy.sh/hands-<random>
-    ntfy 403  https://ntfy.sh/hands-<random>     # printed too, and exits 1
+    ntfy 200  https://ntfy.sh/hands-<project>-<random>
+    ntfy 403  https://ntfy.sh/hands-<project>-<random>     # printed too, and exits 1
 
 A 2xx exits 0; any other code is printed with the same `ntfy <code> <url>` line
 and exits 1, because the message did not reach the topic. With no `ntfy_topic`
@@ -463,7 +466,12 @@ Three uses of ntfy, each on its own random topic in `[notify]` (DESIGN §11,
 read their command topics by outbound long polls, so nothing listens on this
 machine. With `ntfy_token` set, every publish and every subscription carries it
 as a bearer ("Self-hosted ntfy over Tailscale", below). All three are off unless
-configured, and hands runs without any of them:
+configured, and hands runs without any of them. Every topic name carries the
+project (`hands-<project>-…`, `hands-<project>-cmd-…`, `who-<project>-…`,
+`whocmd-<project>-…`, DESIGN §36), and every title handsd publishes begins with
+`<project>: ` — `demo: hands: the pipeline stopped` — so two projects on one
+phone are told apart by topic and by title; the titles this page names
+(`hands: reply`, `builder`, …) are what follows that prefix:
 
 | what | on when | who reads the topic |
 |---|---|---|
@@ -484,7 +492,9 @@ that is not there; `kit transport` is on when the command channel is on and
 names what is missing. It prints no topic and no secret. The
 `config` row also warns when `ntfy_topic` is missing, since you then learn you
 are needed only by looking; and a config that does not load (a `cmd_topic`
-without a `cmd_secret`, below) is the failed `config` row, as always.
+without a `cmd_secret`, below) is the failed `config` row, as always. The
+`topics` row warns, never fails, when a configured topic's name does not carry
+the project, naming the key and the shape to rename it to — never the topic.
 
 ### Notifications
 
@@ -543,15 +553,15 @@ With `[notify] cmd_topic` set, handsd subscribes to that topic — an outbound
 long poll to ntfy, nothing listening on this machine — and takes nine commands
 from it. Set it up once:
 
-    python3 -c 'import secrets; print("hands-cmd-" + secrets.token_urlsafe(16))'
+    python3 -c 'import secrets; print("hands-<project>-cmd-" + secrets.token_urlsafe(16))'
     python3 -c 'import secrets; print(secrets.token_urlsafe(32))'
 
 The first line is a topic name, the second the secret. Put both in the config
 beside the events topic, which must be a different topic:
 
     [notify]
-    ntfy_topic = "hands-<something-random>"
-    cmd_topic = "hands-cmd-<the first line>"
+    ntfy_topic = "hands-<project>-<something-random>"
+    cmd_topic = "<the first line>"
     cmd_secret = "<the second line>"
 
 Restart handsd (`systemctl --user restart handsd@<project>`). A `cmd_topic` without a
@@ -814,8 +824,8 @@ is not answering, and exits 0.
 To have it pushed to your phone, add two more random topics:
 
     [notify]
-    who_topic = "hands-who-<something-random>"
-    who_cmd_topic = "hands-who-cmd-<something-random>"   # optional
+    who_topic = "who-<project>-<something-random>"
+    who_cmd_topic = "whocmd-<project>-<something-random>"   # optional
 
 and run `handswho --project <project>` (the same as `hands who --daemon`).
 `systemd/handswho@.service` is an optional user unit, off unless you enable it;
@@ -926,9 +936,13 @@ presses them. Keep the config file private (`chmod 600`). It already holds
 Make each name fresh, because an old name may already be known to whoever read
 it on ntfy.sh:
 
-    python3 -c 'import secrets; print("hands-" + secrets.token_urlsafe(16))'
+    python3 -c 'import secrets; print("hands-<project>-" + secrets.token_urlsafe(16))'      # ntfy_topic
+    python3 -c 'import secrets; print("hands-<project>-cmd-" + secrets.token_urlsafe(16))'  # cmd_topic
+    python3 -c 'import secrets; print("who-<project>-" + secrets.token_urlsafe(16))'        # who_topic
+    python3 -c 'import secrets; print("whocmd-<project>-" + secrets.token_urlsafe(16))'     # who_cmd_topic
 
-Once per topic. Then:
+One line per topic you set, with your project's name for `<project>` (DESIGN
+§36: two projects on one phone are then told apart by the topic too). Then:
 
 1. Put the new names in `[notify]` beside `ntfy_url` and `ntfy_token`. Keep
    `cmd_secret` if only you have seen it; if it was ever typed on a topic

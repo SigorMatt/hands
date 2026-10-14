@@ -39,6 +39,7 @@ from harness import (
     PROJECT,
     TIMEOUT,
     architect_table,
+    as_published,
     close_consultation,
     config_body,
     ok,
@@ -550,7 +551,8 @@ def test_a_daemon_start_publishes_exactly_one_start_notification(
         await asyncio.sleep(0.2)  # anything the start scheduled has had its turn
         await daemon.notifier.drain()
         titles = sorted(item["title"] for item in posts.sent)
-        assert titles == [HELD_TITLE] * len(held_ids) + ["hands: handsd started"], posts.sent
+        started = as_published("hands: handsd started")
+        assert titles == [as_published(HELD_TITLE)] * len(held_ids) + [started], posts.sent
         (started,) = posts.titled("started")
         message = strip_paths(started["message"])
         for job in held_ids:
@@ -620,7 +622,7 @@ def test_a_daemon_start_folds_what_a_queued_job_that_fails_at_once_raises(
         await daemon.playbook.drain()
         await daemon.notifier.drain()
         titles = [item["title"] for item in posts.sent]
-        assert titles == ["hands: handsd started"], posts.sent
+        assert titles == [as_published("hands: handsd started")], posts.sent
         message = strip_paths(posts.sent[0]["message"])
         stopped = (await ok("pipeline"))["stop_reason"]
         assert stopped, "the queued job's end stops a playbook with no rule"
@@ -658,7 +660,10 @@ def test_a_queued_job_still_running_does_not_hold_the_start_notification_past_it
 
         await poll(stopped, "the stop the failed job raised")
         titles = [item["title"] for item in posts.sent]
-        assert titles == ["hands: handsd started", "hands: the pipeline stopped"], posts.sent
+        assert titles == [
+            as_published("hands: handsd started"),
+            as_published("hands: the pipeline stopped"),
+        ], posts.sent
 
     phone_drive(body, start_fold_s=0.5)
 
@@ -707,7 +712,7 @@ def test_a_job_held_inside_the_start_fold_window_is_published_at_once_with_its_b
             return posts.delivered
 
         note, *_ = await poll(published, "the first notification after the hold")
-        assert note["title"] == HELD_TITLE, posts.called  # first, inside the window
+        assert note["title"] == as_published(HELD_TITLE), posts.called  # first, inside the window
         assert note.get("actions"), note
         assert (await ok("show", queued))["state"] == "running"
         bodies = sorted(action["body"].split()[0] for action in note["actions"])
@@ -728,7 +733,8 @@ def test_a_job_held_inside_the_start_fold_window_is_published_at_once_with_its_b
         await daemon.playbook.drain()
         await daemon.notifier.drain()
         titles = sorted(item["title"] for item in posts.sent)
-        assert titles == [HELD_TITLE, "hands: handsd started"], posts.called
+        started = as_published("hands: handsd started")
+        assert titles == [as_published(HELD_TITLE), started], posts.called
         assert "hands: the pipeline stopped" in strip_paths(start["message"]), start
 
     phone_drive(body, posts)
@@ -760,7 +766,7 @@ def test_a_stop_inside_the_start_fold_window_delivers_the_start_notification(
 
     phone_drive(body, posts)
     titles = [item["title"] for item in posts.delivered]
-    assert titles == ["hands: handsd started"], posts.called
+    assert titles == [as_published("hands: handsd started")], posts.called
     assert "hands: the pipeline stopped" in strip_paths(posts.delivered[0]["message"]), posts
 
 
@@ -860,7 +866,8 @@ def test_unknown_malformed_and_not_held_commands_are_ignored(
         await daemon.notifier.drain()
 
         assert (await ok("show", done["id"]))["gate"] is None
-        assert [item["title"] for item in posts.sent[published:]] == ["hands: status"]
+        status = as_published("hands: status")
+        assert [item["title"] for item in posts.sent[published:]] == [status]
         assert (await ok("pipeline"))["paused"] is False
 
     phone_drive(body)
@@ -880,7 +887,7 @@ def with_playbook(workdir: Path, series: str = f'[series]\nkickoff = "{KICKOFF}"
 
 
 def go_answers(daemon: Daemon) -> list[dict[str, Any]]:
-    return [item for item in daemon.notifier.post.sent if item["title"] == GO_TITLE]
+    return titled(daemon, GO_TITLE)
 
 
 def assert_refused(caplog: pytest.LogCaptureFixture, why: str) -> None:
@@ -1151,7 +1158,7 @@ async def consulted(daemon: Daemon, verdict: str = "VERDICT: series complete") -
 
 
 def titled(daemon: Daemon, title: str) -> list[dict[str, Any]]:
-    return [item for item in daemon.notifier.post.sent if item["title"] == title]
+    return [item for item in daemon.notifier.post.sent if item["title"] == as_published(title)]
 
 
 def assert_reply_refused(daemon: Daemon, caplog: pytest.LogCaptureFixture, why: str) -> None:
@@ -1835,7 +1842,7 @@ def kit_project(tmp_home: Path, workdir: Path, downloads: Path) -> str:
 
 
 def kit_answers(daemon: Daemon) -> list[dict[str, Any]]:
-    return [item for item in daemon.notifier.post.sent if item["title"] == KIT_TITLE]
+    return titled(daemon, KIT_TITLE)
 
 
 def kit_events(daemon: Daemon) -> list[dict[str, Any]]:
@@ -2322,7 +2329,7 @@ def test_a_kit_files_a_held_builder_apply_whose_prompt_is_kit_checks_byte_for_by
         nonce = await nonce_for(daemon, row["id"])
         (held_note,) = [
             item for item in daemon.notifier.post.sent
-            if item["title"] == daemon_mod.NOTIFY_KINDS["job.held"]
+            if item["title"] == as_published(daemon_mod.NOTIFY_KINDS["job.held"])
         ]  # fmt: skip
         assert [action["label"] for action in held_note["actions"]] == ["Approve", "Deny"]
         assert (await ok("jobs", "--origin", "kit"))["jobs"][0]["id"] == row["id"]
@@ -2593,12 +2600,12 @@ def test_a_kit_receipt_and_its_held_apply_are_spaced_for_ntfys_timestamps(
         zipped = kit_zip(good_entries("plan: mission 11 kit\n\nbody\n"))
         (row,) = await kit_jobs(daemon, fake, kit_server.attach("mission-11.zip", zipped))
         assert await state(row["id"]) == "held"
-        pair = (f"publish {KIT_TITLE}", f"publish {held_title}")
+        pair = (f"publish {as_published(KIT_TITLE)}", f"publish {as_published(held_title)}")
         kept = [item for item in order if item.startswith("sleep ") or item in pair]
         assert kept == [
-            f"publish {KIT_TITLE}",
+            f"publish {as_published(KIT_TITLE)}",
             f"sleep {PAIR_SPACING_S}",
-            f"publish {held_title}",
+            f"publish {as_published(held_title)}",
         ], order
 
     phone_drive(body, Timed())
@@ -2652,14 +2659,14 @@ def test_the_ordinary_kit_with_no_kit_md_spaces_all_three_of_its_publishes(
             if not answer["message"].startswith("kit received ")
         ]  # fmt: skip
         assert len(notices) == 1 and notices[0].startswith("apply mission-11: ")
-        wanted = (f"post {KIT_TITLE}", f"hand over {held_title}")
+        wanted = (f"post {as_published(KIT_TITLE)}", f"hand over {held_title}")
         kept = [item for item in order if item.startswith("sleep ") or item in wanted]
         assert kept == [
-            f"post {KIT_TITLE}",
+            f"post {as_published(KIT_TITLE)}",
             f"sleep {PAIR_SPACING_S}",
             f"hand over {held_title}",
             f"sleep {PAIR_SPACING_S}",
-            f"post {KIT_TITLE}",
+            f"post {as_published(KIT_TITLE)}",
         ], order
 
     phone_drive(body, Timed())

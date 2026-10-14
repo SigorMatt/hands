@@ -63,7 +63,7 @@ Write `~/.hands/<project>.toml` (every key is listed in
 `docs/INTEGRATION.md` §3; only `[roles.builder] cwd` is required):
 
     [notify]
-    ntfy_topic = "hands-<something-random>"
+    ntfy_topic = "hands-<project>-<something-random>"
 
     [roles.builder]
     cwd = "~/git/<project>"

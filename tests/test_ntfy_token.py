@@ -34,7 +34,7 @@ from hands.daemon import Daemon
 from hands.notify import Notifier, http_post, http_stream
 from hands.phone import KIT_TITLE, STATUS_TITLE
 from hands.spool import Spool
-from harness import PROJECT, TIMEOUT, config_body, poll, write_project
+from harness import PROJECT, TIMEOUT, as_published, config_body, poll, write_project
 
 NTFY = "https://ntfy.tailnet.example"
 TOKEN = "tk_U6selfhostedBearer0123456789ab"
@@ -483,7 +483,7 @@ def test_the_command_channel_subscribes_with_the_bearer_and_takes_a_command(
     answers = [
         request
         for request in ntfy.requests
-        if request.method == "POST" and request.headers.get("Title") == STATUS_TITLE
+        if request.method == "POST" and request.headers.get("Title") == as_published(STATUS_TITLE)
     ]
     if token is not None:
         assert len(answers) == 1
@@ -605,7 +605,7 @@ def test_a_kit_on_the_ntfy_server_is_fetched_with_the_bearer_and_a_foreign_one_w
                         if e.kind == "kit.received"]  # fmt: skip
             assert received == ["ours.zip", "foreign.zip"]
             titles = [request.headers.get("Title") for request in ntfy.requests]
-            assert titles.count(KIT_TITLE) == 2
+            assert titles.count(as_published(KIT_TITLE)) == 2
             assert set(ntfy.auth()) == {BEARER}
         finally:
             await daemon.stop()

@@ -215,6 +215,7 @@ def run_checks(
     found += [_roots_check(config), _ops_check(config), _isolation_check(config)]
     found += [_playbook_check(config), _notifications_check(config), _phone_check(config)]
     found += [_go_check(config), _kit_check(config), _who_check(config)]
+    found += [_topics_check(config)]
     found += [_daemon_check(config, socket_path, daemon)]
     found += [_live_check(config, role, live=live) for role in config.roles.values()]
     return found
@@ -318,6 +319,44 @@ def _who_check(config: Config) -> Check:
         f"\nnot checked here: whether handswho is running — `handswho --project "
         f"{config.project}`, or systemd/handswho@.service as `handswho@{config.project}`, "
         "off unless enabled (§24, §29)",
+    )
+
+
+#: §36: the topic keys whose names should carry the project, and the shape the
+#: documented setup lines give each.
+TOPIC_SHAPES = (
+    ("ntfy_topic", "hands-<project>-…"),
+    ("cmd_topic", "hands-<project>-cmd-…"),
+    ("who_topic", "who-<project>-…"),
+    ("who_cmd_topic", "whocmd-<project>-…"),
+)
+
+
+def _topics_check(config: Config) -> Check:
+    """§36: a configured topic whose name lacks the project is a warning, never a
+    failure. "Lacks" is the simplest reading: the project name is not a substring
+    of the topic. The keys are named; the topics are never printed."""
+    notify = config.notify
+    lacking = [
+        (key, shape)
+        for key, shape in TOPIC_SHAPES
+        if (topic := getattr(notify, key)) and config.project not in topic
+    ]
+    if not lacking:
+        return Check(
+            "topics",
+            OK,
+            f"every configured ntfy topic carries the project {config.project} (§36)",
+        )
+    keys = ", ".join(key for key, _ in lacking)
+    shapes = "; ".join(f"{key} = \"{shape}\"" for key, shape in lacking)
+    return Check(
+        "topics",
+        WARN,
+        f"[notify] {keys}: the topic name does not carry the project {config.project}, "
+        "so two projects' topics on one phone are told apart only by the title (§36)"
+        f"\nremedy: a fresh name with the project in it — {shapes}, with "
+        f"<project> = {config.project} (docs/INTEGRATION.md); hands works either way",
     )
 
 
