@@ -22,6 +22,7 @@ __all__ = [
     "ARCHITECT_ROLE",
     "BG_WAIT_CEILING_ENV",
     "CLONE_ENV",
+    "BASH_TIMEOUT_ENV",
     "CONSULT_ROLES",
     "CONSULT_ROLE_ENV",
     "DEFAULT_GATE_PATTERNS",
@@ -98,6 +99,16 @@ BG_WAIT_CEILING_ENV = "CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS"
 #: What every role job's environment carries unless `[roles.<r>] env` sets the
 #: same name (§23): `0` is the harness's own "wait indefinitely".
 DEFAULT_ROLE_ENV: dict[str, str] = {BG_WAIT_CEILING_ENV: "0"}
+#: §36 (HF-006): the harness moves a foreground Bash command past its default limit
+#: to the background, where the no-background hook cannot see it. Builder and aux
+#: jobs carry both limits at 15 minutes unless `[roles.<r>] env` sets them.
+BASH_DEFAULT_TIMEOUT_ENV = "BASH_DEFAULT_TIMEOUT_MS"
+BASH_MAX_TIMEOUT_ENV = "BASH_MAX_TIMEOUT_MS"
+BASH_TIMEOUT_ROLES: tuple[str, ...] = ("builder", "aux")
+BASH_TIMEOUT_ENV: dict[str, str] = {
+    BASH_DEFAULT_TIMEOUT_ENV: "900000",
+    BASH_MAX_TIMEOUT_ENV: "900000",
+}
 #: §27: the driver guard's role mode is this name set to `driver` in the environment.
 ROLE_ENV = "HANDS_ROLE"
 #: §28: the role a consultation names, in its driver job's environment (the runner
@@ -214,10 +225,13 @@ class RoleConfig:
         wins and an unset ceiling is `0` — whatever handsd itself inherited.
         A driver-role job also carries `HANDS_ROLE=driver` (§27) and an
         architect-role job `HANDS_ROLE=architect` (§31), on top of the table:
-        the guard's mode is not something a config can switch off.
+        the guard's mode is not something a config can switch off. A builder
+        or aux job also carries `BASH_TIMEOUT_ENV` under the table (§36).
         """
         if self.name in GUARDED_ROLES:
             return {**DEFAULT_ROLE_ENV, **self.env, ROLE_ENV: self.name}
+        if self.name in BASH_TIMEOUT_ROLES:
+            return {**DEFAULT_ROLE_ENV, **BASH_TIMEOUT_ENV, **self.env}
         return {**DEFAULT_ROLE_ENV, **self.env}
 
     @property

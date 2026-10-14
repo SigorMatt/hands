@@ -1614,6 +1614,24 @@ ARCHITECT_MODE: list[tuple[str, bool]] = [
     ("cp -r ./kits/m16 ./kits/m17", True),
     ("cp ./kits/a ./kits/b", True),
     ("mv ./kits/a ./kits/b", True),
+    # §36 (HF-003): `cp` and `cp -r` with every source under the clone and the
+    # target under KITS; nothing else of the table changes
+    ("cp ./repo/DESIGN.md ./kits/DESIGN.md", True),
+    ("cp -r ./repo/docs ./kits/m17/docs", True),
+    ("cp ./repo/DESIGN.md ./repo/SPEC.md ./kits/m17/", True),
+    ("cp /etc/passwd ./kits/passwd", False),
+    ("cp ./repo/../secret ./kits/secret", False),
+    ("cp ./repo/DESIGN.md /tmp/DESIGN.md", False),
+    ("cp ./repo/DESIGN.md ./repo/COPY.md", False),
+    ("cp ./kits/a ./repo/a", False),
+    ("cp ./repo/DESIGN.md ./kits/a ./kits/m17/", False),
+    ("cp ./repo/DESIGN.md", False),
+    ("cp -t ./kits/m17 ./repo/DESIGN.md", False),
+    ("cp -a ./repo/docs ./kits/docs", False),
+    ("cp -s ./repo/DESIGN.md ./kits/DESIGN.md", False),
+    ("cp -L ./repo/DESIGN.md ./kits/DESIGN.md", False),
+    ("mv ./repo/DESIGN.md ./kits/DESIGN.md", False),
+    ("mkdir -p ./repo/x", False),
     # §32 (REVIEW-15 blocker 2, H-030): `zip` and `unzip` left the table
     ("zip -r ./kits/m16.zip ./kits/m16", False),
     ("zip -r kits/m.zip kits/m16", False),
@@ -1625,7 +1643,6 @@ ARCHITECT_MODE: list[tuple[str, bool]] = [
     # ... and refused as soon as one path argument is not under KITS
     ("mkdir -p /tmp/evil", False),
     ("mkdir -p ./kits/../evil", False),
-    ("cp ./repo/DESIGN.md ./kits/DESIGN.md", False),
     ("cp ./kits/a /tmp/b", False),
     ("mv ./kits/a ../a", False),
     ("zip -r /tmp/m16.zip ./kits/m16", False),
@@ -1761,6 +1778,40 @@ def test_architect_mode_confines_every_path_argument_to_hands_kits(
 ) -> None:
     reason = guard.check(cmd, role="architect", consult_role="builder", clone=CLONE, kits=kits)
     assert (reason is None) == allowed, (cmd, kits, reason)
+
+
+#: §36 (HF-003): `(command, HANDS_CLONE, HANDS_KITS, allowed)` for the clone-to-kits
+#: `cp`, decided by realpath as the kits-only `cp` is; with either root unset or
+#: empty it does not pass.
+ABS_CLONE = "/home/u/hands-architect/hands/repo"
+CLONE_CP_PIN: list[tuple[str, str | None, str | None, bool]] = [
+    (f"cp {ABS_CLONE}/DESIGN.md {ABS_KITS}/DESIGN.md", ABS_CLONE, ABS_KITS, True),
+    (f"cp -r {ABS_CLONE}/docs {ABS_KITS}/m17/docs", ABS_CLONE, ABS_KITS, True),
+    (f"cp {ABS_KITS}/../repo/DESIGN.md {ABS_KITS}/x", ABS_CLONE, ABS_KITS, True),
+    (f"cp {ABS_CLONE}/../x {ABS_KITS}/x", ABS_CLONE, ABS_KITS, False),
+    (f"cp {ABS_CLONE}/DESIGN.md {ABS_KITS}/../x", ABS_CLONE, ABS_KITS, False),
+    (f"cp {ABS_CLONE}/DESIGN.md {ABS_KITS}/DESIGN.md", None, ABS_KITS, False),
+    (f"cp {ABS_CLONE}/DESIGN.md {ABS_KITS}/DESIGN.md", "", ABS_KITS, False),
+    (f"cp {ABS_CLONE}/DESIGN.md {ABS_KITS}/DESIGN.md", ABS_CLONE, None, False),
+    (f"cp {ABS_CLONE}/DESIGN.md {ABS_KITS}/DESIGN.md", ABS_CLONE, "", False),
+    (f"cp ~/DESIGN.md {ABS_KITS}/x", ABS_CLONE, ABS_KITS, False),
+    (f"cp {ABS_CLONE}/DESIGN.md {ABS_CLONE}/x", ABS_CLONE, ABS_KITS, False),
+]
+
+
+@pytest.mark.parametrize("cmd,clone,kits,allowed", CLONE_CP_PIN)
+def test_architect_cp_from_the_clone_into_the_kits_is_judged_by_realpath(
+    cmd: str, clone: str | None, kits: str | None, allowed: bool
+) -> None:
+    reason = guard.check(cmd, role="architect", consult_role="builder", clone=clone, kits=kits)
+    assert (reason is None) == allowed, (cmd, clone, kits, reason)
+
+
+def test_the_clone_to_kits_cp_exists_in_architect_mode_only() -> None:
+    for role in (None, "driver"):
+        reason = guard.check("cp ./repo/DESIGN.md ./kits/DESIGN.md", role=role,
+                             consult_role="builder", clone=CLONE, kits=KITS)
+        assert reason is not None, role
 
 
 #: §28: a word the shell expands after the guard read it is not the path the
@@ -2747,6 +2798,89 @@ def test_architect_cp_and_mv_are_refused_while_kits_holds_a_symlink(
     assert reason is not None and ("symlink" in reason or "not '" in reason), reason
     assert guard.check(f"mkdir -p {kits}/m17", role="architect", consult_role="builder",
                        clone=str(cwd / "repo"), kits=kits) is None
+
+
+def _with_clone(tmp_path: Path) -> Path:
+    """`_architect_cwd` plus a clone at `repo/` with a file and a directory."""
+    cwd = _architect_cwd(tmp_path)
+    (cwd / "repo" / "docs").mkdir(parents=True)
+    (cwd / "repo" / "DESIGN.md").write_text("design\n", encoding="utf-8")
+    (cwd / "repo" / "docs" / "A.md").write_text("a\n", encoding="utf-8")
+    return cwd
+
+
+def test_architect_cp_from_the_clone_into_the_kits_runs_under_real_bash(
+    tmp_path: Path,
+) -> None:
+    """§36 (HF-003): the role re-issues a file by copying it from its clone and
+    editing the copy; `cp` and `cp -r` run when the kits tree holds no link."""
+    cwd = _with_clone(tmp_path)
+    for cmd in ("mkdir -p kits/m17", "cp repo/DESIGN.md kits/m17/DESIGN.md",
+                "cp -r repo/docs kits/m17/docs"):
+        assert _guarded_bash(cwd, cmd) == 0, cmd
+    assert (cwd / "kits" / "m17" / "DESIGN.md").read_text(encoding="utf-8") == "design\n"
+    assert (cwd / "kits" / "m17" / "docs" / "A.md").read_text(encoding="utf-8") == "a\n"
+    # the source outside the clone, and the target outside the kits, under real bash
+    assert _guarded_bash(cwd, "cp .claude/settings.json kits/m17/s.json") == 2
+    assert _guarded_bash(cwd, "cp repo/DESIGN.md .claude/hooks/bash_guard.py") == 2
+    assert (cwd / ".claude" / "hooks" / "bash_guard.py").read_text(encoding="utf-8") == GUARD_TEXT
+
+
+@pytest.mark.parametrize(
+    "link,target,cmd",
+    [
+        ("repo/h", "../.claude/hooks/bash_guard.py", "cp repo/h kits/h"),
+        ("repo/h", "../.claude/hooks/bash_guard.py", "cp -r repo/h kits/h"),
+        ("repo/docs", "../.claude", "cp -r repo/docs kits/docs"),
+        ("repo/docs/h", "../../.claude/hooks/bash_guard.py", "cp -r repo/docs kits/docs"),
+        ("repo/l", "DESIGN.md", "cp repo/DESIGN.md repo/l kits/m17/"),
+    ],
+)
+def test_architect_cp_from_the_clone_is_refused_when_a_source_is_a_symlink(
+    tmp_path: Path, link: str, target: str, cmd: str
+) -> None:
+    """§36: refused when a source is a symlink, wherever it points — and, the
+    simplest reading for `cp -r`, when one is anywhere inside a source directory,
+    since `cp -r` copies it into the kits as a link."""
+    cwd = _with_clone(tmp_path)
+    planted = cwd / link
+    if planted.is_dir():
+        import shutil
+
+        shutil.rmtree(planted)
+    planted.symlink_to(target)
+    assert _guarded_bash(cwd, cmd) == 2, cmd
+    assert not any(p.is_symlink() for p in (cwd / "kits").rglob("*"))
+    assert (cwd / ".claude" / "hooks" / "bash_guard.py").read_text(encoding="utf-8") == GUARD_TEXT
+
+
+def test_architect_cp_from_the_clone_is_refused_while_kits_holds_a_symlink(
+    tmp_path: Path,
+) -> None:
+    cwd = _with_clone(tmp_path)
+    (cwd / "kits" / "a").mkdir()
+    (cwd / "kits" / "a" / "h").symlink_to("../../.claude/hooks/bash_guard.py")
+    for cmd in ("cp repo/DESIGN.md kits/m17", "cp -r repo/docs kits/a",
+                "cp repo/DESIGN.md kits/a/h"):
+        assert _guarded_bash(cwd, cmd) == 2, cmd
+    assert (cwd / ".claude" / "hooks" / "bash_guard.py").read_text(encoding="utf-8") == GUARD_TEXT
+
+
+def test_the_guards_selftest_carries_the_clone_to_kits_cp_rows() -> None:
+    """§36: the self-test doctor runs judges the new `cp` shapes, so a copy of the
+    guard without them (or without their refusals) is not green."""
+    architect = dict(guard.ARCHITECT_SELFTEST)
+    assert architect.get("cp ./repo/DESIGN.md ./kits/DESIGN.md") is True
+    assert architect.get("cp -r ./repo/docs ./kits/m17/docs") is True
+    assert architect.get("cp /etc/passwd ./kits/passwd") is False
+    assert architect.get("cp ./repo/DESIGN.md /tmp/DESIGN.md") is False
+    shapes = {(shape, cmd): ok for shape, cmd, ok in guard.SYMLINK_SELFTEST}
+    assert shapes.get(("clean", "cp repo/DESIGN.md kits/pay/D.md")) is True
+    assert shapes.get(("clean", "cp -r repo/docs kits/docs")) is True
+    assert shapes.get(("clone-link", "cp repo/h kits/h")) is False
+    assert shapes.get(("clone-link", "cp -r repo/docs kits/docs")) is False
+    assert shapes.get(("planted", "cp repo/DESIGN.md kits/pay/D.md")) is False
+    assert guard.symlink_selftest() == 0
 
 
 def test_architect_cp_and_mv_run_on_a_kits_tree_without_a_symlink(tmp_path: Path) -> None:

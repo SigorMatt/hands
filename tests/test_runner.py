@@ -604,6 +604,80 @@ def test_a_configured_role_env_wins_and_reaches_the_process(
     assert send(runner, spool, "FAKE:env HANDS_ROLE_EXTRA").result == "yes"
 
 
+# ---------------------------------------- §36 "The job environment" (HF-006)
+
+BASH_TIMEOUTS = ("BASH_DEFAULT_TIMEOUT_MS", "BASH_MAX_TIMEOUT_MS")
+
+
+def _env_runner(tmp_home: Path, workdir: Path, spool: Spool, roles: dict) -> Runner:
+    cfg = parse_config(
+        {"roles": roles, "runner": {"claude": str(FAKE)}},
+        project="demo",
+        path=tmp_home / ".hands" / "demo.toml",
+    )
+    return Runner(cfg, spool)
+
+
+def _ran(runner: Runner, spool: Spool, role: str, var: str) -> str | None:
+    job = spool.create_job(role=role, context="clear", prompt=f"FAKE:env {var}", origin="cli")
+    return asyncio.run(runner.run(job)).result
+
+
+@pytest.mark.parametrize("var", BASH_TIMEOUTS)
+def test_builder_and_aux_jobs_carry_the_bash_timeouts_at_900000_by_default(
+    tmp_home: Path, workdir: Path, spool: Spool, monkeypatch: pytest.MonkeyPatch, var: str
+) -> None:
+    """§36 (HF-006): the harness moves a foreground command past its default limit to
+    the background; builder and aux jobs get 900000 whatever handsd inherited."""
+    monkeypatch.setenv(var, "120000")
+    runner = _env_runner(
+        tmp_home, workdir, spool, {"builder": {"cwd": str(workdir)}, "aux": {"cwd": str(workdir)}}
+    )
+    assert _ran(runner, spool, "builder", var) == "900000"
+    assert _ran(runner, spool, "aux", var) == "900000"
+
+
+@pytest.mark.parametrize("var", BASH_TIMEOUTS)
+def test_the_role_env_table_overrides_the_bash_timeouts(
+    tmp_home: Path, workdir: Path, spool: Spool, monkeypatch: pytest.MonkeyPatch, var: str
+) -> None:
+    monkeypatch.setenv(var, "120000")
+    runner = _env_runner(
+        tmp_home,
+        workdir,
+        spool,
+        {
+            "builder": {"cwd": str(workdir), "env": {var: "1800000"}},
+            "aux": {"cwd": str(workdir), "env": {var: "60000"}},
+        },
+    )
+    assert _ran(runner, spool, "builder", var) == "1800000"
+    assert _ran(runner, spool, "aux", var) == "60000"
+
+
+@pytest.mark.parametrize("var", BASH_TIMEOUTS)
+def test_driver_and_architect_jobs_do_not_get_the_bash_timeouts_from_hands(
+    tmp_home: Path, workdir: Path, spool: Spool, monkeypatch: pytest.MonkeyPatch, var: str
+) -> None:
+    """§36 names builder and aux only: a role job of the other two inherits handsd's."""
+    monkeypatch.delenv(var, raising=False)
+    _clone_behind(workdir.parent, workdir / "repo")  # §36: the clone is advanced first
+    runner = _env_runner(
+        tmp_home,
+        workdir,
+        spool,
+        {
+            "builder": {"cwd": str(workdir)},
+            "driver": {"cwd": str(workdir)},
+            "architect": {"cwd": str(workdir)},
+        },
+    )
+    assert _ran(runner, spool, "driver", var) == f"UNSET:{var}"
+    assert _ran(runner, spool, "architect", var) == f"UNSET:{var}"
+    monkeypatch.setenv(var, "120000")
+    assert _ran(runner, spool, "driver", var) == "120000"
+
+
 def test_non_json_lines_in_the_stream_are_ignored(runner: Runner, spool: Spool) -> None:
     job = send(runner, spool, "FAKE:junk not json at all\nFAKE:result ok")
     assert job.state == "done"

@@ -55,6 +55,7 @@ import hands.monitor
 import hands.runner
 from hands.config import (
     ARCHITECT_ROLE,
+    BASH_TIMEOUT_ENV,
     BG_WAIT_CEILING_ENV,
     CLONE_ENV,
     DRIVER_ROLE,
@@ -593,6 +594,22 @@ def _project_line(project: str) -> str:
     )
 
 
+def _bash_timeout_lines(role: RoleConfig) -> str:
+    """§36 (HF-006): the Bash limits a builder or aux job really runs with, one line
+    each; nothing for a role hands does not set them on."""
+    lines = ""
+    for name in BASH_TIMEOUT_ENV:
+        if name not in role.spawn_env:
+            continue
+        source = (
+            f"set by [roles.{role.name}.env]"
+            if name in role.env
+            else "hands' default: a foreground gate is not moved to the background"
+        )
+        lines += f"\nenv {name}={role.spawn_env[name]} ({source}; §36)"
+    return lines
+
+
 def _role_check(role: RoleConfig, project: str) -> Check:
     """§2: every job is spawned in `role.cwd`, and hands reads git HEAD there."""
     name = f"role {role.name}"
@@ -610,6 +627,7 @@ def _role_check(role: RoleConfig, project: str) -> Check:
         f"{role.cwd}  model {role.model}; permission_flags {flags}"
         f"\n{role.resume_behaviour} (§6)"
         f"\nenv {BG_WAIT_CEILING_ENV}={role.spawn_env[BG_WAIT_CEILING_ENV]} ({source}; §23)"
+        f"{_bash_timeout_lines(role)}"
         f"\n{_project_line(project)}"
     )
     if not (role.cwd / ".git").exists():

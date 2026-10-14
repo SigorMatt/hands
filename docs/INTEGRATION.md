@@ -165,6 +165,8 @@ cwd` is optional.
     [roles.builder.env]                  # optional: added to handsd's environment
     CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS = "0"  # for this role's jobs. hands sets
                                          # this one to "0" unless you set it here
+    BASH_DEFAULT_TIMEOUT_MS = "900000"   # builder and aux: hands sets both Bash
+    BASH_MAX_TIMEOUT_MS = "900000"       # limits to "900000" unless set here (§36)
 
     [roles.aux]
     cwd = "~/git/<project>"
@@ -336,6 +338,12 @@ Notes that are easy to get wrong:
   value. With Claude Code's default ceiling (600 s), a `claude -p` whose turn
   ended while a sub-agent it started was still running is terminated and exits 0.
   `hands doctor` prints the effective value on each role's row.
+  Builder and aux jobs also get `BASH_DEFAULT_TIMEOUT_MS=900000` and
+  `BASH_MAX_TIMEOUT_MS=900000` unless this table sets them (§36, HF-006): the
+  harness moves a foreground command past its default limit to the background,
+  where the no-background hook cannot see it, and a three-minute gate was moved
+  so. Driver and architect jobs do not get them from hands. Doctor prints both
+  effective values on the builder and aux rows.
   Every role job's environment also carries `HANDS_PROJECT`, the config's
   project name (§36, H-043), over handsd's own environment and this table
   alike; doctor prints it on each role's row as `env HANDS_PROJECT=<project>`.
@@ -1006,7 +1014,9 @@ one `-C`, whose realpath must equal `HANDS_CLONE`'s (a second `-C` is refused,
 because git applies each `-C` relative to the one before). Architect mode
 (`HANDS_ROLE=architect`) is the same read-only table with `hands
 show|jobs|inbox|pipeline|status|kit check|kit file`, plus `mkdir -p`, `cp -r`
-and `mv` (no other option) with every path under `HANDS_KITS`, `cp` and `mv`
+and `mv` (no other option) with every path under `HANDS_KITS`, `cp` and `cp -r`
+also with every source under `HANDS_CLONE` and the target under `HANDS_KITS`
+(§36), `cp` and `mv`
 refused while anything under `HANDS_KITS` is a symlink, and every `mkdir`, `cp`,
 `mv` and write refused when `HANDS_KITS` itself is one (§33); `zip` and `unzip`
 are in no mode's table (§32). In both
@@ -1070,7 +1080,13 @@ writes once it has moved a link (review 16 should-fix 2: `cp -r kits/a/h kits/`
 moved a relative link planted inside `kits/` so it pointed out, and `cp
 kits/pay/h kits/` wrote through it over the guard), so `cp` and `mv` are refused
 while anything under `HANDS_KITS` — walked, links not followed — is a symlink;
-the architect cannot make one, and `mkdir` still runs. Since §34 (review 17
+the architect cannot make one, and `mkdir` still runs. Since §36 (HF-003) `cp`
+and `cp -r` also copy from the role's clone: every source under `HANDS_CLONE`
+and the target (the last path) under `HANDS_KITS`, judged by the same realpath
+containment, refused with `HANDS_CLONE` unset, while anything under
+`HANDS_KITS` is a symlink, and when a source is one or (for `cp -r`) holds one
+anywhere inside it; a `cp` whose sources mix the clone and the kits is refused.
+The role re-issues a file by copying it and editing the copy. Since §34 (review 17
 should-fix 3: a link in a directory of mode 0111 was skipped by the walk) the
 walk is `os.lstat` on every path from `HANDS_KITS` down, and a directory it
 cannot list or a path it cannot stat refuses `cp` and `mv` as a link does. A `HANDS_KITS` that is

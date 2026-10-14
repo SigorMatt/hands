@@ -274,6 +274,24 @@ def test_doctor_shows_a_configured_ceiling_for_the_role_that_sets_it(
     assert f"{CEILING}=0" in strip_paths(found["role aux"]["detail"])
 
 
+@pytest.mark.parametrize("var", ["BASH_DEFAULT_TIMEOUT_MS", "BASH_MAX_TIMEOUT_MS"])
+def test_doctor_prints_the_effective_bash_timeouts_on_each_role_row(
+    tmp_home: Path, tmp_path: Path, fake_mode: None, monkeypatch: pytest.MonkeyPatch, var: str
+) -> None:
+    """§36 (HF-006): 900000 unless the role's env table sets it, never doctor's own."""
+    monkeypatch.setenv(var, "120000")
+    write_config(tmp_home, tmp_path, builder_extra=f'[roles.builder.env]\n{var} = "1800000"')
+    code, out, err = run()
+    assert code == 0, f"{out}\n{err}"
+    assert f"{var}=1800000" in strip_paths(text_row(out, "role builder"))
+    assert f"{var}=900000" in strip_paths(text_row(out, "role aux"))
+    code, found = checks()
+    assert f"{var}=1800000" in strip_paths(found["role builder"]["detail"])
+    assert "[roles.builder.env]" in strip_paths(found["role builder"]["detail"])
+    assert f"{var}=900000" in strip_paths(found["role aux"]["detail"])
+    assert f"{var}=120000" not in strip_paths(found["role aux"]["detail"])
+
+
 def test_the_live_turn_runs_with_the_role_environment(
     tmp_home: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
