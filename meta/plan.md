@@ -1,55 +1,55 @@
-# plan — mission 18 (review 17; who "needs you" from current state)
+# plan — mission 19 (the pull-request flow; a hosted second reviewer)
 
-Source: meta/BUILDER-18-PROMPT.md, DESIGN v3.17 §34 (with §11, §26, §32,
-§33), meta/reviews/REVIEW-17.md. Units run in order; each ends with a commit
-and a push. `[x]` = done and pushed, `[b]` = blocked (two failures).
+Source: meta/BUILDER-19-PROMPT.md, DESIGN v3.18 §35 (with §26, §31),
+meta/reviews/REVIEW-18.md. Units run in order; each ends with a commit
+and a push, to `main` (this mission is "direct", §35 "This repository").
+`[x]` = done and pushed, `[b]` = blocked (two failures).
 
-Base of the mission: fc376ab (`plan: mission 18 kit (DESIGN v3.17)`).
+Base of the mission: 21d62d9 (`plan: mission 19 kit (DESIGN v3.18)`).
 
-- [x] U0 Plan and bookkeeping (`plan:`) 23da451 — this file, meta/CHECKPOINT.md;
-      H-038 filed (the start fold drops a held job's buttons, blocker 1 with
-      should-fix 6); FINAL-REPORT-17 §2's "both denied" (and §3.7) corrected
-      by an appended dated block
-- [x] U1 The start fold (§34; blocker 1; should-fix 6) 45da318 — `job.held` never
-      folded, published at once with buttons; start notification lists holds
-      by title only; a stop in the window flushes the fold, cancels nothing
-      queued; `cancel_all` off that path; the reviewer's two probes as tests
-- [x] U2 The kit record (§34; should-fix 1, 2) 88e8830 — `kit.json` sha256 of the
-      checked bytes; engine approval re-hashes, `kit.refused` on mismatch;
-      `kit_file` serialized per consultation, second refused before checking
-- [x] U3 Symlinks and doctor (§34; should-fix 3, 4, 5) f846965 — lstat walk from the
-      root (guard and doctor); doctor reads every settings layer, fails on
-      disabled hooks, altered matcher, hostile `env`, different command;
-      self-test runs the named guard and compares sha256 with the repo's
-- [x] U4 The token and who (§34; should-fix 7; backlog mission 18 item 1) 2221151 —
-      `ntfy_token` refused without an explicit non-public `ntfy_url`; `hands
-      who`'s "needs YOU" from current state only
-- [x] U5 This repository's playbook f159d28 — `[series] kickoff` names
-      meta/BUILDER-19-PROMPT.md; loads; kit of the BUILDER-18 brief `--repo .`
-      exits 0
-- [x] U6 Final report (meta/FINAL-REPORT-18.md) (the commit that carries
-      this line) — drafted under meta/drafts/,
-      moved in with the mission's meta bookkeeping; H-038 code line and status
+- [x] U0 Plan, bookkeeping and the gate (`plan:`) (this commit) — this file,
+      meta/CHECKPOINT.md, meta/journal.md; probe PR from `probe-qodo`, the
+      bot's first comment within 15 minutes, recorded under "Gate U0"; PR
+      closed, branch deleted
+- [ ] U1 Doctor's `gh` row (§35) — src/hands/doctor.py, tests; fake `gh` on
+      PATH: success, missing, unauthenticated, no `repo` scope; WARN never
+      FAIL; `--json` carries it
+- [ ] U2 Templates (§35) — templates/BUILDER-N-PROMPT.md,
+      templates/REVIEW-PROTOCOL.md, templates/PLAYBOOK-missions.toml,
+      templates/PLAYBOOK-runs.toml, src/hands/kit.py, tests; the `pr=<number>`
+      literal passes `verdicts`; a filled kit passes 6 of 6 against a clone
+- [ ] U3 This repository's own flow (§35) — CLAUDE.md,
+      meta/REVIEW-PROTOCOL.md, PLAYBOOK.toml (kickoff BUILDER-20, review
+      prompt); loads with 20 rules; kit `--repo .` exit 0
+- [ ] U4 Docs (§35) — docs/ARCHITECT-HANDBOOK.md §6 and §9,
+      docs/INTEGRATION.md, docs/PLAYBOOK.md
+- [ ] U5 Final report (meta/FINAL-REPORT-19.md) — drafted under meta/drafts/
 
-Review items by unit. REVIEW-17 blocker 1 → U1; should-fix 6 → U1; should-fix
-1, 2 → U2; should-fix 3, 4, 5 → U3; should-fix 7 → U4.
+Review items. REVIEW-18's should-fix 1–4 are mission 20's (the brief: this
+mission does not touch the engine, the guard, the roles or those items).
 
-Scope choices (orchestrator's):
-- Numbering. The brief says "File H-037", but H-037 already exists (mission 17
-  U8: Approve/Deny buttons carry no ntfy token). Blocker 1 is filed as H-038;
-  every reference in this mission uses that number.
-- Should-fix 7. REVIEW-17 says refusing would be wrong; DESIGN v3.17 §34 says
-  refuse at config load. The design wins (CLAUDE.md).
-- REVIEW-17's Notes (heading-rule shapes, hardlinks, `kit check`'s config
-  choice, a crash between done and the engine's end, `"hooks": {}` and
-  defaultMode shapes) are observations, not items, and are not taken unless
-  a unit's own work touches them.
+Findings. H-040 filed by U0: twelve tests/test_kit.py tests fail when
+`HANDS_PROJECT`/`HANDS_JOB` are set (this mission runs as a hands job); every
+gate of this mission is `env -u HANDS_PROJECT -u HANDS_JOB ./scripts/check`.
+H-039, H-037, H-034, H-027, H-001, H-009 stay open.
 
-Dependencies. U1 edits daemon/notifier start; U2 edits api/spool/engine kit
-path; U3 edits the guard and doctor; U4 edits config, doctor's token line and
-who. U3 and U4 both touch doctor: U3 before U4. U5 and U6 last.
+Dependencies. U2's protocol template is U3's source; U1 before U4 (the docs
+name doctor's row); U5 last.
 
-Findings. H-038 filed by U0 (code U1). H-039 filed after U1 (§34's fold names
-kinds that never reach ntfy; U1 kept §33's fold of the rest; open, the
-architect's). H-037, H-034, H-027, H-001, H-009 stay
-open.
+## Gate U0
+
+Run by the orchestrator, 2026-10-14, `gh` 2.92.0, logged in as SigorMatt
+(scopes `gist`, `read:org`, `repo`, `workflow`).
+
+- PR: SigorMatt/hands#1, `probe-qodo` → `main`, one line appended to
+  docs/INTEGRATION.md ("probe: hosted review, 2026-10-14"), commit
+  `probe: hosted review`.
+- Opened: 2026-10-14T11:31:49Z (`gh pr view 1 --json createdAt`).
+- First bot comment: 2026-10-14T11:32:18Z, `qodo-code-review[bot]`, two
+  issue comments at the same second ("PR Summary by Qodo"; "Code Review by
+  Qodo": Bugs 0, Rule violations 0, Requirement gaps 0). No entry under
+  `pulls/1/reviews` by the second poll (11:32:57Z).
+- Delay: 29 seconds.
+- Trigger mode: on open (the bot posted with no comment from me).
+- Closed: `gh pr close 1 --delete-branch`; local branch deleted; `git fetch
+  --prune` then `git branch -a` shows no `probe-qodo`.

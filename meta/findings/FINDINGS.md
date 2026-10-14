@@ -1993,3 +1993,32 @@ everything except `job.held`), or state which other kinds must publish at
 once during the window.
 
 Status: open
+
+---
+
+## H-040 — twelve `kit file` tests fail when the gate runs inside a hands job
+
+Severity: low · Component: `tests/test_kit.py` (the `hands kit file` CLI
+tests); the gate `./scripts/check`
+Filed by: mission 19 orchestrator, U0 (2026-10-14).
+
+Symptom. This mission's orchestrator runs as a hands builder job, so its
+environment carries `HANDS_PROJECT` and `HANDS_JOB`. At 21d62d9 with only
+meta/ edits, `./scripts/check` gave `12 failed, 4018 passed`; every failure is
+in tests/test_kit.py (`test_kit_file_refuses_*`,
+`test_kit_file_does_not_file_a_failing_kit_*`,
+`test_kit_file_files_a_held_apply_*`). For example:
+`hands: cannot read config <path>/home/.hands/hands.toml: [Errno 2] No such
+file or directory` where the test expected "HANDS_KITS". The CLI resolves the
+project from `$HANDS_PROJECT` (src/hands/cli.py:880) when the test names none.
+`env -u HANDS_PROJECT -u HANDS_JOB uv run pytest -q tests/test_kit.py` passes.
+So the tests are not hermetic against the environment of the job that runs
+them, and a builder dispatched by hands, which is how every mission runs, sees
+a red gate the test log does not explain.
+
+Direction. Have the tests (a conftest autouse fixture, or `scripts/check`)
+clear `HANDS_*` from the environment before they run. This is test code
+outside mission 19's scope. Mission 19 runs its gate as `env -u HANDS_PROJECT
+-u HANDS_JOB ./scripts/check` and says so in every commit body.
+
+Status: open
