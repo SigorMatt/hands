@@ -273,11 +273,14 @@ def test_the_example_parses_into_the_rules_of_section_10(tmp_home: Path, workdir
     assert book.sha256 == hashlib.sha256(EXAMPLE.encode()).hexdigest()
 
 
-def test_the_repositorys_own_playbook_loads_and_its_review_reads_from_the_last_review() -> None:
+def test_the_repositorys_own_playbook_loads_and_its_review_lets_the_protocol_find_the_commits(
+) -> None:
     """§23, review 6's scope note: the root `PLAYBOOK.toml` goes through the real
-    loader, and the rule that sends the cold review names its base as the last
-    `review:` commit, never `{job.head_at_start}` of the job that finished — a
-    resumed mission's last job starts mid-mission."""
+    loader, and the rule that sends the cold review never names
+    `{job.head_at_start}` of the job that finished — a resumed mission's last job
+    starts mid-mission. §35 "This repository" (mission 19 U3): the prompt is the
+    missions template's — the protocol finds the mission's commits itself (its
+    pull request, or `main` since the last `review:` commit)."""
     path = Path(__file__).parents[1] / "PLAYBOOK.toml"
     book = load_playbook(path)
     assert book is not None, "the repository's PLAYBOOK.toml is missing"
@@ -289,13 +292,21 @@ def test_the_repositorys_own_playbook_loads_and_its_review_reads_from_the_last_r
     prompt = reviews[0].prompt
     assert prompt is not None
     assert "head_at_start" not in strip_paths(prompt)
-    assert "every commit after the last review: commit" in strip_paths(prompt)
+    assert "every commit after" not in strip_paths(prompt)
+    assert "finds the mission's commits itself" in strip_paths(prompt)
     assert "meta/REVIEW-PROTOCOL.md" in strip_paths(prompt)
+    template = Path(__file__).parents[1] / "templates" / "PLAYBOOK-missions.toml"
+    shipped = parse_playbook(template.read_text(encoding="utf-8"), path=template)
+    [theirs] = [rule for rule in shipped.rules if rule.then == "send" and rule.role == "aux"]
+    assert prompt == theirs.prompt, "the review prompt is the missions template's"
+    assert reviews[0].verdict is not None and theirs.verdict is not None
+    assert reviews[0].verdict.pattern == theirs.verdict.pattern
 
 
 def test_the_repositorys_own_playbook_carries_the_series_kickoff() -> None:
     """§26 (mission 10 U2): the root playbook names its kickoff line in `[series]`.
-    §27 Conventions, §34 (mission 18 U5): it is the next mission's line, BUILDER-19.
+    §27 Conventions, §34 (mission 18 U5), §35 (mission 19 U3): it is the next
+    mission's line, BUILDER-20.
     §31: this repository runs a phone architect, and says so — `architect = "phone"`
     is the default, written out, and it is the only §31 key the table sets."""
     path = Path(__file__).parents[1] / "PLAYBOOK.toml"
@@ -303,7 +314,7 @@ def test_the_repositorys_own_playbook_carries_the_series_kickoff() -> None:
     assert book is not None, "the repository's PLAYBOOK.toml is missing"
     assert book.series == "hands-missions"
     assert book.kickoff == (
-        "Read meta/BUILDER-19-PROMPT.md and execute the mission below its divider."
+        "Read meta/BUILDER-20-PROMPT.md and execute the mission below its divider."
     )
     assert book.architect == "phone"
     assert book.autonomous is False

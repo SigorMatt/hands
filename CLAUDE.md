@@ -12,7 +12,11 @@ Gate: ./scripts/check (ruff, pytest, CLI smoke). Green before every commit.
 
 Conventions:
 - One commit per unit: <area>: <one line> with a body naming the unit and
-  the DESIGN.md sections it implements. Push immediately.
+  the DESIGN.md sections it implements, pushed at once to the mission's
+  branch; the brief says which (a `mission-N` branch, or `main` for a
+  "direct" brief). `main` moves by merges and by plan commits.
+- At mission end the working tree is left on `main`:
+  `git checkout main && git pull --ff-only`.
 - Tests live in tests/; tests/fake_claude.py stands in for the claude CLI.
 - Never require a real claude binary in tests.
 - Never run a background task (`run_in_background`, `nohup`, `setsid`,

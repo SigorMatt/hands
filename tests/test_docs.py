@@ -1947,3 +1947,32 @@ def test_each_templates_architect_block_carries_kit_wait_s(path: Path) -> None:
     text, _blocks = uncommented(path.read_text(encoding="utf-8"))
     assert "kit_wait_s" in text
     assert parse_playbook(text, path=path).kit_wait_s == DEFAULT_KIT_WAIT_S
+
+
+def test_this_repositorys_review_protocol_is_the_template_with_its_names() -> None:
+    """§35 "This repository" (mission 19 U3): `meta/REVIEW-PROTOCOL.md` is
+    `templates/REVIEW-PROTOCOL.md` with this repository's names — the forge's
+    `<owner>/<repo>` is `SigorMatt/hands` — and nothing else differs."""
+    template = (ROOT / "templates" / "REVIEW-PROTOCOL.md").read_text(encoding="utf-8")
+    ours = (ROOT / "meta" / "REVIEW-PROTOCOL.md").read_text(encoding="utf-8")
+    assert "<owner>/<repo>" in template
+    assert "<owner>" not in ours and "<repo>" not in ours
+    assert ours == template.replace("<owner>/<repo>", "SigorMatt/hands")
+
+
+def test_this_repositorys_claude_md_commits_to_the_missions_branch() -> None:
+    """§35 "The builder" (mission 19 U3): CLAUDE.md's convention is one commit per
+    unit pushed at once to the mission's branch, which the brief names (a
+    `mission-N` branch, or `main` for a "direct" brief); `main` moves by merges
+    and plan commits; the tree is left on `main` at mission end."""
+    text = flattened((ROOT / "CLAUDE.md").read_text(encoding="utf-8"))
+    for said in (
+        "One commit per unit: <area>: <one line>",
+        "pushed at once to the mission's branch",
+        "the brief says which",
+        "a `mission-N` branch, or `main` for a \"direct\" brief",
+        "`main` moves by merges and by plan commits",
+        "`git checkout main && git pull --ff-only`",
+    ):
+        assert said in text, f"CLAUDE.md does not say {said!r}"
+    assert "Push immediately." not in text
