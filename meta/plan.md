@@ -11,19 +11,19 @@ Base of the mission: 21d62d9 (`plan: mission 19 kit (DESIGN v3.18)`).
       meta/CHECKPOINT.md, meta/journal.md; probe PR from `probe-qodo`, the
       bot's first comment within 15 minutes, recorded under "Gate U0"; PR
       closed, branch deleted
-- [ ] U1 Doctor's `gh` row (§35) — src/hands/doctor.py, tests; fake `gh` on
+- [x] U1 Doctor's `gh` row (§35) b55dfb1 — src/hands/doctor.py, tests; fake `gh` on
       PATH: success, missing, unauthenticated, no `repo` scope; WARN never
       FAIL; `--json` carries it
-- [ ] U2 Templates (§35) — templates/BUILDER-N-PROMPT.md,
+- [x] U2 Templates (§35) 7929d9c — templates/BUILDER-N-PROMPT.md,
       templates/REVIEW-PROTOCOL.md, templates/PLAYBOOK-missions.toml,
       templates/PLAYBOOK-runs.toml, src/hands/kit.py, tests; the `pr=<number>`
       literal passes `verdicts`; a filled kit passes 6 of 6 against a clone
-- [ ] U3 This repository's own flow (§35) — CLAUDE.md,
+- [x] U3 This repository's own flow (§35) de56f62 — CLAUDE.md,
       meta/REVIEW-PROTOCOL.md, PLAYBOOK.toml (kickoff BUILDER-20, review
       prompt); loads with 20 rules; kit `--repo .` exit 0
-- [ ] U4 Docs (§35) — docs/ARCHITECT-HANDBOOK.md §6 and §9,
+- [x] U4 Docs (§35) 5220e67 — docs/ARCHITECT-HANDBOOK.md §6 and §9,
       docs/INTEGRATION.md, docs/PLAYBOOK.md
-- [ ] U5 Final report (meta/FINAL-REPORT-19.md) — drafted under meta/drafts/
+- [x] U5 Final report (meta/FINAL-REPORT-19.md) (the commit that carries this line) — drafted under meta/drafts/
 
 Review items. REVIEW-18's should-fix 1–4 are mission 20's (the brief: this
 mission does not touch the engine, the guard, the roles or those items).
