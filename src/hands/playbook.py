@@ -1313,6 +1313,12 @@ class PlaybookEngine:
     * `deny` — `Api.deny_from_playbook`, the same authority's other answer, for a
       kit §33 forbids: a second kit of one consultation, or one whose name is not
       the verdict's `next kit <name>`;
+    * `hold` — the daemon's publisher of a held job's notification with §34's
+      Approve/Deny buttons (`Daemon.publish_hold`). §36: under `autonomous`, the
+      hold of a kit the role filed is not published when it is filed
+      (`defer_hold`); the engine decides it first and then publishes one buttonless
+      "kit <name> filed by the architect; apply approved by the playbook", or,
+      when it does not approve it, the hold through this seam;
     * `sleep` — an attribute, `asyncio.sleep` by default: §32's `kit_wait_s` is
       waited through it, so a test never waits one out (as `LimitManager.sleep`).
     """
@@ -1328,6 +1334,7 @@ class PlaybookEngine:
         notify: Callable[[str, dict[str, Any]], Any] | None = None,
         approve: Callable[..., Awaitable[dict[str, Any]]] | None = None,
         deny: Callable[..., Awaitable[dict[str, Any]]] | None = None,
+        hold: Callable[[Job], Any] | None = None,
     ) -> None:
         self.config = config
         self.spool = spool
@@ -1340,6 +1347,12 @@ class PlaybookEngine:
         #: §33's seam: `Api.deny_from_playbook`. None in a caller that does not wire
         #: it: a forbidden kit then stays held for the human, and the stop says so.
         self.deny = deny
+        #: §36's seam: publish a held job with its buttons. None in a caller that
+        #: does not wire it: no hold is then deferred (`defer_hold`).
+        self.hold = hold
+        #: §36: the held applies whose notification waits for the engine's decision.
+        #: In memory: a daemon that restarts publishes every held job at its start.
+        self._deferred_holds: set[str] = set()
         #: §6's manager, when there is one: §10's `[limits] max_resumes` overrides
         #: the config's, and the counter both units read is the role's.
         self.limits = limits
@@ -1559,6 +1572,12 @@ class PlaybookEngine:
                 return
             log.info("playbook: paused (%s); %s fires nothing", self.state.paused_by, event)
             return
+        if event == "builder.done" and job is not None and self._engine_applied_kit(job):
+            # §36 (H-044): the apply may have committed a new playbook — its kickoff
+            # above all — after the load its job's start made. The builder.done of
+            # an apply the engine approved itself is decided with the committed
+            # file, reloaded now; one that no longer loads stops (`_load`).
+            await self._load()
         book = self.playbook
         if book is None:
             if enforced is not None:  # §28: the engine's stop needs no playbook
@@ -1733,6 +1752,73 @@ class PlaybookEngine:
         await self._decide_kits(consulted)
         return True
 
+    def defer_hold(self, job: Job) -> bool:
+        """§36 (H-045): called by `Api.send` before a hold's `job.held` is filed. True
+        when the notification of that hold is the engine's to publish once it has
+        decided it: a held apply of a kit the role filed (`kit_apply_problem`), under
+        a playbook in role mode with `autonomous`, over a pipeline that is not
+        paused, with a `hold` seam to publish it through. Any other hold is published
+        when it is filed, with its buttons, as §34 says.
+
+        The playbook judged is the one loaded already (the consultation's start
+        loaded it): this does not load it, so a playbook that cannot load stops the
+        pipeline where it always did, after the `job.held`, and defers nothing."""
+        if job.origin != ARCHITECT_ORIGIN or self.hold is None or self.state.paused:
+            return False
+        book = self.playbook
+        if book is None or not book.architect_is_autonomous:
+            return False
+        if kit_apply_problem(self.spool, job) is not None:
+            return False
+        self._deferred_holds.add(job.id)
+        return True
+
+    def hold_deferred(self, job_id: str) -> bool:
+        """§36: True while the notification of the hold `job_id` waits for the engine."""
+        return job_id in self._deferred_holds
+
+    def _announce_hold(self, job: Job, *, approved: bool) -> None:
+        """§36 (H-045): the engine decided the deferred hold `job`. Approved: one
+        buttonless notification naming the kit. Not approved: the hold, published
+        with its buttons as §34 publishes every hold. A hold that was not deferred
+        was published when it was filed, and nothing more is said here."""
+        if job.id not in self._deferred_holds:
+            return
+        self._deferred_holds.discard(job.id)
+        record = self.spool.read_kit_record(job.kit_id) if job.kit_id is not None else None
+        name = record["name"] if record is not None else job.kit_id
+        if approved:
+            self._notify(
+                f"hands: kit {name} filed by the architect; apply approved by the playbook",
+                {
+                    "job": job.id,
+                    "role": job.role,
+                    "kit_id": job.kit_id,
+                    "name": name,
+                    "consultation": record["consultation"] if record is not None else None,
+                },
+            )
+            return
+        if self.hold is not None:
+            outcome = self.hold(job)
+            if inspect.isawaitable(outcome):  # pragma: no cover - the daemon's is sync
+                task = asyncio.create_task(_await(outcome), name="hands-playbook-hold")
+                self._tasks.add(task)
+                task.add_done_callback(self._tasks.discard)
+
+    def _publish_undecided(self, consulted: Job) -> None:
+        """§36: every kit of `consulted` whose hold is still deferred and was not
+        approved — the engine did not decide it, or decided it is the human's — is
+        published with its buttons. A hold decided already is not deferred."""
+        for filed, _ in self._kits_of(consulted):
+            job = self._job(filed.id)
+            if job is None:
+                continue
+            if job.state != "held":
+                self._deferred_holds.discard(job.id)  # decided by someone already
+                continue
+            self._announce_hold(job, approved=False)
+
     def _kits_of(self, consulted: Job) -> list[tuple[Job, str]]:
         """§33: every apply of origin `architect` whose kit record names the
         consultation `consulted` (`kits_filed_during`)."""
@@ -1774,6 +1860,13 @@ class PlaybookEngine:
         kits = self._kits_of(consulted)
         if not kits:
             return False
+        try:
+            return await self._decide_filed(consulted, kits)
+        finally:
+            self._publish_undecided(consulted)  # §36: what was not approved is the human's
+
+    async def _decide_filed(self, consulted: Job, kits: list[tuple[Job, str]]) -> bool:
+        """`_decide_kits` for a consultation that filed `kits`."""
         event = f"{ARCHITECT}.{consulted.state}"
         stop = self._architect_stop(event, consulted)
         named = _NEXT_KIT_RE.match(consulted.verdict or "") if stop is None else None
@@ -1808,18 +1901,22 @@ class PlaybookEngine:
         apply hands filed from a checked kit (`kit_apply_problem`)."""
         job = self._job(filed.id)
         if job is None or job.state != "held":
+            self._deferred_holds.discard(filed.id)
             return  # decided already (by the engine on its hold, or by a human)
         if self.state.paused:
             log.info("playbook: paused; the architect's apply %s stays held (§10, §33)", job.id)
+            self._announce_hold(job, approved=False)  # §36: the hold is the human's
             return
         problem = kit_apply_problem(self.spool, job)
         if problem is not None:  # its `job.held` already took the human's path
             log.warning("playbook: %s is not approved (%s; §32)", job.id, problem)
+            self._announce_hold(job, approved=False)
             return
         where = _payload("job.held", job)
         if not await self._kit_bytes_unchanged(job, where):
             return
         if self.approve is None:  # pragma: no cover - wired by the daemon and the tests
+            self._announce_hold(job, approved=False)
             await self.stop(
                 f"job.held: {job.id} is the architect's apply under an autonomous playbook "
                 "and this engine has no approve seam to release it with (§31)",
@@ -1831,11 +1928,13 @@ class PlaybookEngine:
         except asyncio.CancelledError:
             raise
         except Exception as exc:
+            self._announce_hold(job, approved=False)
             await self.stop(
                 f"job.held: the engine could not approve the architect's apply {job.id}: {exc}",
                 where,
             )
             return
+        self._announce_hold(job, approved=True)  # §36: one buttonless line, no buttons
         # No inbox event of its own: the decision is recorded exactly as every
         # other gate decision is, by `Api._gate_decided` — one `gate.decided`
         # carrying `decided_by: playbook` and the reason above — and, as today,
@@ -1856,6 +1955,7 @@ class PlaybookEngine:
         if stored == recorded:
             return True
         shown = stored if stored is not None else "unreadable"
+        self._announce_hold(job, approved=False)  # §36: the hold is the human's, with buttons
         self.spool.append_event(
             "kit.refused",
             {
@@ -1899,6 +1999,8 @@ class PlaybookEngine:
         )
         if stop is not None:
             reason += f"; its own end: {stop}"
+        for job in held:  # §36: a hold the engine does not approve is published as before
+            self._announce_hold(job, approved=False)
         await self.stop(reason, _payload(event, consulted), notify_suppressed=True)
         if self.deny is None:  # pragma: no cover - wired by the daemon and the tests
             return
@@ -2288,7 +2390,9 @@ class PlaybookEngine:
         event = f"{ARCHITECT}.{job.state}"
         reason = self._architect_stop(event, job)
         book = self.playbook
-        if book is not None and book.architect_is_autonomous and await self._decide_kits(job):
+        if book is None or not book.architect_is_autonomous:
+            self._publish_undecided(job)  # §36: no longer the engine's to decide
+        elif await self._decide_kits(job):
             return  # §33: the consultation's kits made it escalate, and it has stopped
         if reason is not None:
             await self.stop(reason, _payload(event, job), notify_suppressed=True)

@@ -145,7 +145,12 @@ files. With `architect = "role"` and `autonomous = true` (DESIGN §32):
   and notifies with the reason, the architect's session id and the `claude
   --resume <id>` line;
 - `[series] kickoff` is sent to the builder when that apply, approved by the
-  engine, replies `VERDICT: kit applied`.
+  engine, replies `VERDICT: kit applied`;
+- the hold of that apply is not published when it is filed: the engine decides
+  it first (DESIGN §36). Approved, you get one notification without buttons,
+  `kit <name> filed by the architect; apply approved by the playbook`; not
+  approved (the kit is not the one the verdict named, the hash mismatches), the
+  held notification with its Approve and Deny buttons.
 
 Say it in the human's words before turning it on: **the human who approves an
 `autonomous` playbook is approving every apply the architect files under it.**
@@ -184,7 +189,10 @@ other job a rule starts, so it does not clear a stop. With `autonomous` set and
 no `[series] kickoff` to send, the engine stops and says so. The rule fires only
 for that apply — one hands filed from the architect's kit and the engine itself
 approved (DESIGN §32); any other `builder.done` replying `VERDICT: kit applied`,
-a `hands send` job's among them, meets the file's own rules.
+a `hands send` job's among them, meets the file's own rules. Before deciding
+that apply's `builder.done` the engine reloads the playbook from the committed
+file (DESIGN §36), so the kickoff it sends is the one the kit just committed; a
+playbook that no longer loads stops the pipeline with the loader's reason.
 
 ## Events (`on`)
 

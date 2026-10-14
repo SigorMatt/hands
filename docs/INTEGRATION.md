@@ -505,7 +505,14 @@ start notification; what its end raises later is published on its own.
 A held job is never folded (DESIGN §34). Its `job.held` notification is
 published at once, with its Approve and Deny buttons, whether the job was held
 before the start (every job still held is published again, with fresh buttons)
-or during it; the start notification names it by title only. Stopping handsd
+or during it; the start notification names it by title only. One hold is
+decided before it is published (DESIGN §36): under a playbook with `architect =
+"role"` and `autonomous = true`, the held apply of a kit the architect filed is
+published only once the engine has decided it — as one notification without
+buttons, `kit <name> filed by the architect; apply approved by the playbook`,
+when it approves it, and as the held notification with its buttons when it does
+not (the kit is not the one the verdict named, the stored zip's hash is not the
+checked one). Stopping handsd
 inside the window publishes the start notification first, and handsd waits for
 what is already queued to publish instead of cancelling it.
 
@@ -1148,7 +1155,11 @@ consultation" before it is checked (§34); a consultation that tried to file a
 second kit, or filed a kit of another name, ends `escalate`, and its kit, if
 still held, is denied by the engine (`decided_by: playbook`). `[series] kickoff` is sent when
 that apply, approved by the engine, replies `VERDICT: kit applied` — a rule the
-engine adds, which no playbook writes. What this cannot tell apart is another
+engine adds, which no playbook writes. The kickoff it sends is read from the
+playbook as committed when that reply is decided — the engine reloads the file
+first, so a kit that rewrote the kickoff is followed by its own line, and a
+playbook that no longer loads stops the pipeline with the loader's reason
+(DESIGN §36). What this cannot tell apart is another
 process of your user calling the socket during a consultation from the
 architect's own `hands kit file` — though such a kit must pass the check and be
 the one kit its consultation's verdict names. Read that

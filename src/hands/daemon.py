@@ -165,6 +165,9 @@ class Daemon:
             approve=self.api.decide_from_playbook,
             # §33: and its denial, of a kit the consultation may not file.
             deny=self.api.deny_from_playbook,
+            # §36: the hold of a kit the role filed is published by the engine once
+            # it has decided it — with its buttons through this, when not approved.
+            hold=self.publish_hold,
         )
         #: §24's command channel: on only when `[notify] cmd_topic` is set, which
         #: the config refuses without `cmd_secret`. Its stream is an attribute, so
@@ -374,15 +377,22 @@ class Daemon:
         """
         held = [job for job in self.spool.list_jobs() if job.state == "held"]
         for job in held:
-            gate = job.gate or {}
-            payload: dict[str, Any] = {"job": job.id, "role": job.role, "state": "held"}
-            if gate.get("reason"):
-                payload["reason"] = gate["reason"]
-            if gate.get("kind"):
-                payload["gate"] = gate["kind"]
-            actions = self.phone.actions(job.id) if self.phone is not None else None
-            self.notifier.notify(NOTIFY_KINDS["job.held"], payload, actions=actions, fold=False)
+            self.publish_hold(job)
         return [job.id for job in held]
+
+    def publish_hold(self, job: Job) -> None:
+        """One held job's notification, published at once with §34's buttons (a
+        nonce minted now) — its payload rebuilt from the job record as `send`
+        shapes it. §36: also the engine's seam for a deferred hold it did not
+        approve (`PlaybookEngine._announce_hold`)."""
+        gate = job.gate or {}
+        payload: dict[str, Any] = {"job": job.id, "role": job.role, "state": "held"}
+        if gate.get("reason"):
+            payload["reason"] = gate["reason"]
+        if gate.get("kind"):
+            payload["gate"] = gate["kind"]
+        actions = self.phone.actions(job.id) if self.phone is not None else None
+        self.notifier.notify(NOTIFY_KINDS["job.held"], payload, actions=actions, fold=False)
 
     async def serve_forever(self) -> None:
         if self._server is None:  # pragma: no cover - defensive
@@ -740,6 +750,9 @@ class Daemon:
         if self.phone is not None and event.kind == "gate.decided" and job_id:
             self.phone.discard(str(job_id))
         title = NOTIFY_KINDS.get(event.kind)
+        if event.kind == "job.held" and job_id and self.playbook.hold_deferred(str(job_id)):
+            # §36 (H-045): the engine decides this hold before anything is published.
+            title = None
         if title is not None:
             actions = None
             if self.phone is not None and event.kind == "job.held" and job_id:

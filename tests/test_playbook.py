@@ -4970,6 +4970,208 @@ def test_end_to_end_next_kit_waits_for_the_apply_the_architect_filed(
     drive(body)
 
 
+# ---- §36 "The engine" (H-044): the kickoff after an autonomous apply is the committed one
+
+#: What the scripted builder runs in place of applying a kit: write `PLAYBOOK.toml`
+#: with the given body and commit it in its cwd, as a kit's apply commit does.
+COMMIT_PLAYBOOK = """
+import subprocess, sys
+from pathlib import Path
+Path("PLAYBOOK.toml").write_text(sys.argv[1], encoding="utf-8")
+subprocess.run(["git", "add", "--", "PLAYBOOK.toml"], check=True)
+subprocess.run(["git", "commit", "-q", "-m", "plan: kit mission-17-kit"], check=True)
+"""
+
+#: The kickoff the scripted apply commits: another brief than the one loaded before it.
+NEW_KICKOFF = "Read meta/BUILDER-18-PROMPT.md and execute the mission below its divider."
+
+
+def commit_playbook_argv(body: str) -> list[str]:
+    import sys
+
+    return [sys.executable, "-c", COMMIT_PLAYBOOK, body]
+
+
+def test_end_to_end_the_kickoff_after_an_apply_is_the_one_the_apply_committed(
+    tmp_home: Path, workdir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """§36 "The engine" (H-044, the shape the series found): the engine approved the
+    apply itself, the apply rewrote and committed `[series] kickoff` and replied
+    `VERDICT: kit applied`; the kickoff job's prompt is the committed line, not the
+    one of the playbook loaded when the apply started."""
+    architect_project(tmp_home, workdir)
+    new_book = E2E_BOOK.replace(ARCHITECT_KICKOFF, NEW_KICKOFF).replace(
+        "mission 17 finished", "mission 18 finished"
+    )
+    assert NEW_KICKOFF in strip_paths(new_book)
+    assert ARCHITECT_KICKOFF not in strip_paths(new_book)
+    script(
+        tmp_home,
+        monkeypatch,
+        [
+            {"result": "VERDICT: next kit mission-17-kit", "exec": file_apply_argv(tmp_home)},
+            {"result": "VERDICT: kit applied abc1234", "exec": commit_playbook_argv(new_book)},
+        ],
+    )
+
+    async def body(daemon: Daemon) -> None:
+        review = await ok("send", "--role", "aux", "--context", "clear", fake_result(REVIEW))
+        await ok("wait", review["id"])
+        state = await wait_for_stop()
+
+        rows = sorted((await ok("jobs", "-n", "50"))["jobs"], key=lambda row: row["id"])
+        assert [(row["role"], row["origin"]) for row in rows] == [
+            ("aux", "cli"),
+            (ARCHITECT, "playbook"),
+            ("builder", "architect"),
+            ("builder", "playbook"),
+        ]
+        apply_job, kickoff = [await ok("result", row["id"]) for row in rows[2:]]
+        assert apply_job["gate"]["decided_by"] == "playbook"
+        assert apply_job["verdict"] == "VERDICT: kit applied abc1234"
+        assert (workdir / "PLAYBOOK.toml").read_text(encoding="utf-8") == new_book
+        assert kickoff["prompt"].startswith(NEW_KICKOFF), kickoff["prompt"]
+        assert ARCHITECT_KICKOFF not in strip_paths(kickoff["prompt"])
+        assert state["stop_reason"] == "Mission 18 finished"
+
+    drive(body)
+
+
+def test_end_to_end_a_playbook_that_no_longer_loads_after_the_apply_stops_with_its_reason(
+    tmp_home: Path, workdir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """§36 "The engine" (H-044): "a playbook that no longer loads after the apply
+    stops the pipeline with the loader's reason". The apply commits a playbook the
+    loader refuses; no kickoff is sent, and the stop names what the loader said."""
+    architect_project(tmp_home, workdir)
+    broken = E2E_BOOK.replace('then = "consult"', 'then = "teleport"')
+    script(
+        tmp_home,
+        monkeypatch,
+        [
+            {"result": "VERDICT: next kit mission-17-kit", "exec": file_apply_argv(tmp_home)},
+            {"result": "VERDICT: kit applied abc1234", "exec": commit_playbook_argv(broken)},
+        ],
+    )
+
+    async def body(daemon: Daemon) -> None:
+        review = await ok("send", "--role", "aux", "--context", "clear", fake_result(REVIEW))
+        await ok("wait", review["id"])
+        state = await wait_for_stop()
+
+        rows = sorted((await ok("jobs", "-n", "50"))["jobs"], key=lambda row: row["id"])
+        assert [(row["role"], row["origin"]) for row in rows] == [
+            ("aux", "cli"),
+            (ARCHITECT, "playbook"),
+            ("builder", "architect"),
+        ], "a kickoff was sent from a playbook that does not load"
+        with pytest.raises(PlaybookError) as caught:
+            load_playbook(workdir / "PLAYBOOK.toml", cwd=workdir)
+        said = strip_paths(state["stop_reason"])
+        assert strip_paths(str(caught.value)) in said, said
+        assert "teleport" in strip_paths(said), said
+
+    drive(body)
+
+
+# ---- §36 "The engine" (H-045): a role-filed kit's hold is decided before it is published
+
+PHONE_SECRET = "Xyzzy-ENGINE-s3cret-0123456789abcdef"
+HELD_TITLE = "hands: a job is held for a human"
+APPROVED_TITLE = (
+    "hands: kit mission-17-kit filed by the architect; apply approved by the playbook"
+)
+
+
+class SilentStream:
+    """The command topic's `/json` stream, open and silent: nobody types a command."""
+
+    def __call__(self, url: str) -> Any:
+        return self._lines()
+
+    async def _lines(self) -> Any:
+        yield json.dumps({"event": "open", "topic": "hands-cmd-test"})
+        await asyncio.Event().wait()
+
+
+class ActionPosts:
+    """Every publish, with its title and its buttons (`actions`, absent when none)."""
+
+    def __init__(self) -> None:
+        self.sent: list[dict[str, Any]] = []
+
+    async def __call__(self, url: str, **kwargs: Any) -> int:
+        self.sent.append(kwargs)
+        return 200
+
+
+@pytest.mark.parametrize("case", ["approved", "a kit of another name", "the hash mismatches"])
+def test_end_to_end_the_hold_of_a_role_filed_kit_is_decided_before_it_is_published(
+    tmp_home: Path, workdir: Path, monkeypatch: pytest.MonkeyPatch, case: str
+) -> None:
+    """§36 "The engine" (H-045): under `autonomous`, the hold for a kit the role
+    filed is decided before anything is published. Approved: one buttonless
+    notification "kit <name> filed by the architect; apply approved by the
+    playbook", and no held notification, no button. Not approved (the verdict names
+    another kit; the stored zip's hash is not the checked one): the held
+    notification with §34's Approve/Deny buttons, and no approval line."""
+    architect_project(tmp_home, workdir, ntfy=True)
+    with (tmp_home / ".hands" / f"{PROJECT}.toml").open("a") as config:
+        config.write(f'\n[notify]\ncmd_topic = "hands-cmd-test"\ncmd_secret = "{PHONE_SECRET}"\n')
+    verdict = "VERDICT: next kit " + ("other" if case == "a kit of another name"
+                                      else "mission-17-kit")
+    script(tmp_home, monkeypatch, [
+        {"result": verdict, "exec": file_apply_argv(tmp_home)},
+        "VERDICT: kit applied abc1234",
+    ])
+    if case == "the hash mismatches":
+        def flip(path: Path) -> None:
+            data = bytearray(path.read_bytes())
+            data[-1] ^= 0x01
+            path.write_bytes(bytes(data))
+
+        monkeypatch.setattr("hands.api.check_kit", CheckKitCalls(after=flip))
+    posts = ActionPosts()
+
+    async def scenario() -> None:
+        daemon = Daemon(load_config(PROJECT))
+        daemon.notifier.post = posts  # before start(): no test may reach a network
+        assert daemon.phone is not None, "the command channel is on in this config"
+        daemon.phone.stream = SilentStream()
+        await daemon.start()
+        try:
+            await asyncio.wait_for(body(daemon), 60)
+        finally:
+            await daemon.stop()
+
+    async def body(daemon: Daemon) -> None:
+        review = await ok("send", "--role", "aux", "--context", "clear", fake_result(REVIEW))
+        await ok("wait", review["id"])
+        await wait_for_stop()
+        await daemon.notifier.drain()
+
+        [apply_job] = [row for row in (await ok("jobs", "-n", "50"))["jobs"]
+                       if row["origin"] == "architect"]
+        held = [note for note in posts.sent if note["title"] == HELD_TITLE]
+        approved = [note for note in posts.sent if note["title"] == APPROVED_TITLE]
+        if case == "approved":
+            assert held == [], posts.sent
+            assert len(approved) == 1, posts.sent
+            assert not approved[0].get("actions"), approved[0]
+            assert all(not note.get("actions") for note in posts.sent), posts.sent
+            record = await ok("result", apply_job["id"])
+            assert record["gate"]["decided_by"] == "playbook"
+        else:
+            assert approved == [], posts.sent
+            assert len(held) == 1, posts.sent
+            assert [a["label"] for a in held[0]["actions"]] == ["Approve", "Deny"], held[0]
+            assert apply_job["id"] in json.dumps(held[0]["actions"])
+            assert [e for e in await _events("gate.decided")
+                    if e["payload"]["decision"] == "approved"] == []
+
+    asyncio.run(scenario())
+
+
 def test_end_to_end_next_kit_stops_when_no_kit_is_filed_within_kit_wait_s(
     tmp_home: Path, workdir: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

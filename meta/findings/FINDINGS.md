@@ -2114,7 +2114,10 @@ the loader's reason. Regression test: a scripted apply that rewrites and
 commits the kickoff, then the kickoff job's prompt is the committed line.
 Mission 20 U5.
 
-Status: open (code: mission 20 U5)
+Status: resolved-by-code (mission 20 U5 — the engine reloads the committed
+playbook before deciding the builder.done of an apply it approved itself; a
+playbook that no longer loads stops with the loader's reason; tests in
+tests/test_playbook.py)
 
 ---
 
@@ -2133,4 +2136,7 @@ Direction. §36: decide the hold before anything is published; one
 buttonless "kit <name> filed by the architect; apply approved by the
 playbook" when approved, the §34 buttons when not. Mission 20 U5.
 
-Status: open (code: mission 20 U5)
+Status: resolved-by-code (mission 20 U5 — Api.send defers the hold of a
+role-filed kit under autonomous; the engine publishes one buttonless approval
+line, or the hold with its buttons when it does not approve; tests in
+tests/test_playbook.py)

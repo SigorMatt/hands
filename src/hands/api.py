@@ -278,6 +278,9 @@ class Api:
         # send that is held at §8's gate or waiting in the queue has not yet
         # answered the stop.
         if reason:
+            # §36 (H-045): the hold of a kit the role filed, under `autonomous`, is
+            # decided by the engine before anything is published.
+            self.daemon.playbook.defer_hold(job)
             self.spool.append_event(
                 "job.held",
                 {"job": job.id, "role": role, "state": "held", "reason": reason, "gate": "send"},
