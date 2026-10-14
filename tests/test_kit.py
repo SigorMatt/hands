@@ -886,6 +886,138 @@ def test_the_filled_runs_playbook_passes_with_a_workplan(tmp_path: Path) -> None
     assert code == 0, out + err
 
 
+# ------------------------------------- §35: the pull-request flow's templates
+
+#: The finished literal a PR-shaped brief asks for (§35 "The builder").
+PR_FINISHED = "VERDICT: mission 11 finished pr=<number>"
+
+
+def test_a_brief_with_the_pr_literal_passes_the_verdicts_check(
+    tmp_path: Path, repo: Path
+) -> None:
+    """§35: the playbook's unchanged `^VERDICT: mission (?P<n>\\d+) finished` matches
+    `VERDICT: mission N finished pr=<number>` by prefix, so kit check's vocabulary
+    accepts the `pr=<number>` placeholder as it accepts `<unit>`."""
+    brief = BRIEF.replace("`VERDICT: mission 11\n  finished`", f"`{PR_FINISHED}`")
+    assert PR_FINISHED in strip_paths(brief)
+    kit = write_tree(tmp_path / "k", {**good_kit(), "meta/BUILDER-11-PROMPT.md": brief})
+    code, out, err = run_check(kit, repo)
+    assert code == 0, out + err
+    assert line(out, "verdicts").startswith("PASS verdicts: ")
+
+
+def test_a_brief_with_both_finished_literals_passes_and_one_without_pr_still_does(
+    tmp_path: Path, repo: Path
+) -> None:
+    """The template offers both shapes (PR and "direct"); each literal must match a
+    rule, and the one finished rule matches both. The direct brief (no `pr=`) is
+    `BRIEF` itself."""
+    assert "pr=" not in strip_paths(BRIEF)
+    both = BRIEF.replace(
+        "`VERDICT: mission 11\n  finished`", f"`{PR_FINISHED}` | `VERDICT: mission 11 finished`"
+    )
+    for name, brief in (("both", both), ("direct", BRIEF)):
+        kit = write_tree(tmp_path / name, {**good_kit(), "meta/BUILDER-11-PROMPT.md": brief})
+        code, out, err = run_check(kit, repo)
+        assert code == 0, (name, out + err)
+        assert line(out, "verdicts").startswith("PASS verdicts: "), name
+
+
+def test_the_filled_brief_template_carries_both_finished_literals() -> None:
+    literals = kit_mod.final_reply_literals(template("BUILDER-N-PROMPT.md"))
+    assert literals is not None
+    assert literals.count(PR_FINISHED) == 1
+    assert literals.count("VERDICT: mission 11 finished") == 1
+
+
+def test_the_brief_template_says_the_branch_the_pr_and_the_return_to_main() -> None:
+    """§35 "The builder": the brief template's text, flattened."""
+    text = " ".join((TEMPLATES / "BUILDER-N-PROMPT.md").read_text(encoding="utf-8").split())
+    for said in (
+        "`mission-N`",
+        "merging `main` in first",
+        "push",
+        "`gh pr create --base main --head mission-N --title \"mission N: <title>\" "
+        "--body-file meta/FINAL-REPORT-N.md`",
+        "`VERDICT: mission N finished pr=<number>`",
+        "`git checkout main && git pull --ff-only`",
+        "direct",
+    ):
+        assert said in strip_paths(text), f"the brief template does not say {said!r}"
+    assert "as before" not in strip_paths(text)
+
+
+def test_the_protocol_template_finds_the_pr_reads_the_hosted_review_and_merges() -> None:
+    """§35 "The review": the protocol template's text, flattened."""
+    text = " ".join((TEMPLATES / "REVIEW-PROTOCOL.md").read_text(encoding="utf-8").split())
+    for said in (
+        "gh pr list --head mission-N --state open --json number,baseRefName,headRefOid",
+        "`git log <base>..origin/mission-N`",
+        "merge-base with `main`",
+        "`reviewed:` sha",
+        "`review:` commit on `main`",
+        "`gh api repos/<owner>/<repo>/issues/<pr>/comments`",
+        "pulls/<pr>/comments`",
+        "pulls/<pr>/reviews`",
+        "ten minutes",
+        "one-minute foreground steps",
+        "`## Hosted review`",
+        "verbatim",
+        "dismissed",
+        "`reviewed: <sha>`",
+        "first line after the title",
+        "before any merge",
+        "`gh pr merge <number> --merge --subject \"merge: mission N (PR #<number>)\"`",
+        "`git checkout main && git pull --ff-only`",
+        "leaves the PR open",
+        "VERDICT: review mission N blockers=<k> should-fix=<m>",
+    ):
+        assert said in strip_paths(text), f"the protocol template does not say {said!r}"
+    raw = (TEMPLATES / "REVIEW-PROTOCOL.md").read_text(encoding="utf-8")
+    assert kit_mod.review_literals([raw]) == [
+        "VERDICT: review mission N blockers=<k> should-fix=<m>"
+    ]
+
+
+def test_the_missions_template_review_prompt_lets_the_protocol_find_the_commits() -> None:
+    """§35: the review prompt no longer fixes the base itself; the finished regex
+    is unchanged."""
+    book = parse_playbook(
+        template("PLAYBOOK-missions.toml"), path=TEMPLATES / "PLAYBOOK-missions.toml"
+    )
+    finished = [rule for rule in book.rules if rule.then == "send" and rule.role == "aux"]
+    assert len(finished) == 1
+    rule = finished[0]
+    assert rule.verdict is not None
+    assert rule.verdict.pattern == r"^VERDICT: mission (?P<n>\d+) finished"
+    assert rule.prompt is not None
+    assert "every commit after" not in strip_paths(rule.prompt)
+    assert "finds the mission's commits itself" in strip_paths(rule.prompt)
+
+
+def test_the_filled_missions_templates_pass_six_of_six_against_a_clone_of_this_repository(
+    tmp_path: Path,
+) -> None:
+    """§35's gate: a kit from the filled templates, checked against a `git clone` of
+    this repository, passes every check."""
+    clone = tmp_path / "clone"
+    subprocess.run(
+        ["git", "clone", "--quiet", str(ROOT), str(clone)], check=True, capture_output=True
+    )
+    kit = write_tree(
+        tmp_path / "k",
+        {
+            "meta/BUILDER-11-PROMPT.md": template("BUILDER-N-PROMPT.md"),
+            "PLAYBOOK.toml": template("PLAYBOOK-missions.toml"),
+            "meta/REVIEW-PROTOCOL.md": template("REVIEW-PROTOCOL.md"),
+        },
+    )
+    code, out, err = run_check(kit, clone)
+    assert code == 0, out + err
+    for name in CHECK_NAMES:
+        assert line(out, name).startswith(f"PASS {name}: "), out
+
+
 def test_the_handbook_section_11_names_every_check_and_the_apply_literal() -> None:
     handbook = (ROOT / "docs" / "ARCHITECT-HANDBOOK.md").read_text(encoding="utf-8")
     section = handbook.split("## 11. `hands kit check`")[1].split("\n## 12.")[0]

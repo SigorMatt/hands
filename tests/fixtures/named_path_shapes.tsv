@@ -97,5 +97,6 @@ localhost:8080
 src/hands/	
 # this repository's and the templates' send prompts, verbatim
 Read meta/REVIEW-PROTOCOL.md and review mission {n} of this repository: every commit after the last review: commit on origin/main (the protocol says how to find the base). Follow the protocol exactly, commit only meta/reviews/REVIEW-{n}.md, and begin your reply with the VERDICT line it specifies.	meta/REVIEW-PROTOCOL.md meta/reviews/REVIEW-{n}.md
+Read meta/REVIEW-PROTOCOL.md and review mission {n} of this repository: the protocol finds the mission's commits itself (its pull request, or main since the last review: commit). Follow the protocol exactly, commit only meta/reviews/REVIEW-{n}.md, and begin your reply with the VERDICT line it specifies.	meta/REVIEW-PROTOCOL.md meta/reviews/REVIEW-{n}.md
 Review WORKPLAN.md commits since the last review: commit on this branch, per WORKPLAN.md §0.2. Begin your reply with: VERDICT: review run {n} blockers=<k> should-fix=<m>	WORKPLAN.md WORKPLAN.md
 The review of run {n} has no blockers. Confirm the PR's checks are green, merge it with gh pr merge --squash, then Execute WORKPLAN.md run {n+1} on a new branch from main. Begin your reply with: VERDICT: run {n+1} finished, or VERDICT: run {n+1} blocked <reason>, or VERDICT: question <one line>	WORKPLAN.md

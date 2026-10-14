@@ -30,13 +30,15 @@ max_resumes = 2
 # <<< architect
 
 # The builder finished a mission → cold review by aux, cold (no context).
+# The protocol finds the mission's PR (or, for a direct mission, the commits on
+# main since the last review) itself, and merges a clean PR (DESIGN §35).
 [[rule]]
 on = "builder.done"
 verdict = '^VERDICT: mission (?P<n>\d+) finished'
 then = "send"
 role = "aux"
 context = "clear"
-prompt = "Read meta/REVIEW-PROTOCOL.md and review mission {n} of this repository: every commit after the last review: commit on origin/main (the protocol says how to find the base). Follow the protocol exactly, commit only meta/reviews/REVIEW-{n}.md, and begin your reply with the VERDICT line it specifies."
+prompt = "Read meta/REVIEW-PROTOCOL.md and review mission {n} of this repository: the protocol finds the mission's commits itself (its pull request, or main since the last review: commit). Follow the protocol exactly, commit only meta/reviews/REVIEW-{n}.md, and begin your reply with the VERDICT line it specifies."
 
 # A kit was applied: worth a note, not a stop. Under an autonomous architect
 # series this rule does not fire: the engine sends `[series] kickoff` itself on
