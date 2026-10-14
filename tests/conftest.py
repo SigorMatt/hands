@@ -7,6 +7,16 @@ from pathlib import Path
 import pytest
 
 
+@pytest.fixture(autouse=True)
+def _no_hands_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+    """DESIGN §36 "Hermetic tests" (H-040): every `HANDS_*` variable of the
+    environment that runs the suite is removed for every test, so the gate is
+    the same inside a hands job (which carries `HANDS_PROJECT` and `HANDS_JOB`)
+    and outside one. A test that wants one sets it itself."""
+    for name in [name for name in os.environ if name.startswith("HANDS_")]:
+        monkeypatch.delenv(name)
+
+
 @pytest.fixture
 def tmp_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Path]:
     """Point HOME (and therefore `~/.hands`) at a temp dir for the duration of a test.

@@ -497,7 +497,7 @@ commit: §10's example says "commits since the last review: commit on the
 branch", and the protocol the prompt points at says how to find it.
 
 Since DESIGN §35 a mission may be a pull request (docs/ARCHITECT-HANDBOOK.md
-§9), and the review prompt `templates/PLAYBOOK-missions.toml` and this
+§9), and the review prompt that `templates/PLAYBOOK-missions.toml` and this
 repository's `PLAYBOOK.toml` ship says the protocol finds the mission's
 commits itself (its pull request, or main since the last review: commit).
 The protocol looks for the PR with `gh pr list --head mission-N --state open

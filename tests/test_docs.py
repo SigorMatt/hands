@@ -2112,3 +2112,24 @@ def test_every_gh_command_the_docs_show_is_one_the_flow_uses(name: str) -> None:
         assert words in GH_COMMANDS or words.split()[0] == "api", (
             f"{name} shows `gh {words}`, which §35's flow does not use"
         )
+
+
+def test_integration_says_the_gh_row_reads_the_active_github_com_account() -> None:
+    """DESIGN §36 "Doctor's `gh` row" (review 19 should-fix 3, 4): the doc names the
+    command the row runs, and its claim that every warn names the remedy is the
+    code's (tests/test_doctor.py tests each warn for `gh auth login`)."""
+    text = flattened((ROOT / "docs" / "INTEGRATION.md").read_text(encoding="utf-8"))
+    row = text.split("The `gh` row (DESIGN §35", 1)[1].split("A config that will not load", 1)[0]
+    assert "`gh auth status --active --hostname github.com`" in row, row
+    assert "`gh --version` that does not answer" in row, row
+    assert "run `gh auth login` as this user" in row, row
+
+
+def test_the_playbook_doc_review_base_sentence_is_not_garbled() -> None:
+    """Review 19 should-fix 5: "the review prompt X and Y ship says" is reworded."""
+    text = flattened((ROOT / "docs" / "PLAYBOOK.md").read_text(encoding="utf-8"))
+    assert "the review prompt `templates/PLAYBOOK-missions.toml`" not in text
+    assert (
+        "the review prompt that `templates/PLAYBOOK-missions.toml` and this repository's "
+        "`PLAYBOOK.toml` ship says"
+    ) in text

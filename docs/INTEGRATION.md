@@ -374,18 +374,21 @@ are on, and whether handsd is answering. A daemon
 that is not running is a **warning**, not a failure — this step comes before
 you have to have started one. Exit code 1 means a check failed.
 
-The `gh` row (DESIGN §35) runs `gh --version` and `gh auth status` as the
-user doctor runs as — handsd's user when the daemon answers `doctor` — and
-reports the version, the path, the login and whether the token's scopes
-include `repo`:
+The `gh` row (DESIGN §35, §36) runs `gh --version` and `gh auth status
+--active --hostname github.com` as the user doctor runs as — handsd's user
+when the daemon answers `doctor` — and reports the version, the path, the
+login of the active github.com account and whether its token's scopes
+include `repo`. Another host listed by `gh auth status` (a GitHub Enterprise
+host, say) or a bad account on one does not decide the row:
 
     ok    gh   gh version 2.92.0 (2026-04-28)  (/usr/bin/gh)
                logged in as <login> (user <user>); token scopes include `repo`
 
-No `gh` on PATH, a `gh --version` that does not answer, not logged in, or a
-token without `repo` is a `warn` naming the remedy — run `gh auth login` as
-this user (and grant the `repo` scope) — and is a warning, not a failure,
-because a project may commit direct.
+No `gh` on PATH, a `gh --version` that does not answer, a `gh auth status`
+that does not return, not logged in, or a token without `repo` is a `warn`
+naming the remedy — run `gh auth login` as this user (and grant the `repo`
+scope) — and is a warning, not a failure, because a project may commit
+direct.
 
 A config that will not load at all is reported the same way, not as a crash:
 doctor prints its usual report with a failed `config` row carrying the error

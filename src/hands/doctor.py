@@ -507,10 +507,11 @@ def _gh_said(text: str) -> str:
 
 
 def _gh_check() -> Check:
-    """§35: `gh --version` and `gh auth status` for the user this process runs as
-    (handsd's, when the daemon answers `doctor`): the login and whether the token's
-    scopes include `repo`. Absent, unauthenticated or without `repo` is a warning,
-    never a failure — a project may commit direct. Only the `gh` on PATH is run."""
+    """§35, §36: `gh --version` and `gh auth status --active --hostname github.com`
+    for the user this process runs as (handsd's, when the daemon answers `doctor`):
+    the login and whether the token's scopes include `repo`. Absent, unanswering,
+    unauthenticated or without `repo` is a warning naming the remedy, never a
+    failure — a project may commit direct. Only the `gh` on PATH is run."""
     try:
         user = getpass.getuser()
     except (KeyError, OSError):
@@ -526,12 +527,19 @@ def _gh_check() -> Check:
     version = _gh_run(path, "--version")
     if isinstance(version, str) or version.returncode != 0:
         said = version if isinstance(version, str) else _gh_said(version.stderr)
-        return Check("gh", WARN, f"{path} --version did not answer: {said}")
+        return Check("gh", WARN, f"{path} --version did not answer: {said}\n{GH_REMEDY}")
     lines = (version.stdout or version.stderr).strip().splitlines()
     head = lines[0] if lines else "gh (no version printed)"
-    status = _gh_run(path, "auth", "status")
+    # §36: the active account of github.com only — a GHE host listed first, or a
+    # bad account on another host (which makes plain `gh auth status` exit 1),
+    # must not decide the row.
+    status = _gh_run(path, "auth", "status", "--active", "--hostname", "github.com")
     if isinstance(status, str):
-        return Check("gh", WARN, f"{head}  ({path})\n`gh auth status` did not run: {status}")
+        return Check(
+            "gh",
+            WARN,
+            f"{head}  ({path})\n`gh auth status` did not run: {status}\n{GH_REMEDY}",
+        )
     # gh 2.92 prints the status on stdout; older versions printed it on stderr.
     text = f"{status.stdout or ''}\n{status.stderr or ''}"
     login = _GH_LOGIN_RE.search(text)

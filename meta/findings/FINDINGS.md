@@ -2021,7 +2021,8 @@ clear `HANDS_*` from the environment before they run. This is test code
 outside mission 19's scope. Mission 19 runs its gate as `env -u HANDS_PROJECT
 -u HANDS_JOB ./scripts/check` and says so in every commit body.
 
-Status: open
+Status: resolved (code: mission 20 U1 — the autouse fixture in tests/conftest.py
+clears every `HANDS_*` variable for every test; tests/test_hermetic.py)
 
 ---
 

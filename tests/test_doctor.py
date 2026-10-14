@@ -2506,3 +2506,52 @@ def test_gh_absent_from_path_is_a_warning_naming_gh_auth_login(
     assert row["status"] == "warn", row
     assert "no `gh` on PATH" in strip_paths(row["detail"])
     assert "gh auth login" in strip_paths(row["detail"])
+
+
+# ------------------------- the `gh` row, one host and every remedy (§36, mission 20 U1)
+
+
+def test_gh_row_reads_the_active_github_com_account_not_the_first_host_listed(
+    tmp_home: Path, tmp_path: Path, fake_mode: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Review 19 should-fix 3. In `multihost` the fake's plain `gh auth status`
+    lists a GHE host first (another login, no `repo`) and exits 1 for a bad
+    account on a third host; only `--active --hostname github.com` answers with
+    github.com alone. The row must be ok with github.com's login."""
+    monkeypatch.setenv("FAKE_GH_MODE", "multihost")
+    code, row, text = _gh_row(tmp_home, tmp_path)
+    assert code == 0
+    assert row["status"] == "ok", row
+    for detail in (row["detail"], text):
+        assert "fake-login" in strip_paths(detail)
+        assert "ghe-login" not in strip_paths(detail)
+
+
+def test_gh_version_that_does_not_answer_is_a_warning_naming_gh_auth_login(
+    tmp_home: Path, tmp_path: Path, fake_mode: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Review 19 should-fix 4: every WARN of the row names the remedy."""
+    monkeypatch.setenv("FAKE_GH_MODE", "noversion")
+    code, row, text = _gh_row(tmp_home, tmp_path)
+    assert code == 0
+    assert row["status"] == "warn", row
+    assert "--version did not answer" in strip_paths(row["detail"])
+    assert "gh auth login" in strip_paths(row["detail"]) and "gh auth login" in strip_paths(text)
+
+
+def test_gh_auth_status_that_does_not_return_is_a_warning_naming_gh_auth_login(
+    tmp_home: Path, tmp_path: Path, fake_mode: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Review 19 should-fix 4: `gh auth status` timing out is a WARN with the remedy.
+    The probe timeout is shortened so the fake's 60-second sleep is cut at 1s."""
+    import hands.doctor
+
+    monkeypatch.setenv("FAKE_GH_MODE", "hang")
+    monkeypatch.setattr(hands.doctor, "PROBE_S", 1.0)
+    write_config(tmp_home, tmp_path)
+    code, found = checks()
+    assert code == 0, found
+    row = found["gh"]
+    assert row["status"] == "warn", row
+    assert "`gh auth status` did not run" in strip_paths(row["detail"])
+    assert "gh auth login" in strip_paths(row["detail"])
