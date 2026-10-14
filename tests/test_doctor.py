@@ -2555,3 +2555,200 @@ def test_gh_auth_status_that_does_not_return_is_a_warning_naming_gh_auth_login(
     assert row["status"] == "warn", row
     assert "`gh auth status` did not run" in strip_paths(row["detail"])
     assert "gh auth login" in strip_paths(row["detail"])
+
+
+# ------------------------------------- the architect's write permission (§36, H-041)
+
+#: §36: the three allows architect/settings.json ships, and the only write allows.
+KITS_WRITES = ["Edit(kits/**)", "Write(kits/**)", "MultiEdit(kits/**)"]
+
+
+def test_the_shipped_architect_settings_allow_exactly_the_three_writes_under_kits(
+    tmp_home: Path, tmp_path: Path, fake_mode: None
+) -> None:
+    """§36 (H-041): headless `claude -p` denies a tool no allow names, so without
+    these the role could not write a byte. The shipped file, loaded through the row,
+    carries the three and no other write allow, and the row is ok."""
+    allow = json.loads(ARCHITECT_SETTINGS.read_text(encoding="utf-8"))["permissions"]["allow"]
+    writes = [e for e in allow if re.match(r"\s*(Edit|Write|MultiEdit)\b", e, re.IGNORECASE)]
+    assert sorted(writes) == sorted(KITS_WRITES), allow
+    d = architect_dir(tmp_path)
+    add_architect(write_config(tmp_home, tmp_path), d)
+    code, found = checks()
+    row = found["role architect"]
+    assert code == 0 and row["status"] == "ok", row
+    assert "write allow: Edit(kits/**), Write(kits/**), MultiEdit(kits/**)" in strip_paths(
+        row["detail"]
+    ), row
+
+
+def _architect_allow(d: Path, allow: list[str], file: str = "settings.json") -> None:
+    path = d / ".claude" / file
+    data = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+    data.setdefault("permissions", {})["allow"] = allow
+    path.write_text(json.dumps(data), encoding="utf-8")
+
+
+@pytest.mark.parametrize("missing", KITS_WRITES)
+def test_an_architect_settings_without_one_of_the_three_write_allows_fails_doctor(
+    tmp_home: Path, tmp_path: Path, fake_mode: None, missing: str
+) -> None:
+    d = architect_dir(tmp_path)
+    allow = json.loads(ARCHITECT_SETTINGS.read_text(encoding="utf-8"))["permissions"]["allow"]
+    _architect_allow(d, [entry for entry in allow if entry != missing])
+    add_architect(write_config(tmp_home, tmp_path), d)
+    code, found = checks()
+    row = found["role architect"]
+    assert code == 1 and row["status"] == "fail", row
+    assert f"no {missing}" in strip_paths(row["detail"]), row
+
+
+@pytest.mark.parametrize(
+    ("extra", "file"),
+    [
+        ("Write(repo/**)", "settings.json"),
+        ("Edit(.claude/**)", "settings.json"),
+        ("MultiEdit(./kits/**)", "settings.json"),
+        ("write(kits/**/../..)", "settings.json"),
+        ("Edit(~/**)", "settings.local.json"),
+    ],
+    ids=["Write-repo", "Edit-claude", "MultiEdit-dot-kits", "lowercase-write", "local-Edit-home"],
+)
+def test_an_architect_write_allow_naming_anything_but_kits_fails_doctor(
+    tmp_home: Path, tmp_path: Path, fake_mode: None, extra: str, file: str
+) -> None:
+    """§36: an allow for a write tool that names anything but `kits/**`, in any of
+    the settings layers the row reads, fails the row."""
+    d = architect_dir(tmp_path)
+    allow = json.loads(ARCHITECT_SETTINGS.read_text(encoding="utf-8"))["permissions"]["allow"]
+    if file == "settings.json":
+        _architect_allow(d, [*allow, extra])
+    else:
+        _architect_allow(d, [extra], file)
+    add_architect(write_config(tmp_home, tmp_path), d)
+    code, found = checks()
+    row = found["role architect"]
+    assert code == 1 and row["status"] == "fail", row
+    assert repr(extra) in strip_paths(row["detail"]), row
+
+
+#: §36: the one-file kit `doctor --live` has the architect write and check.
+LIVE_KIT = "hands-doctor-live"
+LIVE_FILE = "DOCTOR-LIVE.md"
+
+
+def _live_architect(
+    tmp_home: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    tools: Any,
+    *,
+    job: bool = True,
+) -> tuple[dict[str, Any], Path, str | None]:
+    """`hands doctor --live` against a running daemon, the architect's turn scripted
+    by `tools(kit_file, job_id)` — the fake performs the calls a real turn would
+    make. The builder's and aux's live turns take the first two replies."""
+    import sys
+
+    monkeypatch.setenv("PATH", f"{Path(sys.executable).parent}{os.pathsep}{os.environ['PATH']}")
+    d = architect_dir(tmp_path)
+    add_architect(write_config(tmp_home, tmp_path), d)
+    kit_file = d / "kits" / LIVE_KIT / LIVE_FILE
+    seen: dict[str, Any] = {}
+
+    async def body(daemon: Daemon) -> None:
+        job_id = None
+        if job:
+            job_id = daemon.spool.create_job(
+                role="aux", context="clear", prompt="hello", origin="cli", state="held"
+            ).id
+        replies = tmp_home / "replies.json"
+        replies.write_text(json.dumps(
+            ["VERDICT: doctor ok", "VERDICT: doctor ok",
+             {"result": "VERDICT: doctor ok", "tools": tools(kit_file, job_id)}]
+        ))  # fmt: skip
+        monkeypatch.setenv("HANDS_FAKE_CLAUDE_REPLIES", str(replies))
+        out, err = io.StringIO(), io.StringIO()
+        await asyncio.to_thread(
+            main, ["--project", "demo", "doctor", "--json", "--live"], stdout=out, stderr=err
+        )
+        assert out.getvalue(), err.getvalue()
+        seen["found"] = {c["name"]: c for c in json.loads(out.getvalue())["checks"]}
+        seen["job"] = job_id
+
+    drive(body)
+    return seen["found"], kit_file, seen["job"]
+
+
+def _write(path: Path, *, denied: bool = False) -> dict[str, Any]:
+    call = {"name": "Write", "input": {"file_path": str(path), "content": "doctor\n"}}
+    return {**call, "denied": True} if denied else call
+
+
+def _bash(command: str, *, denied: bool = False) -> dict[str, Any]:
+    call: dict[str, Any] = {"name": "Bash", "input": {"command": command}}
+    return {**call, "denied": True} if denied else call
+
+
+KIT_CHECK = f"hands kit check kits/{LIVE_KIT} --repo ./repo"
+
+
+def test_doctor_live_for_the_architect_writes_checks_shows_and_removes(
+    tmp_home: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """§36 (H-041): a scripted live turn that writes the one file under kits/, runs
+    `hands kit check` on that one-file kit against the clone and `hands show` on a
+    job of the spool passes the row; doctor removes the file afterwards."""
+    found, kit_file, job_id = _live_architect(
+        tmp_home, tmp_path, monkeypatch,
+        lambda path, job: [_write(path), _bash(KIT_CHECK), _bash(f"hands show {job}")],
+    )  # fmt: skip
+    row = found["live architect"]
+    assert row["status"] == "ok", row
+    for step in ("wrote", "kit check", f"hands show {job_id}", "removed"):
+        assert step in strip_paths(row["detail"]), row
+    assert not kit_file.exists() and not kit_file.parent.exists()
+
+
+@pytest.mark.parametrize(
+    ("step", "tools"),
+    [
+        ("write", lambda path, job: [
+            _write(path, denied=True), _bash(KIT_CHECK), _bash(f"hands show {job}")]),
+        ("kit check", lambda path, job: [
+            _write(path), _bash(KIT_CHECK, denied=True), _bash(f"hands show {job}")]),
+        ("hands show", lambda path, job: [
+            _write(path), _bash(KIT_CHECK), _bash(f"hands show {job}", denied=True)]),
+        ("hands show", lambda path, job: [_write(path), _bash(KIT_CHECK)]),
+        ("remove", lambda path, job: [
+            _write(path), _bash(KIT_CHECK), _bash(f"hands show {job}"),
+            _bash(f"chmod 555 kits/{LIVE_KIT}")]),
+    ],
+    ids=["write-denied", "kit-check-denied", "show-denied", "show-not-run", "not-removable"],
+)
+def test_doctor_live_for_an_architect_that_cannot_do_all_four_fails(
+    tmp_home: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, step: str, tools: Any
+) -> None:
+    """§36: a live turn that cannot do all four fails the row, naming what did not
+    happen. `not-removable` leaves the kit directory unwritable, so doctor cannot
+    remove the file."""
+    found, kit_file, _ = _live_architect(tmp_home, tmp_path, monkeypatch, tools)
+    if kit_file.parent.exists():
+        kit_file.parent.chmod(0o755)
+    row = found["live architect"]
+    assert row["status"] == "fail", row
+    assert f"did not happen: {step}" in strip_paths(row["detail"]), row
+
+
+def test_doctor_live_for_the_architect_fails_without_a_job_to_show(
+    tmp_home: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """§36: `hands show` needs a job of the spool; with none the row fails before a
+    turn is spent, and says how to make one."""
+    found, kit_file, _ = _live_architect(
+        tmp_home, tmp_path, monkeypatch, lambda path, job: [_write(path)], job=False
+    )
+    row = found["live architect"]
+    assert row["status"] == "fail", row
+    assert "no job in the spool" in strip_paths(row["detail"]), row
+    assert not kit_file.exists()

@@ -57,7 +57,15 @@ result event, as `FAKE:no-turns` does; `"task_killed": [[<task-id>, <command>], 
 in it emits the task-killed notice for each pair before the result, as
 `FAKE:task-killed` does; `"exec": [<argv>…]` in it runs that command (stdin from
 /dev/null, output to this process's stderr) before the result is emitted, which
-is how a scripted driver role performs its `hands send --context keep` (§27). A
+is how a scripted driver role performs its `hands send --context keep` (§27);
+`"tools": [{"name": <tool>, "input": {…}, "denied": <bool>}, …]` in it emits,
+for each, the `assistant` tool_use and the `user` tool_result a real turn
+carries, before the result: a `Write` writes `input.file_path` (relative to the
+cwd) with `input.content`, a `Bash` runs `input.command` with `sh -c` in the cwd
+(its stdout and stderr are the result's content, and `is_error` is a non-zero
+exit), and `"denied": true` performs nothing, answers with the permission
+refusal and adds a `permission_denials` entry — which is how a scripted
+architect role writes under `kits/`, or cannot (§36, H-041). A
 reply is taken only on the path that emits a
 successful result, so a prompt with `FAKE:error`, `FAKE:no-result` or
 `FAKE:rate-limit` leaves the queue where it was.
@@ -202,6 +210,71 @@ def emit_task_killed(session_id: str, task_id: str, command: str) -> None:
             "session_id": session_id,
         }
     )
+
+
+def emit_tool(session_id: str, tool_use_id: str, call: dict[str, object]) -> object:
+    """One scripted tool call (`"tools"` in a reply entry): its `assistant` tool_use,
+    the call performed (or not, when denied), and its `user` tool_result. Returns the
+    `permission_denials` entry of a denied call, else None."""
+    name = str(call.get("name"))
+    raw = call.get("input")
+    tool_input: dict[str, object] = raw if isinstance(raw, dict) else {}
+    emit(
+        {
+            "type": "assistant",
+            "message": {
+                "role": "assistant",
+                "content": [
+                    {"type": "tool_use", "id": tool_use_id, "name": name, "input": tool_input}
+                ],
+            },
+            "parent_tool_use_id": None,
+            "session_id": session_id,
+        }
+    )
+    denial = None
+    if call.get("denied"):
+        content, is_error = f"Permission to use {name} has been denied.", True
+        denial = {"tool_name": name, "tool_use_id": tool_use_id, "tool_input": tool_input}
+    elif name == "Write":
+        path = str(tool_input.get("file_path"))
+        try:
+            os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+            with open(path, "w", encoding="utf-8") as handle:
+                handle.write(str(tool_input.get("content", "")))
+            content, is_error = f"File created successfully at: {path}", False
+        except OSError as exc:
+            content, is_error = f"Error writing {path}: {exc}", True
+    elif name == "Bash":
+        ran = subprocess.run(
+            ["sh", "-c", str(tool_input.get("command"))],
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        content, is_error = ran.stdout + ran.stderr, ran.returncode != 0
+    else:
+        content, is_error = f"fake_claude: no tool {name}", True
+    emit(
+        {
+            "type": "user",
+            "message": {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": tool_use_id,
+                        "content": content,
+                        "is_error": is_error,
+                    }
+                ],
+            },
+            "parent_tool_use_id": None,
+            "session_id": session_id,
+        }
+    )
+    return denial
 
 
 #: What `FAKE:orphan` leaves running: a command line a test can assert on exactly.
@@ -474,6 +547,11 @@ def main(argv: list[str]) -> int:
         )
         sys.stderr.write(f"exec exit {ran.returncode}\n{ran.stdout}{ran.stderr}")
         sys.stderr.flush()
+    tools = entry.get("tools")
+    for n, call in enumerate(tools if isinstance(tools, list) else []):
+        denial = emit_tool(session_id, f"toolu_fake_tool_{n}", call)
+        if denial is not None:
+            denials.append(denial)
     killed = entry.get("task_killed")
     for pair in killed if isinstance(killed, list) else []:
         emit_task_killed(session_id, str(pair[0]), str(pair[1]))

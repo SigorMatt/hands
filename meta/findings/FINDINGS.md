@@ -2044,7 +2044,8 @@ Direction. §36: allow exactly `Edit(kits/**)`, `Write(kits/**)`,
 `MultiEdit(kits/**)`; doctor's row fails without them or with a wider write
 allow; `doctor --live` writes, checks, shows and removes. Mission 20 U3.
 
-Status: open (code: mission 20 U3)
+Status: resolved (code: mission 20 U3 — architect/settings.json allows the
+three writes under kits/; doctor's architect row and its `--live` turn judge them)
 
 ---
 

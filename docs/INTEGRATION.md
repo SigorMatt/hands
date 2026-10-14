@@ -1050,7 +1050,23 @@ directory that is missing or does not resolve under the architect's cwd
 (§32), and (§33) on a kits directory that is a symlink or holds one (§34: or
 holds a directory the same walk as the guard's cannot list), or when
 `.claude`, its hooks directory, either settings file, either guard file or the
-clone resolves under the kits directory; a missing clone warns.
+clone resolves under the kits directory; a missing clone warns. Since §36
+(finding H-041) it also fails when the settings lack any of the three allows
+`architect/settings.json` ships — `Edit(kits/**)`, `Write(kits/**)` and
+`MultiEdit(kits/**)`; headless `claude -p` denies a tool no allow names, and the
+`--write` hook only ever denies, so without them the role cannot write a byte —
+or when any allow for `Edit`, `Write` or `MultiEdit`, in any settings layer it
+reads, names anything but `kits/**`. `hands doctor --live` gives the architect
+a turn that does its work in miniature: it writes one file,
+`kits/hands-doctor-live/DOCTOR-LIVE.md`, with the Write tool, runs `hands kit
+check kits/hands-doctor-live --repo ./repo` on that one-file kit and `hands
+show <job>` on the newest job of the spool (so a daemon must be running, and a
+spool with no job fails the row before a turn is spent); doctor then removes
+the file, which the role cannot (its settings deny `rm`). The row is judged
+from what happened — the file on disk, the two commands and their results in
+the turn's stream, the path gone — and names whichever of the four did not
+happen. The tests prove it with the fake `claude` performing scripted tool
+calls; a real turn under the real settings and guard is not proven by them.
 
 **Directory kits (finding H-030, resolved by DESIGN v3.15 §32; code: mission 16
 U2).** Under §31 the architect's `zip` could store entries only under

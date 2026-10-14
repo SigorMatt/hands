@@ -56,6 +56,7 @@ import hands.runner
 from hands.config import (
     ARCHITECT_ROLE,
     BG_WAIT_CEILING_ENV,
+    CLONE_ENV,
     DRIVER_ROLE,
     GUARDED_ROLES,
     KITS_ENV,
@@ -73,7 +74,7 @@ from hands.playbook import (
     playbook_path,
 )
 from hands.runner import build_argv
-from hands.spool import SpoolError, resolve_under_roots
+from hands.spool import Spool, SpoolError, resolve_under_roots
 
 __all__ = [
     "FAKE_ENV",
@@ -105,6 +106,18 @@ GUARD_INTERPRETER = "python3"
 #: three tools; doctor asks that each of them be judged, however it is spelled.
 WRITE_FLAG = "--write"
 WRITE_TOOLS: tuple[str, ...] = ("Write", "Edit", "MultiEdit")
+#: §36 (H-041): the one specifier an allow for a write tool may carry in the
+#: architect's settings, and so the three allows architect/settings.json ships —
+#: headless `claude -p` denies a tool no allow names, and the `--write` hook only
+#: ever denies, so without them the role cannot write a byte.
+KITS_SPECIFIER = "kits/**"
+#: §36: the one-file kit `doctor --live` has the architect write under `kits/` and
+#: check. Doctor removes it (the role cannot: its settings deny `rm`).
+LIVE_KIT = "hands-doctor-live"
+LIVE_FILE = "DOCTOR-LIVE.md"
+LIVE_CONTENT = "doctor"
+#: §36: what `hands kit check` prints for a one-file kit it read against a repository.
+LIVE_KIT_CHECKED = "PASS paths: 1 files"
 #: §31, §32: the push URL driver/README.md and architect/README.md give the clone.
 NO_PUSH = "no_push"
 #: §32 (review 15 should-fix 6), §33: tools a settings file must not allow
@@ -790,6 +803,15 @@ def _architect_check(config: Config) -> Check:
         settings += f"\nsettings: {env_problem}; remove it"
         failures.append(env_problem)
 
+    allows = _settings_write_allows(loaded)  # §36 (H-041)
+    if allows is None:
+        verified.append(
+            "write allow: " + ", ".join(f"{tool}({KITS_SPECIFIER})" for tool in WRITE_ALLOWS)
+        )
+    else:
+        settings += f"\nsettings: {allows}; copy architect/settings.json again (§36)"
+        failures.append(allows)
+
     write_named, write_problem, write_command = _settings_name_the_write_guard(
         loaded, role.cwd, required=True
     )
@@ -1319,6 +1341,43 @@ def _allows_wholesale(entry: str) -> bool:
     return specifier is None or re.search(r"[A-Za-z0-9]", specifier) is None
 
 
+#: §36: the order the three write allows are named in, as architect/settings.json
+#: ships them.
+WRITE_ALLOWS: tuple[str, ...] = ("Edit", "Write", "MultiEdit")
+
+
+def _settings_write_allows(settings: _Settings) -> str | None:
+    """§36 (H-041): the architect's allows for the write tools, over every settings
+    layer the row reads (Claude Code merges their allow lists): `Edit(kits/**)`,
+    `Write(kits/**)` and `MultiEdit(kits/**)` must each be there, and an allow for
+    any of the three tools — its name compared in any case — must carry exactly
+    that specifier, spelled exactly so. Why not, or None."""
+    if settings.problem is not None:
+        return None  # the hook check already fails the row on it
+    found: set[str] = set()
+    for path, data in settings.loaded:
+        permissions = data.get("permissions")
+        allow = permissions.get("allow") if isinstance(permissions, dict) else None
+        for entry in allow if isinstance(allow, list) else []:
+            match = _ALLOW_RULE.fullmatch(entry) if isinstance(entry, str) else None
+            if match is None or match.group(1).lower() not in {t.lower() for t in WRITE_TOOLS}:
+                continue
+            if match.group(1) in WRITE_TOOLS and entry == f"{match.group(1)}({KITS_SPECIFIER})":
+                found.add(match.group(1))
+                continue
+            return (
+                f"permissions.allow in {path} names {entry!r}: an allow for "
+                f"{', '.join(WRITE_ALLOWS)} names {KITS_SPECIFIER} and nothing else (§36)"
+            )
+    missing = [f"{tool}({KITS_SPECIFIER})" for tool in WRITE_ALLOWS if tool not in found]
+    if missing:
+        return (
+            f"permissions.allow has no {', no '.join(missing)}: headless claude -p denies "
+            "a tool no allow names, so the role cannot write under kits/ (§36)"
+        )
+    return None
+
+
 def _settings_allow_wholesale(settings: _Settings) -> str | None:
     """§32 (review 15 should-fix 6), §33 (review 16 should-fix 4): the permission
     settings, in either settings file, that let a guarded role past its settings
@@ -1662,7 +1721,10 @@ def _daemon_check(
 
 
 def _live_check(config: Config, role: RoleConfig, *, live: bool) -> Check:
-    """One real `claude -p` turn for a role — the only check that costs anything."""
+    """One real `claude -p` turn for a role — the only check that costs anything.
+
+    §36 (H-041): the architect's turn is not the one-line answer; see
+    `_architect_live`."""
     name = f"live {role.name}"
     if is_fake():
         return Check(
@@ -1678,13 +1740,36 @@ def _live_check(config: Config, role: RoleConfig, *, live: bool) -> Check:
             "not run: `hands doctor --live` spends one turn of your subscription per "
             "role. Every other check here is free",
         )
+    if role.name == ARCHITECT_ROLE:
+        return _architect_live(config, role)
+    # the environment a role job gets (§23)
+    turn = _live_turn(config, role, LIVE_PROMPT, {**os.environ, **role.spawn_env})
+    if isinstance(turn, Check):
+        return turn
+    result, _ = turn
+    first = str(result.get("result", "")).strip().splitlines()
+    return Check(
+        name,
+        OK if not result.get("is_error") else FAIL,
+        f"one turn in {role.cwd}: {first[0] if first else '(empty result)'}  "
+        f"[session {result.get('session_id')}, {result.get('num_turns')} turn(s), "
+        f"${result.get('total_cost_usd')}]",
+    )
+
+
+def _live_turn(
+    config: Config, role: RoleConfig, prompt: str, env: dict[str, str]
+) -> tuple[dict[str, Any], str] | Check:
+    """§2's invocation exactly, as argv, in the role's cwd: the turn's `result` event
+    and its whole stdout, or the failed `live <role>` row."""
+    name = f"live {role.name}"
     argv = build_argv(config, role)
     try:
-        proc = subprocess.run(  # §2's invocation exactly, as argv
+        proc = subprocess.run(
             argv,
-            input=LIVE_PROMPT,
+            input=prompt,
             cwd=str(role.cwd),
-            env={**os.environ, **role.spawn_env},  # the environment a role job gets (§23)
+            env=env,
             capture_output=True,
             text=True,
             timeout=LIVE_S,
@@ -1701,14 +1786,170 @@ def _live_check(config: Config, role: RoleConfig, *, live: bool) -> Check:
             f"the turn ended {proc.returncode} with no result event; §2's invocation was "
             f"`{' '.join(argv)}`: {_tail(proc.stderr)}",
         )
-    first = str(result.get("result", "")).strip().splitlines()
-    return Check(
-        name,
-        OK if not result.get("is_error") else FAIL,
-        f"one turn in {role.cwd}: {first[0] if first else '(empty result)'}  "
-        f"[session {result.get('session_id')}, {result.get('num_turns')} turn(s), "
-        f"${result.get('total_cost_usd')}]",
+    return result, proc.stdout
+
+
+def _architect_live(config: Config, role: RoleConfig) -> Check:
+    """§36 (H-041): the architect's live turn does the role's work in miniature —
+    writes one file under `kits/` with the Write tool, runs `hands kit check` on that
+    one-file kit against the clone, and runs `hands show` on a job of its spool —
+    and doctor then removes the file. Each is judged from what happened, not from
+    the reply: the file on disk with its content, the tool calls and their results
+    in the turn's stream, and the path gone afterwards. Any of the four missing
+    fails the row.
+
+    The turn's environment is an architect job's (`hands.runner.job_env`: the role's
+    `spawn_env`, `HANDS_CLONE`, `HANDS_KITS`) plus `HANDS_PROJECT`, the config's
+    project, so `hands show` reaches this project's daemon. The design is silent on
+    who removes the file; the role cannot (its settings deny `rm`), so doctor does.
+    """
+    name = f"live {role.name}"
+    kits_dir = role.cwd / "kits"
+    kit = kits_dir / LIVE_KIT
+    target = kit / LIVE_FILE
+    try:
+        jobs = Spool(config.spool_root).list_jobs()
+    except (OSError, SpoolError) as exc:
+        return Check(name, FAIL, f"cannot read the spool for a job to show: {exc}")
+    if not jobs:
+        return Check(
+            name,
+            FAIL,
+            "no job in the spool for the turn's `hands show`: run one job (`hands send "
+            "--role aux ...`) and run `hands doctor --live` again (§36). Not run",
+        )
+    job_id = jobs[-1].id
+    if not kits_dir.is_dir() or kits_dir.is_symlink():
+        return Check(name, FAIL, f"no kits directory {kits_dir} to write under (§31, §36)")
+    removed = _remove_live_kit(kit)
+    if removed is not None:
+        return Check(name, FAIL, f"cannot clear {kit} before the turn: {removed}")
+    kit_check = f"hands kit check kits/{LIVE_KIT} --repo ./repo"
+    show = f"hands show {job_id}"
+    prompt = (
+        "hands doctor --live: prove this role can do its work. Do exactly these three "
+        "things, in order, and nothing else:\n"
+        f"1. With the Write tool, create the file {target} whose whole content is the "
+        f"one word: {LIVE_CONTENT}\n"
+        f"2. Run this Bash command (it reports FAIL for a kit with no brief; that is "
+        f"expected): {kit_check}\n"
+        f"3. Run this Bash command: {show}\n"
+        "Do not remove the file; hands doctor removes it. Then reply with exactly this "
+        "line and nothing else:\nVERDICT: doctor ok\n"
     )
+    env = {**os.environ, **role.spawn_env, KITS_ENV: str(kits_dir), "HANDS_PROJECT": config.project}
+    env.pop(CLONE_ENV, None)
+    clone = driver_clone(role.cwd)
+    if clone is not None:
+        env[CLONE_ENV] = str(clone)
+    turn = _live_turn(config, role, prompt, env)
+    if isinstance(turn, Check):
+        _remove_live_kit(kit)
+        return turn
+    result, stdout = turn
+    calls = _tool_calls(stdout)
+
+    done: list[str] = []
+    missing: list[str] = []
+    try:
+        wrote = target.is_file() and target.read_text(encoding="utf-8").strip() == LIVE_CONTENT
+    except (OSError, UnicodeDecodeError):
+        wrote = False
+    (done if wrote else missing).append("write")
+    checked = any(
+        argv[:3] == ["hands", "kit", "check"] and LIVE_KIT_CHECKED in text
+        for argv, text, _ in calls
+    )
+    (done if checked else missing).append("kit check")
+    shown = any(
+        argv[:3] == ["hands", "show", job_id] and not error and f"job {job_id}" in text.splitlines()
+        for argv, text, error in calls
+    )
+    (done if shown else missing).append("hands show")
+    problem = _remove_live_kit(kit)
+    (done if problem is None else missing).append("remove")
+
+    words = {
+        "write": f"wrote {target}",
+        "kit check": f"ran `{kit_check}` on the one-file kit against the clone",
+        "hands show": f"ran `{show}`",
+        "remove": f"removed {kit}" if problem is None else f"could not remove {kit}: {problem}",
+    }
+    detail = (
+        f"one turn in {role.cwd}  [session {result.get('session_id')}, "
+        f"{result.get('num_turns')} turn(s), ${result.get('total_cost_usd')}]"
+        + "".join(f"\n{words[step]}" for step in done)
+    )
+    if result.get("is_error"):
+        missing.append("a successful turn")
+    if missing:
+        detail += (
+            f"\ndid not happen: {', '.join(missing)}; the architect role must write under "
+            "kits/, run hands kit check and hands show (§36): check the row above and "
+            "architect/settings.json"
+        )
+        if problem is not None:
+            detail += f"\n{words['remove']}"
+        return Check(name, FAIL, detail)
+    return Check(name, OK, detail)
+
+
+def _remove_live_kit(kit: Path) -> str | None:
+    """Remove doctor's one-file kit (§36), a link or a directory; why not, or None."""
+    try:
+        if kit.is_symlink() or kit.is_file():
+            kit.unlink()
+        elif kit.exists():
+            shutil.rmtree(kit)
+    except OSError as exc:
+        return str(exc)
+    if kit.exists() or kit.is_symlink():
+        return f"{kit} is still there"
+    return None
+
+
+def _tool_calls(stdout: str) -> list[tuple[list[str], str, bool]]:
+    """Every Bash call of a stream-json turn (§2) that has a result: its command as
+    words, the result's text and whether the result is an error."""
+    commands: dict[str, str] = {}
+    calls: list[tuple[list[str], str, bool]] = []
+    for line in stdout.splitlines():
+        try:
+            event = json.loads(line)
+        except ValueError:
+            continue
+        message = event.get("message") if isinstance(event, dict) else None
+        content = message.get("content") if isinstance(message, dict) else None
+        for block in content if isinstance(content, list) else []:
+            if not isinstance(block, dict):
+                continue
+            if block.get("type") == "tool_use" and block.get("name") == "Bash":
+                tool_input = block.get("input")
+                command = tool_input.get("command") if isinstance(tool_input, dict) else None
+                if isinstance(command, str):
+                    commands[str(block.get("id"))] = command
+            elif block.get("type") == "tool_result":
+                command = commands.get(str(block.get("tool_use_id")))
+                if command is None:
+                    continue
+                try:
+                    argv = shlex.split(command)
+                except ValueError:
+                    continue
+                text = _result_text(block.get("content"))
+                calls.append((argv, text, bool(block.get("is_error"))))
+    return calls
+
+
+def _result_text(content: Any) -> str:
+    """A tool_result's content: a string, or a list of text blocks."""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return "\n".join(
+            str(part.get("text", "")) for part in content if isinstance(part, dict)
+        )
+    return ""
 
 
 # ----------------------------------------------- the notification check (§11)
