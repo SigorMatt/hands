@@ -951,8 +951,8 @@ def test_the_protocol_template_finds_the_pr_reads_the_hosted_review_and_merges()
     """§35 "The review": the protocol template's text, flattened."""
     text = " ".join((TEMPLATES / "REVIEW-PROTOCOL.md").read_text(encoding="utf-8").split())
     for said in (
-        "gh pr list --head mission-N --state open --json number,baseRefName,headRefOid",
-        "`git log <base>..origin/mission-N`",
+        "gh pr list --head <branch> --state open --json number,baseRefName,headRefOid",
+        "`git log <base>..origin/<branch> ^origin/main`",
         "merge-base with `main`",
         "`reviewed:` sha",
         "`review:` commit on `main`",
@@ -977,6 +977,64 @@ def test_the_protocol_template_finds_the_pr_reads_the_hosted_review_and_merges()
     assert kit_mod.review_literals([raw]) == [
         "VERDICT: review mission N blockers=<k> should-fix=<m>"
     ]
+
+
+#: §36 "The review protocol" (review 19 should-fix 1, 2 and its Notes item for
+#: mission 20's protocol; HF-007; HF-008): each sentence the protocol template
+#: must carry, flattened. meta/REVIEW-PROTOCOL.md is the template with the
+#: repository's names (tests/test_docs.py), so it carries them too.
+PROTOCOL_36_SENTENCES = {
+    "direct-only-when-the-brief-says-direct": (
+        "The direct shape only when the Branch section of `meta/BUILDER-N-PROMPT.md`"
+        ' says "Direct"'
+    ),
+    "the-branch-named-once": "the branch the brief names, `<branch>`",
+    "find-the-pr-of-the-branch": (
+        "gh pr list --head <branch> --state open --json number,baseRefName,headRefOid"
+    ),
+    "no-pr-is-a-blocker": 'one blocker, "no pull request for <branch>"',
+    "no-pr-stops-the-review": "the review goes no further",
+    "no-pr-records-nothing-reviewed": "`reviewed: none`",
+    "commits-exclude-mains-history": "`git log <base>..origin/<branch> ^origin/main`",
+    "merge-base-of-the-branch": "`git merge-base origin/main origin/<branch>`",
+    "skip-merge-commits": "skip `meta:` bookkeeping commits and merge commits",
+    "sub-agents-one-at-a-time": "one at a time, never concurrently",
+    "one-check-per-sub-agent": "Runs `./scripts/check` once at that commit",
+    "tests-only-commit-body-names-wrong-changes": (
+        "A commit that changes only tests must name in its body each wrong change"
+        " that would make them red"
+    ),
+    "tests-only-wrong-changes-made-in-the-worktree": (
+        "the sub-agent makes each one in the worktree, without committing, runs the"
+        " relevant tests, expects red, and restores"
+    ),
+    "tests-only-commit-naming-none-is-a-blocker": (
+        "A tests-only commit whose body names none is a blocker"
+    ),
+    "the-reviewers-own-run-once-at-the-tip": (
+        "You run `./scripts/check` yourself once, at the tip under review"
+    ),
+    "on-an-up-to-date-main-before-committing": (
+        "Before you commit it, bring the tree to an up-to-date `main`:"
+        " `git checkout main && git pull --ff-only`"
+    ),
+}
+
+
+@pytest.mark.parametrize("key", sorted(PROTOCOL_36_SENTENCES))
+def test_the_protocol_template_carries_section_36s_sentence(key: str) -> None:
+    text = " ".join((TEMPLATES / "REVIEW-PROTOCOL.md").read_text(encoding="utf-8").split())
+    said = PROTOCOL_36_SENTENCES[key]
+    assert said in strip_paths(text), f"the protocol template does not say {said!r}"
+
+
+def test_the_protocol_template_names_the_branch_once() -> None:
+    """§36: `mission-N` appears once (as what `<branch>` is by default); every
+    command says `<branch>`."""
+    text = (TEMPLATES / "REVIEW-PROTOCOL.md").read_text(encoding="utf-8")
+    assert text.count("mission-N") == 1, text.count("mission-N")
+    assert "origin/mission-N" not in strip_paths(text)
+    assert "--head mission-N" not in strip_paths(text)
 
 
 def test_the_missions_template_review_prompt_lets_the_protocol_find_the_commits() -> None:
