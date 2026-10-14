@@ -530,7 +530,7 @@ is stamped before anything the resumed job goes on to publish. An exhausted
 ### The command channel: approve from the phone
 
 With `[notify] cmd_topic` set, handsd subscribes to that topic — an outbound
-long poll to ntfy, nothing listening on this machine — and takes eight commands
+long poll to ntfy, nothing listening on this machine — and takes nine commands
 from it. Set it up once:
 
     python3 -c 'import secrets; print("hands-cmd-" + secrets.token_urlsafe(16))'
@@ -550,7 +550,7 @@ to start. So does a secret with a blank inside it, and a `cmd_topic` equal to
 `ntfy_topic`.
 
 Publish a command to `cmd_topic` from the ntfy app. The last word is the token
-(but for `reply`, whose second word is the secret):
+(but for `reply` and `answer`, whose second word is the secret):
 
     approve <job> <secret>
     deny <job> [reason words] <secret>
@@ -560,6 +560,7 @@ Publish a command to `cmd_topic` from the ntfy app. The last word is the token
     go <secret>
     kit <secret>                  (with a .zip attached to the message)
     reply <secret> <text>
+    answer <secret> <text>        (a .zip may be attached to the message)
 
 - `approve` and `deny` decide a **held** job, exactly as `hands approve|deny`
   does, and the job record says `decided_by: phone`. `pause` and `resume` are
@@ -623,6 +624,32 @@ Publish a command to `cmd_topic` from the ntfy app. The last word is the token
   un-pause a stopped pipeline, it does not count against
   `max_architect_consults`, and a `hands kit file` while it runs is refused. The
   text goes over ntfy: see "Old messages" and the privacy note below.
+- `answer` is the phone answering the builder (DESIGN §36). `answer <secret>
+  <text>` is delivered as `hands send --role builder --context keep "<text>"`
+  would be, to the builder's last session: one job, `origin: phone`, whose
+  prompt is `<text>` as typed after the whitespace that follows the secret. The
+  secret is the approval: an answer is never held by the gate patterns, whatever
+  its text says (a text naming a decisions file included). Its job un-pauses a
+  stopped pipeline when it starts, as a `cli` send's does, because answering the
+  question is answering the stop. handsd answers on `ntfy_topic` titled `hands:
+  answer` with the job id and state, files the text in the inbox as
+  `answer.sent`, and when the job ends publishes the builder's final reply
+  there titled `builder`; its `VERDICT:` line fires the playbook's rules as any
+  builder end does. It is refused, and the refusal answered under `hands:
+  answer`, when the text is empty, while the builder has a job running, queued
+  or held, and when the builder has no resumable session. A file attached to
+  the message is judged by the `kit` rules above (a plain `.zip` name,
+  `kit_max_mb`, an http(s) URL, `kit_dir` inside `allowed_roots`) before
+  anything is fetched, and fetched into `kit_dir` as a kit is; nothing is
+  unzipped or applied. The delivered text then ends with one sentence naming the
+  file's path, the job record's `files_written` keeps its sha256, and
+  `answer.sent` carries the attachment's name and hash. A refused attachment
+  refuses the answer. When the driver escalates, the stop's message carries the
+  builder's question verbatim, so the question and your answer are on one
+  screen; the architect's next consultation lists every `answer` (with every
+  `hands send --role builder --context keep` and every committed
+  `meta/decisions/*-owner.md`) since its last one, under "Decided by the human
+  since your last consultation".
 - **The buttons.** With the channel on, a held job's notification has Approve
   and Deny buttons. Each publishes `approve <job> <nonce>` or `deny <job>
   <nonce>` to `cmd_topic`. The nonce is 32 random bytes minted for that one job
@@ -634,8 +661,8 @@ Publish a command to `cmd_topic` from the ntfy app. The last word is the token
   `hands approve <job>` / `hands deny <job>`, or `approve <job> <secret>` on
   `cmd_topic`, decide a held job all the same. `pause`, `resume`,
   `status` and `go` take the secret only, never a nonce.
-- **Nothing is answered except `status`, an accepted `go`, a written kit and a
-  `reply` whose secret was right.** A wrong secret or nonce, a command
+- **Nothing is answered except `status`, an accepted `go`, a written kit, and a
+  `reply` or an `answer` whose secret was right.** A wrong secret or nonce, a command
   hands does not know, or a job that is not held is logged in handsd's journal
   (`journalctl --user -u handsd@<project>`) and ignored. If a command seems to do
   nothing, look there. The log never contains the token.

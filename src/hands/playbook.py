@@ -56,6 +56,7 @@ import subprocess
 import tomllib
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -69,6 +70,7 @@ from hands.spool import (
     SpoolError,
     atomic_write,
     is_architect_reply,
+    is_builder_answer,
     kit_apply_problem,
     kits_filed_during,
     now_iso,
@@ -222,6 +224,12 @@ _SERIES_COMPLETE_RE = re.compile(r"\AVERDICT: series complete\s*\Z")
 #: §32: read as the playbook is — the committed file (`git show HEAD:./<path>`), so it
 #: is the branch's own roadmap and never an uncommitted edit.
 ROADMAP = Path("meta") / "ROADMAP.md"
+#: §36: the owner's decision files the architect is told about — `meta/decisions/
+#: *-owner.md` under the builder's cwd, read from the commits — and the heading of
+#: the consult prompt's section that lists them with the human's sends.
+DECISIONS_DIR = Path("meta") / "decisions"
+OWNER_SUFFIX = "-owner.md"
+DECIDED_HEADING = "Decided by the human since your last consultation"
 #: §32: a milestone of the roadmap is a top-level list item whose text begins with
 #: a bold `M` (`- **M4c The architect role** — …`), running over the indented lines
 #: that follow it. §33: it is marked DONE when its *heading* is (`_heading_done`).
@@ -735,6 +743,51 @@ def _committed_text(path: Path, cwd: Path) -> str:
         return proc.stdout.decode("utf-8")
     except UnicodeDecodeError as exc:
         raise PlaybookError(f"the committed copy is not valid UTF-8: {exc}") from exc
+
+
+def _owner_decisions(cwd: Path, since: str | None) -> list[str]:
+    """§36: each `meta/decisions/*-owner.md` a commit touched since `since` (an
+    ISO-8601 job time; None is every commit), oldest first, as `[<path>, committed]`
+    and its committed text — or one line of why the files could not be listed."""
+    command = ["git", "log", "--format=", "--name-only", "--no-renames"]
+    if since is not None:
+        try:
+            moment = datetime.fromisoformat(since.replace("Z", "+00:00")).astimezone(UTC)
+        except ValueError:
+            moment = None
+        if moment is not None:
+            command.append(f"--since={moment.strftime('%Y-%m-%d %H:%M:%S')} +0000")
+    command += ["--", f"{DECISIONS_DIR.as_posix()}/"]
+    env = {name: value for name, value in os.environ.items() if name not in GIT_ENV_CLEARED}
+    try:
+        proc = subprocess.run(
+            command, cwd=cwd, env=env, stdin=subprocess.DEVNULL, capture_output=True,
+            timeout=GIT_SHOW_TIMEOUT_S, check=False,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        return [f"[hands: the files under {DECISIONS_DIR}/ could not be listed: {exc}]"]
+    if proc.returncode != 0:
+        lines = proc.stderr.decode("utf-8", errors="replace").strip().splitlines()
+        said = lines[0] if lines else f"exit {proc.returncode}"
+        return [f"[hands: the files under {DECISIONS_DIR}/ could not be listed: {said}]"]
+    names: list[str] = []
+    for line in reversed(proc.stdout.decode("utf-8", errors="replace").splitlines()):
+        path = Path(line.strip())
+        if (
+            path.parent == DECISIONS_DIR
+            and path.name.endswith(OWNER_SUFFIX)
+            and len(path.name) > len(OWNER_SUFFIX)
+            and str(path) not in names
+        ):
+            names.append(str(path))
+    blocks = []
+    for name in names:
+        try:
+            text = _committed_text(cwd / name, cwd)
+        except PlaybookError as exc:
+            text = f"[hands: {exc}]"
+        blocks.append(f"[{name}, committed]\n{text}")
+    return blocks
 
 
 def _lf(data: bytes) -> bytes:
@@ -1562,7 +1615,7 @@ class PlaybookEngine:
         await self._ensure_loaded()
         if job is None and payload:
             job = self._job(payload.get("job"))
-        enforced = driver_stop(event, job)
+        enforced = driver_stop(event, job, asked=self._asked(job))
         if self.state.paused:
             if enforced is not None:
                 # §29: the engine's consult stops apply over a paused pipeline too:
@@ -1595,6 +1648,14 @@ class PlaybookEngine:
                 f"{event}: the playbook engine failed ({type(exc).__name__}: {exc})",
                 _payload(event, job),
             )
+
+    def _asked(self, job: Job | None) -> Job | None:
+        """§36: the job a driver consultation was about (its prompt's head names it),
+        or None for any other job or one the spool does not hold."""
+        if job is None or job.role != DRIVER:
+            return None
+        about = (consult_head(job.prompt) or {}).get("job")
+        return self._job(about) if about else None
 
     async def _match(
         self,
@@ -2263,7 +2324,42 @@ class PlaybookEngine:
             max_consults=book.max_architect_consults,
             gate_failures=book.gate_failures,
             escalate_on=book.escalate_on,
+            decided=self.human_decisions(),
         )
+
+    def human_decisions(self) -> str:
+        """§36: every `answer`, every cli `--context keep` send to the builder, and every
+        `meta/decisions/*-owner.md` committed since the architect's last consultation,
+        verbatim, each under a one-line label; "" when there is none.
+
+        The last consultation is the newest architect job that is neither a phone
+        `reply` nor a §6 resume, and "since" is the jobs after it in the spool's order
+        and the commits from the second it was created on (the boundary second
+        included: the inclusive direction tells the role too much rather than too
+        little). With no consultation before, everything counts — the same safe
+        direction. The jobs come first, oldest first, then the files, oldest commit
+        first, each as committed at HEAD.
+        """
+        jobs = self.spool.list_jobs()
+        start, since = 0, None
+        for index, record in enumerate(jobs):
+            if (
+                record.role == ARCHITECT
+                and record.resumed_from is None
+                and not is_architect_reply(record)
+            ):
+                start, since = index + 1, record.created
+        blocks: list[str] = []
+        for record in jobs[start:]:
+            if is_builder_answer(record):
+                said = "`answer` from the phone"
+            elif record.role == "builder" and record.context == "keep" and record.origin == "cli":
+                said = "`hands send --role builder --context keep`"
+            else:
+                continue
+            blocks.append(f"[{said}: builder job {record.id}, {record.created}]\n{record.prompt}")
+        blocks.extend(_owner_decisions(self.config.role("builder").cwd, since))
+        return "\n\n".join(blocks)
 
     def architect_consults_used(self) -> int:
         """§31: the architect consultations of this *series* — architect jobs (a §6
@@ -2505,6 +2601,9 @@ class PlaybookEngine:
             reason = render(rule.message, groups=groups, job=job)
         else:
             reason = f"{event} matched rule {rule.index}, whose action is stop (§10)"
+        question = escalation_question(job, self._asked(job))
+        if question is not None:  # §36: the question and the answer on one screen
+            reason = f"{reason}; {question}"
         self._fired(rule, event, job, message=reason)
         await self.stop(reason, _payload(event, job, rule=rule.index))
 
@@ -2801,10 +2900,14 @@ def _choose(rules: list[Rule], job: Job | None) -> tuple[Rule | None, re.Match[s
     return None, None
 
 
-def driver_stop(event: str, job: Job | None) -> str | None:
+def driver_stop(event: str, job: Job | None, *, asked: Job | None = None) -> str | None:
     """§27, §28: the stop reason the engine enforces for a driver event, or None
     for a `driver.done` whose verdict is `VERDICT: resolved …` (and every event
-    that is not a driver's)."""
+    that is not a driver's).
+
+    §36: `asked` is the job the consultation was about; an escalation's stop keeps
+    its question — that job's last reply — verbatim, "so the question and the answer
+    are on one screen"."""
     role, _, state = event.partition(".")
     if role != DRIVER:
         return None
@@ -2821,11 +2924,26 @@ def driver_stop(event: str, job: Job | None) -> str | None:
     escalated = _ESCALATE_RE.match(verdict)
     if escalated is not None:
         reason = escalated.group("reason") or "(no reason given)"
-        return f"{event}: the driver escalated: {reason} (§27, §28)"
+        stop = f"{event}: the driver escalated: {reason} (§27, §28)"
+        question = escalation_question(job, asked)
+        return stop if question is None else f"{stop}; {question}"
     return (
         f"{event}: the driver's verdict {verdict!r} is neither resolved nor escalate, "
         "so it stops (§27, §28)"
     )
+
+
+def escalation_question(job: Job | None, asked: Job | None) -> str | None:
+    """§36: for a driver job whose verdict is `VERDICT: escalate …`, the question of
+    the job it was consulted about — that job's last reply, verbatim, after one line
+    naming it — or None. Every stop that escalation produces carries it: the engine's
+    own (`driver_stop`) and a playbook `stop` rule's (`_act_stop`)."""
+    if job is None or job.role != DRIVER or asked is None:
+        return None
+    if job.verdict is None or _ESCALATE_RE.match(job.verdict) is None:
+        return None
+    question = asked.result if asked.result is not None else "(it recorded no reply)"
+    return f"the {asked.role}'s question (job {asked.id}), verbatim:\n{question}"
 
 
 def _resume_line(job: Job) -> str:
@@ -2866,6 +2984,9 @@ class ArchitectBrief:
     max_consults: int = DEFAULT_MAX_ARCHITECT_CONSULTS
     gate_failures: int = DEFAULT_GATE_FAILURES
     escalate_on: tuple[str, ...] = ()
+    #: §36: what the human decided since the architect's last consultation, verbatim
+    #: (`PlaybookEngine.human_decisions`); empty when nothing was.
+    decided: str = ""
 
 
 def consult_prompt(
@@ -2950,6 +3071,13 @@ def _architect_prompt(event: str, job: Job, brief: ArchitectBrief | None) -> str
         "----- BEGIN REVIEW -----\n"
         f"{review_sections(job.result, job.verdict)}\n"
         "----- END REVIEW -----\n"
+        "\n"
+        f"{DECIDED_HEADING} — every `answer` from the phone, every `hands send --role "
+        f"builder --context keep`, and every {DECISIONS_DIR}/*{OWNER_SUFFIX} committed "
+        "since then — verbatim between the markers:\n"
+        "----- BEGIN DECISIONS -----\n"
+        f"{brief.decided or '[hands: nothing]'}\n"
+        "----- END DECISIONS -----\n"
         "\n"
         f"The roadmap is {brief.roadmap_path}; read it whole from your clone. Its next "
         f"unmet milestone — the first milestone in {brief.roadmap_path} whose heading "

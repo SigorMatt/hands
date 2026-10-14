@@ -580,6 +580,25 @@ def test_reply_is_documented_where_the_phone_commands_and_the_architect_are() ->
     assert "reply <secret> <text>" in (phone.__doc__ or "")
 
 
+def test_answer_is_documented_in_the_command_channel_and_the_phone_module() -> None:
+    """§36: `answer <secret> <text>` is in the command channel's list and its own
+    bullet in INTEGRATION, and in the phone module's own command list."""
+    from hands import phone
+    from hands.phone import ANSWER_TITLE, BUILDER_TITLE
+
+    integration = (ROOT / "docs" / "INTEGRATION.md").read_text(encoding="utf-8")
+    channel = integration.split("### The command channel: approve from the phone", 1)[1]
+    channel = flattened(channel.split("\n### ", 1)[0])
+    assert "answer <secret> <text>" in channel
+    assert "takes nine commands" in channel
+    for said in ("`origin: phone`", f"titled `{BUILDER_TITLE}`", f"`{ANSWER_TITLE}`",
+                 '--context keep "<text>"', "never held by the gate patterns",
+                 "`answer.sent`", "no resumable session", "sha256",
+                 "Decided by the human since your last consultation"):
+        assert flattened(said) in channel, f"the command channel does not say {said!r}"
+    assert "answer <secret> <text>" in (phone.__doc__ or "")
+
+
 def test_the_readme_names_kit_check_go_and_the_kit_transport() -> None:
     readme = flattened((ROOT / "README.md").read_text(encoding="utf-8"))
     for said in ("`hands kit check", "`go <secret>`", "`kit <secret>`", "kit_dir",

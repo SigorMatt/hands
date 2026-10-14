@@ -46,6 +46,7 @@ from hands.kit import (
 from hands.notify import NotifyError, send_test
 from hands.runner import KeepRefused
 from hands.spool import (
+    ANSWER_ORIGIN,
     ARCHITECT_ORIGIN,
     KIT_CHECK_PASSED,
     ORIGINS,
@@ -74,6 +75,7 @@ __all__ = [
     "Api",
     "ApiError",
     "Timeout",
+    "attachment_sentence",
     "job_summary",
     "tail_entries",
 ]
@@ -105,6 +107,13 @@ _TAIL_CHUNK = 64 * 1024
 # implementation-defined server-error range, which is where these live.
 HANDS_ERROR = -32001  # a refusal hands is sure about (bad role, full queue, …)
 TIMEOUT = -32003  # `wait --timeout` expired
+
+
+def attachment_sentence(path: Path) -> str:
+    """§36: the one sentence an `answer`'s delivered text ends with when the message
+    carried a file — its path where handsd wrote it, absolute, so the builder can read
+    it whatever its cwd."""
+    return f"The human attached a file to this answer; it is at {path}."
 
 
 def _check_refusal(name: str, repo: Path, report: Report) -> str:
@@ -227,6 +236,8 @@ class Api:
         playbook_sha256: str | None = None,
         kit_id: str | None = None,
         reply: bool = False,
+        ungated: bool = False,
+        attached: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         if role not in self.config.roles:
             known = ", ".join(sorted(self.config.roles))
@@ -247,7 +258,13 @@ class Api:
 
         # §8: "gating on the default patterns cannot be disabled" — `config.py`
         # keeps the defaults in `gates.patterns` whatever the project says.
-        reason = gates.gate_reason(prompt, explicit=gate, patterns=self.config.gates.patterns)
+        # §36: an `answer` is the one send that is never gated: "the secret is the
+        # approval" (`ungated`, which only `answer_builder` passes).
+        reason = (
+            None
+            if ungated
+            else gates.gate_reason(prompt, explicit=gate, patterns=self.config.gates.patterns)
+        )
 
         if context == "keep":
             # §6: refused if there is no session or its last job is not terminal.
@@ -261,7 +278,7 @@ class Api:
         # §4: `--file path=content`, written before the spawn and recorded with
         # its sha256 (§1 invariant 2). Every path is confined before any byte is
         # written, so a path outside the roots refuses the whole send.
-        written = self._write_files(file or [])
+        written = self._write_files(file or []) + list(attached or [])
 
         job = self.daemon.enqueue(
             role=role,
@@ -346,6 +363,70 @@ class Api:
         return await self._send(
             role=ARCHITECT_ROLE, context="keep", prompt=text, origin=REPLY_ORIGIN, reply=True
         )
+
+    def answer_refusal(self, text: str) -> str | None:
+        """§36: why an `answer` to the builder is refused now, or None.
+
+        Refused when the text is empty (whitespace only is empty), while the builder
+        has a job running, queued or held, and when it has no resumable session
+        (`--context keep`'s own check, §6). The phone asks before it fetches an
+        attachment, and `answer_builder` asks again next to its enqueue.
+        """
+        if not text.strip():
+            return "the text is empty (§36)"
+        builder = "builder"
+        running = self.daemon.running(builder)
+        if running is not None:
+            return f"the builder has a job running ({running}) (§36)"
+        queued = self.daemon.status()["roles"][builder]["queued"]
+        if queued:
+            return f"the builder has a job queued ({', '.join(queued)}) (§36)"
+        held = [job.id for job in self.spool.list_jobs()
+                if job.role == builder and job.state == "held"]
+        if held:
+            return f"the builder has a job held ({', '.join(held)}) (§36)"
+        try:
+            self.daemon.runner.resolve_resume_session(builder)
+        except KeepRefused as exc:
+            return f"the builder has no resumable session: {exc} (§36)"
+        return None
+
+    async def answer_builder(
+        self, text: str, *, attachment: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
+        """§36: the phone's `answer <secret> <text>`, "delivered as `hands send --role
+        builder --context keep "<text>"` would be, to the builder's last session, one
+        job of origin `phone`". Returns the job.
+
+        Not held by §8's gate whatever the text says (`ungated`). `attachment`, when
+        the message carried one the phone has written to `kit_dir`, is `{"path",
+        "name", "sha256", "bytes"}`: the delivered text is `text`, a blank line and
+        `attachment_sentence(path)`, and the path, sha256 and bytes go to the record's
+        `files_written` (the record keeps the sha256). `answer.sent` files `text`, the
+        attachment's name and its hash. Refusals are `answer_refusal`'s, decided with
+        nothing awaited before the enqueue. Not a command of §4 and in neither
+        `COMMANDS` nor `KIT_METHODS`, so the phone channel is its only caller.
+        """
+        why = self.answer_refusal(text)
+        if why is not None:
+            raise ApiError(why)
+        prompt, attached, filed = text, [], None
+        if attachment is not None:
+            prompt = f"{text}\n\n{attachment_sentence(Path(attachment['path']))}"
+            attached = [{key: attachment[key] for key in ("path", "sha256", "bytes")}]
+            filed = {"name": attachment["name"], "sha256": attachment["sha256"]}
+        job = await self._send(
+            role="builder",
+            context="keep",
+            prompt=prompt,
+            origin=ANSWER_ORIGIN,
+            ungated=True,
+            attached=attached,
+        )
+        self.spool.append_event(
+            "answer.sent", {"job": job["id"], "text": text, "attachment": filed}
+        )
+        return job
 
     async def file_apply(self, plan: Apply, origin: str, kit_id: str) -> dict[str, Any]:
         """§27, §31, §32: a kit's held apply, filed by handsd itself.

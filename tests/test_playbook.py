@@ -2323,7 +2323,11 @@ def test_a_question_consulted_and_escalated_stops_with_the_reason(
         first = await ok("send", "--role", "builder", "--context", "clear", KICKOFF)
         await ok("wait", first["id"])
         state = await wait_for_stop()
-        assert state["stop_reason"] == "driver escalated: the mission file does not decide it"
+        # §36: the escalation's stop keeps the builder's question verbatim
+        assert state["stop_reason"] == (
+            "driver escalated: the mission file does not decide it; the builder's question "
+            f"(job {first['id']}), verbatim:\n{QUESTION_RESULT}"
+        )
         drivers = [row for row in (await ok("jobs", "-n", "50"))["jobs"]
                    if row["role"] == "driver"]
         assert len(drivers) == 1
@@ -2492,7 +2496,11 @@ def test_a_playbook_stop_rule_on_an_escalation_keeps_its_message(
     about = finished(engine.spool, verdict="VERDICT: question x")
     driver = _driver_job(engine.spool, state="done", verdict="VERDICT: escalate why", about=about)
     run(engine.on_job(driver))
-    assert engine.state.stop_reason == "driver escalated: why"
+    # §36: the rule's message, and the builder's question after it
+    assert engine.state.stop_reason == (
+        f"driver escalated: why; the builder's question (job {about.id}), verbatim:\n"
+        "VERDICT: question x"
+    )
     assert [title for title, _ in recorder.notified] == ["hands: the pipeline stopped"]
 
 
@@ -5633,3 +5641,155 @@ def test_end_to_end_the_engine_stops_itself_when_the_series_budget_is_exhausted(
         assert state["architect_consults"] == {"used": 1, "max_architect_consults": 1}
 
     drive(body)
+
+
+# ---- §36: the driver's escalation keeps the builder's question; the architect is told
+# ---- what the human decided since its last consultation
+
+
+def test_the_driver_escalation_stop_keeps_the_builders_question_verbatim(
+    tmp_home: Path, workdir: Path
+) -> None:
+    """§36: "the stop the driver's escalation produces keeps the builder's question
+    verbatim in its message, so the question and the answer are on one screen"."""
+    engine, recorder = engine_for(tmp_home, workdir, CONSULT_BOOK, driver=workdir.parent / "d")
+    question = "VERDICT: question which option?\n\n  A keeps the API;  B breaks it.\nWhich? "
+    about = engine.spool.create_job(role="builder", context="clear", prompt="p", origin="cli")
+    engine.spool.transition(about, "running")
+    about = engine.spool.transition(
+        about, "done", verdict=question.splitlines()[0], result=question
+    )
+    driver = _driver_job(
+        engine.spool, state="done", verdict="VERDICT: escalate the brief is silent", about=about
+    )
+    run(engine.on_job(driver))
+    reason = engine.state.stop_reason or ""
+    assert reason.startswith("driver escalated: the brief is silent; ")  # the rule's message
+    assert question in strip_paths(reason)
+    assert about.id in reason
+    [(title, payload)] = recorder.notified
+    assert title == "hands: the pipeline stopped"
+    assert question in strip_paths(payload["reason"])
+
+
+def test_the_engines_own_escalation_stop_keeps_the_builders_question_verbatim(
+    tmp_home: Path, workdir: Path
+) -> None:
+    """§36 with no playbook `stop` rule for the escalation: the engine's §28 stop."""
+    engine, recorder = engine_for(
+        tmp_home, workdir, NO_DRIVER_RULES, driver=workdir.parent / "d"
+    )
+    about = finished(engine.spool, verdict="VERDICT: question A or B?")
+    run(engine.on_job(_driver_job(engine.spool, state="done",
+                                  verdict="VERDICT: escalate silent", about=about)))
+    assert engine.state.stop_reason == (
+        "driver.done: the driver escalated: silent (§27, §28); the builder's question "
+        f"(job {about.id}), verbatim:\nVERDICT: question A or B?"
+    )
+    [(_, payload)] = recorder.notified
+    assert "VERDICT: question A or B?" in strip_paths(payload["reason"])
+
+
+def test_a_driver_stop_that_is_not_an_escalation_carries_no_question(
+    tmp_home: Path, workdir: Path
+) -> None:
+    engine, _ = engine_for(tmp_home, workdir, CONSULT_BOOK, driver=workdir.parent / "d")
+    about = finished(engine.spool, verdict="VERDICT: question the secret word")
+    run(engine.on_job(_driver_job(engine.spool, state="done", verdict="VERDICT: maybe",
+                                  about=about)))
+    assert "the secret word" not in strip_paths(engine.state.stop_reason or "")
+
+
+def _human_job(spool: Spool, *, role: str, context: str, origin: str, prompt: str) -> Job:
+    time.sleep(0.003)  # job ids sort by millisecond; keep the order the test means
+    job = spool.create_job(role=role, context=context, prompt=prompt, origin=origin)
+    spool.transition(job, "running")
+    return spool.transition(job, "done", result="ok")
+
+
+def _commit_dated(
+    monkeypatch: pytest.MonkeyPatch, workdir: Path, name: str, body: str, date: str
+) -> None:
+    monkeypatch.setenv("GIT_AUTHOR_DATE", date)
+    monkeypatch.setenv("GIT_COMMITTER_DATE", date)
+    commit_file(workdir, name, body)
+    monkeypatch.delenv("GIT_AUTHOR_DATE")
+    monkeypatch.delenv("GIT_COMMITTER_DATE")
+
+
+DECIDED = "Decided by the human since your last consultation"
+
+
+def test_the_architect_prompt_lists_what_the_human_decided_since_its_last_consultation(
+    tmp_home: Path, workdir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """§36: every `answer`, every cli `--context keep` send to the builder and every
+    `meta/decisions/*-owner.md` committed since the architect's last consultation,
+    verbatim, under "Decided by the human since your last consultation" — and
+    nothing from before it, nor a send that is not one of those."""
+    engine, recorder = architect_engine(tmp_home, workdir)
+    spool = engine.spool
+    old_answer = _human_job(spool, role="builder", context="keep", origin="phone",
+                            prompt="OLD answer before the consultation")
+    _commit_dated(monkeypatch, workdir, "meta/decisions/001-owner.md",
+                  "OLD owner decision\n", "2001-01-01T00:00:00+00:00")
+    time.sleep(0.003)
+    previous = spool.create_job(role="architect", context="clear", prompt="a consultation",
+                                origin="playbook")
+    spool.transition(previous, "running")
+    spool.transition(previous, "done", verdict="VERDICT: series complete")
+    answer = _human_job(spool, role="builder", context="keep", origin="phone",
+                        prompt="Take option B.\n\n  Not  A. ")
+    keep = _human_job(spool, role="builder", context="keep", origin="cli",
+                      prompt="Keep the API stable; that is my call.")
+    unlisted = [
+        _human_job(spool, role="builder", context="clear", origin="cli", prompt="CLEAR send"),
+        _human_job(spool, role="builder", context="clear", origin="phone", prompt="GO kickoff"),
+        _human_job(spool, role="aux", context="keep", origin="cli", prompt="AUX keep"),
+        _human_job(spool, role="builder", context="keep", origin="playbook",
+                   prompt="PLAYBOOK keep"),
+    ]
+    _commit_dated(monkeypatch, workdir, "meta/decisions/002-owner.md",
+                  "# 002\n\nThe owner decides: B.\n", "2099-01-01T00:00:00+00:00")
+    _commit_dated(monkeypatch, workdir, "meta/decisions/003-review.md",
+                  "NOT an owner file\n", "2099-01-02T00:00:00+00:00")
+
+    run(engine.on_job(reviewed(spool)))
+
+    prompt = strip_paths(recorder.enqueued[0]["prompt"])
+    assert DECIDED in strip_paths(prompt)
+    section = strip_paths(prompt[prompt.index(DECIDED):])
+    assert "Take option B.\n\n  Not  A. " in strip_paths(section)
+    assert answer.id in section and keep.id in section
+    assert "Keep the API stable; that is my call." in strip_paths(section)
+    assert "meta/decisions/002-owner.md" in strip_paths(section)
+    assert "# 002\n\nThe owner decides: B.\n" in strip_paths(section)
+    for gone in ("OLD answer", "OLD owner decision", "001-owner", "NOT an owner file",
+                 old_answer.id, *[job.prompt for job in unlisted]):
+        assert gone not in strip_paths(prompt), gone
+    # beside the review: after its block, before the roadmap
+    assert prompt.index("----- END REVIEW -----") < prompt.index(DECIDED)
+    assert prompt.index(DECIDED) < prompt.index("----- BEGIN MILESTONE -----")
+
+
+def test_with_no_earlier_consultation_the_architect_is_told_every_human_decision(
+    tmp_home: Path, workdir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    engine, recorder = architect_engine(tmp_home, workdir)
+    _human_job(engine.spool, role="builder", context="keep", origin="phone",
+               prompt="FIRST answer")
+    _commit_dated(monkeypatch, workdir, "meta/decisions/001-owner.md",
+                  "FIRST owner decision\n", "2001-01-01T00:00:00+00:00")
+    run(engine.on_job(reviewed(engine.spool)))
+    prompt = strip_paths(recorder.enqueued[0]["prompt"])
+    section = strip_paths(prompt[prompt.index(DECIDED):])
+    assert "FIRST answer" in strip_paths(section)
+    assert "FIRST owner decision" in strip_paths(section)
+
+
+def test_with_nothing_decided_the_architect_is_told_so(tmp_home: Path, workdir: Path) -> None:
+    engine, recorder = architect_engine(tmp_home, workdir)
+    run(engine.on_job(reviewed(engine.spool)))
+    prompt = recorder.enqueued[0]["prompt"]
+    section = prompt[prompt.index(DECIDED):]
+    assert "[hands: nothing]" in strip_paths(section.split("----- BEGIN MILESTONE -----")[0])

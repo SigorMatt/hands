@@ -43,7 +43,7 @@ from hands.config import CONSULT_ROLES, Config, ConfigError, load_config, resolv
 from hands.limits import LimitManager
 from hands.monitor import MonitorSupervisor
 from hands.notify import Notifier
-from hands.phone import ARCHITECT_TITLE, PhoneChannel, reply_answer
+from hands.phone import ARCHITECT_TITLE, BUILDER_TITLE, PhoneChannel, answer_reply, reply_answer
 from hands.playbook import PlaybookEngine, series_roles_problem
 from hands.runner import LINE_LIMIT, Runner, RunnerError, reconcile_orphans
 from hands.spool import (
@@ -53,6 +53,7 @@ from hands.spool import (
     Spool,
     flat_layout,
     is_architect_reply,
+    is_builder_answer,
     now_iso,
 )
 
@@ -671,11 +672,17 @@ class Daemon:
                           job.id, job.role)
 
     def _reply_ended(self, job: Job) -> None:
-        """§33: a phone `reply` to the architect ended on this worker: "the reply's
+        """§33, §36: a phone `reply` to the architect (or `answer` to the builder) ended
+        on this worker: "the reply's
         text is published on `ntfy_topic` with title `architect`" — the architect's
         final message as it is, with no cap or escaping (no publish of hands applies
         one), or which job ended how when there is none. Raised through `notify`, so
         it never holds the worker (§11), and the message is exactly that text."""
+        if is_builder_answer(job):
+            # §36: "the builder's final reply is published on `ntfy_topic` titled
+            # `builder`"; the engine has already heard its end (`on_job`).
+            self.notifier.notify(BUILDER_TITLE, {"message": answer_reply(job)})
+            return
         if not is_architect_reply(job):
             return
         self.notifier.notify(ARCHITECT_TITLE, {"message": reply_answer(job)})
