@@ -24,7 +24,52 @@ item names the mission it is scheduled for; unscheduled items say so.
 
 ## Mission 17 — DONE 2026-09-17 (review 17: blockers=1, the start fold; autonomy path closed).
 
-## Mission 18 (scheduled 2026-09-17) — closer: review 17, who "needs you" from current state. Spec: DESIGN v3.17 §34. After its review: enable the architect role.
+## Mission 18 — DONE 2026-09-17 (review 18: blockers=0, should-fix=4; the architect role enabled 2026-09-18).
+
+## Mission 19 (scheduled 2026-10-14) — the pull-request flow. Spec: DESIGN v3.18 §35. Gate U0: the hosted review on a probe PR.
+
+## Mission 20 (scheduled 2026-10-12, after 19) — the discotrade shakedown's findings and review 18. First mission through the flow.
+
+1. The architect role's write permission: `architect/settings.json` allows
+   `Edit(kits/**)`, `Write(kits/**)`, `MultiEdit(kits/**)` and nothing wider;
+   doctor checks exactly those; `doctor --live` for the architect writes and
+   removes one file under `kits/` (laptop workaround applied 2026-10-12).
+2. The runner advances the architect's (and driver's) clone to
+   `origin/<branch>` before every job; doctor reports HEAD vs origin
+   (laptop workaround: a transient timer pulling every minute).
+3. The runner sets `HANDS_PROJECT` from the config on every role job, never
+   from the environment; doctor's role rows print it (laptop workaround:
+   the unit's env file).
+4. HF-001: the engine reloads the playbook before deciding an apply's
+   `builder.done` under autonomy; discotrade's probe test as the regression
+   test; a mission-less kickoff line for this repository's playbook.
+5. `answer <secret> <text>` on the command topic → `hands send --role
+   builder --context keep`, origin phone, un-pauses, not held by the §8
+   gate (the secret is the approval), with an optional attached file landed
+   in `kit_dir`; the builder's final reply published titled `builder`;
+   every answer and every owner decisions file since the architect's last
+   consultation listed verbatim in its next consult prompt.
+6. The hold notification under autonomy: decide before publishing; a
+   buttonless "kit filed by the architect; apply approved by the playbook".
+7. HF-006: `BASH_DEFAULT_TIMEOUT_MS` and `BASH_MAX_TIMEOUT_MS` set for
+   builder and aux jobs unless the role's env table overrides them; the
+   brief template's explicit gate timeout.
+8. HF-002: the role reads the handbook and templates from the installed
+   hands, not from the project's clone. HF-003: `cp` from `HANDS_CLONE` into
+   `HANDS_KITS`. HF-004, HF-005: docs. The first plan kit's silent apply:
+   docs. `doctor --live` exercises a real write, check and project lookup.
+9. Review 18 should-fix 1–4: the Unicode full stop in `ntfy_url`; the guard
+   module planted beside it; the kit record's bytes; the hardlink under
+   `kits/`.
+10. Project name in every notification title and in generated topic names
+    (doctor warns); `hands project add <name> --repo <url>` ending with the
+    filled instruction printed for pasting and the verification question;
+    the Purpose block as a slot in both instruction templates;
+    `templates/DECISIONS-owner.md`; the review-protocol template's
+    one-commit exception for `plan: decisions <date> (owner)`; the brief
+    template's recovery brief: a `keep` send after `VERDICT: question` is
+    the answer, carried out, mission continued, a VERDICT line always; the
+    onboarding shape and the ruling round in the handbook.
 
 - Review 11 blockers 1–5 and should-fix 1–9; the guard rewritten on shlex
   tokens; consult stops in the engine; H-022 resolved. Spec: DESIGN v3.11

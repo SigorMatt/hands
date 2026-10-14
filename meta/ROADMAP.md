@@ -5,7 +5,10 @@ Standing reminder for the architect, at every milestone gate below: if
 the complete new instruction text to paste into the claude.ai Project (the
 human cannot see the installed copy; a stale one is invisible from inside a
 chat). Missions 10 and 11 change it (kit check, the closed loop, the driver
-role), and each Project onboarded in M5/M6 needs its own pasted copy.
+role), and each Project onboarded in M5–M7 needs its own pasted copy, with
+the Purpose block filled, pasted into the Project's instructions field and
+verified by asking the new Project "What are your Parameters?" (discotrade
+ran two days without one, noticed 2026-10-13).
 
 Milestones are gated by a clean cold review of the mission that closes them,
 then an install (`uv tool install --force`) and a driver-kit refresh.
@@ -62,7 +65,8 @@ then an install (`uv tool install --force`) and a driver-kit refresh.
   — DONE 2026-09-16; review 16 found no guard hole; the driver role is
   enabled. Mission 17: review 16 (the autonomy path), `reply <secret> <text>` — DONE
   2026-09-17; review 17: one blocker (the start fold). Mission 18 (closer):
-  review 17; then the architect role is enabled. `reply <secret> <text>`
+  review 17 — DONE 2026-09-17 (review 18: blockers=0, should-fix=4, carried
+  to mission 20); the architect role enabled 2026-09-18. `reply <secret> <text>`
   on the command topic delivered as a `keep` to the architect's last
   session with its answer on the events topic, and self-hosted ntfy behind
   the Tailscale tunnel (free text about a project no longer crosses a
@@ -70,9 +74,45 @@ then an install (`uv tool install --force`) and a driver-kit refresh.
   the role at the switch point, and run to a reviewed-clean stop with no
   human action; one escalation answered over `reply`.
   Requires: the driver role enabled (done 2026-09-17), the architect role
-  enabled after review 17 finds the autonomy path closed, and one real
-  consultation graded by a review.
-- **M5 spanweave integration** — INSTRUCTION PASTE DUE: the spanweave
+  enabled after review 17 finds the autonomy path closed (done 2026-09-18),
+  and one real consultation graded by a review. GATE MET 2026-10-12: the
+  discotrade series (M5) ran in role mode from its plan kit; the role's
+  mission-2 kit was graded clean by discotrade review 2 (6e88bbb), and by
+  the next morning the role had kitted missions 2–5 unattended. The first
+  three consultations escalated on hands bugs (the role could not write,
+  its clone never advanced, no `HANDS_PROJECT` in role jobs), worked
+  around on the laptop and fixed in mission 20.
+- **M4d The pull-request flow, then the shakedown's findings** — missions
+  19 and 20 (decided 2026-10-12). Mission 19: DESIGN §35, the PR per
+  mission with the hosted review (Qodo) read by the cold review as a
+  second reviewer and the review merging on a clean verdict; templates,
+  this repository's protocol and playbook, doctor's `gh` row, docs. Its U0
+  is the gate: a probe PR must draw the hosted review within fifteen
+  minutes, else the mission is blocked at U0 and nothing is built.
+  Mission 19 itself commits to `main`; mission 20 is the first mission run
+  through a pull request. Mission 20: the discotrade shakedown's findings
+  (the architect role's write permission, its clone advanced by the
+  runner, `HANDS_PROJECT` on every role job, HF-001 the stale kickoff
+  after an autonomous apply, `answer <secret> <text>` with an attached
+  file for the builder's questions and owner rulings, human decisions in
+  the role's consult prompt, the hold notification under autonomy,
+  HF-002..006), review 18's four should-fix items, project name in
+  notification titles and topic names, `hands project add`, the Purpose
+  block in both instruction templates, the owner-decisions file as a
+  template, the onboarding shape in the handbook. Gate: mission 20
+  merged by its own review through the flow, with a `## Hosted review`
+  section in REVIEW-20.
+- **M5 Pet projects from scratch (discotrade)** — decided 2026-09-17: before
+  any integration, hands drives a new project from an empty repository in
+  role mode, as the shakedown of the whole loop. discotrade
+  (SigorMatt/discotrade): repo and SPEC.md 2026-10-11, laptop set up as a
+  second project the same day, plan kit from its own Project chat applied
+  2026-10-11 23:54, `go` 2026-10-12; the series runs autonomously; owner
+  rulings as `meta/decisions/decisions-<date>-owner.md` (2026-10-13). Its
+  hands findings (HF-001..006 in discotrade's FINDINGS) are mission 20's.
+  Gate: the series reaches its roadmap's last milestone or its consult
+  budget, with every stop that needed a human answered from the phone.
+- **M6 spanweave integration** — INSTRUCTION PASTE DUE: the spanweave
   Project gets its own copy, parameters filled in.
   spanweave integration — hands drives spanweave's *development*
   (its builders and reviewers run as hands jobs); nothing of hands enters
@@ -101,10 +141,11 @@ then an install (`uv tool install --force`) and a driver-kit refresh.
      standing approval of every merge it makes.
   5. First series is a shakeout in phone mode: expect doc-versus-reality
      findings, keep it short, and treat the first auto-merge as the
-     milestone. The second series runs in role mode (M4c).
+     milestone. The second series runs in role mode (M4c). The PR shape
+     is mission 19's (DESIGN §35): the review merges, merge commits.
   Gate: one series of at least two runs merged with no human action
   between kickoff and the series-close stop.
-- **M6 agile-skills integration** — INSTRUCTION PASTE DUE: the agile-skills
+- **M7 agile-skills integration** — INSTRUCTION PASTE DUE: the agile-skills
   Project gets its own copy.
   agile-skills integration — hands drives agile-skills' development;
   agile-skills stays machinery-agnostic and owns the mission-form contract
@@ -113,6 +154,11 @@ then an install (`uv tool install --force`) and a driver-kit refresh.
   `meta/` paths and the mission form (`meta/BUILDER-N-PROMPT.md`, checkpoint-driven kickoff, no
   `resume_line`), which is the form hands has been exercised on. PR per
   mission, auto-merge on a clean review.
-- **M7 (removed 2026-09-15):** the optional remote MCP face (DESIGN §9) is
+- **M8 Other coding agents as backends** — decided 2026-09-17: a role may
+  run on a different agent CLI; Codex CLI first; evaluate ACP as the
+  common protocol. Requirements: headless one-shot invocation with a
+  resumable session, a transcript hands can read, a permission mode the
+  guard can enforce, and the VERDICT contract unchanged.
+- **(removed 2026-09-15):** the optional remote MCP face (DESIGN §9) is
   dropped from the roadmap; the phone loop and the architect role cover
   what it was for. DESIGN §9 stays as history.

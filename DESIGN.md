@@ -1,12 +1,12 @@
-# hands — DESIGN v3.17
+# hands — DESIGN v3.18
 
 Machinery that replaces the human relay between the planning brain and the two
 Claude Code roles (builder, aux) on the Ubuntu laptop, and that keeps a series
 moving without a human while everything goes by plan. Working name: `hands`.
 The method it serves is described in WORKING-MODEL.md (agile-skills) and
 OPERATING-MODEL.md (spanweave); hands changes the topology, not the method.
-v3.17 (2026-09-17) folds in the mission 17 review; changes are in §34;
-earlier changes in §33–§17.
+v3.18 (2026-10-14) adds the pull-request flow with a hosted second reviewer;
+changes are in §35; earlier changes in §34–§17.
 
 Status: proposal, 2026-09-10. Items marked DECIDED were settled in discussion.
 
@@ -1501,3 +1501,103 @@ unread events alone say "informational, the driver acks them on its next
 check".
 
 The architect role is enabled after this mission's review.
+
+## 35. Changes from v3.17 (the pull-request flow; a hosted second reviewer)
+
+Decided 2026-10-12 with the human, written 2026-10-14. Until now every
+project hands drives, this repository included, commits straight to `main`:
+one commit per unit, pushed at once (CLAUDE.md). The roadmap's "PR per run,
+auto-merge on a clean review" was a sentence for the spanweave integration
+and nothing implemented it. The human has an automated review on every pull
+request of his repositories (Qodo, `qodo-code-review[bot]`, which posts a
+summary, a review and inline comments on its own within minutes of a PR
+opening; verified 2026-10-14 on spanweave-zoo #2: 111 seconds). A pull
+request per mission makes that a second cold reviewer, from a different
+model, that the aux review reads and either confirms or dismisses with a
+reason. This section is the shape. It changes templates, the review
+protocol, this repository's own playbook and `hands doctor`; the engine
+does not change.
+
+**Why not in the engine.** The branch logic belongs to the brief and the
+review protocol, which are the project's files, because what a mission
+branches from and what a review merges are plan facts that differ per
+project and per mission (a closer mission continues an open branch). The
+engine keeps reading one `VERDICT:` line and firing one rule; nothing in
+`playbook.py` learns the word "branch". The one new mechanical piece is
+doctor's `gh` row.
+
+**The builder (brief template, this repository's CLAUDE.md).** A mission
+runs on a branch `mission-N`, created from `main` at U0 (or, for a closer
+mission, continuing the open branch the brief names, with `main` merged in
+first so the kit's plan files are present). Every unit commit goes to that
+branch and is pushed at once, as before. The last unit opens the pull
+request — `gh pr create --base main --head mission-N --title "mission N:
+<title>" --body-file meta/FINAL-REPORT-N.md` — and the final reply's
+verdict carries its number: `VERDICT: mission N finished pr=<number>`. The
+builder then returns the working tree to `main` (`git checkout main && git
+pull --ff-only`), because the next kit apply and the next kickoff run in
+that tree on `main`. The playbook's regex `^VERDICT: mission (?P<n>\d+)
+finished` matches the longer line by prefix; `kit check`'s vocabulary check
+accepts the `pr=<number>` placeholder as it accepts `<unit>`. A mission
+whose brief says "direct" (this repository's mission 19, the one that
+builds the flow) commits to `main` as before and replies without `pr=`.
+
+**The review (review-protocol template, this repository's protocol).** The
+protocol finds the mission's pull request itself: `gh pr list --head
+mission-N --state open --json number,baseRefName,headRefOid`. With a PR,
+the commits under review are the PR's own since the last reviewed tip
+(`git log <base>..origin/mission-N`, where base is the merge-base with
+`main` for a first review of the branch, or the `reviewed:` sha the
+previous REVIEW file recorded for a closer); without one, the base is the
+last `review:` commit on `main` as before, so the protocol is one text
+for both shapes. The reviewer reads the hosted review before writing:
+`gh api repos/<owner>/<repo>/issues/<pr>/comments`, `pulls/<pr>/comments`
+and `pulls/<pr>/reviews`; when none from the bot is there yet it waits, in
+the foreground, up to ten minutes in one-minute steps. `REVIEW-N.md` gains
+a `## Hosted review` section listing every bot finding verbatim with one
+of: confirmed → carried as blocker k or should-fix m; dismissed → the
+reason; and `reviewed: <sha>` on its first line after the title. The
+review file is committed to `main` as `review: mission N` and pushed,
+before any merge, so the architect's clone and the phone architect read it
+from `main` whatever happens to the branch. Then: with `blockers=0`, the
+reviewer merges the PR itself — `gh pr merge <number> --merge --subject
+"merge: mission N (PR #<number>)"` — and brings the local tree level
+(`git checkout main && git pull --ff-only`), so the next kickoff starts
+from a `main` that has the code; a merge commit, never a squash, because
+the per-unit commits are what the next cold review's sub-agents work on.
+With blockers, the PR stays open and the reply says so; the closer
+mission's brief names the branch to continue and its review merges when
+clean. The merge is inside the review job on purpose: a human merging
+later from the GitHub app would let the next kickoff start from a `main`
+without the mission's code. The verdict line is unchanged:
+`VERDICT: review mission N blockers=<k> should-fix=<m>`.
+
+**Standing approval.** The human's approval of a playbook whose review
+protocol merges on a clean review is the standing approval of every merge
+it makes, as the approval of an autonomous playbook is of every kit apply
+(§31). A project that wants a human on every merge leaves the merge step
+out of its protocol and merges from the phone's GitHub app; the next
+kickoff then waits for `go`.
+
+**`hands doctor` (code).** A `gh` row: `gh --version`, `gh auth status`
+for the user handsd runs as, the login, and whether the token's scopes
+include `repo`; absent or unauthenticated is a warning, not a failure,
+since a project may commit direct; the row names the remedy (`gh auth
+login`). Tests use a fake `gh` on PATH as they use the fake claude.
+
+**This repository.** Mission 19 builds the above on `main` directly and
+is reviewed under the direct shape (the protocol's "no PR" branch; the
+review rule fires with the prompt loaded when the mission started, which
+is the old one, and the protocol on disk handles both). Its U0 is the
+gate: a probe PR from branch `probe-qodo`, one line in a doc, must draw
+the bot's review within fifteen minutes; the trigger mode and the delay
+are recorded in `meta/plan.md`; no review within the window is `VERDICT:
+mission 19 blocked U0`, and nothing of the flow is built on a reviewer
+that is not there. From mission 20 on, every mission of this repository
+is a pull request; mission 20 is the first, and its review the first to
+read a hosted review.
+
+**Not changed.** The kickoff line, the kit apply, the engine's rules, the
+driver and architect roles, the guard. The architect role's clone reads
+`main`; a mission's branch is invisible to it until merged, which is
+correct: the role plans from reviewed, merged state.
