@@ -1,55 +1,44 @@
-# plan — mission 19 (the pull-request flow; a hosted second reviewer)
+# plan — mission 20 (the first role-mode series' findings)
 
-Source: meta/BUILDER-19-PROMPT.md, DESIGN v3.18 §35 (with §26, §31),
-meta/reviews/REVIEW-18.md. Units run in order; each ends with a commit
-and a push, to `main` (this mission is "direct", §35 "This repository").
-`[x]` = done and pushed, `[b]` = blocked (two failures).
+Source: meta/BUILDER-20-PROMPT.md, DESIGN v3.19 §36 (with §31, §33, §34,
+§35), meta/reviews/REVIEW-19.md, meta/reviews/REVIEW-18.md. Units run in
+order; each ends with a commit and a push to `mission-20` (pull-request
+mission, §35). `[x]` = done and pushed, `[b]` = blocked (two failures).
 
-Base of the mission: 21d62d9 (`plan: mission 19 kit (DESIGN v3.18)`).
+Base of the mission: 238a57b (`plan: mission 20 kit (DESIGN v3.19)`).
 
-- [x] U0 Plan, bookkeeping and the gate (`plan:`) (this commit) — this file,
-      meta/CHECKPOINT.md, meta/journal.md; probe PR from `probe-qodo`, the
-      bot's first comment within 15 minutes, recorded under "Gate U0"; PR
-      closed, branch deleted
-- [x] U1 Doctor's `gh` row (§35) b55dfb1 — src/hands/doctor.py, tests; fake `gh` on
-      PATH: success, missing, unauthenticated, no `repo` scope; WARN never
-      FAIL; `--json` carries it
-- [x] U2 Templates (§35) 7929d9c — templates/BUILDER-N-PROMPT.md,
-      templates/REVIEW-PROTOCOL.md, templates/PLAYBOOK-missions.toml,
-      templates/PLAYBOOK-runs.toml, src/hands/kit.py, tests; the `pr=<number>`
-      literal passes `verdicts`; a filled kit passes 6 of 6 against a clone
-- [x] U3 This repository's own flow (§35) de56f62 — CLAUDE.md,
-      meta/REVIEW-PROTOCOL.md, PLAYBOOK.toml (kickoff BUILDER-20, review
-      prompt); loads with 20 rules; kit `--repo .` exit 0
-- [x] U4 Docs (§35) 5220e67 — docs/ARCHITECT-HANDBOOK.md §6 and §9,
-      docs/INTEGRATION.md, docs/PLAYBOOK.md
-- [x] U5 Final report (meta/FINAL-REPORT-19.md) (the commit that carries this line) — drafted under meta/drafts/
+- [x] U0 Plan, branch and findings (`plan:`) (this commit) — this file,
+      meta/CHECKPOINT.md, meta/journal.md, meta/findings/FINDINGS.md
+      (H-041..H-045); branch `mission-20` pushed
+- [ ] U1 Hermetic tests; review 19 should-fix 3, 4, 5 (H-040) —
+      tests/conftest.py, src/hands/doctor.py (`gh` row), docs/INTEGRATION.md,
+      docs/PLAYBOOK.md
+- [ ] U2 The review protocol (review 19 should-fix 1, 2; HF-007; HF-008) —
+      templates/REVIEW-PROTOCOL.md, meta/REVIEW-PROTOCOL.md
+- [ ] U3 The architect role's write permission (H-041) —
+      architect/settings.json, src/hands/doctor.py
+- [ ] U4 The runner (H-042, H-043) — src/hands/runner.py,
+      src/hands/config.py, src/hands/doctor.py
+- [ ] U5 The engine (H-044, H-045) — src/hands/playbook.py,
+      src/hands/api.py, src/hands/daemon.py
+- [ ] U6 `answer <secret> <text>` — src/hands/phone.py, api.py, spool.py,
+      playbook.py, notify.py, docs/INTEGRATION.md
+- [ ] U7 The job environment and the guard (HF-006; HF-003) —
+      src/hands/runner.py, src/hands/doctor.py, driver/hooks/bash_guard.py,
+      docs/INTEGRATION.md
+- [ ] U8 Review 18 should-fix 1–4 — config.py, doctor.py, api.py/kit.py,
+      bash_guard.py
+- [ ] U9 Notifications and this repository's kickoff — notify.py,
+      daemon.py, doctor.py, docs/INTEGRATION.md, PLAYBOOK.toml
+- [ ] U10 Final report and the pull request — meta/FINAL-REPORT-20.md
+      (drafted under meta/drafts/); `gh pr create`; tree back to `main`
 
-Review items. REVIEW-18's should-fix 1–4 are mission 20's (the brief: this
-mission does not touch the engine, the guard, the roles or those items).
+Review items. REVIEW-19 should-fix 1, 2 → U2; 3, 4, 5 → U1. REVIEW-18
+should-fix 1–4 → U8.
 
-Findings. H-040 filed by U0: twelve tests/test_kit.py tests fail when
-`HANDS_PROJECT`/`HANDS_JOB` are set (this mission runs as a hands job); every
-gate of this mission is `env -u HANDS_PROJECT -u HANDS_JOB ./scripts/check`.
-H-039, H-037, H-034, H-027, H-001, H-009 stay open.
+Findings. H-041..H-045 filed by U0. H-040 resolved by U1. Until U1 lands
+the gate is `env -u HANDS_PROJECT -u HANDS_JOB ./scripts/check`.
 
-Dependencies. U2's protocol template is U3's source; U1 before U4 (the docs
-name doctor's row); U5 last.
-
-## Gate U0
-
-Run by the orchestrator, 2026-10-14, `gh` 2.92.0, logged in as SigorMatt
-(scopes `gist`, `read:org`, `repo`, `workflow`).
-
-- PR: SigorMatt/hands#1, `probe-qodo` → `main`, one line appended to
-  docs/INTEGRATION.md ("probe: hosted review, 2026-10-14"), commit
-  `probe: hosted review`.
-- Opened: 2026-10-14T11:31:49Z (`gh pr view 1 --json createdAt`).
-- First bot comment: 2026-10-14T11:32:18Z, `qodo-code-review[bot]`, two
-  issue comments at the same second ("PR Summary by Qodo"; "Code Review by
-  Qodo": Bugs 0, Rule violations 0, Requirement gaps 0). No entry under
-  `pulls/1/reviews` by the second poll (11:32:57Z).
-- Delay: 29 seconds.
-- Trigger mode: on open (the bot posted with no comment from me).
-- Closed: `gh pr close 1 --delete-branch`; local branch deleted; `git fetch
-  --prune` then `git branch -a` shows no `probe-qodo`.
+Dependencies. U1 first (hermetic gate). U4 before U7 (both touch the
+runner's job environment). U3, U4, U7, U8, U9 all touch doctor.py: run in
+order, never concurrently. U5 before U6 (both in the engine). U10 last.
