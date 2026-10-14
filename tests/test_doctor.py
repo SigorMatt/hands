@@ -2752,3 +2752,69 @@ def test_doctor_live_for_the_architect_fails_without_a_job_to_show(
     assert row["status"] == "fail", row
     assert "no job in the spool" in strip_paths(row["detail"]), row
     assert not kit_file.exists()
+
+
+# --------------------------------------------- §36 "The runner" (H-042, H-043)
+
+
+def _commit(repo: Path, name: str) -> str:
+    (repo / name).write_text(name)
+    _git(repo, "add", "--", name)
+    _git(repo, "-c", "user.name=t", "-c", "user.email=t@t.invalid", "-c", "commit.gpgsign=false",
+         "-c", "core.hooksPath=/dev/null", "commit", "-q", "-m", name)
+    out = subprocess.run(["git", "-C", str(repo), "rev-parse", "HEAD"], check=True,
+                         capture_output=True, text=True)
+    return out.stdout.strip()
+
+
+@pytest.mark.parametrize("role", ["driver", "architect"])
+def test_a_role_row_prints_the_clone_head_against_origin_and_the_project(
+    tmp_home: Path, tmp_path: Path, fake_mode: None, monkeypatch: pytest.MonkeyPatch, role: str
+) -> None:
+    """§36: doctor's role rows print the clone's HEAD against origin and the project
+    the job will see — the config's, not doctor's own `HANDS_PROJECT`. The clone is
+    one commit behind origin/main as last fetched."""
+    monkeypatch.setenv("HANDS_PROJECT", "other")
+    d, add = _role_dir(tmp_path, role)
+    repo = d / "repo"
+    old = _commit(repo, "old.txt")
+    new = _commit(repo, "new.txt")
+    _git(repo, "update-ref", "refs/remotes/origin/main", new)
+    _git(repo, "checkout", "-q", "--detach", old)
+    code, row = _row(tmp_home, tmp_path, role, d, add)
+    assert code == 0 and row["status"] == "ok", row
+    detail = row["detail"]
+    assert f"clone HEAD {old[:12]}, origin/main {new[:12]} as last fetched" in strip_paths(detail)
+    assert "HANDS_PROJECT=demo" in strip_paths(detail), detail
+    assert "HANDS_PROJECT=other" not in strip_paths(detail), detail
+
+
+def test_a_role_row_names_the_configured_branch(
+    tmp_home: Path, tmp_path: Path, fake_mode: None
+) -> None:
+    """§36: `[roles.<role>] branch` is the origin branch the row compares HEAD with;
+    HEAD at it is said so, and an origin branch the clone has not fetched is named."""
+    d = driver_dir(tmp_path)
+    repo = d / "repo"
+    tip = _commit(repo, "a.txt")
+    _git(repo, "update-ref", "refs/remotes/origin/trunk", tip)
+    add_driver(write_config(tmp_home, tmp_path), d, 'branch = "trunk"')
+    _code, found = checks()
+    detail = found["role driver"]["detail"]
+    assert f"clone HEAD {tip[:12]} at origin/trunk as last fetched" in strip_paths(detail), detail
+
+    _git(repo, "update-ref", "-d", "refs/remotes/origin/trunk")
+    _code, found = checks()
+    detail = found["role driver"]["detail"]
+    assert f"clone HEAD {tip[:12]}, origin/trunk not fetched" in strip_paths(detail), detail
+
+
+def test_a_builder_row_prints_the_project_its_jobs_see(
+    tmp_home: Path, tmp_path: Path, fake_mode: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """§36 (H-043): every role job carries `HANDS_PROJECT` from the config."""
+    monkeypatch.setenv("HANDS_PROJECT", "other")
+    write_config(tmp_home, tmp_path)
+    _code, found = checks()
+    detail = found["role builder"]["detail"]
+    assert "HANDS_PROJECT=demo" in strip_paths(detail), detail

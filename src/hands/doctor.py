@@ -60,6 +60,7 @@ from hands.config import (
     DRIVER_ROLE,
     GUARDED_ROLES,
     KITS_ENV,
+    PROJECT_ENV,
     ROLE_ENV,
     Config,
     RoleConfig,
@@ -205,7 +206,9 @@ def run_checks(
     found = [_config_check(config)]
     found += [_claude_check(config), _gh_check()]
     found += [
-        _role_check(role) for role in config.roles.values() if role.name not in GUARDED_ROLES
+        _role_check(role, config.project)
+        for role in config.roles.values()
+        if role.name not in GUARDED_ROLES
     ]
     found += [_driver_check(config), _architect_check(config)]
     found += [_roots_check(config), _ops_check(config), _isolation_check(config)]
@@ -583,7 +586,14 @@ def _gh_check() -> Check:
     )
 
 
-def _role_check(role: RoleConfig) -> Check:
+def _project_line(project: str) -> str:
+    """§36 (H-043): the project a role's jobs see, whatever doctor itself inherited."""
+    return (
+        f"env {PROJECT_ENV}={project} (the config's project, in every job's environment; §36)"
+    )
+
+
+def _role_check(role: RoleConfig, project: str) -> Check:
     """§2: every job is spawned in `role.cwd`, and hands reads git HEAD there."""
     name = f"role {role.name}"
     if not role.cwd.is_dir():
@@ -600,6 +610,7 @@ def _role_check(role: RoleConfig) -> Check:
         f"{role.cwd}  model {role.model}; permission_flags {flags}"
         f"\n{role.resume_behaviour} (§6)"
         f"\nenv {BG_WAIT_CEILING_ENV}={role.spawn_env[BG_WAIT_CEILING_ENV]} ({source}; §23)"
+        f"\n{_project_line(project)}"
     )
     if not (role.cwd / ".git").exists():
         return Check(
@@ -661,7 +672,7 @@ def _driver_check(config: Config) -> Check:
     warnings: list[str] = []
     failures: list[str] = []
     verified: list[str] = []
-    clone = _clone_lines(role.cwd, failures, warnings, verified)
+    clone = _clone_lines(role, failures, warnings, verified)
 
     settings_path = role.cwd / ".claude" / "settings.json"
     loaded = _load_settings(role.cwd)
@@ -710,6 +721,7 @@ def _driver_check(config: Config) -> Check:
 
     detail = (
         f"{role.cwd}  model {role.model}; permission_flags (none)"
+        f"\n{_project_line(config.project)}"
         f"\n{clone}\n{settings}\n{guard}"
         f"\nguard mode: role mode ({mode} in every driver-role job's environment; §27)"
         + "".join(f"\nverified: {line}" for line in verified)
@@ -765,7 +777,7 @@ def _architect_check(config: Config) -> Check:
     warnings: list[str] = []
     failures: list[str] = []
     verified: list[str] = []
-    clone = _clone_lines(role.cwd, failures, warnings, verified)
+    clone = _clone_lines(role, failures, warnings, verified)
 
     # The runner's own expression (`hands.runner.job_env`), so the row names the
     # path the job really gets as `HANDS_KITS`.
@@ -863,6 +875,7 @@ def _architect_check(config: Config) -> Check:
 
     detail = (
         f"{role.cwd}  model {role.model}; permission_flags (none)"
+        f"\n{_project_line(config.project)}"
         f"\n{clone}\n{kits}\n{settings}\n{write}\n{guard}"
         f"\nguard mode: architect mode ({mode} in every architect-role job's environment; "
         f"§31), and every write confined to {KITS_ENV}={kits_dir}"
@@ -873,9 +886,10 @@ def _architect_check(config: Config) -> Check:
 
 
 def _clone_lines(
-    cwd: Path, failures: list[str], warnings: list[str], verified: list[str]
+    role: RoleConfig, failures: list[str], warnings: list[str], verified: list[str]
 ) -> str:
-    """The clone's lines of a role row (§29, §31, §32, §33), shared by both rows."""
+    """The clone's lines of a role row (§29, §31, §32, §33, §36), shared by both rows."""
+    cwd = role.cwd
     found = driver_clone(cwd)  # §29, §31: the same path the job gets as HANDS_CLONE
     if found is None:
         clone = f"no clone: neither {cwd / 'repo'} nor {cwd} is a git repository"
@@ -886,7 +900,34 @@ def _clone_lines(
         verified.append(shown)
     else:
         failures.append(push)
-    return f"clone {found}\n{push}"
+    return f"clone {found}\n{_head_line(found, role.branch)}\n{push}"
+
+
+def _head_line(clone: Path, branch: str) -> str:
+    """§36 (H-042): the clone's HEAD against `origin/<branch>`, as last fetched.
+
+    Read from the clone's own refs: doctor does not fetch. Informational — the
+    runner fetches and checks out `origin/<branch>` before every job, and a clone
+    that cannot be advanced fails that job, so the row's status does not change.
+    """
+    def short(ref: str) -> str | None:
+        proc = _git(clone, "rev-parse", "--verify", "-q", f"{ref}^{{commit}}")
+        if isinstance(proc, str) or proc.returncode != 0:
+            return None
+        return proc.stdout.strip()[:12] or None
+
+    head = short("HEAD") or "(no commit)"
+    origin = short(f"refs/remotes/origin/{branch}")
+    if origin is None:
+        compared = f"clone HEAD {head}, origin/{branch} not fetched"
+    elif origin == head:
+        compared = f"clone HEAD {head} at origin/{branch} as last fetched"
+    else:
+        compared = f"clone HEAD {head}, origin/{branch} {origin} as last fetched"
+    return (
+        f"{compared} (the runner fetches origin and checks out origin/{branch} "
+        "before every job; §36)"
+    )
 
 
 def _kits_line(kits_dir: Path, cwd: Path) -> tuple[str, bool]:

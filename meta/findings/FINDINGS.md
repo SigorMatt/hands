@@ -2067,7 +2067,10 @@ Direction. §36: before every architect and driver job the runner runs `git
 origin/<branch>` (`[roles.<role>] branch`, default `main`); a failure fails
 the job before `claude` starts. Mission 20 U4.
 
-Status: open (code: mission 20 U4)
+Status: resolved (code: mission 20 U4 — the runner fetches origin and checks out
+origin/<branch> detached before every architect and driver job, `[roles.<role>]
+branch` default main; a clone that cannot be advanced fails the job, spawn_error,
+git's message in stderr_tail; doctor's role rows print HEAD against origin/<branch>)
 
 ---
 
@@ -2087,7 +2090,9 @@ Direction. §36: every role job's environment carries `HANDS_PROJECT` from
 the config's project name, never from handsd's environment; doctor's role
 rows print it. Mission 20 U4.
 
-Status: open (code: mission 20 U4)
+Status: resolved (code: mission 20 U4 — every job's environment carries
+HANDS_PROJECT=<config project> over handsd's environment and the env table;
+doctor's role rows print it)
 
 ---
 

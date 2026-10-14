@@ -29,6 +29,7 @@ __all__ = [
     "DRIVER_ROLE",
     "GUARDED_ROLES",
     "KITS_ENV",
+    "PROJECT_ENV",
     "Config",
     "ConfigError",
     "FilesConfig",
@@ -71,6 +72,8 @@ KNOWN_ROLES: tuple[str, ...] = ("builder", "aux", "driver", "architect")  # §27
 DEFAULT_QUEUE_DEPTH = {"builder": 1, "aux": 4, "driver": 1, "architect": 1}
 #: §6; §27 and §31 are silent for the two roles handsd starts one job at a time
 DEFAULT_MODEL = "opus"
+#: §36 (H-042): `[roles.<role>] branch` when the config does not set it.
+DEFAULT_ROLE_BRANCH = "main"
 DEFAULT_NTFY_URL = "https://ntfy.sh"
 #: §34: the public broker a token is never sent to. §34 does not define "a public
 #: broker"; hands' own default host and its subdomains are what it refuses.
@@ -108,6 +111,9 @@ CLONE_ENV = "HANDS_CLONE"
 #: argument of `mkdir|cp|mv` and every write to that directory; §32 took `zip` and
 #: `unzip` out, and `hands kit file` refuses a kit directory outside it).
 KITS_ENV = "HANDS_KITS"
+#: §36 (H-043): the project, in every role job's environment (the runner sets it
+#: from the config's project name, never from handsd's environment).
+PROJECT_ENV = "HANDS_PROJECT"
 DRIVER_ROLE = "driver"
 ARCHITECT_ROLE = "architect"
 #: §27, §31: the roles handsd starts headless, each with its own guard mode and
@@ -196,6 +202,9 @@ class RoleConfig:
     #: `[roles.<r>] env` as written (§23); `spawn_env` is what a job gets. Not
     #: part of the hash: a dict cannot be hashed, and the name identifies a role.
     env: dict[str, str] = field(default_factory=dict, hash=False)
+    #: §36 (H-042): the branch an architect or driver job's clone is checked out
+    #: at, detached, before the job starts (`origin/<branch>`). Read by no other role.
+    branch: str = DEFAULT_ROLE_BRANCH
 
     @property
     def spawn_env(self) -> dict[str, str]:
@@ -764,7 +773,10 @@ def _role(name: str, table: Any, path: Path) -> RoleConfig:
         raise ConfigError(f"{path}: {where} must be a table")
     _check_keys(
         table,
-        ("cwd", "model", "permission_flags", "resume_line", "queue_depth", "cancel_gated", "env"),
+        (
+            "cwd", "model", "permission_flags", "resume_line", "queue_depth", "cancel_gated",
+            "env", "branch",
+        ),
         where,
         path,
     )
@@ -820,6 +832,18 @@ def _role(name: str, table: Any, path: Path) -> RoleConfig:
                 f"the job inherits it from handsd, except {BG_WAIT_CEILING_ENV}, "
                 "which hands sets to 0",
                 "value",
+            ),
+        ),
+        branch=_str(
+            table,
+            "branch",
+            DEFAULT_ROLE_BRANCH,
+            where,
+            path,
+            blank=_omit(
+                f"an architect or driver job's clone is then checked out at "
+                f"origin/{DEFAULT_ROLE_BRANCH}",
+                "branch name",
             ),
         ),
     )

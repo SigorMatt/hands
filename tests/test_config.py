@@ -904,6 +904,7 @@ env = { HANDS_PADDED = "  1  " }
 [roles.aux]
 cwd = "  ~/g  "
 model = "  sonnet  "
+branch = "  trunk  "
 
 [ops]
 repo = "  ~/ops  "
@@ -961,6 +962,8 @@ def test_every_accepted_string_value_is_stored_stripped(write_config, ops_repo: 
     # …and the stripped values are the ones the rest of hands then uses.
     assert cfg.role("builder").resume_line == "Resume WORKPLAN.md"
     assert cfg.role("builder").env == {"HANDS_PADDED": "1"}
+    assert cfg.role("aux").branch == "trunk"  # §36 (H-042) through §21's helper
+    assert cfg.role("builder").branch == "main"  # its default
     assert cfg.notify.ntfy_token == "tk_padded0token"  # §33 through §21's helper
     assert cfg.playbook.path == "P.toml"
     assert cfg.ops.monitor_path == ops_repo / "watch_monitor.sh"

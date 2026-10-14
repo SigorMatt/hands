@@ -175,11 +175,14 @@ cwd` is optional.
     cwd = "~/hands-driver/hands"         # the driver directory and its repo/ clone
                                          # (~/hands-driver/<project>; this is hands'
                                          # own); permission_flags must stay empty
+    branch = "main"                      # default (§36): the clone is checked out
+                                         # at origin/<branch> before every job
 
     [roles.architect]                    # optional (§31): the architect role
     cwd = "~/hands-architect/hands"      # the architect directory, its repo/ clone
                                          # and its kits/; permission_flags must stay
                                          # empty, as for the driver
+    branch = "main"                      # default (§36), as for the driver
 
     [ops]
     repo = "~/<project>-ops"
@@ -232,8 +235,20 @@ Notes that are easy to get wrong:
   environment carries `HANDS_ROLE=driver`, on top of its `env` table and
   whatever that table says, which puts the guard in role mode. The driver role
   is started by handsd only through a playbook `consult` action: `hands send
-  --role driver` is refused. `hands doctor` prints a `role driver` row with the
-  cwd, the clone, the settings, the guard and its mode (§28). The row fails on
+  --role driver` is refused. Before every driver and architect job (§36,
+  H-042) the runner advances the role's clone: `git -C <clone> fetch -q origin`,
+  then `git -C <clone> checkout -q --detach origin/<branch>`, where `<branch>` is
+  the role's `branch` key (default `main`; read by these two roles only). A
+  clone that cannot be advanced (an unreachable origin, a branch origin does not
+  have, local changes in the way) fails the job before `claude` starts:
+  `failed`, `failure_reason` `spawn_error`, and `stderr_tail` holding the git
+  command and git's own message. A role with no clone has nothing to advance;
+  its job runs, and the guard refuses every `git -C`. `hands doctor` prints a
+  `role driver` row with the
+  cwd, the project its jobs see (`env HANDS_PROJECT=<project>`), the clone, the
+  clone's HEAD against `origin/<branch>` as last fetched (doctor reads the
+  clone's refs and does not fetch; the line does not change the row's status),
+  the settings, the guard and its mode (§28, §36). The row fails on
   a permission bypass, when the driver directory's `.claude/settings.json` does
   not name the hook (a `PreToolUse` command hook for `Bash` that runs
   `.claude/hooks/bash_guard.py`), and when that hook's `--selftest` is not green
@@ -321,6 +336,9 @@ Notes that are easy to get wrong:
   value. With Claude Code's default ceiling (600 s), a `claude -p` whose turn
   ended while a sub-agent it started was still running is terminated and exits 0.
   `hands doctor` prints the effective value on each role's row.
+  Every role job's environment also carries `HANDS_PROJECT`, the config's
+  project name (§36, H-043), over handsd's own environment and this table
+  alike; doctor prints it on each role's row as `env HANDS_PROJECT=<project>`.
 - **How a job ends** (§6, §23). A job is `failed` when the process ends without
   a final `result` event, with a `result` of subtype `error` (claude's `error_*`
   family, `error_max_turns` included, whatever its `is_error` says), without
@@ -1034,7 +1052,9 @@ write only under `HANDS_KITS`; the driver has no equivalent, because the driver
 writes nothing at all.
 
 `hands doctor` prints a `role architect` row beside the `role driver` one: the
-cwd, the clone, the kits directory, the settings, the write matcher, the
+cwd, the project its jobs see, the clone and its HEAD against `origin/<branch>`
+(as the driver row prints them; the clone is advanced before every architect
+job as it is before every driver job, §36), the kits directory, the settings, the write matcher, the
 guard's self-test run in architect mode, the mode itself, and the `verified:`
 lines the driver row prints plus the kits realpath. It fails on a
 permission bypass (`permission_flags`, or the driver row's settings rules, above,

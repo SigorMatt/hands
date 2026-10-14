@@ -19,7 +19,14 @@ All six flags were checked against the installed binary (claude 2.1.268,
 
 The process runs in handsd's environment plus the role's `spawn_env` (§23):
 `CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS=0` unless `[roles.<r>] env` sets it; and
-`HANDS_JOB=<job id>`, which the post-exit sweep reads as corroboration only (§29).
+`HANDS_JOB=<job id>`, which the post-exit sweep reads as corroboration only (§29);
+and `HANDS_PROJECT=<the config's project>` (§36, H-043).
+
+Before an architect or driver job, the role's clone (`driver_clone`) is advanced
+to `origin/<[roles.<r>] branch>`, detached (§36, H-042; `advance_clone`). A clone
+that cannot be advanced fails the job before claude starts: `failed` with
+`spawn_error` (§6's closed vocabulary; no process is spawned) and git's message as
+`stderr_tail`. A role with no clone has nothing to advance and runs as §29 says.
 
 Each process is isolated per job (§24). When `systemd-run --user --scope` can
 start a scope here, the invocation runs inside a transient user scope named
@@ -69,6 +76,7 @@ from hands.config import (
     CONSULT_ROLE_ENV,
     DRIVER_ROLE,
     KITS_ENV,
+    PROJECT_ENV,
     Config,
     RoleConfig,
     driver_clone,
@@ -86,7 +94,7 @@ from hands.monitor import (
     proc_stats,
     start_time,
 )
-from hands.playbook import consult_head
+from hands.playbook import GIT_ENV_CLEARED, consult_head
 from hands.spool import TERMINAL_STATES, Job, Spool, SpoolError
 
 __all__ = [
@@ -221,6 +229,11 @@ MAX_UNIT_PROJECT = 64
 #: limit (`limited`) are decided before any of these, and their reason is null.
 #: Otherwise the terminating line wins even over a `success` result with
 #: `num_turns` and exit 0: the harness ended the session mid-turn (DESIGN v3.8 §6).
+#: §36 (H-042): how long each git command of `advance_clone` may take. §36 names
+#: no bound; a fetch from an origin that never answers would otherwise hold the
+#: queue, so the job fails with that said instead.
+ADVANCE_TIMEOUT_S = 300.0
+
 FAILURE_REASONS: tuple[str, ...] = (
     "harness_terminated",
     "no_final_result",
@@ -594,8 +607,22 @@ class Runner:
         )
         self._remember_argv(job.id, spawned)
 
+        # §36 (H-042): the architect's and the driver's clone is advanced to
+        # origin/<branch> before the job starts; one that cannot be fails the job
+        # here, before claude, with git's message as the record's stderr_tail.
+        advance_error = None
+        if job.role in (DRIVER_ROLE, ARCHITECT_ROLE):
+            clone = driver_clone(role.cwd)
+            if clone is not None:
+                advance_error = await advance_clone(clone, role.branch)
+
         head_at_start = await _git_head(role.cwd)
         job = self.spool.transition(job, "running", head_at_start=head_at_start)
+        if advance_error is not None:
+            return await self._finish(
+                job, role, "failed", _Parsed(), None, advance_error,
+                failure_reason="spawn_error",
+            )
 
         try:
             proc = await asyncio.create_subprocess_exec(
@@ -607,7 +634,7 @@ class Runner:
                 limit=_STREAM_LIMIT,
                 # §23, plus the job's id: the mark the post-exit sweep reads to
                 # tell the job's descendants from strangers (§27).
-                env=job_env(job, role),
+                env=job_env(job, role, self.config.project),
                 start_new_session=isolation == GROUP,  # §24: its own process group
             )
         except OSError as exc:
@@ -1013,7 +1040,7 @@ def _failure_reason(parsed: _Parsed, exit_code: int | None) -> str | None:
     return None
 
 
-def job_env(job: Job, role: RoleConfig) -> dict[str, str]:
+def job_env(job: Job, role: RoleConfig, project: str) -> dict[str, str]:
     """handsd's environment, the role's `spawn_env` (§23) and `HANDS_JOB` (§27).
 
     §28: a driver job also carries `HANDS_CONSULT_ROLE`, the role its consult
@@ -1026,8 +1053,10 @@ def job_env(job: Job, role: RoleConfig) -> dict[str, str]:
     `HANDS_KITS` — `<cwd>/kits`, the one directory that role may write to. It is
     set whether or not the directory exists yet: the guard confines paths to it,
     and a `mkdir -p` under it is how the architect makes it.
+    §36 (H-043): every job carries `HANDS_PROJECT`, the config's project name,
+    over handsd's environment and the role's env table alike.
     """
-    env = {**os.environ, **role.spawn_env, JOB_ENV: job.id}
+    env = {**os.environ, **role.spawn_env, JOB_ENV: job.id, PROJECT_ENV: project}
     if job.role in (DRIVER_ROLE, ARCHITECT_ROLE):
         env.pop(CONSULT_ROLE_ENV, None)
         head = consult_head(job.prompt)
@@ -1224,6 +1253,44 @@ async def _systemctl(*args: str, timeout: float = PROBE_S) -> str | None:
     if proc.returncode != 0:
         return None
     return out.decode("utf-8", errors="replace").strip()
+
+
+async def advance_clone(clone: Path, branch: str) -> str | None:
+    """§36 (H-042): `git -C <clone> fetch -q origin`, then `git -C <clone> checkout
+    -q --detach origin/<branch>`. None when both succeed; otherwise the command that
+    failed and git's own message, for the job record. Never raises.
+
+    Run with the git variables of handsd's environment cleared (as doctor's probes
+    are) and with no terminal prompt, bounded by `ADVANCE_TIMEOUT_S` per command.
+    """
+    env = {name: value for name, value in os.environ.items() if name not in GIT_ENV_CLEARED}
+    env["GIT_TERMINAL_PROMPT"] = "0"
+    for args in (("fetch", "-q", "origin"), ("checkout", "-q", "--detach", f"origin/{branch}")):
+        shown = f"git -C {clone} {' '.join(args)}"
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "git",
+                "-C",
+                str(clone),
+                *args,
+                env=env,
+                stdin=asyncio.subprocess.DEVNULL,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,
+            )
+        except OSError as exc:
+            return f"cannot advance the clone (§36): {shown}: {exc}"
+        try:
+            out, _ = await asyncio.wait_for(proc.communicate(), ADVANCE_TIMEOUT_S)
+        except TimeoutError:
+            with contextlib.suppress(ProcessLookupError):
+                proc.kill()
+            await proc.wait()
+            return f"cannot advance the clone (§36): {shown}: no answer in {ADVANCE_TIMEOUT_S}s"
+        if proc.returncode != 0:
+            said = out.decode("utf-8", errors="replace").strip() or f"exit {proc.returncode}"
+            return f"cannot advance the clone (§36): {shown}: exit {proc.returncode}\n{said}"
+    return None
 
 
 async def _git_head(cwd: Path) -> str | None:

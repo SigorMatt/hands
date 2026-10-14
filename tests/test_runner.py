@@ -1437,11 +1437,12 @@ def test_a_driver_job_carries_its_clone_as_hands_clone(
     when that is the repository (doctor's rule). Never from handsd's environment or
     the role's env table; with no clone it is absent and every `git -C` is refused."""
     monkeypatch.setenv("HANDS_CLONE", "/tmp")
+    # §36: the runner advances the clone before the job, so it is a real one
     if layout == "repo-under-cwd":
-        (workdir / "repo" / ".git").mkdir(parents=True)
+        _clone_behind(workdir.parent, workdir / "repo")
         expected = str(workdir / "repo")
     elif layout == "cwd-is-the-repo":
-        (workdir / ".git").mkdir()
+        _clone_behind(workdir.parent, workdir)
         expected = str(workdir)
     else:
         expected = "UNSET:HANDS_CLONE"
@@ -1472,7 +1473,7 @@ def test_an_architect_job_carries_its_role_clone_and_kits(
     environment or the role's `env` table, which the guard's modes depend on."""
     monkeypatch.setenv("HANDS_KITS", "/tmp")
     monkeypatch.setenv("HANDS_CLONE", "/tmp")
-    (workdir / "repo" / ".git").mkdir(parents=True)
+    _clone_behind(workdir.parent, workdir / "repo")  # §36: a real clone, advanced
     cfg = parse_config(
         {
             "roles": {
@@ -1499,3 +1500,158 @@ def test_an_architect_job_carries_its_role_clone_and_kits(
     assert ran("HANDS_KITS") == str(workdir / "kits")
     # a builder job gets none of them from hands (it inherits handsd's own)
     assert send(runner, spool, "FAKE:env HANDS_KITS").result == "/tmp"
+
+
+# ------------------------------------------- §36 "The runner" (H-042, H-043)
+
+
+def _git(repo: Path, *args: str) -> str:
+    done = subprocess.run(
+        ["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t@t.invalid",
+         "-c", "commit.gpgsign=false", "-c", "core.hooksPath=/dev/null", *args],
+        check=True, capture_output=True, text=True,
+    )
+    return done.stdout.strip()
+
+
+def _publish(seed: Path, name: str, body: str, branch: str) -> str:
+    """Commit `name` in `seed` on `branch` and push it to origin; the new sha."""
+    (seed / name).write_text(body)
+    _git(seed, "add", "--", name)
+    _git(seed, "commit", "-q", "-m", name)
+    _git(seed, "push", "-q", "origin", f"HEAD:refs/heads/{branch}")
+    return _git(seed, "rev-parse", "HEAD")
+
+
+def _clone_behind(tmp_path: Path, clone: Path, branch: str = "main") -> tuple[Path, str]:
+    """A local bare origin with `branch`, and `clone` of it one commit behind: the
+    newer commit adds `new.txt`. Returns (origin, the tip of origin/<branch>)."""
+    origin = tmp_path / "origin.git"
+    seed = tmp_path / "seed"
+    subprocess.run(["git", "init", "-q", "--bare", "-b", "main", str(origin)], check=True)
+    subprocess.run(["git", "init", "-q", "-b", branch, str(seed)], check=True)
+    _git(seed, "remote", "add", "origin", str(origin))
+    _publish(seed, "old.txt", "old\n", branch)
+    if branch != "main":
+        _publish(seed, "main.txt", "main\n", "main")  # main exists, and is not branch
+        _git(seed, "reset", "-q", "--hard", "HEAD~1")
+    subprocess.run(["git", "clone", "-q", "-b", branch, str(origin), str(clone)],
+                   check=True, capture_output=True)
+    tip = _publish(seed, "new.txt", "new\n", branch)
+    return origin, tip
+
+
+def _role_runner(
+    tmp_home: Path, spool: Spool, role: str, cwd: Path, *, extra: dict | None = None,
+    project: str = "demo",
+) -> Runner:
+    cfg = parse_config(
+        {
+            "roles": {"builder": {"cwd": str(cwd)}, role: {"cwd": str(cwd), **(extra or {})}},
+            "runner": {"claude": str(FAKE)},
+        },
+        project=project,
+        path=tmp_home / ".hands" / f"{project}.toml",
+    )
+    return Runner(cfg, spool)
+
+
+@pytest.mark.parametrize("role", ["driver", "architect"])
+def test_a_role_job_advances_its_clone_to_origin_before_claude_starts(
+    tmp_home: Path, tmp_path: Path, workdir: Path, spool: Spool, role: str
+) -> None:
+    """§36 (H-042): before every architect and driver job the runner runs `git -C
+    <clone> fetch -q origin` and `git -C <clone> checkout -q --detach origin/main`.
+    The clone is one commit behind; the job reads the newer commit's file, so the
+    advance happened before claude ran, and HEAD is origin/main's tip, detached."""
+    clone = workdir / "repo"
+    _origin, tip = _clone_behind(tmp_path, clone)
+    assert not (clone / "new.txt").exists()
+    runner = _role_runner(tmp_home, spool, role, workdir)
+    job = spool.create_job(role=role, context="clear", prompt=f"FAKE:cat {clone / 'new.txt'}",
+                           origin="cli")
+    done = asyncio.run(runner.run(job))
+    assert done.state == "done", done
+    assert done.result == "new\n"
+    assert _git(clone, "rev-parse", "HEAD") == tip
+    assert _git(clone, "rev-parse", "--abbrev-ref", "HEAD") == "HEAD"  # detached
+
+
+def test_a_non_default_branch_is_the_one_checked_out(
+    tmp_home: Path, tmp_path: Path, workdir: Path, spool: Spool
+) -> None:
+    """§36: `<branch>` is the config's `[roles.<role>] branch` (default `main`)."""
+    clone = workdir / "repo"
+    _origin, tip = _clone_behind(tmp_path, clone, branch="trunk")
+    runner = _role_runner(tmp_home, spool, "driver", workdir, extra={"branch": "trunk"})
+    assert runner.config.role("driver").branch == "trunk"
+    job = spool.create_job(role="driver", context="clear", prompt="FAKE:result ran",
+                           origin="cli")
+    done = asyncio.run(runner.run(job))
+    assert done.state == "done", done
+    assert _git(clone, "rev-parse", "HEAD") == tip
+    assert _git(clone, "rev-parse", "origin/main") != tip
+    assert not (clone / "main.txt").exists()
+
+
+@pytest.mark.parametrize("role", ["driver", "architect"])
+def test_a_clone_whose_origin_is_unreachable_fails_the_job_before_claude(
+    tmp_home: Path, tmp_path: Path, workdir: Path, spool: Spool, role: str
+) -> None:
+    """§36: a clone that cannot be advanced fails the job before `claude` starts,
+    with the git message in the record. The origin is removed after the clone."""
+    import shutil
+
+    clone = workdir / "repo"
+    origin, _tip = _clone_behind(tmp_path, clone)
+    before = _git(clone, "rev-parse", "HEAD")
+    shutil.rmtree(origin)
+    marker = tmp_path / "claude-ran"
+    runner = _role_runner(tmp_home, spool, role, workdir)
+    job = spool.create_job(role=role, context="clear",
+                           prompt=f"FAKE:cat {marker}\nFAKE:result ran", origin="cli")
+    done = asyncio.run(runner.run(job))
+    assert done.state == "failed", done
+    assert done.failure_reason == "spawn_error"
+    assert done.result is None and done.session_id is None and done.pid is None
+    assert done.stderr_tail is not None
+    assert strip_paths(done.stderr_tail).startswith(
+        "cannot advance the clone (§36): git -C <path>/work/repo fetch -q origin: exit "
+    )
+    assert str(origin) in done.stderr_tail  # git's own message names the missing origin
+    assert _git(clone, "rev-parse", "HEAD") == before
+    assert spool.load_job(done.id).state == "failed"
+
+
+def test_a_builder_job_does_not_touch_a_clone(
+    tmp_home: Path, tmp_path: Path, workdir: Path, spool: Spool
+) -> None:
+    """The advance is for architect and driver jobs only (§36): a builder whose cwd
+    is a clone behind origin is left where it is."""
+    _origin, tip = _clone_behind(tmp_path, workdir / "repo")
+    cfg = parse_config(
+        {"roles": {"builder": {"cwd": str(workdir / "repo")}}, "runner": {"claude": str(FAKE)}},
+        project="demo",
+        path=tmp_home / ".hands" / "demo.toml",
+    )
+    before = _git(workdir / "repo", "rev-parse", "HEAD")
+    assert send(Runner(cfg, spool), spool, "FAKE:result ran").state == "done"
+    assert _git(workdir / "repo", "rev-parse", "HEAD") == before != tip
+
+
+@pytest.mark.parametrize("role", ["builder", "driver", "architect"])
+def test_every_role_job_carries_hands_project_from_the_config(
+    tmp_home: Path, tmp_path: Path, workdir: Path, spool: Spool,
+    monkeypatch: pytest.MonkeyPatch, role: str,
+) -> None:
+    """§36 (H-043): every role job's environment carries `HANDS_PROJECT`, set from
+    the config's project name, never from handsd's environment or the env table."""
+    monkeypatch.setenv("HANDS_PROJECT", "other")
+    _clone_behind(tmp_path, workdir / "repo")
+    runner = _role_runner(
+        tmp_home, spool, role, workdir, project="alpha",
+        extra={"env": {"HANDS_PROJECT": "table"}},
+    )
+    job = spool.create_job(role=role, context="clear", prompt="FAKE:env HANDS_PROJECT",
+                           origin="cli")
+    assert asyncio.run(runner.run(job)).result == "alpha"
