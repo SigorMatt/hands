@@ -37,6 +37,7 @@ failed, 0 otherwise.
 
 from __future__ import annotations
 
+import getpass
 import hashlib
 import json
 import os
@@ -189,7 +190,7 @@ def run_checks(
     instead of having it connect to its own socket.
     """
     found = [_config_check(config)]
-    found += [_claude_check(config)]
+    found += [_claude_check(config), _gh_check()]
     found += [
         _role_check(role) for role in config.roles.values() if role.name not in GUARDED_ROLES
     ]
@@ -471,6 +472,94 @@ def _claude_check(config: Config) -> Check:
         )
     fake = f"  [{FAKE_ENV}=1: a stand-in, not the real binary]" if is_fake() else ""
     return Check("claude", OK, f"{version[0]}  ({path}){fake}")
+
+
+#: §35: the remedy every non-OK `gh` row names.
+GH_REMEDY = "run `gh auth login` as this user"
+
+#: `gh auth status`: "Logged in to <host> account <login>" (gh 2.40+) or
+#: "Logged in to <host> as <login>" (older).
+_GH_LOGIN_RE = re.compile(r"Logged in to \S+ (?:account|as) (\S+)")
+_GH_SCOPES_RE = re.compile(r"Token scopes:\s*(.*)")
+
+
+def _gh_run(path: str, *args: str) -> subprocess.CompletedProcess[str] | str:
+    """`gh <args>`, argv only, no stdin, no prompt; the result or why it could not run."""
+    env = {**os.environ, "GH_PROMPT_DISABLED": "1", "NO_COLOR": "1"}
+    try:
+        return subprocess.run(
+            [path, *args],
+            env=env,
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            timeout=PROBE_S,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        return str(exc)
+
+
+def _gh_said(text: str) -> str:
+    """What `gh` printed, with every `Token:` line dropped (the token is never shown)."""
+    kept = [line for line in text.splitlines() if "Token:" not in line and line.strip()]
+    return _tail("\n".join(kept), 2)
+
+
+def _gh_check() -> Check:
+    """§35: `gh --version` and `gh auth status` for the user this process runs as
+    (handsd's, when the daemon answers `doctor`): the login and whether the token's
+    scopes include `repo`. Absent, unauthenticated or without `repo` is a warning,
+    never a failure — a project may commit direct. Only the `gh` on PATH is run."""
+    try:
+        user = getpass.getuser()
+    except (KeyError, OSError):
+        user = f"uid {os.getuid()}"
+    path = shutil.which("gh")
+    if path is None:
+        return Check(
+            "gh",
+            WARN,
+            f"no `gh` on PATH for user {user}: the pull-request flow (§35) needs it; "
+            f"install the GitHub CLI and {GH_REMEDY}",
+        )
+    version = _gh_run(path, "--version")
+    if isinstance(version, str) or version.returncode != 0:
+        said = version if isinstance(version, str) else _gh_said(version.stderr)
+        return Check("gh", WARN, f"{path} --version did not answer: {said}")
+    lines = (version.stdout or version.stderr).strip().splitlines()
+    head = lines[0] if lines else "gh (no version printed)"
+    status = _gh_run(path, "auth", "status")
+    if isinstance(status, str):
+        return Check("gh", WARN, f"{head}  ({path})\n`gh auth status` did not run: {status}")
+    # gh 2.92 prints the status on stdout; older versions printed it on stderr.
+    text = f"{status.stdout or ''}\n{status.stderr or ''}"
+    login = _GH_LOGIN_RE.search(text)
+    if status.returncode != 0 or login is None:
+        return Check(
+            "gh",
+            WARN,
+            f"{head}  ({path})\nnot logged in as user {user}: {_gh_said(text)}\n{GH_REMEDY}",
+        )
+    found = _GH_SCOPES_RE.search(text)
+    scopes = (
+        [part.strip().strip("'\"") for part in found.group(1).split(",")] if found else []
+    )
+    if "repo" not in scopes:
+        listed = ", ".join(scope for scope in scopes if scope) or "none reported"
+        return Check(
+            "gh",
+            WARN,
+            f"{head}  ({path})\nlogged in as {login.group(1)} (user {user}), "
+            f"no `repo` scope in the token (scopes: {listed})\n"
+            f"{GH_REMEDY} and grant the `repo` scope",
+        )
+    return Check(
+        "gh",
+        OK,
+        f"{head}  ({path})\nlogged in as {login.group(1)} (user {user}); "
+        "token scopes include `repo`",
+    )
 
 
 def _role_check(role: RoleConfig) -> Check:

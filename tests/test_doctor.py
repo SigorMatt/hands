@@ -2422,3 +2422,87 @@ def test_the_shipped_settings_and_guard_pass_and_print_the_matching_sha256(
     code, row = _row(tmp_home, tmp_path, role, d, add)
     assert code == 0 and row["status"] == "ok", row
     assert f"sha256 {SHIPPED_SHA}" in strip_paths(row["detail"]), row
+
+
+# ------------------------------------------------- the `gh` row (§35, mission 19 U1)
+
+FAKE_GH_TOKEN = "gho_FAKEtokenFAKEtokenFAKEtoken0000"
+
+
+def _gh_row(tmp_home: Path, tmp_path: Path) -> tuple[int, dict[str, Any], str]:
+    """Doctor's `gh` row from `--json`, the exit code, and the text report."""
+    write_config(tmp_home, tmp_path)
+    code, found = checks()
+    _, out, err = run()
+    said = out + err + json.dumps(found)
+    assert FAKE_GH_TOKEN not in strip_paths(said)
+    assert "Token:" not in strip_paths(said)
+    return code, found["gh"], text_row(out, "gh")
+
+
+def test_gh_logged_in_with_repo_is_ok_with_the_login_and_the_version(
+    tmp_home: Path, tmp_path: Path, fake_mode: None
+) -> None:
+    code, row, text = _gh_row(tmp_home, tmp_path)
+    assert code == 0
+    assert row["status"] == "ok", row
+    for detail in (row["detail"], text):
+        assert "gh version 9.9.9 (fake)" in strip_paths(detail)
+        assert "fake-login" in strip_paths(detail)
+        assert "repo" in strip_paths(detail)
+
+
+def test_gh_older_format_on_stderr_is_parsed_as_well(
+    tmp_home: Path, tmp_path: Path, fake_mode: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("FAKE_GH_MODE", "stderr")
+    code, row, _ = _gh_row(tmp_home, tmp_path)
+    assert code == 0
+    assert row["status"] == "ok", row
+    assert "fake-login" in strip_paths(row["detail"])
+
+
+def test_gh_unauthenticated_is_a_warning_naming_gh_auth_login(
+    tmp_home: Path, tmp_path: Path, fake_mode: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("FAKE_GH_MODE", "unauth")
+    code, row, text = _gh_row(tmp_home, tmp_path)
+    assert code == 0
+    assert row["status"] == "warn", row
+    assert "not logged in" in strip_paths(row["detail"])
+    assert "gh auth login" in strip_paths(row["detail"]) and "gh auth login" in strip_paths(text)
+
+
+def test_gh_without_the_repo_scope_is_a_warning_naming_gh_auth_login(
+    tmp_home: Path, tmp_path: Path, fake_mode: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("FAKE_GH_MODE", "norepo")
+    code, row, _ = _gh_row(tmp_home, tmp_path)
+    assert code == 0
+    assert row["status"] == "warn", row
+    assert "fake-login" in strip_paths(row["detail"])
+    assert "no `repo` scope" in strip_paths(row["detail"])
+    assert "gh auth login" in strip_paths(row["detail"])
+
+
+def test_gh_absent_from_path_is_a_warning_naming_gh_auth_login(
+    tmp_home: Path, tmp_path: Path, fake_mode: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The row looks `gh` up on PATH only. PATH here is a directory with no `gh`
+    and the interpreter's own directory (which the fake claude's shebang needs);
+    a test proves first that the real `gh` is not reachable on it."""
+    write_config(tmp_home, tmp_path)
+    bindir = tmp_path / "bin-without-gh"
+    bindir.mkdir()
+    for tool in ("python3", "git", "sh", "env"):
+        found = shutil.which(tool)
+        if found:
+            (bindir / tool).symlink_to(found)
+    monkeypatch.setenv("PATH", str(bindir))
+    assert shutil.which("gh") is None
+    code, found = checks()
+    assert code == 0, found
+    row = found["gh"]
+    assert row["status"] == "warn", row
+    assert "no `gh` on PATH" in strip_paths(row["detail"])
+    assert "gh auth login" in strip_paths(row["detail"])

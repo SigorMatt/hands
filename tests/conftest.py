@@ -171,3 +171,23 @@ def kill_quietly(pid: int) -> None:
             os.kill(pid, signal.SIGKILL)
         except OSError:
             pass
+
+
+FAKE_GH = Path(__file__).with_name("fake_gh.py")
+
+
+@pytest.fixture(scope="session")
+def _fake_gh_dir(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """A directory holding one entry, `gh`, a link to `tests/fake_gh.py`."""
+    bindir = tmp_path_factory.mktemp("fake-gh-bin")
+    (bindir / "gh").symlink_to(FAKE_GH)
+    return bindir
+
+
+@pytest.fixture(autouse=True)
+def _fake_gh_on_path(_fake_gh_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """`hands doctor` runs the `gh` it finds on PATH (DESIGN §35); no test may run
+    the real one, so the stand-in is first on PATH for every test. A test picks
+    its shape with `FAKE_GH_MODE` (see `tests/fake_gh.py`)."""
+    monkeypatch.setenv("PATH", f"{_fake_gh_dir}{os.pathsep}{os.environ.get('PATH', '')}")
+    monkeypatch.delenv("FAKE_GH_MODE", raising=False)
