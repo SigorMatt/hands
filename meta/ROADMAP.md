@@ -83,25 +83,33 @@ then an install (`uv tool install --force`) and a driver-kit refresh.
   its clone never advanced, no `HANDS_PROJECT` in role jobs), worked
   around on the laptop and fixed in mission 20.
 - **M4d The pull-request flow, then the shakedown's findings** — missions
-  19 and 20 (decided 2026-10-12). Mission 19: DESIGN §35, the PR per
-  mission with the hosted review (Qodo) read by the cold review as a
-  second reviewer and the review merging on a clean verdict; templates,
-  this repository's protocol and playbook, doctor's `gh` row, docs. Its U0
-  is the gate: a probe PR must draw the hosted review within fifteen
-  minutes, else the mission is blocked at U0 and nothing is built.
-  Mission 19 itself commits to `main`; mission 20 is the first mission run
-  through a pull request. Mission 20: the discotrade shakedown's findings
-  (the architect role's write permission, its clone advanced by the
-  runner, `HANDS_PROJECT` on every role job, HF-001 the stale kickoff
-  after an autonomous apply, `answer <secret> <text>` with an attached
-  file for the builder's questions and owner rulings, human decisions in
-  the role's consult prompt, the hold notification under autonomy,
-  HF-002..006), review 18's four should-fix items, project name in
-  notification titles and topic names, `hands project add`, the Purpose
-  block in both instruction templates, the owner-decisions file as a
-  template, the onboarding shape in the handbook. Gate: mission 20
-  merged by its own review through the flow, with a `## Hosted review`
-  section in REVIEW-20.
+  19, 20 and 21 (decided 2026-10-12; split 2026-10-14). Mission 19: DESIGN
+  §35, the PR per mission with the hosted review (Qodo) read by the cold
+  review as a second reviewer and the review merging on a clean verdict;
+  templates, this repository's protocol and playbook, doctor's `gh` row,
+  docs — DONE 2026-10-14 (review 19: blockers=0, should-fix=5; the probe
+  PR #1 drew the hosted review in 29 seconds; installed 2026-10-14).
+  Mission 20 (DESIGN §36, the first mission run through a pull request):
+  hermetic tests (H-040); review 19's five should-fix items and the review
+  protocol's tests-only and concurrency rules (HF-007, HF-008); the
+  architect role's write permission (H-041); the runner advancing the
+  roles' clones and setting `HANDS_PROJECT` (H-042, H-043); the engine's
+  reload before an autonomous apply's kickoff (H-044, HF-001) and the hold
+  decided before it is published (H-045); `answer <secret> <text>` with an
+  attached file, not gated, with the builder's reply published and human
+  decisions listed in the role's consult prompt; the job environment's
+  timeouts (HF-006); `cp` from the clone into kits (HF-003); review 18's
+  four should-fix items; project name in every notification title and in
+  generated topic names; this repository's mission-less kickoff. Gate:
+  mission 20 merged by its own review through the flow, with a `## Hosted
+  review` section in REVIEW-20. Mission 21: the onboarding half — the role
+  reads the handbook and templates from the installed hands (HF-002),
+  `hands project add`, the Purpose block in both instruction templates, the
+  owner-decisions file as a template with the review protocol's one-commit
+  exception, the brief template's recovery rule for a `keep` answer, the
+  handbook's onboarding shape, ruling round, separation rule and consultation
+  re-firing, HF-004, HF-005 and the first plan kit's silent apply in the
+  docs. INSTRUCTION PASTE DUE after mission 21 for every Project.
 - **M5 Pet projects from scratch (discotrade)** — decided 2026-09-17: before
   any integration, hands drives a new project from an empty repository in
   role mode, as the shakedown of the whole loop. discotrade

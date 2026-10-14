@@ -1,12 +1,12 @@
-# hands — DESIGN v3.18
+# hands — DESIGN v3.19
 
 Machinery that replaces the human relay between the planning brain and the two
 Claude Code roles (builder, aux) on the Ubuntu laptop, and that keeps a series
 moving without a human while everything goes by plan. Working name: `hands`.
 The method it serves is described in WORKING-MODEL.md (agile-skills) and
 OPERATING-MODEL.md (spanweave); hands changes the topology, not the method.
-v3.18 (2026-10-14) adds the pull-request flow with a hosted second reviewer;
-changes are in §35; earlier changes in §34–§17.
+v3.19 (2026-10-14) folds in the first role-mode series' findings and the
+mission 19 review; changes are in §36; earlier changes in §35–§17.
 
 Status: proposal, 2026-09-10. Items marked DECIDED were settled in discussion.
 
@@ -1601,3 +1601,149 @@ read a hosted review.
 driver and architect roles, the guard. The architect role's clone reads
 `main`; a mission's branch is invisible to it until merged, which is
 correct: the role plans from reviewed, merged state.
+
+## 36. Changes from v3.18 (the first role-mode series; mission 19 review)
+
+The first series run in role mode by another project (2026-10-12 to
+2026-10-14; the evidence is that project's findings HF-001..HF-008 and its
+reviews, cited by id only) found, in the order it hit them, that the
+architect role could not write, that its clone never advanced, that no role
+job carried `HANDS_PROJECT`, that the kickoff after an autonomous apply came
+from the playbook loaded before the apply, that the hold for a kit the role
+filed was announced with buttons before the engine approved it, that a
+builder's question could be answered only from the laptop, that the
+harness backgrounds a long foreground gate, and that the role may not copy
+a file from its clone into a kit. Each was worked around on the laptop by
+hand; this section is the fix for each, with the mission 19 review's five
+should-fix items and the mission 18 review's four. Mission 20 builds it.
+
+**Hermetic tests (H-040).** Every builder hands dispatches inherits
+`HANDS_PROJECT` and `HANDS_JOB`, and twelve `kit file` tests resolved the
+project from them. `tests/conftest.py` clears every `HANDS_*` variable for
+every test (an autouse fixture), so the gate is the same inside a job and
+outside one. Until that unit lands, mission 20's gate runs as `env -u
+HANDS_PROJECT -u HANDS_JOB ./scripts/check`.
+
+**The review protocol (mission 19 should-fix 1, 2; HF-007; HF-008).** The
+protocol takes the direct shape only when the brief's Branch section says
+"Direct"; a brief that names a branch and has no open pull request is a
+blocker ("no pull request for mission-N") and the review goes no further.
+The branch is named once, as `<branch>`, and the commits under review
+exclude `main`'s own history: `git log <base>..origin/<branch>
+^origin/main`. A unit commit that changes only tests is reviewed by making,
+in the worktree and without committing, each wrong change the commit body
+names and expecting red; the body of a tests-only commit must name them.
+Per-commit sub-agents run one at a time, never concurrently, and each runs
+`./scripts/check` once at its commit; the reviewer's own run count is one,
+at the tip. The templates and this repository's protocol change together.
+
+**Doctor's `gh` row (mission 19 should-fix 3, 4).** `gh auth status
+--active --hostname github.com`; every WARN of the row, including a
+`gh --version` that does not answer, names the remedy. docs/PLAYBOOK.md's
+garbled sentence (should-fix 5) is reworded.
+
+**The architect role's write permission (H-041).** `architect/settings.json`
+allows exactly `Edit(kits/**)`, `Write(kits/**)` and `MultiEdit(kits/**)`;
+headless `claude -p` without a bypass denies any tool not allowed, and the
+`--write` hook only ever denies, so without these the role could not write
+a byte. Doctor's architect row fails when any of the three is missing or
+when an allow for a write tool names anything but `kits/**`; `doctor --live`
+for the architect writes one file under `kits/`, runs `hands kit check` on a
+one-file kit against the clone, runs `hands show` on a job of its spool,
+and removes the file; a live turn that cannot do all four fails the row.
+
+**The runner (H-042, H-043).** Before every architect and driver job the
+runner advances the role's clone: `git -C <clone> fetch -q origin` then
+`git -C <clone> checkout -q --detach origin/<branch>`, where `<branch>` is
+the config's `[roles.<role>] branch` (default `main`); a clone that cannot
+be advanced fails the job before `claude` starts, with the git message in
+the record. Every role job's environment carries `HANDS_PROJECT`, set from
+the config's project name and never from handsd's environment; doctor's
+role rows print the clone's HEAD against origin and the project the job
+will see. The guard's project resolution is unchanged and now always has a
+value.
+
+**The engine (H-044, the stale kickoff; H-045, the hold).** Before deciding
+the `builder.done` of an apply it approved itself, the engine reloads the
+playbook from the committed file, so the kickoff it sends is the one the
+kit just committed; a playbook that no longer loads after the apply stops
+the pipeline with the loader's reason. The regression test is the shape
+the series found: a scripted apply that rewrites and commits the playbook's
+kickoff before replying `VERDICT: kit applied`, after which the kickoff job's
+prompt must be the committed line. Under `autonomous`, the engine decides a
+hold for a kit the role filed before anything is published: the human sees
+one buttonless notification, "kit <name> filed by the architect; apply
+approved by the playbook", never Approve/Deny buttons for a decision already
+taken; a hold the engine does not approve (the kit's name is not the one
+the verdict named, the hash mismatches) is published with buttons as
+before.
+
+**`answer <secret> <text>` (the phone answers the builder).** The ninth
+command on `cmd_topic`. It is delivered as `hands send --role builder
+--context keep "<text>"` would be, to the builder's last session, one job
+of origin `phone`, and it un-pauses a stopped pipeline when the job starts,
+as a cli send does, because answering the question is answering the stop.
+The secret is the approval: an `answer` is not held by the §8 gate whatever
+its text says. It is refused, and the refusal published under `hands:
+answer`, when the builder has no resumable session, has a job running,
+queued or held, or the text is empty. A file attached to the message is
+fetched into `kit_dir` as a kit is, judged by the same size and name rules,
+and the delivered text ends with one sentence naming its path; the record
+keeps the sha256. The text and the attachment's name and hash are filed as
+an inbox event `answer.sent`. The builder's final reply is published on
+`ntfy_topic` titled `builder`, and its `VERDICT:` line fires the playbook's
+rules as any builder end does. The stop the driver's escalation produces
+keeps the builder's question verbatim in its message, so the question and
+the answer are on one screen. Every `answer`, every cli `--context keep`
+send to the builder, and every `meta/decisions/*-owner.md` file committed
+since the architect's last consultation are listed verbatim in its next
+consult prompt under "Decided by the human since your last consultation",
+beside the review's verdict and sections: the role is told, not left to
+notice a ledger line.
+
+**The job environment (HF-006).** Builder and aux jobs carry
+`BASH_DEFAULT_TIMEOUT_MS` and `BASH_MAX_TIMEOUT_MS`, both `900000`, unless
+the role's `[roles.<role>.env]` sets them, as `CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS`
+is set; doctor prints the effective values on each row. The harness moves a
+foreground command past its default limit to the background, where the
+no-background hook cannot see it; a three-minute gate was moved so.
+
+**The guard (HF-003).** Architect mode allows `cp` (and `cp -r`) with
+every source under `HANDS_CLONE` and every target under `HANDS_KITS`, judged
+by realpath as the kits-only `cp` is, refused while anything under
+`HANDS_KITS` is a symlink and when a source is one; nothing else in the
+table changes. The role can now re-issue a file by copying it and editing
+the copy instead of regenerating it.
+
+**Review 18's four should-fix items.** A Unicode full stop or any
+non-ASCII character in `ntfy_url` is refused at config load (the
+public-broker check compares the host after NFKC normalisation and ASCII
+folding, and refuses what does not fold). Doctor's guard self-test runs
+with `-I` (isolated mode) and an empty `PYTHONPATH`, so a module planted
+beside the guard is not imported. The kit record stores the sha256 of the
+bytes `check_kit` read, not the client's; the two are compared and a
+mismatch refuses the filing. A hardlink under `kits/` (link count above one
+on a regular file) refuses `cp` and `mv` as a symlink does, and doctor's
+kits walk reports it.
+
+**Notifications name the project.** Every title handsd publishes begins
+with `<project>: `; `handswho` keeps its root line. The documented setup
+lines generate topic names that carry the project (`hands-<project>-…`,
+`hands-<project>-cmd-…`, `who-<project>-…`, `whocmd-<project>-…`), and doctor
+warns, never fails, on a configured topic whose name lacks it.
+
+**This repository's kickoff.** `[series] kickoff` becomes "Read the builder
+prompt with the highest mission number in the meta directory and execute
+the mission below its divider.", so no later kit re-issues the playbook to
+move a number; every brief from mission 21 on carries that line as its
+kickoff.
+
+**Mission 21 (specified next).** The onboarding half of the same findings:
+the role reads the handbook and templates from the installed hands rather
+than the project's clone (HF-002); `hands project add`; the Purpose block in
+both instruction templates; the owner-decisions file as a template with the
+review protocol's one-commit exception; the brief template's recovery rule
+for a `keep` answer; the handbook's onboarding shape, the ruling round, the
+separation rule (another project appears in hands' files only as evidence),
+re-firing a consultation; HF-004, HF-005 and the first plan kit's silent
+apply in the docs.

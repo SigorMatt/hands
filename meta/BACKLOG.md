@@ -26,9 +26,9 @@ item names the mission it is scheduled for; unscheduled items say so.
 
 ## Mission 18 — DONE 2026-09-17 (review 18: blockers=0, should-fix=4; the architect role enabled 2026-09-18).
 
-## Mission 19 (scheduled 2026-10-14) — the pull-request flow. Spec: DESIGN v3.18 §35. Gate U0: the hosted review on a probe PR.
+## Mission 19 — DONE 2026-10-14 (review 19: blockers=0, should-fix=5; installed 2026-10-14).
 
-## Mission 20 (scheduled 2026-10-12, after 19) — the discotrade shakedown's findings and review 18. First mission through the flow.
+## Mission 20 (scheduled 2026-10-14) — the machinery half of the first role-mode series' findings, review 19, review 18. Spec: DESIGN v3.19 §36. First mission through the flow. Items 1–7, 9 (HF-003 only), the review-18 items and the title/topic item below are its; items 8 (HF-002, HF-004, HF-005, the silent first apply) and 10 are mission 21's, with the review-protocol texts of HF-007/HF-008 in 20.
 
 1. The architect role's write permission: `architect/settings.json` allows
    `Edit(kits/**)`, `Write(kits/**)`, `MultiEdit(kits/**)` and nothing wider;
