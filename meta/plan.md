@@ -10,27 +10,27 @@ Base of the mission: 238a57b (`plan: mission 20 kit (DESIGN v3.19)`).
 - [x] U0 Plan, branch and findings (`plan:`) (this commit) — this file,
       meta/CHECKPOINT.md, meta/journal.md, meta/findings/FINDINGS.md
       (H-041..H-045); branch `mission-20` pushed
-- [ ] U1 Hermetic tests; review 19 should-fix 3, 4, 5 (H-040) —
+- [x] U1 Hermetic tests; review 19 should-fix 3, 4, 5 (H-040) 4752ace —
       tests/conftest.py, src/hands/doctor.py (`gh` row), docs/INTEGRATION.md,
       docs/PLAYBOOK.md
-- [ ] U2 The review protocol (review 19 should-fix 1, 2; HF-007; HF-008) —
+- [x] U2 The review protocol (review 19 should-fix 1, 2; HF-007; HF-008) 7326386 —
       templates/REVIEW-PROTOCOL.md, meta/REVIEW-PROTOCOL.md
-- [ ] U3 The architect role's write permission (H-041) —
+- [x] U3 The architect role's write permission (H-041) 0eb37bc —
       architect/settings.json, src/hands/doctor.py
-- [ ] U4 The runner (H-042, H-043) — src/hands/runner.py,
+- [x] U4 The runner (H-042, H-043) de2e34c — src/hands/runner.py,
       src/hands/config.py, src/hands/doctor.py
-- [ ] U5 The engine (H-044, H-045) — src/hands/playbook.py,
+- [x] U5 The engine (H-044, H-045) 337db9a — src/hands/playbook.py,
       src/hands/api.py, src/hands/daemon.py
-- [ ] U6 `answer <secret> <text>` — src/hands/phone.py, api.py, spool.py,
+- [x] U6 `answer <secret> <text>` 187e38e — src/hands/phone.py, api.py, spool.py,
       playbook.py, notify.py, docs/INTEGRATION.md
-- [ ] U7 The job environment and the guard (HF-006; HF-003) —
+- [x] U7 The job environment and the guard (HF-006; HF-003) 61a2417 —
       src/hands/runner.py, src/hands/doctor.py, driver/hooks/bash_guard.py,
       docs/INTEGRATION.md
-- [ ] U8 Review 18 should-fix 1–4 — config.py, doctor.py, api.py/kit.py,
+- [x] U8 Review 18 should-fix 1–4 6a3f2f2 — config.py, doctor.py, api.py/kit.py,
       bash_guard.py
-- [ ] U9 Notifications and this repository's kickoff — notify.py,
+- [x] U9 Notifications and this repository's kickoff 2e9a6ca — notify.py,
       daemon.py, doctor.py, docs/INTEGRATION.md, PLAYBOOK.toml
-- [ ] U10 Final report and the pull request — meta/FINAL-REPORT-20.md
+- [x] U10 Final report and the pull request (this commit) — meta/FINAL-REPORT-20.md
       (drafted under meta/drafts/); `gh pr create`; tree back to `main`
 
 Review items. REVIEW-19 should-fix 1, 2 → U2; 3, 4, 5 → U1. REVIEW-18
