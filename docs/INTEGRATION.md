@@ -1377,3 +1377,5 @@ of this terminal. The driver does not: it arms nothing, and your message
   container, the Tailscale tunnel, the phone app's sign-in with a token, and the
   buttons on a server whose topics require one are unproven ("Self-hosted ntfy
   over Tailscale").
+
+probe: hosted review, 2026-10-14
