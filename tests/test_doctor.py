@@ -2237,6 +2237,88 @@ def test_an_execute_only_directory_without_a_symlink_still_fails_the_architect_r
     assert "cannot be listed" in strip_paths(row["detail"]), row
 
 
+def test_a_hardlink_under_kits_fails_the_architect_row(
+    tmp_home: Path, tmp_path: Path, fake_mode: None
+) -> None:
+    """REVIEW-18 should-fix 4, the probe: a planted hardlink `kits/h` to
+    `.claude/hooks/bash_guard.py` gave `status=ok`, "no symlink under it". §36: a
+    regular file under `kits/` with a link count above one is reported."""
+    d = architect_dir(tmp_path)
+    os.link(d / ".claude" / "hooks" / "bash_guard.py", d / "kits" / "h")
+    code, row = _row(tmp_home, tmp_path, "architect", d, add_architect)
+    assert code == 1 and row["status"] == "fail", row
+    assert "no symlink under it" not in strip_paths(row["detail"]), row
+    assert "<path>/hands-architect/kits/h" in strip_paths(row["detail"]), row
+    assert "hard link" in strip_paths(row["detail"]), row
+
+
+def _load_shipped_guard() -> Any:
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("bash_guard_shared", GUARD)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+#: The shared cases (REVIEW-18 notes, U3): every tree both walks judge.
+KITS_WALK_SHAPES = [
+    "missing", "empty", "clean", "symlink", "dangling", "nested-symlink",
+    "hardlink-out", "hardlink-pair", "nested-hardlink", "fifo",
+]
+
+
+def _kits_tree(root: Path, shape: str) -> Path:
+    outside = root / "outside"
+    outside.write_text("x", encoding="utf-8")
+    kits = root / "kits"
+    if shape == "missing":
+        return kits
+    (kits / "pay").mkdir(parents=True)
+    if shape != "empty":
+        (kits / "pay" / "h").write_text("x", encoding="utf-8")
+    if shape == "symlink":
+        (kits / "l").symlink_to(outside)
+    if shape == "dangling":
+        (kits / "l").symlink_to("../nowhere")
+    if shape == "nested-symlink":
+        (kits / "a" / "b").mkdir(parents=True)
+        (kits / "a" / "b" / "l").symlink_to("../../pay")
+    if shape == "hardlink-out":
+        os.link(outside, kits / "h")
+    if shape == "hardlink-pair":
+        os.link(kits / "pay" / "h", kits / "pay" / "h2")
+    if shape == "nested-hardlink":
+        (kits / "a" / "b").mkdir(parents=True)
+        os.link(outside, kits / "a" / "b" / "h")
+    if shape == "fifo":
+        os.mkfifo(kits / "pay" / "f")
+    return kits
+
+
+@pytest.mark.parametrize("shape", KITS_WALK_SHAPES)
+def test_doctors_kits_walk_and_the_guards_agree_on_every_shared_case(
+    tmp_path: Path, shape: str
+) -> None:
+    """REVIEW-18 should-fix 4: doctor's `_kits_walk` re-implements the guard's walk
+    (the guard is a standalone script); on each shared tree both find the same
+    first path, or both find none."""
+    import hands.doctor
+
+    guard_mod = _load_shipped_guard()
+    kits = str(_kits_tree(tmp_path, shape))
+    found = guard_mod.kits_symlink(kits)
+    walked = hands.doctor._kits_walk(kits)
+    linked = shape in {"symlink", "dangling", "nested-symlink", "hardlink-out",
+                       "hardlink-pair", "nested-hardlink"}
+    assert (found is not None) == linked, (shape, found)
+    assert (walked is not None) == linked, (shape, walked)
+    if linked:
+        assert walked is not None and found is not None
+        assert found.split(" (")[0] == walked[0], (found, walked)
+
+
 def _layer(d: Path, home: Path, layer: str, data: dict[str, Any]) -> Path:
     """Write `data` into one settings layer of the role directory `d`: `local`
     (`settings.local.json`), `project` (merged into the shipped `settings.json`), or
@@ -2440,6 +2522,38 @@ def test_the_shipped_settings_and_guard_pass_and_print_the_matching_sha256(
     code, row = _row(tmp_home, tmp_path, role, d, add)
     assert code == 0 and row["status"] == "ok", row
     assert f"sha256 {SHIPPED_SHA}" in strip_paths(row["detail"]), row
+
+
+@pytest.mark.parametrize("role", ["driver", "architect"])
+@pytest.mark.parametrize("where", ["beside_the_guard", "on_pythonpath"])
+def test_the_guard_self_test_does_not_import_a_planted_module(
+    tmp_home: Path,
+    tmp_path: Path,
+    fake_mode: None,
+    monkeypatch: pytest.MonkeyPatch,
+    role: str,
+    where: str,
+) -> None:
+    """REVIEW-18 should-fix 2, the probe: the real guard untouched plus
+    `.claude/hooks/shlex.py` = `import sys; sys.exit(0)` gave `ok` and "self-test
+    green". §36: doctor's self-test runs under `python3 -I` with an empty
+    `PYTHONPATH`, so a module planted beside the guard (or on `PYTHONPATH`) is not
+    imported: the planted `shlex.py` leaves a marker if it is."""
+    d, add = _role_dir(tmp_path, role)
+    marker = tmp_path / "imported"
+    plant_dir = d / ".claude" / "hooks"
+    if where == "on_pythonpath":
+        plant_dir = tmp_path / "planted"
+        plant_dir.mkdir()
+        monkeypatch.setenv("PYTHONPATH", str(plant_dir))
+    (plant_dir / "shlex.py").write_text(
+        f"import pathlib, sys\npathlib.Path({str(marker)!r}).touch()\nsys.exit(0)\n",
+        encoding="utf-8",
+    )
+    code, row = _row(tmp_home, tmp_path, role, d, add)
+    assert not marker.exists(), "doctor's self-test imported the planted shlex.py"
+    assert code == 0 and row["status"] == "ok", row
+    assert "self-test green" in strip_paths(row["detail"]), row
 
 
 # ------------------------------------------------- the `gh` row (§35, mission 19 U1)

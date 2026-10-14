@@ -5545,6 +5545,68 @@ def test_end_to_end_a_byte_flip_between_check_and_approval_is_refused_with_both_
     drive(body)
 
 
+def test_end_to_end_a_passing_zip_swapped_in_for_the_check_only_is_refused(
+    tmp_home: Path, workdir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """REVIEW-18 should-fix 3, the probe: during the `next kit` wait the client sends a
+    check-failing zip; a writer into `<spool>/kits` puts a passing zip at the stored
+    path just before `check_kit` and restores the failing bytes right after it. The
+    kit was filed and approved. §36: the record stores the sha256 of the bytes
+    `check_kit` read, compared with the client's; the mismatch refuses the filing —
+    no builder job, no approval, nothing kept under `<spool>/kits`."""
+    import base64
+
+    from hands.kit import check_kit as real_check_kit
+
+    architect_project(tmp_home, workdir)
+    script(tmp_home, monkeypatch, ["VERDICT: next kit mission-17-kit"])
+    passing = kit_zip(passing_kit())
+    failing_files = passing_kit()
+    del failing_files["meta/BUILDER-17-PROMPT.md"]
+    failing = kit_zip(failing_files)
+    checked: list[bool] = []
+
+    def swapped(path: Path, repo: Path, **kw: Any) -> Any:
+        stored = path.read_bytes()
+        path.write_bytes(passing)
+        try:
+            report = real_check_kit(path, repo, **kw)
+        finally:
+            path.write_bytes(stored)
+        checked.append(report.ok)
+        return report
+
+    monkeypatch.setattr("hands.api.check_kit", swapped)
+
+    async def body(daemon: Daemon) -> None:
+        data = base64.b64encode(failing).decode()
+        refusals: list[ApiError] = []
+
+        async def sleep(delay: float) -> None:
+            try:
+                await daemon.api.kit_file(name="mission-17-kit", zip=data)
+            except ApiError as exc:
+                refusals.append(exc)
+
+        daemon.playbook.sleep = sleep
+        review = await ok("send", "--role", "aux", "--context", "clear", fake_result(REVIEW))
+        await ok("wait", review["id"])
+        await wait_for_stop()
+
+        assert checked == [True], checked  # the swap did happen: the check passed
+        [refused] = refusals
+        said = strip_paths(str(refused))
+        assert hashlib.sha256(failing).hexdigest() in said, said
+        assert hashlib.sha256(passing).hexdigest() in said, said
+        assert [job for job in daemon.spool.list_jobs() if job.role == "builder"] == []
+        assert [e for e in await _events("gate.decided")
+                if e["payload"]["decision"] == "approved"] == []
+        kits = daemon.spool.root / "kits"
+        assert not kits.exists() or list(kits.iterdir()) == []
+
+    drive(body)
+
+
 def test_end_to_end_series_complete_stops_with_that_reason(
     tmp_home: Path, workdir: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

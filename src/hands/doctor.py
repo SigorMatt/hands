@@ -803,7 +803,8 @@ def _architect_check(config: Config) -> Check:
     kits, kits_ok = _kits_line(kits_dir, role.cwd)
     if kits_ok:
         verified.append(
-            f"kits realpath {os.path.realpath(kits_dir)}, not a symlink, and no symlink under it"
+            f"kits realpath {os.path.realpath(kits_dir)}, not a symlink, and no symlink "
+            "or hard link under it"
         )
     else:
         failures.append(kits)
@@ -952,7 +953,7 @@ def _kits_line(kits_dir: Path, cwd: Path) -> tuple[str, bool]:
     """§32, §33: the architect's kits line, and whether it holds.
 
     `kits` exists, is not a symlink, resolves under the cwd, and nothing under it
-    (walked, links not followed) is a symlink.
+    (walked, links not followed) is a symlink or (§36) a hard-linked regular file.
     """
     real, base = os.path.realpath(kits_dir), os.path.realpath(cwd)
     if kits_dir.is_symlink():
@@ -978,6 +979,13 @@ def _kits_line(kits_dir: Path, cwd: Path) -> tuple[str, bool]:
     found = _kits_walk(str(kits_dir))
     if found is not None:
         path, why = found
+        if why is not None and why.startswith(_HARDLINK):
+            return (
+                f"kits {kits_dir} holds a hard link, {path} ({why}): the guard refuses cp "
+                "and mv until it is gone, since cp onto it writes into the file the other "
+                "name shares, and nothing the architect runs made it (§36)",
+                False,
+            )
         if why is None:
             return (
                 f"kits {kits_dir} holds a symlink, {path} -> {os.readlink(path)}: the "
@@ -993,11 +1001,16 @@ def _kits_line(kits_dir: Path, cwd: Path) -> tuple[str, bool]:
     return f"kits {kits_dir}", True
 
 
+_HARDLINK = "a regular file with"
+
+
 def _kits_walk(kits: str) -> tuple[str, str | None] | None:
     """§34 (review 17 should-fix 3): the guard's `kits_symlink` walk, the same steps
     (`driver/hooks/bash_guard.py` is a standalone script doctor cannot import): the
-    first path under `kits` that is a symlink (`(path, None)`), or that the walk
-    cannot judge (`(path, why)`), or None.
+    first path under `kits` that is a symlink (`(path, None)`), a regular file with
+    a link count above one (§36, review 18 should-fix 4: `(path, "a regular file
+    with N hard links")`), or that the walk cannot judge (`(path, why)`), or None.
+    tests/test_doctor.py runs both walks over the same trees.
 
     `os.lstat` on every path from the root down decides what each one is; a
     directory that cannot be listed (mode 0111) and a path that cannot be stat'ed
@@ -1008,7 +1021,8 @@ def _kits_walk(kits: str) -> tuple[str, str | None] | None:
     while pending:
         top = pending.pop()
         try:
-            mode = os.lstat(top).st_mode
+            info = os.lstat(top)
+            mode, links = info.st_mode, info.st_nlink
         except FileNotFoundError:
             if top == kits:
                 return None
@@ -1017,6 +1031,8 @@ def _kits_walk(kits: str) -> tuple[str, str | None] | None:
             return top, f"cannot be stat'ed: {exc.strerror}"
         if stat.S_ISLNK(mode):
             return top, None
+        if stat.S_ISREG(mode) and links > 1:
+            return top, f"{_HARDLINK} {links} hard links"
         if not stat.S_ISDIR(mode):
             continue
         try:
@@ -1061,7 +1077,9 @@ def _guard_selftest(
     (`<cwd>/.claude/hooks/bash_guard.py`, compared by realpath), so an absolute
     command path elsewhere fails, and its bytes must hash (sha256) to the guard the
     repository ships (`SHIPPED_GUARDS`), with both hashes printed when they differ.
-    The self-test still runs on that same path, whatever the hashes say.
+    The self-test still runs on that same path, whatever the hashes say, under
+    `python3 -I` with an empty `PYTHONPATH` (§36), so what runs is the guard and
+    the standard library, not a module planted beside it.
     """
     if not hook.is_file():
         return (
@@ -1080,8 +1098,12 @@ def _guard_selftest(
     same, said_bytes = _guard_bytes(hook)
     lines.append(said_bytes)
     green = green and same
+    # §36 (review 18 should-fix 2): isolated mode and an empty PYTHONPATH, so a
+    # module planted beside the guard (or on PYTHONPATH) is not imported.
     probe = _run_probe(
-        [shutil.which("python3") or sys.executable, str(hook), "--selftest"], cwd=cwd, env=env
+        [shutil.which("python3") or sys.executable, "-I", str(hook), "--selftest"],
+        cwd=cwd,
+        env={**env, "PYTHONPATH": ""},
     )
     if probe is not None and probe.code == 0 and not probe.timed_out:
         lines.append(f"self-test green in {words} ({mode})")

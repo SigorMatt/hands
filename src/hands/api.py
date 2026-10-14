@@ -463,7 +463,10 @@ class Api:
         that fails the check files nothing, so a later call may file one.
 
         §34: the record holds the sha256 of the bytes handsd stored and ran the check
-        on; the engine re-hashes the stored zip when it approves.
+        on; the engine re-hashes the stored zip when it approves. §36 (review 18
+        should-fix 3): that sha256 is the one `check_kit` computed over the very
+        bytes it judged (read once), compared with the client's; a mismatch refuses
+        the filing.
 
         §32: the engine approves "a kit filed by the architect role", so a kit is
         accepted only during an architect consultation — while an architect job is
@@ -521,6 +524,14 @@ class Api:
         builder = self.config.role("builder").cwd
         try:
             report = await asyncio.to_thread(check_kit, path, builder, config=self.config)
+            sent = hashlib.sha256(data).hexdigest()
+            if report.sha256 != sent:
+                # §36 (review 18 should-fix 3): what was checked is not what was sent.
+                raise ApiError(
+                    f"kit_file: the stored kit {name!r} changed under the check — the "
+                    f"client sent sha256 {sent}, the check read sha256 {report.sha256}; "
+                    "nothing is filed (§34, §36)"
+                )
             if not report.ok:
                 raise ApiError(_check_refusal(name, builder, report))
             plan = await asyncio.to_thread(apply_from_zip, path, builder, home_shown(path))
@@ -530,7 +541,7 @@ class Api:
                 name=name,
                 consultation=consultation,
                 check=KIT_CHECK_PASSED,
-                sha256=hashlib.sha256(data).hexdigest(),
+                sha256=report.sha256,
             )
             job = await self.file_apply(plan, ARCHITECT_ORIGIN, kit_id)
             self.daemon.playbook.kit_filed(consultation)

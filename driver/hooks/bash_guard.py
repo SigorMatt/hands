@@ -171,7 +171,9 @@ guards the architect ROLE, a headless session handsd starts to write one kit:
   `cp -s`, `cp -l` are refused), so one under `HANDS_KITS` was planted by
   something else, and the rule is the simplest that closes the class: `cp` and
   `mv` are refused while **anything** under `HANDS_KITS` (walked, links not
-  followed) is a symlink, wherever it sits and wherever it points. `mkdir` still
+  followed) is a symlink, wherever it sits and wherever it points — or (§36,
+  REVIEW-18 should-fix 4) a regular file with a link count above one, a hard
+  link `cp` would write through into a file another name shares. `mkdir` still
   runs: it moves no link and writes no file content. And `HANDS_KITS` itself
   must not be a symlink: when its realpath is not its parent's realpath joined
   to its own last name (a link, or a `..` through one), every `mkdir`, `cp`,
@@ -552,9 +554,15 @@ def kits_link(kits):
     return None
 
 
-def kits_symlink(kits):
+def kits_symlink(kits, hardlinks=True):
     """§33 (REVIEW-16 should-fix 2): the first symlink anywhere under `HANDS_KITS`,
     walked without following links, or None.
+
+    §36 (REVIEW-18 should-fix 4): with `hardlinks`, a regular file whose link count
+    is above one is returned too (`<path> (a regular file with N hard links)`): `cp`
+    onto it writes into an inode another name shares, wherever that name sits.
+    `source_problem` walks a clone source without it — reading a hardlinked file
+    writes nothing through it.
 
     §34 (REVIEW-17 should-fix 3): `os.lstat` on every path from the root down, and
     nothing else decides what a path is. `os.walk` skipped a directory it could not
@@ -567,7 +575,8 @@ def kits_symlink(kits):
     while pending:
         top = pending.pop()
         try:
-            mode = os.lstat(top).st_mode
+            info = os.lstat(top)
+            mode, links = info.st_mode, info.st_nlink
         except FileNotFoundError:
             if top == kits:  # no kits directory holds no link; what `os.walk` did
                 return None
@@ -576,6 +585,8 @@ def kits_symlink(kits):
             return f"{top} (cannot be stat'ed: {e.strerror})"
         if stat.S_ISLNK(mode):
             return top
+        if hardlinks and stat.S_ISREG(mode) and links > 1:
+            return f"{top} (a regular file with {links} hard links)"
         if not stat.S_ISDIR(mode):
             continue
         try:
@@ -1176,7 +1187,7 @@ def source_problem(word, clone, name):
     a symlink is refused wherever it points; so is a directory with one anywhere
     inside it (walked as the kits are, links not followed), since `cp -r` would
     carry it into the kits as a link."""
-    link = kits_symlink(word)
+    link = kits_symlink(word, hardlinks=False)
     if link is None:
         return None
     return (f"`{name}` copies from the role's clone ({CLONE_ENV}={clone!r}) only what "
@@ -1244,9 +1255,11 @@ def option_violation(name, row, args, amasks, cmd, kits=None, reads=None, clone=
                 return f"{problem}: {cmd!r}"
         link = kits_symlink(kits) if row.moves else None
         if link is not None:
-            return (f"`{name}` is refused while anything under {KITS_ENV} is a symlink "
+            return (f"`{name}` is refused while anything under {KITS_ENV} is a symlink, "
+                    f"a hard link (a regular file with more than one link, §36) "
                     f"or cannot be walked ({link!r}, §34): realpath judges where a path resolves now, and `{name}` "
-                    f"can move a link so the next write lands outside it (§33): {cmd!r}")
+                    f"can move a link so the next write lands outside it (§33), or write "
+                    f"through a hard link into a file outside it: {cmd!r}")
     if row.words is not None:
         reason = row.words(name, [word for word, _ in plain], cmd)
         if reason is not None:
@@ -1849,7 +1862,8 @@ WRITE_SELFTEST = [
 # architect directory (`.claude/hooks/`, `kits/pay/h`); `planted` adds the
 # reviewer's `kits/a/h -> ../.claude/hooks/bash_guard.py`; `xonly` (§34, REVIEW-17
 # should-fix 3) plants the same link in `kits/d` and makes `kits/d` mode 0111;
-# `kits-link` makes `kits` a symlink to `.claude`. §36 (HF-003): every shape but
+# `kits-link` makes `kits` a symlink to `.claude`; `hardlinked` (§36, REVIEW-18
+# should-fix 4) plants `kits/h` as a hard link to `.claude/hooks/bash_guard.py`. §36 (HF-003): every shape but
 # `kits-link` has a clone `repo/` (`DESIGN.md`, `docs/A.md`); `clone-link` adds
 # `repo/h -> ../.claude/hooks/bash_guard.py` and `repo/docs/l -> ../DESIGN.md`.
 SYMLINK_SELFTEST = [
@@ -1871,6 +1885,10 @@ SYMLINK_SELFTEST = [
     ("xonly", "cp -r kits/d/h kits/", False),
     ("xonly", "cp kits/pay/h kits/", False),
     ("xonly", "mv kits/d/h kits/", False),
+    ("hardlinked", "cp kits/pay/h kits/h", False),
+    ("hardlinked", "mv kits/pay/h kits/h", False),
+    ("hardlinked", "cp repo/DESIGN.md kits/pay/D.md", False),
+    ("hardlinked", "mkdir -p kits/m17", True),
     ("kits-link", "mkdir -p kits/x", False),
     ("kits-link", "cp kits/settings.json kits/y", False),
     ("kits-link", "--write .claude/settings.json", False),
@@ -1898,6 +1916,12 @@ def _symlink_scratch(root, shape):
     if shape == "planted":
         os.makedirs(os.path.join(root, "kits", "a"))
         os.symlink("../.claude/hooks/bash_guard.py", os.path.join(root, "kits", "a", "h"))
+    if shape == "hardlinked":  # §36: REVIEW-18's hard link to the hook
+        with open(os.path.join(root, ".claude", "hooks", "bash_guard.py"), "w",
+                  encoding="utf-8") as f:
+            f.write("x")
+        os.link(os.path.join(root, ".claude", "hooks", "bash_guard.py"),
+                os.path.join(root, "kits", "h"))
     if shape == "xonly":  # §34: REVIEW-17's link in a directory of mode 0111
         os.makedirs(os.path.join(root, "kits", "d"))
         os.symlink("../.claude/hooks/bash_guard.py", os.path.join(root, "kits", "d", "h"))

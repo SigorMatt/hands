@@ -3014,3 +3014,50 @@ def test_the_kits_walk_is_an_lstat_walk_not_os_walk() -> None:
 def test_the_guards_selftest_carries_the_review_17_execute_only_rows() -> None:
     assert any(shape == "xonly" and not ok for shape, _, ok in guard.SYMLINK_SELFTEST)
     assert guard.symlink_selftest() == 0
+
+
+# --- §36: a hardlink under kits/ refuses cp and mv as a symlink does (REVIEW-18 SF 4) ---
+#
+# A planted hardlink `kits/h` to `.claude/hooks/bash_guard.py`: `cp kits/pay/h
+# kits/h` under real bash exited 0 and wrote the neutering bytes into the guard's
+# inode, because realpath containment sees `kits/h` as a plain file under kits.
+
+
+def _hardlink_planted(tmp_path: Path) -> Path:
+    cwd = _architect_cwd(tmp_path)
+    os.link(cwd / ".claude" / "hooks" / "bash_guard.py", cwd / "kits" / "h")
+    return cwd
+
+
+@pytest.mark.parametrize(
+    "cmd", ["cp kits/pay/h kits/h", "mv kits/pay/h kits/h", "cp -r kits/pay kits/m18"]
+)
+def test_review_18_hardlink_probe_is_refused_under_real_bash(tmp_path: Path, cmd: str) -> None:
+    """The reviewer's probe through the shipped hook and real bash: refused, and the
+    guard file is unchanged; so is any other `cp` or `mv` while the link is there."""
+    cwd = _hardlink_planted(tmp_path)
+    assert _guarded_bash(cwd, cmd) == 2, cmd
+    assert (cwd / ".claude" / "hooks" / "bash_guard.py").read_text(
+        encoding="utf-8") == GUARD_TEXT
+
+
+def test_a_hardlink_under_kits_is_named_in_the_refusal_and_mkdir_still_runs(
+    tmp_path: Path,
+) -> None:
+    cwd = _hardlink_planted(tmp_path)
+    kits = str(cwd / "kits")
+    reason = guard.check(f"cp {kits}/pay/h {kits}/h", role="architect",
+                         consult_role="builder", clone=str(cwd / "repo"), kits=kits)
+    assert reason is not None and "hard link" in reason and f"{kits}/h" in reason, reason
+    assert guard.check(f"mkdir -p {kits}/m18", role="architect", consult_role="builder",
+                       clone=str(cwd / "repo"), kits=kits) is None
+
+
+def test_the_guards_selftest_carries_the_review_18_hardlink_rows() -> None:
+    """The self-test doctor runs plants the hardlink and expects the refusals, so a
+    copy of the guard without the rule is not green."""
+    shapes = {(shape, cmd): ok for shape, cmd, ok in guard.SYMLINK_SELFTEST}
+    assert shapes.get(("hardlinked", "cp kits/pay/h kits/h")) is False
+    assert shapes.get(("hardlinked", "mv kits/pay/h kits/h")) is False
+    assert shapes.get(("hardlinked", "mkdir -p kits/m17")) is True
+    assert guard.symlink_selftest() == 0

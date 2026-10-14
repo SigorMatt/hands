@@ -96,6 +96,7 @@ The checks, in order (docs/ARCHITECT-HANDBOOK.md §11 says the same):
 from __future__ import annotations
 
 import base64
+import hashlib
 import io
 import itertools
 import json
@@ -290,6 +291,8 @@ class Report:
     kit_md: str | None = None
     #: One line saying `KIT.md`'s shape and what this kit's gives (§27).
     kit_md_note: str = ""
+    #: §36: the sha256 of the zip bytes the checks read (None for a directory).
+    sha256: str | None = None
 
     @property
     def ok(self) -> bool:
@@ -336,6 +339,9 @@ class _Kit:
     filename: str
     files: dict[str, bytes]
     problems: list[str]
+    #: §36: the sha256 of the zip's bytes, read once and judged from memory; None
+    #: for a directory.
+    sha256: str | None = None
 
 
 # ------------------------------------------------------------------ the kit
@@ -525,15 +531,18 @@ def _read_entry(archive: zipfile.ZipFile, info: zipfile.ZipInfo) -> bytes | str:
         return f"unreadable: {type(exc).__name__}"
 
 
-def _open_zip(path: Path) -> zipfile.ZipFile:
+def _open_zip(path: Path) -> tuple[zipfile.ZipFile, str]:
+    """§36 (review 18 should-fix 3): the zip read once into memory, and the sha256
+    of those bytes — what is judged is what is hashed."""
     try:
-        return zipfile.ZipFile(path)
+        raw = path.read_bytes()
+        return zipfile.ZipFile(io.BytesIO(raw)), hashlib.sha256(raw).hexdigest()
     except (zipfile.BadZipFile, OSError, EOFError, ValueError) as exc:
         raise KitError(f"{path} is neither a directory nor a zip: {exc}") from exc
 
 
 def _read_zip(path: Path) -> _Kit:
-    archive = _open_zip(path)
+    archive, sha256 = _open_zip(path)
     files: dict[str, bytes] = {}
     with archive:
         good, found, whole = _zip_entries(archive)
@@ -544,7 +553,7 @@ def _read_zip(path: Path) -> _Kit:
                 problems.append(_problem_text(name, data))
             else:
                 files[name] = data
-    return _Kit(filename=path.name, files=files, problems=problems)
+    return _Kit(filename=path.name, files=files, problems=problems, sha256=sha256)
 
 
 def _read_dir(root: Path) -> _Kit:
@@ -1322,6 +1331,7 @@ def check_kit(
         commit_message=plan.commit_message,
         kit_md=plan.kit_md,
         kit_md_note=kit_md_note(plan),
+        sha256=kit.sha256,
     )
     if report.ok:
         report.apply_prompt = plan.prompt

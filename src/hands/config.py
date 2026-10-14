@@ -13,6 +13,7 @@ import os
 import re
 import shlex
 import tomllib
+import unicodedata
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -578,6 +579,7 @@ def parse_config(data: dict[str, Any], *, project: str, path: Path) -> Config:
         ntfy_url = _str(
             server_t, "ntfy_url", DEFAULT_NTFY_URL, "[server]", path, blank=default_url
         )
+    _check_url_ascii(ntfy_url, path)
     url_set = "ntfy_url" in notify_t or "ntfy_url" in server_t
     notify = NotifyConfig(
         ntfy_url=ntfy_url,
@@ -899,6 +901,10 @@ def is_public_ntfy_url(url: str) -> bool:
     to: the host `ntfy.sh` or any subdomain of it, in any letter case, scheme,
     port, path, or with a trailing dot. A url no host can be read from counts as
     public, so a token is only ever sent beside a url that names another host.
+    §36 (review 18 should-fix 1): the host is compared after NFKC normalisation and
+    ASCII folding (`ntfy。sh` is `ntfy.sh`, as httpx's IDNA reads it), and a host
+    that does not fold to ASCII counts as public; the load refuses any non-ASCII
+    `ntfy_url` before this is asked.
     """
     try:
         host = urlsplit(url if "//" in url else f"//{url}").hostname
@@ -906,8 +912,38 @@ def is_public_ntfy_url(url: str) -> bool:
         return True
     if not host:
         return True
+    host = _fold_host(host)
+    if host is None:
+        return True
     host = host.rstrip(".")
     return host == PUBLIC_NTFY_HOST or host.endswith("." + PUBLIC_NTFY_HOST)
+
+
+#: The full stops IDNA (UTS 46) maps to "." after NFKC: U+FF0E and U+FF61 fold
+#: to these under NFKC, and U+3002 is itself one.
+_IDEOGRAPHIC_STOPS = {"\u3002": "."}
+
+
+def _fold_host(host: str) -> str | None:
+    """§36 (review 18 should-fix 1): the host after NFKC normalisation and ASCII
+    folding, lowercased; None for a host that does not fold to ASCII."""
+    folded = unicodedata.normalize("NFKC", host)
+    folded = "".join(_IDEOGRAPHIC_STOPS.get(char, char) for char in folded).lower()
+    return folded if folded.isascii() else None
+
+
+def _check_url_ascii(url: str, path: Path) -> None:
+    """§36 (review 18 should-fix 1): a non-ASCII character anywhere in `ntfy_url`
+    is refused at load. The refusal names the character and its position, not the
+    url (which may carry the token's text)."""
+    for index, char in enumerate(url):
+        if not char.isascii():
+            raise ConfigError(
+                f"{path}: ntfy_url must be ASCII; it carries U+{ord(char):04X} at "
+                f"position {index + 1} (§36) — an HTTP client may read a non-ASCII "
+                "character as another host's (U+3002 as a '.'); write the url in "
+                "ASCII, a non-ASCII host in its punycode (xn--) form"
+            )
 
 
 def _check_token_url(notify: NotifyConfig, url_set: bool, path: Path) -> None:

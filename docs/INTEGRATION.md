@@ -255,7 +255,9 @@ Notes that are easy to get wrong:
   not name the hook (a `PreToolUse` command hook for `Bash` that runs
   `.claude/hooks/bash_guard.py`), and when that hook's `--selftest` is not green
   run with the role's environment (`HANDS_ROLE=driver`). The hook self-tested
-  is the file the settings' command names (§29). The command must run it as
+  is the file the settings' command names (§29), run as `python3 -I` with an
+  empty `PYTHONPATH` (§36), so a module planted beside the guard is not imported
+  by the self-test. The command must run it as
   the guard (§30): exactly `python3` and a path ending in
   `.claude/hooks/bash_guard.py`, with `$CLAUDE_PROJECT_DIR` and a relative path
   read against the driver directory, and nothing else: no further argument
@@ -849,7 +851,9 @@ printing it. The token is accepted only beside an explicit `ntfy_url` that is
 not a public broker (§34): with `ntfy_url` unset (so `https://ntfy.sh`), or set
 to a url whose host is `ntfy.sh` or a subdomain of it (any letter case, scheme,
 port or path), the config does not load, and the refusal names the url, not the
-token. handsd, `handswho`, every `hands` command and `hands doctor` (as its
+token. A non-ASCII character anywhere in `ntfy_url` does not load either, token
+or not (§36: an HTTP client reads `https://ntfy。sh` as `ntfy.sh`); the refusal
+names the character and its position, and a host is written in its `xn--` form. handsd, `handswho`, every `hands` command and `hands doctor` (as its
 failed `config` row) read the config the same way. `hands doctor` says `ntfy
 token on` or `ntfy token off`.
 
@@ -1017,7 +1021,8 @@ show|jobs|inbox|pipeline|status|kit check|kit file`, plus `mkdir -p`, `cp -r`
 and `mv` (no other option) with every path under `HANDS_KITS`, `cp` and `cp -r`
 also with every source under `HANDS_CLONE` and the target under `HANDS_KITS`
 (§36), `cp` and `mv`
-refused while anything under `HANDS_KITS` is a symlink, and every `mkdir`, `cp`,
+refused while anything under `HANDS_KITS` is a symlink or (§36) a regular file
+with more than one hard link, and every `mkdir`, `cp`,
 `mv` and write refused when `HANDS_KITS` itself is one (§33); `zip` and `unzip`
 are in no mode's table (§32). In both
 role modes reads are confined to the clone and the spool: every path that
@@ -1089,7 +1094,10 @@ anywhere inside it; a `cp` whose sources mix the clone and the kits is refused.
 The role re-issues a file by copying it and editing the copy. Since §34 (review 17
 should-fix 3: a link in a directory of mode 0111 was skipped by the walk) the
 walk is `os.lstat` on every path from `HANDS_KITS` down, and a directory it
-cannot list or a path it cannot stat refuses `cp` and `mv` as a link does. A `HANDS_KITS` that is
+cannot list or a path it cannot stat refuses `cp` and `mv` as a link does. Since §36
+(review 18 should-fix 4: `cp kits/pay/h kits/h`, with `kits/h` a planted hard link
+to the guard, wrote into the guard) a regular file under `HANDS_KITS` whose link
+count is above one refuses `cp` and `mv` as a symlink does. A `HANDS_KITS` that is
 itself a symlink (its realpath is not its parent's realpath joined to its name)
 refuses every `mkdir`, `cp`, `mv` and every write (§33, review 16 should-fix 3:
 `kits -> .claude` let the write matcher pass the role's own settings). `zip` and `unzip`
@@ -1118,7 +1126,8 @@ green run with `HANDS_ROLE=architect` and `HANDS_KITS` set, on a clone whose
 push is not disabled (the driver row's rule, above), on a kits
 directory that is missing or does not resolve under the architect's cwd
 (§32), and (§33) on a kits directory that is a symlink or holds one (§34: or
-holds a directory the same walk as the guard's cannot list), or when
+holds a directory the same walk as the guard's cannot list; §36: or holds a
+regular file with more than one hard link), or when
 `.claude`, its hooks directory, either settings file, either guard file or the
 clone resolves under the kits directory; a missing clone warns. Since §36
 (finding H-041) it also fails when the settings lack any of the three allows
@@ -1183,7 +1192,9 @@ apply `hands kit file` files, whose `kit_id` handsd minted and checked against
 the spool — the stored zip and its record naming the kit and the consultation
 it was filed during, and the passing check handsd itself ran on that zip (§33)
 — never by origin alone; the record holds the sha256 of the bytes that check
-passed on, and the engine re-hashes the stored zip when it approves, refusing a
+read (§36: the stored zip is read once, and the same bytes are checked and
+hashed), a hash that differs from the sha256 of the bytes the client sent
+refuses the filing, and the engine re-hashes the stored zip when it approves, refusing a
 mismatch with `kit.refused` carrying both hashes and a stop (§34). A socket client cannot set `origin:
 architect` (`hands send` refuses it, naming §32), handsd takes `hands kit file`
 only while an architect consultation runs or the engine waits for its `next
