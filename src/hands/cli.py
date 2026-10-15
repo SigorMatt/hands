@@ -27,6 +27,7 @@ from typing import Any, TextIO
 from hands import __version__, doctor
 from hands import kit as kit_mod
 from hands import notify as notify_mod
+from hands import project as project_mod
 from hands import who as who_mod
 from hands.api import MAX_TAIL_ENTRIES, TAIL_WINDOW_BYTES
 from hands.api import TIMEOUT as TIMEOUT_CODE
@@ -364,6 +365,31 @@ def build_parser() -> argparse.ArgumentParser:
         "--templates",
         action="store_true",
         help="print the installed templates directory instead",
+    )
+    # §38 "Onboarding": answered by the client with no daemon and no config, like
+    # `kit check`: it writes the config, so there is none to read yet.
+    project = command(
+        "project",
+        "project add: write a project's config, secret, driver and architect "
+        "directories and fetch-only clones, enable handsd@<name>, run doctor (§38)",
+    )
+    project_sub = project.add_subparsers(dest="project_command", metavar="add", required=True)
+    project_add = project_sub.add_parser(
+        "add",
+        parents=[common],
+        help="set up a new project on this laptop (§38)",
+        description="write ~/.hands/<name>.toml from the installed config template (four "
+        "generated topics, a command secret also kept in ~/.hands/<name>.cmd_secret, both "
+        "mode 600), ~/hands-driver/<name>/ and ~/hands-architect/<name>/ with the shipped "
+        "settings, guard and CLAUDE.md and a fetch-only clone of the url (push URL "
+        "no_push), enable handsd@<name> with systemctl --user, run doctor, and print the "
+        "filled Project instruction; refused for an existing project or a non-empty "
+        "directory, before anything is written",
+    )
+    project_add.add_argument("name", help="the project name (~/.hands/<name>.toml)")
+    project_add.add_argument("--repo", required=True, metavar="URL", help="the repository url")
+    project_add.add_argument(
+        "--dry-run", action="store_true", help="print every path and command; write nothing"
     )
     check = command("doctor", "check the install end to end (§4, §14)")
     check.add_argument(
@@ -777,6 +803,8 @@ def main(
             return _migrate_spool(out=out, err=err, as_json=as_json)
         if command == "handbook":
             return _handbook(args.templates, out=out, err=err, as_json=as_json)
+        if command == "project":
+            return project_mod.add(args.name, args.repo, dry_run=args.dry_run, out=out, err=err)
         if command == "send":
             args.prompt = _prompt_of(args, sys.stdin if stdin is None else stdin)
         project: str | None = None

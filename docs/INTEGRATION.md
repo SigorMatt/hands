@@ -45,6 +45,47 @@ with `git checkout main && git pull --ff-only`. A tree left on `mission-N`
 (a blocked mission, a review with blockers, a hand edit) is yours to put back
 the same way before the next `go`.
 
+## One command for steps 2, 3, 5 and 6: `hands project add` (§38)
+
+    hands project add <project> --repo <url> --dry-run   # every path and command; writes nothing
+    hands project add <project> --repo <url>
+
+does for one project what the sections below do by hand, from the hands that is
+installed (`hands handbook --templates` is where its templates are):
+
+- `~/.hands/<project>.toml` from the installed `templates/config.toml`, with four
+  generated topics that carry the project's name (`ntfy_topic`, `cmd_topic`,
+  `who_topic`, `who_cmd_topic`) and a generated `cmd_secret`, which is also
+  written alone to `~/.hands/<project>.cmd_secret`; both files mode 600. The
+  config names `[roles.builder]` and `[roles.aux]` at `~/git/<project>`, the
+  builder's own clone, which you make yourself; and `ntfy.sh` until you set
+  `ntfy_url` (see "Self-hosted ntfy over Tailscale").
+- `~/hands-driver/<project>/` and `~/hands-architect/<project>/` (and its
+  `kits/`), each with the shipped `.claude/settings.json`, the shipped guard at
+  `.claude/hooks/bash_guard.py`, the role's `CLAUDE.md` with the Parameters
+  filled (`driver/CLAUDE.md`, and for the architect role `architect/CLAUDE.md`,
+  the instruction's role variant), and `repo/`, a clone of `<url>` whose push
+  URL is `no_push`.
+- `~/.config/hands/<project>.env` (empty), `~/.config/systemd/user/handsd@.service`
+  when it is not there yet, then `systemctl --user daemon-reload` and
+  `systemctl --user enable handsd@<project>`. Starting it, and enabling
+  `handswho@<project>`, are left to you.
+- `hands --project <project> doctor`, printed. Its failures (no builder clone yet,
+  no `claude` on PATH) are your next steps; they do not change the command's exit
+  status, which is 1 only for a refusal or a failed `git` or `systemctl` step.
+- Last, the Project instruction of `docs/ARCHITECT-INSTRUCTION.md` with the
+  Parameters filled, for pasting into the Claude Project (fill its Purpose
+  block), and the question to ask it: "What are your Parameters?".
+
+The Parameters it fills: `PROJECT` and `REPO_URL` from the command line, and
+`BRANCH = main`, `PLAN = meta/CHECKPOINT.md meta/plan.md`, `QUESTIONS =
+meta/findings/FINDINGS.md`, `PLAYBOOK = PLAYBOOK.toml`, hands' own conventions;
+edit them where the project differs. It refuses, before writing anything, a
+project that exists (its config, its spool or its `.cmd_secret` is there), a role
+directory that is not empty, and a name outside the pattern below. Proven by
+tests against a temporary HOME, a stand-in `systemctl` and a local bare
+repository; it has not been run on a real laptop.
+
 ## 2. Run handsd (once per machine, per project)
 
     install -Dm644 ~/git/hands/systemd/handsd@.service ~/.config/systemd/user/handsd@.service

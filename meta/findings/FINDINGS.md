@@ -2307,3 +2307,29 @@ architect's table and settings allow `hands handbook [--templates]`; or
 the guard's read roots gain `HANDS_DOCS` and the instruction says `cat`.
 
 Status: open
+
+## H-052 — `project add` writes the architect role's `CLAUDE.md` from the role variant
+
+Severity: low · Component: `src/hands/project.py`; DESIGN §38 "Onboarding",
+§31
+Filed by: mission 22 U10 (2026-10-15).
+Evidence: §38 says `hands project add` "writes the architect's `CLAUDE.md`
+from `docs/ARCHITECT-INSTRUCTION.md` with the Parameters filled". That file
+is the phone Project's instruction: it tells the reader to install hands in
+a sandbox and to deliver files for download, and it has no `KITS`, no `hands
+kit file` and none of the role's verdicts (`VERDICT: next kit <name>`,
+`series complete`, `escalate`) that the role-mode playbook's consult rules
+match. §31 names `architect/CLAUDE.md` "the instruction's role variant", and
+docs/INTEGRATION.md's by-hand recipe and `architect/README.md` copy that file
+into `~/hands-architect/<project>/`.
+
+Reading taken by U10 (not a design change): the role directory's `CLAUDE.md`
+is `architect/CLAUDE.md` (the role variant of the instruction), its
+Parameters filled; `docs/ARCHITECT-INSTRUCTION.md`, filled the same way, is
+what the command prints last for pasting into the Project. Both now ship in
+the wheel under `hands/shipped/`. If the design meant the phone instruction
+literally, the role would answer consultations in a vocabulary no consult
+rule matches.
+
+Status: open (for the architect: confirm the reading in the next DESIGN
+revision, or rule otherwise)
