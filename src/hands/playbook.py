@@ -142,6 +142,7 @@ EVENTS: tuple[str, ...] = (
     "builder.orphaned",
     "aux.done",
     "aux.failed",
+    "aux.orphaned",  # §39 (H-057): a review the daemon's stop (or a crash) killed
     "driver.done",
     "driver.failed",
     "driver.killed",  # §28: a consultation's driver job ended any other way
@@ -2216,8 +2217,15 @@ class PlaybookEngine:
             return
 
         role = self.config.role(job.role)
-        if job.role == "builder":  # §10/§6: the resume line when configured, else the
+        if is_builder_answer(job):
+            # §39 (review 22 should-fix 3): a phone `answer` is re-sent as what it was,
+            # its text to the builder's session as a `keep`, never as a clear.
+            prompt, context = job.prompt, "keep"
+        elif job.role == "builder":  # §10/§6: the resume line when configured, else the
             prompt, context = role.resume_prompt(job.prompt), "clear"  # same prompt (H-008)
+        elif job.state == "orphaned":
+            # §39 (H-057): an orphaned review's prompt goes to a fresh context.
+            prompt, context = job.prompt, "clear"
         else:
             prompt, context = job.prompt, job.context
         try:

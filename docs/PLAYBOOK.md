@@ -203,9 +203,14 @@ playbook that no longer loads stops the pipeline with the loader's reason.
 ## Events (`on`)
 
 `builder.done`, `builder.failed`, `builder.limited`, `builder.orphaned`,
-`aux.done`, `aux.failed`, `driver.done`, `driver.failed`, `driver.killed`,
-`driver.orphaned`, `driver.limited`, `monitor.stall`, `monitor.tripwire`,
-`monitor.task_killed`, `monitor.orphan_processes`, `job.held`, `job.denied`.
+`aux.done`, `aux.failed`, `aux.orphaned`, `driver.done`, `driver.failed`,
+`driver.killed`, `driver.orphaned`, `driver.limited`, `monitor.stall`,
+`monitor.tripwire`, `monitor.task_killed`, `monitor.orphan_processes`,
+`job.held`, `job.denied`.
+
+`aux.orphaned` (DESIGN §39) is an aux job — a review — that a daemon stop or a
+crash ended; the shipped playbooks map it to `resume`, which re-sends the
+review's prompt to a fresh context, bounded by `max_resumes`.
 
 `driver.done`, `driver.failed`, `driver.killed`, `driver.orphaned` and
 `driver.limited` (DESIGN §27, §28) are a consultation's driver job ending that

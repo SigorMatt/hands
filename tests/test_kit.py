@@ -2626,3 +2626,22 @@ def test_the_filled_templates_with_an_owner_file_pass_six_of_six(tmp_path: Path)
     assert len(CHECK_NAMES) == 6
     for name in CHECK_NAMES:
         assert line(out, name).startswith(f"PASS {name}: "), out
+
+
+# ------------------------------------- §39 (H-057): a killed review is resumed
+
+
+@pytest.mark.parametrize(
+    "name", ["PLAYBOOK-missions.toml", "PLAYBOOK-runs.toml", "this repository's PLAYBOOK.toml"]
+)
+def test_each_shipped_playbook_resumes_an_orphaned_review(name: str) -> None:
+    """§39: both templates and this repository's playbook carry `aux.orphaned →
+    resume`, one rule, no verdict; read by the engine's own parser (which `kit check`
+    uses), so a playbook naming the event loads."""
+    if name.startswith("this"):
+        text = (ROOT / "PLAYBOOK.toml").read_text(encoding="utf-8")
+    else:
+        text = template(name)
+    book = parse_playbook(text, path=Path("PLAYBOOK.toml"))
+    rules = [rule for rule in book.rules if rule.on == "aux.orphaned"]
+    assert [(rule.then, rule.verdict) for rule in rules] == [("resume", None)], rules

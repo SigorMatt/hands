@@ -35,7 +35,7 @@ ntfy_topic = "hands-events-test"
 """
 
 
-def book(max_resumes: int | None = None) -> str:
+def book(max_resumes: int | None = None, rules: str = "") -> str:
     limits = "" if max_resumes is None else f"\n[limits]\nmax_resumes = {max_resumes}\n"
     return f"""version = 1
 
@@ -45,7 +45,7 @@ kickoff = "Kick off mission 22"
 [[rule]]
 on = "builder.orphaned"
 then = "resume"
-"""
+{rules}"""
 
 
 class Recorder:
@@ -70,12 +70,14 @@ def workdir(tmp_path: Path) -> Path:
     return d
 
 
-def setup(tmp_home: Path, workdir: Path, *, max_resumes: int | None = None) -> Spool:
+def setup(
+    tmp_home: Path, workdir: Path, *, max_resumes: int | None = None, rules: str = ""
+) -> Spool:
     body = config_body(
         tmp_home, workdir, builder="cancel_gated = false", extra=NOTIFY
     )
     (tmp_home / ".hands" / f"{PROJECT}.toml").write_text(body)
-    commit_file(workdir, "PLAYBOOK.toml", book(max_resumes))
+    commit_file(workdir, "PLAYBOOK.toml", book(max_resumes, rules))
     return Spool(tmp_home / ".hands" / PROJECT)
 
 
@@ -304,3 +306,153 @@ def test_a_cancel_wins_over_the_daemon_stop() -> None:
     assert _final_state(_Parsed(), 130, cancelled=True, daemon_stop=True) == ("killed", None)
     assert _final_state(_Parsed(), 130, cancelled=False, daemon_stop=True) == ("orphaned", None)
     assert _final_state(_Parsed(), 130, cancelled=True) == ("killed", None)
+
+
+# ------------------------------------------- §39: review 22 should-fix 3 and 4, H-057
+
+#: §39 (H-057): the rule both templates and this repository's playbook now carry.
+AUX_RESUME = """
+[[rule]]
+on = "aux.orphaned"
+then = "resume"
+"""
+#: A builder.done that fires a rule, so a warm-up job does not stop the pipeline.
+DONE_NOTE = """
+[[rule]]
+on = "builder.done"
+then = "notify"
+message = "builder done"
+"""
+REVIEW = f"Read meta/REVIEW-PROTOCOL.md and review mission 22\n{BLOCK}"
+
+
+def jobs_resumed_from(spool: Spool, job_id: str) -> list[Any]:
+    return [job for job in spool.list_jobs() if job.resumed_from == job_id]
+
+
+def test_a_review_a_stop_orphans_is_resumed_fresh_with_its_prompt_at_the_next_start(
+    tmp_home: Path, workdir: Path
+) -> None:
+    """H-057: the daemon's stop records the running aux job `orphaned` with `reason:
+    daemon_stop`, as it does a builder's; at the next start `aux.orphaned → resume`
+    re-sends the review's prompt to a fresh context (the orphan was a `keep`)."""
+    spool = setup(tmp_home, workdir, rules=AUX_RESUME)
+    seen: dict[str, Any] = {}
+
+    async def first(daemon: Daemon) -> None:
+        warm = await ok("send", "--role", "aux", "--context", "clear", "FAKE:result ok")
+        assert (await ok("wait", warm["id"]))["state"] == "done"
+        sent = await ok("send", "--role", "aux", "--context", "keep", REVIEW)
+        await running_job("aux")
+        seen["id"] = sent["id"]
+
+    run_daemon(first)
+    orphan = spool.load_job(seen["id"])
+    assert (orphan.state, orphan.orphan_reason, orphan.context) == (
+        "orphaned", "daemon_stop", "keep",
+    )
+
+    async def second(daemon: Daemon) -> None:
+        async def resumed() -> Any:
+            return jobs_resumed_from(spool, orphan.id)
+
+        [job] = await poll(resumed, "the resumed review")
+        seen["resumed"] = job.id
+        await running_job("aux")
+        await settle(daemon)
+
+    posts = run_daemon(second)
+    resumed = spool.load_job(seen["resumed"])
+    assert (resumed.role, resumed.prompt, resumed.context, resumed.origin) == (
+        "aux", REVIEW, "clear", "playbook",
+    )
+    assert spool.read_role("aux").consecutive_resumes == 1
+    [message] = posts.started()
+    assert (
+        f"Resumed: aux job {resumed.id}, from job {orphan.id} which a daemon stop orphaned"
+        in strip_paths(message)
+    ), message
+
+
+def test_an_orphaned_review_is_bounded_by_max_resumes(tmp_home: Path, workdir: Path) -> None:
+    spool = setup(tmp_home, workdir, max_resumes=0, rules=AUX_RESUME)
+    seen: dict[str, Any] = {}
+
+    async def first(daemon: Daemon) -> None:
+        seen["id"] = (await ok("send", "--role", "aux", "--context", "clear", REVIEW))["id"]
+        await running_job("aux")
+
+    run_daemon(first)
+
+    async def second(daemon: Daemon) -> None:
+        async def stopped() -> Any:
+            return (await ok("pipeline"))["stop_reason"]
+
+        reason = await poll(stopped, "the stop")
+        assert "aux.orphaned" in strip_paths(reason), reason
+        assert "max_resumes is 0" in strip_paths(reason), reason
+
+    run_daemon(second)
+    assert jobs_resumed_from(spool, seen["id"]) == []
+
+
+def test_the_start_notification_names_a_crash_orphan_as_found_not_as_a_daemon_stop(
+    tmp_home: Path, workdir: Path
+) -> None:
+    """Review 22 should-fix 4: a job the start reconciled (its process gone, no
+    `orphan_reason`) is resumed and named as found, never as a daemon stop's."""
+    spool = setup(tmp_home, workdir)
+    job = spool.create_job(role="builder", context="clear", prompt=KICKOFF, origin="cli")
+    spool.transition(job, "running")  # no pid: the process is gone, as after a crash
+
+    async def body(daemon: Daemon) -> None:
+        async def resumed() -> Any:
+            return jobs_resumed_from(spool, job.id)
+
+        await poll(resumed, "the resumed builder job")
+        await running_job("builder")
+        await settle(daemon)
+
+    posts = run_daemon(body)
+    assert spool.load_job(job.id).orphan_reason is None
+    [message] = posts.started()
+    assert f"from job {job.id}" in strip_paths(message), message
+    assert "daemon stop" not in strip_paths(message), message
+    assert "found orphaned" in strip_paths(message), message
+
+
+def test_an_answer_a_stop_orphans_is_published_and_re_sent_as_a_keep(
+    tmp_home: Path, workdir: Path
+) -> None:
+    """Review 22 should-fix 3: a phone `answer` the daemon's stop ends is published on
+    ntfy_topic titled `builder` as its end, and `builder.orphaned → resume` re-sends
+    it to the builder's session as a `keep` with its own text, never as a clear."""
+    spool = setup(tmp_home, workdir, rules=DONE_NOTE)
+    answer = f"Take the second option.\n{BLOCK}"
+    seen: dict[str, Any] = {}
+
+    async def first(daemon: Daemon) -> None:
+        warm = await ok("send", "--role", "builder", "--context", "clear", "FAKE:result ok")
+        assert (await ok("wait", warm["id"]))["state"] == "done"
+        seen["id"] = (await daemon.api.answer_builder(answer))["id"]
+        await running_job("builder")
+
+    posts = run_daemon(first)
+    orphan = spool.load_job(seen["id"])
+    assert (orphan.state, orphan.orphan_reason) == ("orphaned", "daemon_stop")
+    ended = [item for item in posts.sent if item["title"] == as_published("builder")]
+    assert [item["message"] for item in ended] == [
+        f"builder job {orphan.id} ended orphaned with no reply"
+    ], posts.sent
+
+    async def second(daemon: Daemon) -> None:
+        async def resumed() -> Any:
+            return jobs_resumed_from(spool, orphan.id)
+
+        [job] = await poll(resumed, "the re-sent answer")
+        seen["resumed"] = job.id
+        await settle(daemon)
+
+    run_daemon(second)
+    resumed = spool.load_job(seen["resumed"])
+    assert (resumed.role, resumed.context, resumed.prompt) == ("builder", "keep", answer)

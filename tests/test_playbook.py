@@ -498,6 +498,7 @@ def test_the_events_and_actions_are_exactly_section_10s() -> None:
         "builder.orphaned",
         "aux.done",
         "aux.failed",
+        "aux.orphaned",  # §39 (H-057): a review a daemon stop killed
         "driver.done",  # §27: a consultation's driver job ended done
         "driver.failed",  # §27: … or failed
         "driver.killed",  # §28: … or any other way, each a stop the engine enforces

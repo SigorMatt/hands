@@ -437,6 +437,9 @@ def _message(payload: dict[str, Any]) -> str:
         value = payload.get(key)
         if value is not None:
             lines.append(f"{key}: {value}")
+    if payload.get("state") == "held" and payload.get("job"):
+        # §39 (H-059): a held job's id on a line of its own, to copy for a command.
+        lines.append(str(payload["job"]))
     if not lines:
         lines.append(json.dumps(payload, sort_keys=True))
     return "\n".join(lines)

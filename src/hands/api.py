@@ -20,6 +20,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import binascii
+import contextlib
 import hashlib
 import os
 import re
@@ -55,6 +56,7 @@ from hands.spool import (
     TERMINAL_STATES,
     Event,
     Job,
+    Spool,
     SpoolError,
     is_architect_reply,
     kit_apply_problem,
@@ -78,6 +80,7 @@ __all__ = [
     "Timeout",
     "attachment_sentence",
     "job_summary",
+    "match_job_id",
     "tail_entries",
 ]
 
@@ -155,6 +158,47 @@ def job_summary(job: Job) -> dict[str, Any]:
     first = job.prompt.splitlines()[0] if job.prompt else ""
     out["prompt_line"] = first[:_PROMPT_LINE_CHARS]
     return out
+
+
+#: §39 (H-059): the shortest prefix of a job id `match_job_id` accepts.
+MIN_ID_PREFIX = 4
+#: §39 (H-059): what a human reads one character as: `O` as `0`, `l` and `I` as `1`
+#: (after lower-casing, so `i`, `l` and `o`).
+_ID_LOOKALIKES = str.maketrans({"o": "0", "l": "1", "i": "1"})
+
+
+def _id_key(text: str) -> str:
+    return text.lower().translate(_ID_LOOKALIKES)
+
+
+def match_job_id(spool: Spool, typed: str) -> str:
+    """§39 (H-059): the id of the one job `typed` names, or `ApiError` saying why not.
+
+    An exact id wins. Otherwise both sides are compared case-insensitively with `O`
+    read as `0` and `l` or `I` as `1` — a whole id, else a prefix of `MIN_ID_PREFIX`
+    or more characters. Two or more jobs matching is refused with the candidates.
+    Used by `approve`, `deny` and `cancel` (laptop and phone alike); the phone's
+    `answer` and `reply` carry no job id."""
+    with contextlib.suppress(SpoolError):
+        return spool.load_job(typed).id
+    key = _id_key(typed.strip())
+    ids = sorted(
+        path.stem for path in spool.jobs_dir.glob("*.json") if not path.name.startswith(".")
+    )
+    whole = [job_id for job_id in ids if _id_key(job_id) == key]
+    if len(whole) == 1:
+        return whole[0]
+    if not whole and len(key) >= MIN_ID_PREFIX:
+        whole = [job_id for job_id in ids if _id_key(job_id).startswith(key)]
+        if len(whole) == 1:
+            return whole[0]
+    if whole:
+        raise ApiError(f"job id {typed!r} is ambiguous: it matches {', '.join(whole)}")
+    short = (
+        f" (a prefix needs {MIN_ID_PREFIX} or more characters)"
+        if 0 < len(key) < MIN_ID_PREFIX else ""
+    )
+    raise ApiError(f"no such job {typed!r}{short}")
 
 
 class Api:
@@ -878,7 +922,7 @@ class Api:
         decision and the record comes back in the state it is still in, with the
         pending gate on it.
         """
-        record = self._job(job)
+        record = self._job(match_job_id(self.spool, job))  # §39: a lenient id
         if self.config.role(record.role).cancel_gated:
             return (await self._request_cancel(record, reason)).to_dict()
         return (await self.daemon.cancel(record, reason=reason)).to_dict()
@@ -1000,6 +1044,7 @@ class Api:
         `hands.gates`.
         """
         decided_by = gates.decider_for(human_confirmed=human_confirmed)
+        job = match_job_id(self.spool, job)  # §39 (H-059): a lenient id
         return await self._decide_as(job, decision, decided_by, reason=reason, quote=quote)
 
     async def decide_from_phone(
