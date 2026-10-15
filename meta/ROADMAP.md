@@ -83,7 +83,8 @@ then an install (`uv tool install --force`) and a driver-kit refresh.
   its clone never advanced, no `HANDS_PROJECT` in role jobs), worked
   around on the laptop and fixed in mission 20.
 - **M4d The pull-request flow, then the shakedown's findings** — missions
-  19, 20 and 21 (decided 2026-10-12; split 2026-10-14). Mission 19: DESIGN
+  19 to 22 (decided 2026-10-12; split 2026-10-14; the closer added
+  2026-10-15). Mission 19: DESIGN
   §35, the PR per mission with the hosted review (Qodo) read by the cold
   review as a second reviewer and the review merging on a clean verdict;
   templates, this repository's protocol and playbook, doctor's `gh` row,
@@ -100,16 +101,28 @@ then an install (`uv tool install --force`) and a driver-kit refresh.
   decisions listed in the role's consult prompt; the job environment's
   timeouts (HF-006); `cp` from the clone into kits (HF-003); review 18's
   four should-fix items; project name in every notification title and in
-  generated topic names; this repository's mission-less kickoff. Gate:
-  mission 20 merged by its own review through the flow, with a `## Hosted
-  review` section in REVIEW-20. Mission 21: the onboarding half — the role
+  generated topic names; this repository's mission-less kickoff — built
+  2026-10-14 on branch mission-20, PR #2; review 20 (2026-10-15, the first
+  review through the flow): blockers=1, should-fix=6, nine hosted findings
+  read, four confirmed; the PR stays open. Mission 21 (closer, DESIGN §37):
+  review 20 — the cancel race during the clone advance, the `-I` hook and
+  the module beside the guard, writes through a hardlink, the provenance
+  of an `answer`, `doctor --live` for the architect, the protocol's revert
+  step, the apply that leaves no playbook; files H-046..H-048. Gate:
+  mission 21 merged by its own review through the flow (PR #2), with a
+  `## Hosted review` section in REVIEW-21. Mission 22: the operational
+  findings of 2026-10-14 (H-046 the who publish rate and doctor's warning
+  on the public broker's cap; H-047 the restart that kills the builder;
+  H-048 the blocked verdict consulting the role; the self-hosted ntfy as
+  the documented default with docs/INTEGRATION.md corrected; a phone
+  `progress` command) and the onboarding half — the role
   reads the handbook and templates from the installed hands (HF-002),
   `hands project add`, the Purpose block in both instruction templates, the
   owner-decisions file as a template with the review protocol's one-commit
   exception, the brief template's recovery rule for a `keep` answer, the
   handbook's onboarding shape, ruling round, separation rule and consultation
   re-firing, HF-004, HF-005 and the first plan kit's silent apply in the
-  docs. INSTRUCTION PASTE DUE after mission 21 for every Project.
+  docs. INSTRUCTION PASTE DUE after mission 22 for every Project.
 - **M5 Pet projects from scratch (discotrade)** — decided 2026-09-17: before
   any integration, hands drives a new project from an empty repository in
   role mode, as the shakedown of the whole loop. discotrade
@@ -118,6 +131,8 @@ then an install (`uv tool install --force`) and a driver-kit refresh.
   2026-10-11 23:54, `go` 2026-10-12; the series runs autonomously; owner
   rulings as `meta/decisions/decisions-<date>-owner.md` (2026-10-13). Its
   hands findings (HF-001..006 in discotrade's FINDINGS) are mission 20's.
+  Since 2026-10-14 both projects notify through the self-hosted ntfy of
+  §33 behind Tailscale (the public broker's daily cap was hit that day).
   Gate: the series reaches its roadmap's last milestone or its consult
   budget, with every stop that needed a human answered from the phone.
 - **M6 spanweave integration** — INSTRUCTION PASTE DUE: the spanweave
