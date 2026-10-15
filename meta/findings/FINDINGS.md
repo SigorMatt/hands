@@ -2235,7 +2235,10 @@ Direction. §38: for each non-test file the body lists, `git checkout
 the commit's new tests and expect red; then `git checkout <sha> --
 <files>`. A commit body names added files as added. Mission 22 U7.
 
-Status: in progress (mission 22, U7)
+Status: resolved-by-doc (mission 22 U7 — templates/ and
+meta/REVIEW-PROTOCOL.md step 2: for each listed non-test file, checkout at
+<sha>~1 when it exists there, else rm; a commit body names added files as
+added)
 
 ## H-050 — review 21 ran its sub-agents concurrently against the protocol's one-at-a-time rule
 
@@ -2255,4 +2258,7 @@ sub-agent with its start and end time and states the rule's reason (one
 `./scripts/check` at a time inside the 20-minute cap); a review whose
 Notes lack the schedule is a should-fix for the next review. Mission 22 U7.
 
-Status: in progress (mission 22, U7)
+Status: resolved-by-doc (mission 22 U7 — templates/ and
+meta/REVIEW-PROTOCOL.md: Notes carry one line per sub-agent with start and
+end time; the reason, one ./scripts/check at a time inside the 20-minute
+cap; a review lacking the schedule is a should-fix for the next)

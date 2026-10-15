@@ -1021,25 +1021,57 @@ PROTOCOL_36_SENTENCES = {
 }
 
 
-#: §37 "The protocol's revert step" (review 20 should-fix 6): what every
-#: sub-agent of review 20 did, in the protocol's words.
+#: §38 (review 21 should-fix 2; H-049, H-050): the four sentences both protocol
+#: files carry, flattened. The revert step supersedes §37's single
+#: `git checkout <sha>~1 -- <files>`, which fails for a file the commit adds.
+PROTOCOL_38_SENTENCES = {
+    "the-revert-step-per-file": (
+        "in the worktree at the commit, for each non-test file the body lists,"
+        " `git checkout <sha>~1 -- <file>` when the file exists at `<sha>~1`, else"
+        " `rm` it; then run the commit's new tests and expect red; then"
+        " `git checkout <sha> -- <the same files>`. A commit body names each file"
+        " it adds as added"
+    ),
+    "the-schedule-in-the-notes": (
+        "one line per sub-agent with its start and end time; the sub-agents run one"
+        " at a time so that one `./scripts/check` runs at a time inside the"
+        " 20-minute cap. A review whose Notes lack the schedule is itself a"
+        " should-fix for the next review"
+    ),
+    "the-owner-decisions-commit-is-not-a-unit": (
+        "A `plan: decisions <date> (owner)` commit is read for what it says it does"
+        " and is not reviewed as a unit"
+    ),
+    "a-human-supplied-commit-by-show-stat-alone": (
+        'A human-supplied commit (`fixtures:`, from a "human-supplied unit" of the'
+        " brief) is checked by `git show --stat` alone"
+    ),
+}
+
+#: §37's wording, superseded by §38: it must be gone from both files.
 PROTOCOL_37_REVERT_STEP = (
     "in the worktree at the commit, `git checkout <sha>~1 -- <the non-test files"
-    " the body lists>`, run the commit's new tests and expect red, then"
-    " `git checkout <sha> -- <the same files>`"
+    " the body lists>`, run the commit's new tests and expect red"
 )
 
 
+@pytest.mark.parametrize("key", sorted(PROTOCOL_38_SENTENCES))
 @pytest.mark.parametrize("name", ["templates", "meta"])
-def test_the_protocol_reverts_by_checkout_and_never_says_stash(name: str) -> None:
-    """§37: both protocol files carry the checkout revert step; "stash" is gone
-    from each (the files differ only in the project's names, tests/test_docs.py)."""
+def test_the_protocol_reverts_by_checkout_and_never_says_stash(name: str, key: str) -> None:
+    """§38: both protocol files carry the per-file revert step (checkout at the
+    parent when the file exists there, else rm), the Notes schedule and its
+    reason, the owner-decisions exception and the human-supplied check; §37's
+    one-command wording and "stash" are gone from each (the files differ only in
+    the project's names, tests/test_docs.py)."""
     path = Path(__file__).resolve().parents[1] / name / "REVIEW-PROTOCOL.md"
     text = " ".join(path.read_text(encoding="utf-8").split())
-    lacks = f"{name}/REVIEW-PROTOCOL.md lacks the revert step"
-    assert PROTOCOL_37_REVERT_STEP in strip_paths(text), lacks
+    said = PROTOCOL_38_SENTENCES[key]
+    assert said in strip_paths(text), f"{name}/REVIEW-PROTOCOL.md does not say {said!r}"
+    keeps = f"{name}/REVIEW-PROTOCOL.md keeps §37's step"
+    assert PROTOCOL_37_REVERT_STEP not in strip_paths(text), keeps
     for word in ("stash", "Stash", "STASH"):
         assert word not in strip_paths(text), f"{name}/REVIEW-PROTOCOL.md still says {word}"
+
 
 @pytest.mark.parametrize("key", sorted(PROTOCOL_36_SENTENCES))
 def test_the_protocol_template_carries_section_36s_sentence(key: str) -> None:
