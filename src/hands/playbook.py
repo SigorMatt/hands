@@ -1631,6 +1631,14 @@ class PlaybookEngine:
             # an apply the engine approved itself is decided with the committed
             # file, reloaded now; one that no longer loads stops (`_load`).
             await self._load()
+            if self.playbook is None and self.load_error is None:
+                # §37: the apply left no playbook file — a stop, not §10's
+                # no-playbook path that would end chaining in silence.
+                await self.stop(
+                    f"the apply removed {self.config.playbook.path}",
+                    _payload(event, job),
+                )
+                return
         book = self.playbook
         if book is None:
             if enforced is not None:  # §28: the engine's stop needs no playbook

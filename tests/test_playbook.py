@@ -5086,6 +5086,55 @@ def test_end_to_end_a_playbook_that_no_longer_loads_after_the_apply_stops_with_i
     drive(body)
 
 
+#: What the scripted builder runs in place of applying a kit that deletes the
+#: playbook: `git rm` it and commit, so the committed tree has no `PLAYBOOK.toml`.
+REMOVE_PLAYBOOK = """
+import subprocess
+subprocess.run(["git", "rm", "-q", "--", "PLAYBOOK.toml"], check=True)
+subprocess.run(["git", "commit", "-q", "-m", "plan: kit mission-17-kit"], check=True)
+"""
+
+
+def test_end_to_end_an_apply_that_removes_the_playbook_stops_the_pipeline(
+    tmp_home: Path, workdir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """§37 "An apply that leaves no playbook" (review 20 note on U5): after an apply
+    the engine approved itself, a committed tree without the playbook file stops the
+    pipeline with "the apply removed PLAYBOOK.toml"; no kickoff is sent."""
+    import sys
+
+    architect_project(tmp_home, workdir)
+    script(
+        tmp_home,
+        monkeypatch,
+        [
+            {"result": "VERDICT: next kit mission-17-kit", "exec": file_apply_argv(tmp_home)},
+            {
+                "result": "VERDICT: kit applied abc1234",
+                "exec": [sys.executable, "-c", REMOVE_PLAYBOOK],
+            },
+        ],
+    )
+
+    async def body(daemon: Daemon) -> None:
+        review = await ok("send", "--role", "aux", "--context", "clear", fake_result(REVIEW))
+        await ok("wait", review["id"])
+        state = await wait_for_stop()
+
+        rows = sorted((await ok("jobs", "-n", "50"))["jobs"], key=lambda row: row["id"])
+        assert [(row["role"], row["origin"]) for row in rows] == [
+            ("aux", "cli"),
+            (ARCHITECT, "playbook"),
+            ("builder", "architect"),
+        ], "a kickoff was sent after the apply removed the playbook"
+        apply_job = await ok("result", rows[2]["id"])
+        assert apply_job["gate"]["decided_by"] == "playbook"
+        assert not (workdir / "PLAYBOOK.toml").exists()
+        assert state["stop_reason"] == "the apply removed PLAYBOOK.toml", state
+
+    drive(body)
+
+
 # ---- §36 "The engine" (H-045): a role-filed kit's hold is decided before it is published
 
 PHONE_SECRET = "Xyzzy-ENGINE-s3cret-0123456789abcdef"
