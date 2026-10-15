@@ -2281,6 +2281,10 @@ HF-004: handbook §6 lists every `playbook.SERIES_KEYS` key with the
 loader's default. HF-005: handbook §12 names `hands kit check <kit> --repo
 <clone>` at the laptop before a role-mode plan kit's apply, and the first
 plan kit's silent apply. Tests: tests/test_handbook.py)
+HF-002 resolved in full by mission 23 U7 with H-051's resolution: the
+architect role can now reach the handbook (the consult prompt names its path,
+and the guard reads under `HANDS_DOCS`); `hands handbook`'s help names
+`$HANDS_DOCS/docs/…` (REVIEW-22 should-fix 10).
 
 ## H-051 — the architect role cannot learn the value of `HANDS_DOCS`
 
@@ -2306,7 +2310,7 @@ consult prompt names the handbook's and templates' paths; or the
 architect's table and settings allow `hands handbook [--templates]`; or
 the guard's read roots gain `HANDS_DOCS` and the instruction says `cat`.
 
-Status: decided (DESIGN §39, mission 23 U7) — the consult prompt names the installed handbook's and templates' absolute paths; the guard's read roots gain HANDS_DOCS; the architect's hands subcommands gain handbook; architect/CLAUDE.md says to Read the paths the prompt names
+Status: resolved (mission 23 U7 — the architect's consult prompt names `docs_root()`'s handbook and templates paths; architect mode's read roots gain `HANDS_DOCS` and its `hands` subcommands `handbook`; architect/CLAUDE.md rule 2 says to Read the named paths. Tests: tests/test_playbook.py, tests/test_bash_guard.py)
 
 ## H-052 — `project add` writes the architect role's `CLAUDE.md` from the role variant
 
@@ -2331,7 +2335,7 @@ the wheel under `hands/shipped/`. If the design meant the phone instruction
 literally, the role would answer consultations in a vocabulary no consult
 rule matches.
 
-Status: decided (DESIGN §39, mission 23 U7) — U10's reading is the design: the role directory's CLAUDE.md is architect/CLAUDE.md with the Parameters filled; the phone instruction is what project add prints for pasting
+Status: resolved (mission 23 U7 — U10's code already writes architect/CLAUDE.md filled and prints the filled phone instruction last; tests pin the written bytes and the `--dry-run` source line. Tests: tests/test_project_add.py)
 
 ## H-053 — §38 says `status` hides the architect row; the code shows it
 

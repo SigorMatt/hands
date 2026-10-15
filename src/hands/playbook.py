@@ -59,7 +59,15 @@ from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from typing import Any
 
-from hands.config import ARCHITECT_ROLE, CONSULT_ROLES, Config
+from hands.config import (
+    ARCHITECT_ROLE,
+    CONSULT_ROLES,
+    DOCS_ENV,
+    HANDBOOK_PATH,
+    TEMPLATES_PATH,
+    Config,
+    docs_root,
+)
 from hands.limits import LimitManager
 from hands.spool import (
     ARCHITECT_ORIGIN,
@@ -3239,6 +3247,8 @@ def _architect_prompt(event: str, job: Job, brief: ArchitectBrief | None) -> str
         "([limits] max_architect_consults); when the budget is exhausted handsd stops the "
         "series itself, naming budget-exhausted\n"
         "\n"
+        f"{_docs_paragraph()}"
+        "\n"
         f"The instruction: {ARCHITECT_INSTRUCTION}.\n"
         "Stage the kit as a directory kits/<name>/<repository paths> and file it with "
         "`hands kit file kits/<name>` before you reply `VERDICT: next kit <name>`: "
@@ -3247,6 +3257,25 @@ def _architect_prompt(event: str, job: Job, brief: ArchitectBrief | None) -> str
         "Your reply's first line is exactly one of:\n"
         "\n"
         + "".join(f"    {line}\n" for line in ARCHITECT_VERDICTS)
+    )
+
+
+def _docs_paragraph() -> str:
+    """§39 (H-051): the installed handbook's and templates' absolute paths — the
+    `docs_root` the runner exports as `HANDS_DOCS` — for the role to Read, since
+    nothing it may run prints the variable; or a plain statement that this hands
+    carries none (a broken install)."""
+    root = docs_root()
+    if root is None:
+        return (
+            f"[hands: this hands carries no handbook or templates, so {DOCS_ENV} is not "
+            "set; reinstall hands (§38)]\n"
+        )
+    return (
+        f"The handbook of the hands that runs you ({DOCS_ENV}={root}); Read it before "
+        "writing anything:\n"
+        f"    handbook  = `{root / HANDBOOK_PATH}`\n"
+        f"    templates = `{root / TEMPLATES_PATH}`\n"
     )
 
 

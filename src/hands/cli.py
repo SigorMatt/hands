@@ -359,13 +359,14 @@ def build_parser() -> argparse.ArgumentParser:
     # `kit check`: where this hands' own handbook and templates are.
     handbook = command(
         "handbook",
-        "print the path of the installed hands' docs/ARCHITECT-HANDBOOK.md (§38); "
-        "the directory is what every role job carries as $HANDS_DOCS",
+        "print the path of the installed hands' handbook, "
+        "$HANDS_DOCS/docs/ARCHITECT-HANDBOOK.md, where $HANDS_DOCS is what every role "
+        "job carries (§38, §39)",
     )
     handbook.add_argument(
         "--templates",
         action="store_true",
-        help="print the installed templates directory instead",
+        help="print the installed templates directory, $HANDS_DOCS/templates, instead",
     )
     # §38 "Onboarding": answered by the client with no daemon and no config, like
     # `kit check`: it writes the config, so there is none to read yet.

@@ -30,7 +30,7 @@ import hands.runner as hands_runner
 from conftest import commit_file, strip_paths
 from hands.api import ApiError
 from hands.cli import _pipeline_block
-from hands.config import Config, load_config, parse_config
+from hands.config import Config, docs_root, load_config, parse_config
 from hands.daemon import Daemon
 from hands.gates import DECIDERS
 from hands.kit import Apply, apply_params
@@ -4165,6 +4165,29 @@ def test_the_architect_prompt_carries_the_event_the_review_the_roadmap_and_the_i
     assert sent.payload["event"] == "aux.done"
     assert sent.payload["consults"] == 1
     assert sent.payload["max_consults"] == 12
+
+
+def test_the_architect_prompt_names_the_installed_handbook_and_templates(
+    tmp_home: Path, workdir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """§39 ruling on H-051: the prompt names the installed handbook's and
+    templates' absolute paths — `docs_root()`, the value the runner exports as
+    `HANDS_DOCS` — so the role can Read them; with no docs it says so."""
+    root = docs_root()
+    assert root is not None
+    engine, recorder = architect_engine(tmp_home, workdir)
+    review = reviewed(engine.spool)
+    run(engine.on_job(review))
+    [call] = recorder.enqueued
+    prompt = call["prompt"]
+    assert f"`{root / 'docs' / 'ARCHITECT-HANDBOOK.md'}`" in prompt
+    assert f"`{root / 'templates'}`" in prompt
+    assert "HANDS_DOCS" in strip_paths(prompt)
+
+    monkeypatch.setattr("hands.playbook.docs_root", lambda: None)
+    bare = consult_prompt("aux.done", review, role=ARCHITECT)
+    assert "carries no handbook" in strip_paths(bare)
+    assert "handbook  =" not in strip_paths(bare)
 
 
 def test_a_review_whose_headings_are_missing_is_carried_whole(

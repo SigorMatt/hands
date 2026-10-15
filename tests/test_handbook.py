@@ -251,3 +251,20 @@ def test_the_handbooks_reading_claims_are_the_codes(tmp_home: Path) -> None:
     )
     assert args.prompt == "the answer, verbatim"
     assert "newest first" in strip_paths(Api.jobs.__doc__ or "")
+
+
+# ------------------------------------------ mission 23 U7 (DESIGN §39, H-051)
+
+
+def test_hands_handbook_help_names_the_directory_as_it_is() -> None:
+    """§39 (REVIEW-22 should-fix 10): the handbook is `$HANDS_DOCS/docs/…`, not
+    a file directly under `$HANDS_DOCS`."""
+    from hands.cli import build_parser
+
+    sub = next(a for a in build_parser()._actions if a.dest == "command")
+    parser = sub.choices["handbook"]  # type: ignore[attr-defined]
+    # the help text as written (format_help wraps at hyphens, so it is not read here)
+    text = " ".join([parser.description, *(a.help or "" for a in parser._actions)])
+    assert "$HANDS_DOCS/docs/ARCHITECT-HANDBOOK.md" in strip_paths(text)
+    assert "$HANDS_DOCS/templates" in strip_paths(text)
+    assert "the directory is what every role job carries as $HANDS_DOCS" not in strip_paths(text)

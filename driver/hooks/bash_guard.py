@@ -113,7 +113,8 @@ A `git` without `-C` runs in the role's cwd and is judged by the table alone.
 Reads are confined (§32, review 15 should-fix 7). In role and architect mode
 every path a row reads must be under the clone (`HANDS_CLONE`) or the spool's
 own directory, `~/.hands/<project>/` — and, in architect mode only, under
-`HANDS_KITS` — decided as `git -C` is: `os.path.realpath` containment, a
+`HANDS_KITS` and `HANDS_DOCS` (§39, H-051: the installed hands' handbook and
+templates) — decided as `git -C` is: `os.path.realpath` containment, a
 relative path joined to the hook's working directory (for `git`, to its `-C`
 value), and a leading unquoted `~` expanded as bash expands it. The paths are:
 every file word of `cat`, `head`, `tail`, `wc`; `ls`'s words, or `.` when it
@@ -273,6 +274,7 @@ ROLE_ENV = "HANDS_ROLE"
 CONSULT_ROLE_ENV = "HANDS_CONSULT_ROLE"
 CLONE_ENV = "HANDS_CLONE"  # §29: role mode's `git -C` must name this path
 KITS_ENV = "HANDS_KITS"  # §31: architect mode's writes must land under this path
+DOCS_ENV = "HANDS_DOCS"  # §39 (H-051): architect mode also reads under this path
 DRIVER_ROLE = "driver"
 ARCHITECT_ROLE = "architect"  # §31: the third mode value
 #: The two modes handsd starts: both pin `git -C` to the role's clone.
@@ -280,8 +282,9 @@ ROLE_MODES = (DRIVER_ROLE, ARCHITECT_ROLE)
 ROLE_HANDS_SUBCOMMANDS = {"show", "jobs", "inbox", "pipeline", "status", "tail", "resume"}
 #: §31: the `hands` reads architect mode has, which is `architect/settings.json`'s
 #: own allow list. `kit` is judged by its own subcommand below (`check` and
-#: `file`, never `apply`), and `send` is not here at all.
-ARCHITECT_HANDS_SUBCOMMANDS = {"show", "jobs", "inbox", "pipeline", "status"}
+#: `file`, never `apply`), and `send` is not here at all. §39 (H-051) adds
+#: `handbook`, which prints the installed handbook's or templates' path.
+ARCHITECT_HANDS_SUBCOMMANDS = {"show", "jobs", "inbox", "pipeline", "status", "handbook"}
 ARCHITECT_KIT_SUBCOMMANDS = ("check", "file")
 ROLE_SEND_TARGETS = {"builder", "aux"}
 # `hands` options that may come before the subcommand. Two take a value, one
@@ -640,13 +643,15 @@ class Reads:
     """§32 (review 15 should-fix 7): the roots a role's reads are confined to.
 
     The clone (`HANDS_CLONE`), the spool (`spool_dir`) and, in architect mode
-    only, `HANDS_KITS`. A root that is unset or empty confines nothing, so with
-    none of them every path read is refused. Only the role modes build one.
+    only, `HANDS_KITS` and `HANDS_DOCS` (§39, H-051). A root that is unset or
+    empty confines nothing, so with none of them every path read is refused.
+    Only the role modes build one.
     """
 
-    def __init__(self, role, clone, spool, kits):
+    def __init__(self, role, clone, spool, kits, docs=None):
         self.role, self.clone, self.spool, self.kits = role, clone, spool, kits
-        roots = [clone, spool] + ([kits] if role == ARCHITECT_ROLE else [])
+        self.docs = docs
+        roots = [clone, spool] + ([kits, docs] if role == ARCHITECT_ROLE else [])
         self.roots = [root for root in roots if root]
 
     def problem(self, word: str, mask: str, name: str, cmd: str, base=None):
@@ -658,8 +663,10 @@ class Reads:
             path = os.path.join(base, path)
         if any(under(path, root) for root in self.roots):
             return None
-        kits = (f", {KITS_ENV}={self.kits!r}" if self.role == ARCHITECT_ROLE else "")
-        also = " (and the architect's kits directory)" if self.role == ARCHITECT_ROLE else ""
+        kits = (f", {KITS_ENV}={self.kits!r}, {DOCS_ENV}={self.docs!r}"
+                if self.role == ARCHITECT_ROLE else "")
+        also = (" (and the architect's kits directory and hands' docs)"
+                if self.role == ARCHITECT_ROLE else "")
         return (f"`{name}` reads {word!r}, and in role mode reads are confined to the clone "
                 f"and the spool{also} ({CLONE_ENV}={self.clone!r}, spool {self.spool!r}"
                 f"{kits}; compared by realpath, §32): {cmd!r}")
@@ -935,7 +942,7 @@ def architect_hands_violation(args, sub, rest, cmd):
         return (f"only `hands kit check` and `hands kit file` are allowed for the "
                 f"architect role (§31): {cmd!r}")
     return (f"hands {sub} is not allowed for the architect role (§31: kit check, kit "
-            f"file, show, jobs, inbox, pipeline, status — never send, approve, deny, "
+            f"file, show, jobs, inbox, pipeline, status, handbook — never send, approve, deny, "
             f"go, put, pause, resume or open): {cmd!r}")
 
 
@@ -1316,14 +1323,15 @@ def judge(words, marks, cmd, role, consult_role, clone=None, kits=None, reads=No
     return option_violation(name, row, words[1:], marks[1:], cmd, kits, reads, clone)
 
 
-def check(cmd: str, role=None, consult_role=None, clone=None, kits=None, spool=None):
+def check(cmd: str, role=None, consult_role=None, clone=None, kits=None, spool=None,
+          docs=None):
     """Return None if allowed, else a reason string.
 
     `role` is `HANDS_ROLE`: None for the human's driver session, `driver` for
     §27's role mode, `architect` for §31's, and anything else is refused
     outright (fail closed). `consult_role` is `HANDS_CONSULT_ROLE`, `clone` is
-    `HANDS_CLONE`, `kits` is `HANDS_KITS` and `spool` is `spool_dir()`; only the
-    role modes read them. The language comes first (§30, §32): a command that is
+    `HANDS_CLONE`, `kits` is `HANDS_KITS`, `docs` is `HANDS_DOCS` and `spool` is
+    `spool_dir()`; only the role modes read them (`docs` only architect mode). The language comes first (§30, §32): a command that is
     not one line of words, quotes and separators is refused before any
     tokenizing, naming the first offender and its position.
     """
@@ -1339,7 +1347,7 @@ def check(cmd: str, role=None, consult_role=None, clone=None, kits=None, spool=N
     for pat, why in patterns_for(role):
         if re.search(pat, bare):
             return f"{why}: {cmd!r}"
-    reads = Reads(role, clone, spool, kits) if role in ROLE_MODES else None
+    reads = Reads(role, clone, spool, kits, docs) if role in ROLE_MODES else None
     try:
         for raw, mask in segments(cmd):
             values, masks = tokens(raw, mask)
@@ -1800,6 +1808,7 @@ ARCHITECT_SELFTEST = [
     ("hands inbox", True),
     ("hands pipeline", True),
     ("hands status --json", True),
+    ("hands handbook --templates", True),  # §39, H-051
     # ... and every command that drives a role or decides a gate, by name
     ("hands send --role builder --context keep 'do it'", False),
     ("hands send --role builder --context clear 'do it'", False),
@@ -2051,8 +2060,9 @@ def main() -> int:
     consult_role = os.environ.get(CONSULT_ROLE_ENV) or None
     clone = os.environ.get(CLONE_ENV) or None
     spool = spool_dir() if role in ROLE_MODES else None
+    docs = os.environ.get(DOCS_ENV) or None
     reason = check(cmd, role=role, consult_role=consult_role, clone=clone, kits=kits,
-                   spool=spool)
+                   spool=spool, docs=docs)
     if reason is None:
         return 0
     if role == ARCHITECT_ROLE:
@@ -2067,7 +2077,8 @@ def main() -> int:
               f"never zip or unzip (§32): stage kits/<name> and file it "
               f"with `hands kit file kits/<name>`, which builds the zip. Its reads are "
               f"confined to the clone and the spool "
-              f"({spool or 'none named'}) and ${KITS_ENV}, and the command is one line of "
+              f"({spool or 'none named'}), ${KITS_ENV} and ${DOCS_ENV} (the paths the "
+              f"consultation prompt names; `hands handbook` prints them), and the command is one line of "
               f"words, quotes and ; && || | & (§32). It never sends, approves, denies, "
               f"goes, puts or pushes. If the "
               f"kit needs more, reply VERDICT: escalate <reason>.", file=sys.stderr)

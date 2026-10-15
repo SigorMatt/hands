@@ -37,6 +37,7 @@
       "Bash(hands inbox:*)",
       "Bash(hands pipeline:*)",
       "Bash(hands status:*)",
+      "Bash(hands handbook:*)",
       "Bash(git fetch:*)",
       "Bash(git -C ./repo fetch:*)",
       "Bash(git -C ./repo log:*)",

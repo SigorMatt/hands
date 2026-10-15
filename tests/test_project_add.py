@@ -257,3 +257,35 @@ def test_the_wheel_carries_what_project_add_copies(tmp_path: Path) -> None:
         "bash_guard.py",
     ):
         assert f"hands/shipped/{rel}" in names, rel
+
+
+def test_dry_run_names_the_role_variant_as_the_architects_claude_md_source(
+    tmp_home: Path, fake_systemctl: Path, bare_repo: Path
+) -> None:
+    """§39 ruling on H-052: the role directory's CLAUDE.md is written from
+    `architect/CLAUDE.md` (the role variant), never from the phone instruction."""
+    code, out, err = _run(["project", "add", "demo", "--repo", str(bare_repo), "--dry-run"])
+    assert code == 0, err
+    root = docs_root()
+    assert root is not None
+    target = _paths(tmp_home, "demo")["architect_claude"]
+    [line] = [ln for ln in out.splitlines() if ln.strip().startswith(f"{target} ")]
+    assert line.strip() == f"{target}  (from {root / 'architect' / 'CLAUDE.md'})"
+    assert "ARCHITECT-INSTRUCTION" not in strip_paths(line)
+
+
+def test_the_architect_claude_md_is_the_filled_role_variant(
+    tmp_home: Path, fake_systemctl: Path, bare_repo: Path
+) -> None:
+    """§39 ruling on H-052: byte for byte, `architect/CLAUDE.md` with the
+    Parameters filled; the phone instruction is only printed, last."""
+    from hands.project import DEFAULT_PARAMETERS, fill_parameters
+
+    code, out, err = _run(["project", "add", "demo", "--repo", str(bare_repo)])
+    assert code == 0, err + out
+    root = docs_root()
+    assert root is not None
+    params = {"PROJECT": "demo", "REPO_URL": str(bare_repo), **DEFAULT_PARAMETERS}
+    expected = fill_parameters((root / "architect" / "CLAUDE.md").read_text(), params)
+    assert _paths(tmp_home, "demo")["architect_claude"].read_text() == expected
+    assert out.index("== Project instruction") > out.index("== hands doctor ==")
