@@ -137,9 +137,14 @@ def test_every_optional_key_has_a_default(write_config, tmp_home: Path) -> None:
     assert builder.resume_prompt("the limited prompt") == "the limited prompt"
     assert builder.queue_depth == 1
     assert builder.cancel_gated is True
-    # §23: no env table, and the one variable hands sets for every role job.
+    # §23: no env table, and the one variable hands sets for every role job;
+    # §36 (HF-006): plus the two Bash limits on a builder (and aux) job.
     assert builder.env == {}
-    assert builder.spawn_env == {"CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS": "0"}
+    assert builder.spawn_env == {
+        "CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS": "0",
+        "BASH_DEFAULT_TIMEOUT_MS": "900000",
+        "BASH_MAX_TIMEOUT_MS": "900000",
+    }
 
     assert cfg.ops.repo is None
     assert cfg.ops.monitor_cmd is None
@@ -698,10 +703,15 @@ env = { HANDS_AUX_ONLY = "1" }
     builder, aux = cfg.role("builder"), cfg.role("aux")
     assert builder.env == {"CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS": "1800000", "HANDS_EXTRA": "yes"}
     # the configured value wins over hands' default of 0
-    assert builder.spawn_env == builder.env
+    bash = {"BASH_DEFAULT_TIMEOUT_MS": "900000", "BASH_MAX_TIMEOUT_MS": "900000"}
+    assert builder.spawn_env == {**bash, **builder.env}
     assert aux.env == {"HANDS_AUX_ONLY": "1"}
     # a role that does not set the ceiling still gets 0, alongside its own keys
-    assert aux.spawn_env == {"CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS": "0", "HANDS_AUX_ONLY": "1"}
+    assert aux.spawn_env == {
+        "CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS": "0",
+        **bash,
+        "HANDS_AUX_ONLY": "1",
+    }
 
 
 @pytest.mark.parametrize(
@@ -904,6 +914,7 @@ env = { HANDS_PADDED = "  1  " }
 [roles.aux]
 cwd = "  ~/g  "
 model = "  sonnet  "
+branch = "  trunk  "
 
 [ops]
 repo = "  ~/ops  "
@@ -961,6 +972,8 @@ def test_every_accepted_string_value_is_stored_stripped(write_config, ops_repo: 
     # …and the stripped values are the ones the rest of hands then uses.
     assert cfg.role("builder").resume_line == "Resume WORKPLAN.md"
     assert cfg.role("builder").env == {"HANDS_PADDED": "1"}
+    assert cfg.role("aux").branch == "trunk"  # §36 (H-042) through §21's helper
+    assert cfg.role("builder").branch == "main"  # its default
     assert cfg.notify.ntfy_token == "tk_padded0token"  # §33 through §21's helper
     assert cfg.playbook.path == "P.toml"
     assert cfg.ops.monitor_path == ops_repo / "watch_monitor.sh"

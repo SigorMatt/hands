@@ -41,6 +41,7 @@ __all__ = [
     "auth_headers",
     "http_post",
     "http_stream",
+    "project_title",
     "send_test",
     "token_kwargs",
 ]
@@ -62,8 +63,17 @@ STREAM_READ_TIMEOUT_S = 120.0
 
 #: `hands notify --test` with no message of its own (§4).
 DEFAULT_TEST_MESSAGE = "hands notify --test: if you can read this, delivery works."
-#: The title of that one message, so it is obvious on the phone what it is.
+#: The title of that one message, so it is obvious on the phone what it is
+#: (published as `<project>: ` + this, §36).
 TEST_TITLE = "hands: notify --test"
+
+
+def project_title(project: str, title: str) -> str:
+    """§36: "every title handsd publishes begins with `<project>: `", so two daemons
+    on one phone say whose a notification is. Applied where the Notifier publishes,
+    and nowhere else: what a `hold` keeps, the inbox record of a failed publish and
+    the start notification's list of folded titles keep the title as raised."""
+    return f"{project}: {title}"
 
 
 # ------------------------------------------------------------ the transport
@@ -202,9 +212,13 @@ async def send_test(
         )
     url = f"{config.server.ntfy_url.rstrip('/')}/{topic}"
     send = post if post is not None else http_post
+    # §36: handsd's API answers `notify --test` with this function too, so its
+    # title carries the project like every other title handsd publishes; the
+    # client's `hands notify --test` sends the same title, and proves it.
+    title = project_title(config.project, TEST_TITLE)
     try:
         status = await send(
-            url, title=TEST_TITLE, message=message, **token_kwargs(config.notify.ntfy_token)
+            url, title=title, message=message, **token_kwargs(config.notify.ntfy_token)
         )
     except asyncio.CancelledError:
         raise
@@ -218,7 +232,7 @@ async def send_test(
     return {
         "topic": topic,
         "url": url,
-        "title": TEST_TITLE,
+        "title": title,
         "message": message,
         "status": status,
         "delivered": delivered,
@@ -347,7 +361,8 @@ class Notifier:
         try:
             extra: dict[str, Any] = {"actions": note.actions} if note.actions else {}
             extra.update(token_kwargs(self.config.notify.ntfy_token))
-            status = await post(url, title=note.title, message=note.message, **extra)
+            title = project_title(self.config.project, note.title)
+            status = await post(url, title=title, message=note.message, **extra)
         except asyncio.CancelledError:
             raise
         except Exception as exc:

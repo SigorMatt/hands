@@ -4,8 +4,9 @@
        ▲                                                   │
        └──────────── one JSON line per message ────────────┘
 
-The daemon subscribes to `[notify] cmd_topic` with a long-poll and accepts eight
-commands, each ending in its token but `reply`, whose secret is its second word:
+The daemon subscribes to `[notify] cmd_topic` with a long-poll and accepts nine
+commands, each ending in its token but `reply` and `answer`, whose secret is their
+second word:
 
     approve <job> <secret|nonce>
     deny <job> [reason words…] <secret|nonce>
@@ -15,6 +16,7 @@ commands, each ending in its token but `reply`, whose secret is its second word:
     go <secret>
     kit <secret>        (a message that carries an ntfy attachment)
     reply <secret> <text>
+    answer <secret> <text>   (the message may carry an ntfy attachment)
 
 **`reply`** (§33) sends `<text>` — the rest of the message after the whitespace
 that follows the secret, unchanged — to the architect's last session as one
@@ -27,6 +29,23 @@ daemon publishes the architect's final message on `ntfy_topic` titled
 `architect`. The job is not a consultation: the engine reads no verdict from it,
 it does not un-pause a stopped pipeline, it is not counted against
 `max_architect_consults`, and `kit_file` refuses a kit filed while it runs.
+
+**`answer`** (§36) is the phone answering the builder: `<text>`, parsed as
+`reply`'s is, is delivered as `hands send --role builder --context keep "<text>"`
+would be, to the builder's last session, as one job of `origin: phone`
+(`Api.answer_builder`). The secret is the approval: the job is never held by §8's
+gate, whatever its text says. Like a cli send, its job un-pauses a stopped pipeline
+when it starts (`UNPAUSE_ORIGINS`), and its end fires the playbook's rules as any
+builder end does; the builder's final reply is also published on `ntfy_topic`
+titled `builder`. It is refused, and the refusal answered titled `hands: answer`,
+when the text is empty, while the builder has a job running, queued or held, and
+when the builder has no resumable session. A file attached to the message is
+checked by the `kit` rules below (a `.zip` basename, `kit_max_mb`, the url,
+`kit_dir` inside `allowed_roots`) before anything is fetched, then fetched into
+`kit_dir` as a kit is; a refused attachment refuses the answer. Nothing is
+unzipped or applied: the delivered text ends with one sentence naming the file's
+path (`attachment_sentence`), and the job record's `files_written` keeps its
+sha256. The text and the attachment's name and hash are filed as `answer.sent`.
 
 **`go`** (§26) is the one way to start work from the phone: it sends the
 playbook's `[series] kickoff` line to the builder as a `clear` send with
@@ -96,7 +115,8 @@ publishes each job's held notification again with those buttons (§34, reversing
 **What is answered.** `status` publishes a short summary to `ntfy_topic`, an
 accepted `go` publishes the id and state of the job it filed there, a
 written kit publishes its name, size and sha256, and a `reply` with the secret
-publishes the job it filed or why it was refused (then the architect's answer).
+publishes the job it filed or why it was refused (then the architect's answer),
+and an `answer` with the secret likewise (then the builder's final reply).
 Nothing else is answered: a bad token, an unknown or malformed command, a
 command for a job that is not held — each is logged (without the token, and
 without any word of the message that could be one) and ignored.
@@ -130,7 +150,7 @@ from typing import IO, TYPE_CHECKING
 from urllib.parse import quote
 
 from hands import notify as notify_mod
-from hands.api import ApiError
+from hands.api import ApiError, attachment_sentence
 from hands.kit import KitError, apply_from_zip, home_shown
 from hands.notify import PAIR_SPACING_S
 from hands.playbook import PlaybookError, load_playbook, playbook_path
@@ -142,8 +162,9 @@ if TYPE_CHECKING:  # pragma: no cover
     from hands.daemon import Daemon
 
 __all__ = [
-    "ARCHITECT_TITLE", "BACKOFF_S", "GO_TITLE", "KIT_TITLE", "NONCE_BYTES", "REPLY_TITLE",
-    "STATUS_TITLE", "PhoneChannel", "parse_reply", "reply_answer", "status_summary",
+    "ANSWER_TITLE", "ARCHITECT_TITLE", "BACKOFF_S", "BUILDER_TITLE", "GO_TITLE", "KIT_TITLE",
+    "NONCE_BYTES", "REPLY_TITLE", "STATUS_TITLE", "PhoneChannel", "answer_reply",
+    "attachment_sentence", "parse_answer", "parse_reply", "reply_answer", "status_summary",
 ]  # fmt: skip
 
 log = logging.getLogger("hands.phone")
@@ -164,6 +185,10 @@ KIT_TITLE = "hands: kit received"
 REPLY_TITLE = "hands: reply"
 #: §33: "the reply's text is published on `ntfy_topic` with title `architect`".
 ARCHITECT_TITLE = "architect"
+#: §36: the channel's answer to an `answer` — accepted (the job) or refused (why).
+ANSWER_TITLE = "hands: answer"
+#: §36: "the builder's final reply is published on `ntfy_topic` titled `builder`".
+BUILDER_TITLE = "builder"
 
 #: §26's size cap is in MB; hands reads that as MiB.
 MIB = 1024 * 1024
@@ -181,6 +206,11 @@ _SECRET_ONLY = ("pause", "resume", "status", "go", "kit")
 #: between `reply` and the secret, and the run between the secret and the text are
 #: the separators, and nothing else is stripped.
 _REPLY_RE = re.compile(r"\A\s*reply\s+(?P<token>\S+)\s+(?P<text>.*)\Z", re.IGNORECASE | re.DOTALL)
+#: §36: `answer <secret> <text>`, split as `reply` is; the text may be empty here,
+#: because an empty answer with the secret is refused out loud, not ignored.
+_ANSWER_RE = re.compile(
+    r"\A\s*answer\s+(?P<token>\S+)(?:\s+(?P<text>.*))?\Z", re.IGNORECASE | re.DOTALL
+)
 _DECISIONS = {"approve": "approved", "deny": "denied"}
 
 
@@ -318,6 +348,8 @@ class PhoneChannel:
         token = words[-1] if words else ""
         if verb == "reply":
             return await self._reply_command(text)
+        if verb == "answer":
+            return await self._answer_command(text, attachment)
         if verb in _SECRET_ONLY:
             if len(words) != 2:
                 return self._ignore(f"{verb} takes only the secret")
@@ -388,9 +420,7 @@ class PhoneChannel:
         if busy is not None:
             return self._ignore(f"go: {busy}")
         try:
-            job = await self.daemon.api.send(
-                role="builder", context="clear", prompt=book.kickoff, origin="phone"
-            )
+            job = await self.daemon.api.go_builder(book.kickoff)
         except ApiError as exc:
             return self._ignore(f"go: the send was refused ({exc})")
         log.info("phone: go filed builder job %s (%s)", job["id"], job["state"])
@@ -427,6 +457,106 @@ class PhoneChannel:
         )
         return None
 
+    async def _answer_command(self, text: str, attachment: object) -> None:
+        """§36: `answer <secret> <text>` — the text to the builder's last session as one
+        `keep` job of `origin: phone`, never gated, with the message's attachment
+        fetched into `kit_dir` first.
+
+        Neither the text nor any word of it is logged. A token that is not the secret
+        is ignored like any command; once the secret is accepted every refusal is
+        answered on `ntfy_topic` (`ANSWER_TITLE`). The refusals are asked before the
+        attachment is fetched, so a refused answer never reaches its server, and again
+        by `Api.answer_builder` next to the enqueue, after the fetch's awaits.
+        """
+        parsed = parse_answer(text)
+        if parsed is None:
+            return self._ignore("answer takes the secret and a text")
+        token, answer = parsed
+        if not self._is_secret(token):
+            return self._ignore("answer: bad secret")
+        why = self.daemon.api.answer_refusal(answer)
+        if why is not None:
+            return await self._refuse_answer(why)
+        attached: dict[str, object] | None = None
+        if attachment is not None:
+            fetched = await self._fetch_attachment(attachment)
+            if isinstance(fetched, str):
+                return await self._refuse_answer(fetched)
+            attached = fetched
+        try:
+            job = await self.daemon.api.answer_builder(answer, attachment=attached)
+        except ApiError as exc:
+            return await self._refuse_answer(str(exc))
+        log.info("phone: answer filed builder job %s (%s)", job["id"], job["state"])
+        await self.daemon.notifier.answer(
+            ANSWER_TITLE, f"answer: builder job {job['id']} {job['state']}"
+        )
+        return None
+
+    async def _refuse_answer(self, why: str) -> None:
+        self._ignore(f"answer: {why}")
+        await self.daemon.notifier.answer(ANSWER_TITLE, f"answer refused: {why}")
+
+    async def _fetch_attachment(self, attachment: object) -> dict[str, object] | str:
+        """§36: an `answer`'s attachment, "fetched into `kit_dir` as a kit is, judged by
+        the same size and name rules" (`_fetch`), as `{"path", "name", "sha256",
+        "bytes"}`, or why not."""
+        fetched = await self._fetch(attachment)
+        if isinstance(fetched, str):
+            return fetched
+        directory, written, total, digest = fetched
+        return {"path": str(directory / written), "name": written, "sha256": digest,
+                "bytes": total}
+
+    async def _fetch(self, attachment: object) -> tuple[Path, str, int, str] | str:
+        """§26: the message's attachment, fetched into `[files] kit_dir` — `kit_dir`,
+        the name written, the bytes and the sha256 — or why it was not (`kit` and,
+        §36, `answer`).
+
+        Every check that needs no network runs first, so a refused attachment never
+        reaches its server. A refusal names the check, never the attachment's name
+        or URL (text the sender chose).
+        """
+        if not isinstance(attachment, dict):
+            return "the message carries no attachment"
+        name = attachment.get("name")
+        if not _is_kit_name(name):
+            return "the attachment name is not a .zip basename"
+        assert isinstance(name, str)
+        files = self.daemon.config.files
+        size = attachment.get("size")
+        if isinstance(size, bool) or not isinstance(size, int) or size < 0:
+            return "the attachment reports no size in bytes"
+        cap = files.kit_max_mb * MIB
+        if size > cap:
+            return (
+                f"the attachment is {size} bytes, over [files] kit_max_mb = "
+                f"{files.kit_max_mb} ({cap} bytes)"
+            )
+        url = attachment.get("url")
+        problem = url_problem(url)
+        if problem is not None:
+            return f"the attachment has no valid http(s) url: {problem}"
+        assert isinstance(url, str)
+        try:
+            directory = resolve_under_roots(files.kit_dir, files.allowed_roots)
+        except PathEscape:
+            return "[files] kit_dir is outside [files] allowed_roots"
+        if not directory.is_dir():
+            return "[files] kit_dir is not a directory"
+        try:
+            written, total, digest = await fetch_kit(
+                url,
+                directory,
+                name,
+                cap=cap,
+                expected=size,
+                token=attachment_token(url, self.notify.ntfy_url, self.notify.ntfy_token),
+            )
+        except _KitRefused as exc:
+            return str(exc)
+        return directory, written, total, digest
+
     def _builder_busy(self) -> str | None:
         """Why the builder cannot take a `go` now — a job running, queued or held — or None."""
         builder = self.daemon.status()["roles"]["builder"]
@@ -451,44 +581,10 @@ class PhoneChannel:
         attachment's name or URL (text the sender chose), and is filed as
         `kit.refused` (§27).
         """
-        if not isinstance(attachment, dict):
-            return self._refuse_kit("the message carries no attachment")
-        name = attachment.get("name")
-        if not _is_kit_name(name):
-            return self._refuse_kit("the attachment name is not a .zip basename")
-        assert isinstance(name, str)
-        files = self.daemon.config.files
-        size = attachment.get("size")
-        if isinstance(size, bool) or not isinstance(size, int) or size < 0:
-            return self._refuse_kit("the attachment reports no size in bytes")
-        cap = files.kit_max_mb * MIB
-        if size > cap:
-            return self._refuse_kit(
-                f"the attachment is {size} bytes, over [files] kit_max_mb = "
-                f"{files.kit_max_mb} ({cap} bytes)"
-            )
-        url = attachment.get("url")
-        problem = url_problem(url)
-        if problem is not None:
-            return self._refuse_kit(f"the attachment has no valid http(s) url: {problem}")
-        assert isinstance(url, str)
-        try:
-            directory = resolve_under_roots(files.kit_dir, files.allowed_roots)
-        except PathEscape:
-            return self._refuse_kit("[files] kit_dir is outside [files] allowed_roots")
-        if not directory.is_dir():
-            return self._refuse_kit("[files] kit_dir is not a directory")
-        try:
-            written, total, digest = await fetch_kit(
-                url,
-                directory,
-                name,
-                cap=cap,
-                expected=size,
-                token=attachment_token(url, self.notify.ntfy_url, self.notify.ntfy_token),
-            )
-        except _KitRefused as exc:
-            return self._refuse_kit(str(exc))
+        fetched = await self._fetch(attachment)
+        if isinstance(fetched, str):
+            return self._refuse_kit(fetched)
+        directory, written, total, digest = fetched
         self.daemon.spool.append_event(
             "kit.received", {"name": written, "bytes": total, "sha256": digest}
         )
@@ -608,6 +704,25 @@ def parse_reply(text: str) -> tuple[str, str] | None:
     if match is None or not match.group("text"):
         return None
     return match.group("token"), match.group("text")
+
+
+def parse_answer(text: str) -> tuple[str, str] | None:
+    """§36: the token and the text of `answer <token> <text>`, or None when there is
+    no token. Split as `parse_reply` splits; a text that is empty, or whitespace only,
+    is answered as empty `""` (the caller refuses it once the secret is accepted)."""
+    match = _ANSWER_RE.match(text)
+    if match is None:
+        return None
+    said = match.group("text") or ""
+    return match.group("token"), said if said.strip() else ""
+
+
+def answer_reply(job: Job) -> str:
+    """§36: what the phone is told when an answer job ends — the builder's final
+    message, verbatim, or, when the job ended without one, which job ended how."""
+    if job.state == "done" and job.result:
+        return job.result
+    return f"builder job {job.id} ended {job.state} with no reply"
 
 
 def reply_answer(job: Job) -> str:

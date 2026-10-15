@@ -69,6 +69,7 @@ from harness import (
     PROJECT,
     UNCHECKED_KIT,
     architect_table,
+    as_published,
     cli,
     config_body,
     drive,
@@ -306,7 +307,8 @@ def test_the_repositorys_own_playbook_loads_and_its_review_lets_the_protocol_fin
 def test_the_repositorys_own_playbook_carries_the_series_kickoff() -> None:
     """§26 (mission 10 U2): the root playbook names its kickoff line in `[series]`.
     §27 Conventions, §34 (mission 18 U5), §35 (mission 19 U3): it is the next
-    mission's line, BUILDER-20.
+    mission's line, BUILDER-20. §36 (mission 20 U9): the mission-less line, so no
+    later kit re-issues the playbook to move a number.
     §31: this repository runs a phone architect, and says so — `architect = "phone"`
     is the default, written out, and it is the only §31 key the table sets."""
     path = Path(__file__).parents[1] / "PLAYBOOK.toml"
@@ -314,7 +316,8 @@ def test_the_repositorys_own_playbook_carries_the_series_kickoff() -> None:
     assert book is not None, "the repository's PLAYBOOK.toml is missing"
     assert book.series == "hands-missions"
     assert book.kickoff == (
-        "Read meta/BUILDER-20-PROMPT.md and execute the mission below its divider."
+        "Read the builder prompt with the highest mission number in the meta directory "
+        "and execute the mission below its divider."
     )
     assert book.architect == "phone"
     assert book.autonomous is False
@@ -1552,7 +1555,8 @@ def drive_notified(
 
 def stop_posts(posts: Posts) -> list[str]:
     """The stop notifications of §11, without the daemon's own start message."""
-    return [title for title in posts.sent if title == "hands: the pipeline stopped"]
+    stopped = as_published("hands: the pipeline stopped")
+    return [title for title in posts.sent if title == stopped]
 
 
 async def assert_pause_is_a_no_op(daemon: Daemon, posts: Posts, reason: str) -> None:
@@ -1636,7 +1640,7 @@ def test_a_limit_stop_over_a_rule_stop_keeps_the_first_reason(
         await daemon.notifier.drain()
         first = await ok("pipeline")
         assert first["stop_reason"] == "a rule said so"
-        assert stop_posts(posts) == ["hands: the pipeline stopped"]
+        assert stop_posts(posts) == [as_published("hands: the pipeline stopped")]
 
         daemon.limits.max_resumes = 0  # §6: the next limit has no resume left
         job = daemon.spool.create_job(
@@ -1665,7 +1669,7 @@ def test_a_limit_stop_over_a_rule_stop_keeps_the_first_reason(
         assert suppressed["payload"]["kept"] == "a rule said so"
         assert suppressed["payload"]["role"] == "builder"
         # one notification per stop that takes: the rule's, and no second one
-        assert stop_posts(posts) == ["hands: the pipeline stopped"]
+        assert stop_posts(posts) == [as_published("hands: the pipeline stopped")]
 
     drive_notified(tmp_home, workdir, body)
 
@@ -1696,7 +1700,7 @@ def test_a_limit_stop_with_no_stop_over_it_still_files_its_event_and_notifies(
         kinds = [event["kind"] for event in (await ok("inbox"))["events"]]
         assert kinds.count("stop") == 1
         assert "pipeline.stop_suppressed" not in kinds
-        assert stop_posts(posts) == ["hands: the pipeline stopped"]
+        assert stop_posts(posts) == [as_published("hands: the pipeline stopped")]
 
     drive_notified(tmp_home, workdir, body)
 
@@ -2323,7 +2327,11 @@ def test_a_question_consulted_and_escalated_stops_with_the_reason(
         first = await ok("send", "--role", "builder", "--context", "clear", KICKOFF)
         await ok("wait", first["id"])
         state = await wait_for_stop()
-        assert state["stop_reason"] == "driver escalated: the mission file does not decide it"
+        # §36: the escalation's stop keeps the builder's question verbatim
+        assert state["stop_reason"] == (
+            "driver escalated: the mission file does not decide it; the builder's question "
+            f"(job {first['id']}), verbatim:\n{QUESTION_RESULT}"
+        )
         drivers = [row for row in (await ok("jobs", "-n", "50"))["jobs"]
                    if row["role"] == "driver"]
         assert len(drivers) == 1
@@ -2492,7 +2500,11 @@ def test_a_playbook_stop_rule_on_an_escalation_keeps_its_message(
     about = finished(engine.spool, verdict="VERDICT: question x")
     driver = _driver_job(engine.spool, state="done", verdict="VERDICT: escalate why", about=about)
     run(engine.on_job(driver))
-    assert engine.state.stop_reason == "driver escalated: why"
+    # §36: the rule's message, and the builder's question after it
+    assert engine.state.stop_reason == (
+        f"driver escalated: why; the builder's question (job {about.id}), verbatim:\n"
+        "VERDICT: question x"
+    )
     assert [title for title, _ in recorder.notified] == ["hands: the pipeline stopped"]
 
 
@@ -2828,8 +2840,8 @@ def test_end_to_end_an_escalation_over_a_paused_pipeline_is_suppressed_and_notif
         state = await ok("pipeline")
         assert state["paused"] and state["stop_reason"] == PAUSE_REASON
         await daemon.notifier.drain()
-        assert posts.sent.count("hands: the pipeline stopped") == 1  # the pause
-        assert posts.sent.count(SUPPRESSED_CONSULT) == 1
+        assert posts.sent.count(as_published("hands: the pipeline stopped")) == 1  # the pause
+        assert posts.sent.count(as_published(SUPPRESSED_CONSULT)) == 1
 
     async def scenario() -> None:
         daemon = Daemon(load_config(PROJECT))
@@ -4970,6 +4982,257 @@ def test_end_to_end_next_kit_waits_for_the_apply_the_architect_filed(
     drive(body)
 
 
+# ---- §36 "The engine" (H-044): the kickoff after an autonomous apply is the committed one
+
+#: What the scripted builder runs in place of applying a kit: write `PLAYBOOK.toml`
+#: with the given body and commit it in its cwd, as a kit's apply commit does.
+COMMIT_PLAYBOOK = """
+import subprocess, sys
+from pathlib import Path
+Path("PLAYBOOK.toml").write_text(sys.argv[1], encoding="utf-8")
+subprocess.run(["git", "add", "--", "PLAYBOOK.toml"], check=True)
+subprocess.run(["git", "commit", "-q", "-m", "plan: kit mission-17-kit"], check=True)
+"""
+
+#: The kickoff the scripted apply commits: another brief than the one loaded before it.
+NEW_KICKOFF = "Read meta/BUILDER-18-PROMPT.md and execute the mission below its divider."
+
+
+def commit_playbook_argv(body: str) -> list[str]:
+    import sys
+
+    return [sys.executable, "-c", COMMIT_PLAYBOOK, body]
+
+
+def test_end_to_end_the_kickoff_after_an_apply_is_the_one_the_apply_committed(
+    tmp_home: Path, workdir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """§36 "The engine" (H-044, the shape the series found): the engine approved the
+    apply itself, the apply rewrote and committed `[series] kickoff` and replied
+    `VERDICT: kit applied`; the kickoff job's prompt is the committed line, not the
+    one of the playbook loaded when the apply started."""
+    architect_project(tmp_home, workdir)
+    new_book = E2E_BOOK.replace(ARCHITECT_KICKOFF, NEW_KICKOFF).replace(
+        "mission 17 finished", "mission 18 finished"
+    )
+    assert NEW_KICKOFF in strip_paths(new_book)
+    assert ARCHITECT_KICKOFF not in strip_paths(new_book)
+    script(
+        tmp_home,
+        monkeypatch,
+        [
+            {"result": "VERDICT: next kit mission-17-kit", "exec": file_apply_argv(tmp_home)},
+            {"result": "VERDICT: kit applied abc1234", "exec": commit_playbook_argv(new_book)},
+        ],
+    )
+
+    async def body(daemon: Daemon) -> None:
+        review = await ok("send", "--role", "aux", "--context", "clear", fake_result(REVIEW))
+        await ok("wait", review["id"])
+        state = await wait_for_stop()
+
+        rows = sorted((await ok("jobs", "-n", "50"))["jobs"], key=lambda row: row["id"])
+        assert [(row["role"], row["origin"]) for row in rows] == [
+            ("aux", "cli"),
+            (ARCHITECT, "playbook"),
+            ("builder", "architect"),
+            ("builder", "playbook"),
+        ]
+        apply_job, kickoff = [await ok("result", row["id"]) for row in rows[2:]]
+        assert apply_job["gate"]["decided_by"] == "playbook"
+        assert apply_job["verdict"] == "VERDICT: kit applied abc1234"
+        assert (workdir / "PLAYBOOK.toml").read_text(encoding="utf-8") == new_book
+        assert kickoff["prompt"].startswith(NEW_KICKOFF), kickoff["prompt"]
+        assert ARCHITECT_KICKOFF not in strip_paths(kickoff["prompt"])
+        assert state["stop_reason"] == "Mission 18 finished"
+
+    drive(body)
+
+
+def test_end_to_end_a_playbook_that_no_longer_loads_after_the_apply_stops_with_its_reason(
+    tmp_home: Path, workdir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """§36 "The engine" (H-044): "a playbook that no longer loads after the apply
+    stops the pipeline with the loader's reason". The apply commits a playbook the
+    loader refuses; no kickoff is sent, and the stop names what the loader said."""
+    architect_project(tmp_home, workdir)
+    broken = E2E_BOOK.replace('then = "consult"', 'then = "teleport"')
+    script(
+        tmp_home,
+        monkeypatch,
+        [
+            {"result": "VERDICT: next kit mission-17-kit", "exec": file_apply_argv(tmp_home)},
+            {"result": "VERDICT: kit applied abc1234", "exec": commit_playbook_argv(broken)},
+        ],
+    )
+
+    async def body(daemon: Daemon) -> None:
+        review = await ok("send", "--role", "aux", "--context", "clear", fake_result(REVIEW))
+        await ok("wait", review["id"])
+        state = await wait_for_stop()
+
+        rows = sorted((await ok("jobs", "-n", "50"))["jobs"], key=lambda row: row["id"])
+        assert [(row["role"], row["origin"]) for row in rows] == [
+            ("aux", "cli"),
+            (ARCHITECT, "playbook"),
+            ("builder", "architect"),
+        ], "a kickoff was sent from a playbook that does not load"
+        with pytest.raises(PlaybookError) as caught:
+            load_playbook(workdir / "PLAYBOOK.toml", cwd=workdir)
+        said = strip_paths(state["stop_reason"])
+        assert strip_paths(str(caught.value)) in said, said
+        assert "teleport" in strip_paths(said), said
+
+    drive(body)
+
+
+#: What the scripted builder runs in place of applying a kit that deletes the
+#: playbook: `git rm` it and commit, so the committed tree has no `PLAYBOOK.toml`.
+REMOVE_PLAYBOOK = """
+import subprocess
+subprocess.run(["git", "rm", "-q", "--", "PLAYBOOK.toml"], check=True)
+subprocess.run(["git", "commit", "-q", "-m", "plan: kit mission-17-kit"], check=True)
+"""
+
+
+def test_end_to_end_an_apply_that_removes_the_playbook_stops_the_pipeline(
+    tmp_home: Path, workdir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """§37 "An apply that leaves no playbook" (review 20 note on U5): after an apply
+    the engine approved itself, a committed tree without the playbook file stops the
+    pipeline with "the apply removed PLAYBOOK.toml"; no kickoff is sent."""
+    import sys
+
+    architect_project(tmp_home, workdir)
+    script(
+        tmp_home,
+        monkeypatch,
+        [
+            {"result": "VERDICT: next kit mission-17-kit", "exec": file_apply_argv(tmp_home)},
+            {
+                "result": "VERDICT: kit applied abc1234",
+                "exec": [sys.executable, "-c", REMOVE_PLAYBOOK],
+            },
+        ],
+    )
+
+    async def body(daemon: Daemon) -> None:
+        review = await ok("send", "--role", "aux", "--context", "clear", fake_result(REVIEW))
+        await ok("wait", review["id"])
+        state = await wait_for_stop()
+
+        rows = sorted((await ok("jobs", "-n", "50"))["jobs"], key=lambda row: row["id"])
+        assert [(row["role"], row["origin"]) for row in rows] == [
+            ("aux", "cli"),
+            (ARCHITECT, "playbook"),
+            ("builder", "architect"),
+        ], "a kickoff was sent after the apply removed the playbook"
+        apply_job = await ok("result", rows[2]["id"])
+        assert apply_job["gate"]["decided_by"] == "playbook"
+        assert not (workdir / "PLAYBOOK.toml").exists()
+        assert state["stop_reason"] == "the apply removed PLAYBOOK.toml", state
+
+    drive(body)
+
+
+# ---- §36 "The engine" (H-045): a role-filed kit's hold is decided before it is published
+
+PHONE_SECRET = "Xyzzy-ENGINE-s3cret-0123456789abcdef"
+HELD_TITLE = "hands: a job is held for a human"
+APPROVED_TITLE = (
+    "hands: kit mission-17-kit filed by the architect; apply approved by the playbook"
+)
+
+
+class SilentStream:
+    """The command topic's `/json` stream, open and silent: nobody types a command."""
+
+    def __call__(self, url: str) -> Any:
+        return self._lines()
+
+    async def _lines(self) -> Any:
+        yield json.dumps({"event": "open", "topic": "hands-cmd-test"})
+        await asyncio.Event().wait()
+
+
+class ActionPosts:
+    """Every publish, with its title and its buttons (`actions`, absent when none)."""
+
+    def __init__(self) -> None:
+        self.sent: list[dict[str, Any]] = []
+
+    async def __call__(self, url: str, **kwargs: Any) -> int:
+        self.sent.append(kwargs)
+        return 200
+
+
+@pytest.mark.parametrize("case", ["approved", "a kit of another name", "the hash mismatches"])
+def test_end_to_end_the_hold_of_a_role_filed_kit_is_decided_before_it_is_published(
+    tmp_home: Path, workdir: Path, monkeypatch: pytest.MonkeyPatch, case: str
+) -> None:
+    """§36 "The engine" (H-045): under `autonomous`, the hold for a kit the role
+    filed is decided before anything is published. Approved: one buttonless
+    notification "kit <name> filed by the architect; apply approved by the
+    playbook", and no held notification, no button. Not approved (the verdict names
+    another kit; the stored zip's hash is not the checked one): the held
+    notification with §34's Approve/Deny buttons, and no approval line."""
+    architect_project(tmp_home, workdir, ntfy=True)
+    with (tmp_home / ".hands" / f"{PROJECT}.toml").open("a") as config:
+        config.write(f'\n[notify]\ncmd_topic = "hands-cmd-test"\ncmd_secret = "{PHONE_SECRET}"\n')
+    verdict = "VERDICT: next kit " + ("other" if case == "a kit of another name"
+                                      else "mission-17-kit")
+    script(tmp_home, monkeypatch, [
+        {"result": verdict, "exec": file_apply_argv(tmp_home)},
+        "VERDICT: kit applied abc1234",
+    ])
+    if case == "the hash mismatches":
+        def flip(path: Path) -> None:
+            data = bytearray(path.read_bytes())
+            data[-1] ^= 0x01
+            path.write_bytes(bytes(data))
+
+        monkeypatch.setattr("hands.api.check_kit", CheckKitCalls(after=flip))
+    posts = ActionPosts()
+
+    async def scenario() -> None:
+        daemon = Daemon(load_config(PROJECT))
+        daemon.notifier.post = posts  # before start(): no test may reach a network
+        assert daemon.phone is not None, "the command channel is on in this config"
+        daemon.phone.stream = SilentStream()
+        await daemon.start()
+        try:
+            await asyncio.wait_for(body(daemon), 60)
+        finally:
+            await daemon.stop()
+
+    async def body(daemon: Daemon) -> None:
+        review = await ok("send", "--role", "aux", "--context", "clear", fake_result(REVIEW))
+        await ok("wait", review["id"])
+        await wait_for_stop()
+        await daemon.notifier.drain()
+
+        [apply_job] = [row for row in (await ok("jobs", "-n", "50"))["jobs"]
+                       if row["origin"] == "architect"]
+        held = [note for note in posts.sent if note["title"] == as_published(HELD_TITLE)]
+        approved = [note for note in posts.sent if note["title"] == as_published(APPROVED_TITLE)]
+        if case == "approved":
+            assert held == [], posts.sent
+            assert len(approved) == 1, posts.sent
+            assert not approved[0].get("actions"), approved[0]
+            assert all(not note.get("actions") for note in posts.sent), posts.sent
+            record = await ok("result", apply_job["id"])
+            assert record["gate"]["decided_by"] == "playbook"
+        else:
+            assert approved == [], posts.sent
+            assert len(held) == 1, posts.sent
+            assert [a["label"] for a in held[0]["actions"]] == ["Approve", "Deny"], held[0]
+            assert apply_job["id"] in json.dumps(held[0]["actions"])
+            assert [e for e in await _events("gate.decided")
+                    if e["payload"]["decision"] == "approved"] == []
+
+    asyncio.run(scenario())
+
+
 def test_end_to_end_next_kit_stops_when_no_kit_is_filed_within_kit_wait_s(
     tmp_home: Path, workdir: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -5157,7 +5420,8 @@ def test_end_to_end_a_kit_the_rule_forbids_is_denied_and_the_consultation_escala
         assert ("at most one" if case == "two kits" else "'bar'") in said, said
         session = architect["session_id"]
         assert session and f"claude --resume {session}" in said, said
-        stops = [message for title, message in posts.sent if title == "hands: the pipeline stopped"]
+        stopped = as_published("hands: the pipeline stopped")
+        stops = [message for title, message in posts.sent if title == stopped]
         assert len(stops) == 1, posts.sent
         assert f"claude --resume {session}" in strip_paths(stops[0])
         assert [e for e in await _events("gate.decided")
@@ -5335,6 +5599,68 @@ def test_end_to_end_a_byte_flip_between_check_and_approval_is_refused_with_both_
     drive(body)
 
 
+def test_end_to_end_a_passing_zip_swapped_in_for_the_check_only_is_refused(
+    tmp_home: Path, workdir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """REVIEW-18 should-fix 3, the probe: during the `next kit` wait the client sends a
+    check-failing zip; a writer into `<spool>/kits` puts a passing zip at the stored
+    path just before `check_kit` and restores the failing bytes right after it. The
+    kit was filed and approved. §36: the record stores the sha256 of the bytes
+    `check_kit` read, compared with the client's; the mismatch refuses the filing —
+    no builder job, no approval, nothing kept under `<spool>/kits`."""
+    import base64
+
+    from hands.kit import check_kit as real_check_kit
+
+    architect_project(tmp_home, workdir)
+    script(tmp_home, monkeypatch, ["VERDICT: next kit mission-17-kit"])
+    passing = kit_zip(passing_kit())
+    failing_files = passing_kit()
+    del failing_files["meta/BUILDER-17-PROMPT.md"]
+    failing = kit_zip(failing_files)
+    checked: list[bool] = []
+
+    def swapped(path: Path, repo: Path, **kw: Any) -> Any:
+        stored = path.read_bytes()
+        path.write_bytes(passing)
+        try:
+            report = real_check_kit(path, repo, **kw)
+        finally:
+            path.write_bytes(stored)
+        checked.append(report.ok)
+        return report
+
+    monkeypatch.setattr("hands.api.check_kit", swapped)
+
+    async def body(daemon: Daemon) -> None:
+        data = base64.b64encode(failing).decode()
+        refusals: list[ApiError] = []
+
+        async def sleep(delay: float) -> None:
+            try:
+                await daemon.api.kit_file(name="mission-17-kit", zip=data)
+            except ApiError as exc:
+                refusals.append(exc)
+
+        daemon.playbook.sleep = sleep
+        review = await ok("send", "--role", "aux", "--context", "clear", fake_result(REVIEW))
+        await ok("wait", review["id"])
+        await wait_for_stop()
+
+        assert checked == [True], checked  # the swap did happen: the check passed
+        [refused] = refusals
+        said = strip_paths(str(refused))
+        assert hashlib.sha256(failing).hexdigest() in said, said
+        assert hashlib.sha256(passing).hexdigest() in said, said
+        assert [job for job in daemon.spool.list_jobs() if job.role == "builder"] == []
+        assert [e for e in await _events("gate.decided")
+                if e["payload"]["decision"] == "approved"] == []
+        kits = daemon.spool.root / "kits"
+        assert not kits.exists() or list(kits.iterdir()) == []
+
+    drive(body)
+
+
 def test_end_to_end_series_complete_stops_with_that_reason(
     tmp_home: Path, workdir: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -5392,7 +5718,8 @@ def test_end_to_end_escalate_notifies_with_the_reason_the_session_and_the_resume
         session = architect["session_id"]
         assert session
         assert reason in strip_paths(state["stop_reason"])
-        stops = [message for title, message in posts.sent if title == "hands: the pipeline stopped"]
+        stopped = as_published("hands: the pipeline stopped")
+        stops = [message for title, message in posts.sent if title == stopped]
         assert len(stops) == 1
         assert reason in strip_paths(stops[0])
         assert session in strip_paths(stops[0])
@@ -5431,3 +5758,155 @@ def test_end_to_end_the_engine_stops_itself_when_the_series_budget_is_exhausted(
         assert state["architect_consults"] == {"used": 1, "max_architect_consults": 1}
 
     drive(body)
+
+
+# ---- §36: the driver's escalation keeps the builder's question; the architect is told
+# ---- what the human decided since its last consultation
+
+
+def test_the_driver_escalation_stop_keeps_the_builders_question_verbatim(
+    tmp_home: Path, workdir: Path
+) -> None:
+    """§36: "the stop the driver's escalation produces keeps the builder's question
+    verbatim in its message, so the question and the answer are on one screen"."""
+    engine, recorder = engine_for(tmp_home, workdir, CONSULT_BOOK, driver=workdir.parent / "d")
+    question = "VERDICT: question which option?\n\n  A keeps the API;  B breaks it.\nWhich? "
+    about = engine.spool.create_job(role="builder", context="clear", prompt="p", origin="cli")
+    engine.spool.transition(about, "running")
+    about = engine.spool.transition(
+        about, "done", verdict=question.splitlines()[0], result=question
+    )
+    driver = _driver_job(
+        engine.spool, state="done", verdict="VERDICT: escalate the brief is silent", about=about
+    )
+    run(engine.on_job(driver))
+    reason = engine.state.stop_reason or ""
+    assert reason.startswith("driver escalated: the brief is silent; ")  # the rule's message
+    assert question in strip_paths(reason)
+    assert about.id in reason
+    [(title, payload)] = recorder.notified
+    assert title == "hands: the pipeline stopped"
+    assert question in strip_paths(payload["reason"])
+
+
+def test_the_engines_own_escalation_stop_keeps_the_builders_question_verbatim(
+    tmp_home: Path, workdir: Path
+) -> None:
+    """§36 with no playbook `stop` rule for the escalation: the engine's §28 stop."""
+    engine, recorder = engine_for(
+        tmp_home, workdir, NO_DRIVER_RULES, driver=workdir.parent / "d"
+    )
+    about = finished(engine.spool, verdict="VERDICT: question A or B?")
+    run(engine.on_job(_driver_job(engine.spool, state="done",
+                                  verdict="VERDICT: escalate silent", about=about)))
+    assert engine.state.stop_reason == (
+        "driver.done: the driver escalated: silent (§27, §28); the builder's question "
+        f"(job {about.id}), verbatim:\nVERDICT: question A or B?"
+    )
+    [(_, payload)] = recorder.notified
+    assert "VERDICT: question A or B?" in strip_paths(payload["reason"])
+
+
+def test_a_driver_stop_that_is_not_an_escalation_carries_no_question(
+    tmp_home: Path, workdir: Path
+) -> None:
+    engine, _ = engine_for(tmp_home, workdir, CONSULT_BOOK, driver=workdir.parent / "d")
+    about = finished(engine.spool, verdict="VERDICT: question the secret word")
+    run(engine.on_job(_driver_job(engine.spool, state="done", verdict="VERDICT: maybe",
+                                  about=about)))
+    assert "the secret word" not in strip_paths(engine.state.stop_reason or "")
+
+
+def _human_job(spool: Spool, *, role: str, context: str, origin: str, prompt: str) -> Job:
+    time.sleep(0.003)  # job ids sort by millisecond; keep the order the test means
+    job = spool.create_job(role=role, context=context, prompt=prompt, origin=origin)
+    spool.transition(job, "running")
+    return spool.transition(job, "done", result="ok")
+
+
+def _commit_dated(
+    monkeypatch: pytest.MonkeyPatch, workdir: Path, name: str, body: str, date: str
+) -> None:
+    monkeypatch.setenv("GIT_AUTHOR_DATE", date)
+    monkeypatch.setenv("GIT_COMMITTER_DATE", date)
+    commit_file(workdir, name, body)
+    monkeypatch.delenv("GIT_AUTHOR_DATE")
+    monkeypatch.delenv("GIT_COMMITTER_DATE")
+
+
+DECIDED = "Decided by the human since your last consultation"
+
+
+def test_the_architect_prompt_lists_what_the_human_decided_since_its_last_consultation(
+    tmp_home: Path, workdir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """§36: every `answer`, every cli `--context keep` send to the builder and every
+    `meta/decisions/*-owner.md` committed since the architect's last consultation,
+    verbatim, under "Decided by the human since your last consultation" — and
+    nothing from before it, nor a send that is not one of those."""
+    engine, recorder = architect_engine(tmp_home, workdir)
+    spool = engine.spool
+    old_answer = _human_job(spool, role="builder", context="keep", origin="phone",
+                            prompt="OLD answer before the consultation")
+    _commit_dated(monkeypatch, workdir, "meta/decisions/001-owner.md",
+                  "OLD owner decision\n", "2001-01-01T00:00:00+00:00")
+    time.sleep(0.003)
+    previous = spool.create_job(role="architect", context="clear", prompt="a consultation",
+                                origin="playbook")
+    spool.transition(previous, "running")
+    spool.transition(previous, "done", verdict="VERDICT: series complete")
+    answer = _human_job(spool, role="builder", context="keep", origin="phone",
+                        prompt="Take option B.\n\n  Not  A. ")
+    keep = _human_job(spool, role="builder", context="keep", origin="cli",
+                      prompt="Keep the API stable; that is my call.")
+    unlisted = [
+        _human_job(spool, role="builder", context="clear", origin="cli", prompt="CLEAR send"),
+        _human_job(spool, role="builder", context="clear", origin="phone", prompt="GO kickoff"),
+        _human_job(spool, role="aux", context="keep", origin="cli", prompt="AUX keep"),
+        _human_job(spool, role="builder", context="keep", origin="playbook",
+                   prompt="PLAYBOOK keep"),
+    ]
+    _commit_dated(monkeypatch, workdir, "meta/decisions/002-owner.md",
+                  "# 002\n\nThe owner decides: B.\n", "2099-01-01T00:00:00+00:00")
+    _commit_dated(monkeypatch, workdir, "meta/decisions/003-review.md",
+                  "NOT an owner file\n", "2099-01-02T00:00:00+00:00")
+
+    run(engine.on_job(reviewed(spool)))
+
+    prompt = strip_paths(recorder.enqueued[0]["prompt"])
+    assert DECIDED in strip_paths(prompt)
+    section = strip_paths(prompt[prompt.index(DECIDED):])
+    assert "Take option B.\n\n  Not  A. " in strip_paths(section)
+    assert answer.id in section and keep.id in section
+    assert "Keep the API stable; that is my call." in strip_paths(section)
+    assert "meta/decisions/002-owner.md" in strip_paths(section)
+    assert "# 002\n\nThe owner decides: B.\n" in strip_paths(section)
+    for gone in ("OLD answer", "OLD owner decision", "001-owner", "NOT an owner file",
+                 old_answer.id, *[job.prompt for job in unlisted]):
+        assert gone not in strip_paths(prompt), gone
+    # beside the review: after its block, before the roadmap
+    assert prompt.index("----- END REVIEW -----") < prompt.index(DECIDED)
+    assert prompt.index(DECIDED) < prompt.index("----- BEGIN MILESTONE -----")
+
+
+def test_with_no_earlier_consultation_the_architect_is_told_every_human_decision(
+    tmp_home: Path, workdir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    engine, recorder = architect_engine(tmp_home, workdir)
+    _human_job(engine.spool, role="builder", context="keep", origin="phone",
+               prompt="FIRST answer")
+    _commit_dated(monkeypatch, workdir, "meta/decisions/001-owner.md",
+                  "FIRST owner decision\n", "2001-01-01T00:00:00+00:00")
+    run(engine.on_job(reviewed(engine.spool)))
+    prompt = strip_paths(recorder.enqueued[0]["prompt"])
+    section = strip_paths(prompt[prompt.index(DECIDED):])
+    assert "FIRST answer" in strip_paths(section)
+    assert "FIRST owner decision" in strip_paths(section)
+
+
+def test_with_nothing_decided_the_architect_is_told_so(tmp_home: Path, workdir: Path) -> None:
+    engine, recorder = architect_engine(tmp_home, workdir)
+    run(engine.on_job(reviewed(engine.spool)))
+    prompt = recorder.enqueued[0]["prompt"]
+    section = prompt[prompt.index(DECIDED):]
+    assert "[hands: nothing]" in strip_paths(section.split("----- BEGIN MILESTONE -----")[0])

@@ -274,6 +274,24 @@ def test_doctor_shows_a_configured_ceiling_for_the_role_that_sets_it(
     assert f"{CEILING}=0" in strip_paths(found["role aux"]["detail"])
 
 
+@pytest.mark.parametrize("var", ["BASH_DEFAULT_TIMEOUT_MS", "BASH_MAX_TIMEOUT_MS"])
+def test_doctor_prints_the_effective_bash_timeouts_on_each_role_row(
+    tmp_home: Path, tmp_path: Path, fake_mode: None, monkeypatch: pytest.MonkeyPatch, var: str
+) -> None:
+    """§36 (HF-006): 900000 unless the role's env table sets it, never doctor's own."""
+    monkeypatch.setenv(var, "120000")
+    write_config(tmp_home, tmp_path, builder_extra=f'[roles.builder.env]\n{var} = "1800000"')
+    code, out, err = run()
+    assert code == 0, f"{out}\n{err}"
+    assert f"{var}=1800000" in strip_paths(text_row(out, "role builder"))
+    assert f"{var}=900000" in strip_paths(text_row(out, "role aux"))
+    code, found = checks()
+    assert f"{var}=1800000" in strip_paths(found["role builder"]["detail"])
+    assert "[roles.builder.env]" in strip_paths(found["role builder"]["detail"])
+    assert f"{var}=900000" in strip_paths(found["role aux"]["detail"])
+    assert f"{var}=120000" not in strip_paths(found["role aux"]["detail"])
+
+
 def test_the_live_turn_runs_with_the_role_environment(
     tmp_home: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1233,10 +1251,10 @@ def test_a_driver_role_without_its_guard_fails_doctor(
             {"type": "command", "command": "python3 other_hook.py"}]}]}}),
         json.dumps({"hooks": {"PreToolUse": [{"matcher": "Edit", "hooks": [
             {"type": "command",
-             "command": 'python3 "$CLAUDE_PROJECT_DIR"/.claude/hooks/bash_guard.py'}]}]}}),
+             "command": 'python3 -I "$CLAUDE_PROJECT_DIR"/.claude/hooks/bash_guard.py'}]}]}}),
         json.dumps({"hooks": {"PostToolUse": [{"matcher": "Bash", "hooks": [
             {"type": "command",
-             "command": 'python3 "$CLAUDE_PROJECT_DIR"/.claude/hooks/bash_guard.py'}]}]}}),
+             "command": 'python3 -I "$CLAUDE_PROJECT_DIR"/.claude/hooks/bash_guard.py'}]}]}}),
     ],
     ids=["missing", "unparseable", "no-hooks", "another-hook", "not-bash", "not-pretooluse"],
 )
@@ -1298,7 +1316,7 @@ def test_doctor_self_tests_the_hook_file_the_settings_name_not_the_default_one(
     other.parent.mkdir(parents=True)
     other.write_text(BROKEN_HOOK, encoding="utf-8")
     (d / ".claude" / "settings.json").write_text(
-        _settings_running(f'python3 "{other}"'), encoding="utf-8"
+        _settings_running(f'python3 -I "{other}"'), encoding="utf-8"
     )
     add_driver(write_config(tmp_home, tmp_path), d)
     code, found = checks()
@@ -1313,10 +1331,10 @@ def test_doctor_self_tests_the_hook_file_the_settings_name_not_the_default_one(
 @pytest.mark.parametrize(
     "command",
     [
-        'python3 "$CLAUDE_PROJECT_DIR"/.claude/hooks/bash_guard.py',
-        "python3 ${CLAUDE_PROJECT_DIR}/.claude/hooks/bash_guard.py",
-        "python3 .claude/hooks/bash_guard.py",
-        "python3 {cwd}/.claude/hooks/bash_guard.py",
+        'python3 -I "$CLAUDE_PROJECT_DIR"/.claude/hooks/bash_guard.py',
+        "python3 -I ${CLAUDE_PROJECT_DIR}/.claude/hooks/bash_guard.py",
+        "python3 -I .claude/hooks/bash_guard.py",
+        "python3 -I {cwd}/.claude/hooks/bash_guard.py",
     ],
     ids=["project-dir", "braced-project-dir", "relative", "absolute-cwd"],
 )
@@ -1342,20 +1360,20 @@ def test_doctor_passes_when_the_settings_name_a_real_hook(
 @pytest.mark.parametrize(
     "command",
     [
-        "python3 .claude/hooks/bash_guard.py --selftest",
-        "python3 .claude/hooks/bash_guard.py || true",
+        "python3 -I .claude/hooks/bash_guard.py --selftest",
+        "python3 -I .claude/hooks/bash_guard.py || true",
         "echo .claude/hooks/bash_guard.py",
         "python3 -c 'pass' .claude/hooks/bash_guard.py",
         "node .claude/hooks/bash_guard.py",
-        "cd /elsewhere && python3 .claude/hooks/bash_guard.py",
-        "python3 .claude/hooks/bash_guard.py; true",
-        "python3 .claude/hooks/bash_guard.py > /dev/null",
-        "python3 .claude/hooks/bash_guard.py &",
-        "python3 $(echo .claude/hooks/bash_guard.py)",
-        "true | python3 .claude/hooks/bash_guard.py",
-        "HANDS_ROLE= python3 .claude/hooks/bash_guard.py",
+        "cd /elsewhere && python3 -I .claude/hooks/bash_guard.py",
+        "python3 -I .claude/hooks/bash_guard.py; true",
+        "python3 -I .claude/hooks/bash_guard.py > /dev/null",
+        "python3 -I .claude/hooks/bash_guard.py &",
+        "python3 -I $(echo .claude/hooks/bash_guard.py)",
+        "true | python3 -I .claude/hooks/bash_guard.py",
+        "HANDS_ROLE= python3 -I .claude/hooks/bash_guard.py",
         ".claude/hooks/bash_guard.py",
-        "python3 .claude/hooks/bash_guard.py\ntrue",
+        "python3 -I .claude/hooks/bash_guard.py\ntrue",
         None,  # the shipped command, with "disableAllHooks": true
     ],
     ids=[
@@ -1393,7 +1411,7 @@ ALLOW_ALL = "echo '{\"hookSpecificOutput\":{\"permissionDecision\":\"allow\"}}'"
     [
         (ALLOW_ALL, "after"),
         (ALLOW_ALL, "before"),
-        ("python3 .claude/hooks/bash_guard.py --selftest", "after"),
+        ("python3 -I .claude/hooks/bash_guard.py --selftest", "after"),
     ],
     ids=["allow-all-after", "allow-all-before", "selftest-argument-after"],
 )
@@ -1407,7 +1425,7 @@ def test_doctor_judges_every_pretooluse_bash_hook_not_only_the_first(
     `allow` gave `exit 0 / ok`, because doctor returned on the first hook that ran
     the guard. Either order now fails, and the row names the offending command."""
     d = driver_dir(tmp_path)
-    good = 'python3 "$CLAUDE_PROJECT_DIR"/.claude/hooks/bash_guard.py'
+    good = 'python3 -I "$CLAUDE_PROJECT_DIR"/.claude/hooks/bash_guard.py'
     commands = [extra, good] if where == "before" else [good, extra]
     (d / ".claude" / "settings.json").write_text(
         json.dumps({"hooks": {"PreToolUse": [{"matcher": "Bash", "hooks": [
@@ -1431,7 +1449,7 @@ def test_doctor_passes_a_second_pretooluse_entry_that_is_not_for_bash(
     write matcher, and it passes because it is exactly that matcher running the
     guard with `--write`."""
     d = driver_dir(tmp_path)
-    good = 'python3 "$CLAUDE_PROJECT_DIR"/.claude/hooks/bash_guard.py'
+    good = 'python3 -I "$CLAUDE_PROJECT_DIR"/.claude/hooks/bash_guard.py'
     (d / ".claude" / "settings.json").write_text(
         json.dumps({"hooks": {"PreToolUse": [
             {"matcher": "Bash", "hooks": [{"type": "command", "command": good}]},
@@ -1453,7 +1471,7 @@ def test_doctor_fails_when_the_hook_the_settings_name_does_not_exist(
     d = driver_dir(tmp_path)
     missing = tmp_path / "gone" / ".claude" / "hooks" / "bash_guard.py"
     (d / ".claude" / "settings.json").write_text(
-        _settings_running(f"python3 {missing}"), encoding="utf-8"
+        _settings_running(f"python3 -I {missing}"), encoding="utf-8"
     )
     add_driver(write_config(tmp_home, tmp_path), d)
     code, found = checks()
@@ -1666,7 +1684,7 @@ def test_an_architect_write_hook_naming_another_guard_file_fails_doctor(
     shutil.copy(GUARD, other)
     (d / ".claude" / "settings.json").write_text(
         _architect_settings(
-            ("Bash", BASH_GUARD), ("Write|Edit|MultiEdit", f"python3 {other} --write")
+            ("Bash", BASH_GUARD), ("Write|Edit|MultiEdit", f"python3 -I {other} --write")
         ),
         encoding="utf-8",
     )
@@ -1774,8 +1792,8 @@ def test_an_architect_role_without_its_guard_fails_doctor(
     assert "no guard" in strip_paths(row["detail"])
 
 
-WRITE_GUARD = 'python3 "$CLAUDE_PROJECT_DIR"/.claude/hooks/bash_guard.py --write'
-BASH_GUARD = 'python3 "$CLAUDE_PROJECT_DIR"/.claude/hooks/bash_guard.py'
+WRITE_GUARD = 'python3 -I "$CLAUDE_PROJECT_DIR"/.claude/hooks/bash_guard.py --write'
+BASH_GUARD = 'python3 -I "$CLAUDE_PROJECT_DIR"/.claude/hooks/bash_guard.py'
 
 
 def _architect_settings(*entries: tuple[str, str]) -> str:
@@ -2144,7 +2162,7 @@ def test_the_row_prints_what_it_verified(
         f"verified: settings read <path>/{home}/.claude/settings.json, "
         f"<path>/{home}/.claude/settings.local.json (absent)",
         "verified: Bash hook, matcher 'Bash', runs "
-        "'python3 \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/bash_guard.py' "
+        "'python3 -I \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/bash_guard.py' "
         f"(guard realpath <path>/{home}/.claude/hooks/bash_guard.py)",
         "verified: push URLs origin=no_push; push remote settings (none set); "
         f"clone realpath <path>/{home}/repo",
@@ -2153,7 +2171,7 @@ def test_the_row_prints_what_it_verified(
     if role == "architect":
         for said in (
             "verified: write hook, matcher 'Write|Edit|MultiEdit', runs "
-            "'python3 \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/bash_guard.py --write'",
+            "'python3 -I \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/bash_guard.py --write'",
             "verified: kits realpath <path>/hands-architect/kits, not a symlink",
         ):
             assert said in strip_paths(row["detail"]), row
@@ -2217,6 +2235,88 @@ def test_an_execute_only_directory_without_a_symlink_still_fails_the_architect_r
         (d / "kits" / "d").chmod(0o755)
     assert code == 1 and row["status"] == "fail", row
     assert "cannot be listed" in strip_paths(row["detail"]), row
+
+
+def test_a_hardlink_under_kits_fails_the_architect_row(
+    tmp_home: Path, tmp_path: Path, fake_mode: None
+) -> None:
+    """REVIEW-18 should-fix 4, the probe: a planted hardlink `kits/h` to
+    `.claude/hooks/bash_guard.py` gave `status=ok`, "no symlink under it". §36: a
+    regular file under `kits/` with a link count above one is reported."""
+    d = architect_dir(tmp_path)
+    os.link(d / ".claude" / "hooks" / "bash_guard.py", d / "kits" / "h")
+    code, row = _row(tmp_home, tmp_path, "architect", d, add_architect)
+    assert code == 1 and row["status"] == "fail", row
+    assert "no symlink under it" not in strip_paths(row["detail"]), row
+    assert "<path>/hands-architect/kits/h" in strip_paths(row["detail"]), row
+    assert "hard link" in strip_paths(row["detail"]), row
+
+
+def _load_shipped_guard() -> Any:
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("bash_guard_shared", GUARD)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+#: The shared cases (REVIEW-18 notes, U3): every tree both walks judge.
+KITS_WALK_SHAPES = [
+    "missing", "empty", "clean", "symlink", "dangling", "nested-symlink",
+    "hardlink-out", "hardlink-pair", "nested-hardlink", "fifo",
+]
+
+
+def _kits_tree(root: Path, shape: str) -> Path:
+    outside = root / "outside"
+    outside.write_text("x", encoding="utf-8")
+    kits = root / "kits"
+    if shape == "missing":
+        return kits
+    (kits / "pay").mkdir(parents=True)
+    if shape != "empty":
+        (kits / "pay" / "h").write_text("x", encoding="utf-8")
+    if shape == "symlink":
+        (kits / "l").symlink_to(outside)
+    if shape == "dangling":
+        (kits / "l").symlink_to("../nowhere")
+    if shape == "nested-symlink":
+        (kits / "a" / "b").mkdir(parents=True)
+        (kits / "a" / "b" / "l").symlink_to("../../pay")
+    if shape == "hardlink-out":
+        os.link(outside, kits / "h")
+    if shape == "hardlink-pair":
+        os.link(kits / "pay" / "h", kits / "pay" / "h2")
+    if shape == "nested-hardlink":
+        (kits / "a" / "b").mkdir(parents=True)
+        os.link(outside, kits / "a" / "b" / "h")
+    if shape == "fifo":
+        os.mkfifo(kits / "pay" / "f")
+    return kits
+
+
+@pytest.mark.parametrize("shape", KITS_WALK_SHAPES)
+def test_doctors_kits_walk_and_the_guards_agree_on_every_shared_case(
+    tmp_path: Path, shape: str
+) -> None:
+    """REVIEW-18 should-fix 4: doctor's `_kits_walk` re-implements the guard's walk
+    (the guard is a standalone script); on each shared tree both find the same
+    first path, or both find none."""
+    import hands.doctor
+
+    guard_mod = _load_shipped_guard()
+    kits = str(_kits_tree(tmp_path, shape))
+    found = guard_mod.kits_symlink(kits)
+    walked = hands.doctor._kits_walk(kits)
+    linked = shape in {"symlink", "dangling", "nested-symlink", "hardlink-out",
+                       "hardlink-pair", "nested-hardlink"}
+    assert (found is not None) == linked, (shape, found)
+    assert (walked is not None) == linked, (shape, walked)
+    if linked:
+        assert walked is not None and found is not None
+        assert found.split(" (")[0] == walked[0], (found, walked)
 
 
 def _layer(d: Path, home: Path, layer: str, data: dict[str, Any]) -> Path:
@@ -2399,9 +2499,9 @@ def test_a_guard_at_another_absolute_path_fails_the_row(
         evil.write_bytes(EXIT_0)
     else:
         shutil.copy(GUARD, evil)
-    entries = [("Bash", f"python3 {evil}")]
+    entries = [("Bash", f"python3 -I {evil}")]
     if role == "architect":
-        entries.append(("Write|Edit|MultiEdit", f"python3 {evil} --write"))
+        entries.append(("Write|Edit|MultiEdit", f"python3 -I {evil} --write"))
     (d / ".claude" / "settings.json").write_text(_architect_settings(*entries), encoding="utf-8")
     code, row = _row(tmp_home, tmp_path, role, d, add)
     assert code == 1 and row["status"] == "fail", row
@@ -2422,6 +2522,145 @@ def test_the_shipped_settings_and_guard_pass_and_print_the_matching_sha256(
     code, row = _row(tmp_home, tmp_path, role, d, add)
     assert code == 0 and row["status"] == "ok", row
     assert f"sha256 {SHIPPED_SHA}" in strip_paths(row["detail"]), row
+
+
+@pytest.mark.parametrize("role", ["driver", "architect"])
+def test_the_guard_self_test_does_not_import_a_module_on_pythonpath(
+    tmp_home: Path,
+    tmp_path: Path,
+    fake_mode: None,
+    monkeypatch: pytest.MonkeyPatch,
+    role: str,
+) -> None:
+    """REVIEW-18 should-fix 2, the probe moved to `PYTHONPATH`: a `shlex.py` there
+    leaves a marker if it is imported. §37: the self-test runs the settings' own
+    command, `python3 -I …`, which ignores `PYTHONPATH`, so the row stays ok. (The
+    same module *beside* the guard fails the row: the test below.)"""
+    d, add = _role_dir(tmp_path, role)
+    marker = tmp_path / "imported"
+    plant_dir = tmp_path / "planted"
+    plant_dir.mkdir()
+    monkeypatch.setenv("PYTHONPATH", str(plant_dir))
+    (plant_dir / "shlex.py").write_text(
+        f"import pathlib, sys\npathlib.Path({str(marker)!r}).touch()\nsys.exit(0)\n",
+        encoding="utf-8",
+    )
+    code, row = _row(tmp_home, tmp_path, role, d, add)
+    assert not marker.exists(), "doctor's self-test imported the planted shlex.py"
+    assert code == 0 and row["status"] == "ok", row
+    assert "self-test green" in strip_paths(row["detail"]), row
+
+
+@pytest.mark.parametrize("role", ["driver", "architect"])
+@pytest.mark.parametrize(
+    "planted",
+    ["shlex.py", "json/__init__.py", "re.pyc"],
+    ids=["module", "package", "sourceless"],
+)
+def test_a_module_or_package_beside_the_guard_fails_the_row_naming_it(
+    tmp_home: Path, tmp_path: Path, fake_mode: None, role: str, planted: str
+) -> None:
+    """Review 20 should-fix 1 (§37): with `shlex.py` planted beside the guard,
+    doctor said `ok`. The row now FAILS and names what sits there; the self-test,
+    run as the settings spell the hook (`python3 -I`), still imports none of it."""
+    d, add = _role_dir(tmp_path, role)
+    marker = tmp_path / "imported"
+    path = d / ".claude" / "hooks" / planted
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        f"import pathlib, sys\npathlib.Path({str(marker)!r}).touch()\nsys.exit(0)\n",
+        encoding="utf-8",
+    )
+    code, row = _row(tmp_home, tmp_path, role, d, add)
+    assert code == 1 and row["status"] == "fail", row
+    named = planted.split("/")[0]
+    assert f".claude/hooks/{named}" in strip_paths(row["detail"]), row
+    assert "beside the guard" in strip_paths(row["detail"]), row
+    assert not marker.exists(), "doctor's self-test imported the planted module"
+
+
+@pytest.mark.parametrize("role", ["driver", "architect"])
+def test_a_plain_directory_or_text_file_beside_the_guard_keeps_the_row_ok(
+    tmp_home: Path, tmp_path: Path, fake_mode: None, role: str
+) -> None:
+    """The boundary: §37 names `.py` files and package directories; a `__pycache__`
+    and a README beside the guard are neither."""
+    d, add = _role_dir(tmp_path, role)
+    hooks = d / ".claude" / "hooks"
+    (hooks / "__pycache__").mkdir()
+    (hooks / "README.txt").write_text("notes\n", encoding="utf-8")
+    code, row = _row(tmp_home, tmp_path, role, d, add)
+    assert code == 0 and row["status"] == "ok", row
+
+
+@pytest.mark.parametrize("role", ["driver", "architect"])
+def test_a_hook_command_without_dash_i_fails_the_row(
+    tmp_home: Path, tmp_path: Path, fake_mode: None, role: str
+) -> None:
+    """§37: the hook command is `python3 -I …`; the pre-§37 spelling `python3 <guard>`
+    imports from the guard's directory, so it no longer names the hook."""
+    d, add = _role_dir(tmp_path, role)
+    path = d / ".claude" / "settings.json"
+    data = json.loads(path.read_text(encoding="utf-8"))
+    bare = BASH_GUARD.replace("python3 -I ", "python3 ", 1)
+    data["hooks"]["PreToolUse"][0]["hooks"][0]["command"] = bare
+    path.write_text(json.dumps(data), encoding="utf-8")
+    code, row = _row(tmp_home, tmp_path, role, d, add)
+    assert code == 1 and row["status"] == "fail", row
+    assert f"the hook command {bare!r} does not run the guard" in strip_paths(
+        row["detail"]
+    ), row
+    assert "python3 -I <path to .claude/hooks/bash_guard.py>" in strip_paths(
+        row["detail"]
+    ), row
+
+
+@pytest.mark.parametrize("role", ["driver", "architect"])
+@pytest.mark.parametrize(
+    "command,argv",
+    [
+        (BASH_GUARD, ["-I", "{cwd}/.claude/hooks/bash_guard.py", "--selftest"]),
+        ("python3 -I .claude/hooks/bash_guard.py",
+         ["-I", ".claude/hooks/bash_guard.py", "--selftest"]),
+    ],
+    ids=["project-dir", "relative"],
+)
+def test_the_self_test_runs_the_hook_command_as_the_settings_spell_it(
+    tmp_home: Path,
+    tmp_path: Path,
+    fake_mode: None,
+    monkeypatch: pytest.MonkeyPatch,
+    role: str,
+    command: str,
+    argv: list[str],
+) -> None:
+    """§37: the row's self-test is the settings' command plus `--selftest`, run as
+    Claude Code runs it (a shell, `CLAUDE_PROJECT_DIR` the role directory), not a
+    command of doctor's own: a `python3` first on PATH records the words it got."""
+    d, add = _role_dir(tmp_path, role)
+    path = d / ".claude" / "settings.json"
+    data = json.loads(path.read_text(encoding="utf-8"))
+    for entry in data["hooks"]["PreToolUse"]:
+        flag = " --write" if entry["matcher"] != "Bash" else ""
+        entry["hooks"][0]["command"] = command + flag
+    path.write_text(json.dumps(data), encoding="utf-8")
+    real = shutil.which("python3")
+    assert real is not None
+    log = tmp_path / "python3.argv"
+    bindir = tmp_path / "recording-bin"
+    bindir.mkdir()
+    shim = bindir / "python3"
+    shim.write_text(
+        f'#!/bin/sh\ncase "$*" in *--selftest*) printf "%s\\n" "$@" > "{log}";; esac\n'
+        f'exec "{real}" "$@"\n',
+        encoding="utf-8",
+    )
+    shim.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bindir}{os.pathsep}{os.environ['PATH']}")
+    code, row = _row(tmp_home, tmp_path, role, d, add)
+    assert code == 0 and row["status"] == "ok", row
+    want = [word.replace("{cwd}", str(d)) for word in argv]
+    assert log.read_text(encoding="utf-8").splitlines() == want
 
 
 # ------------------------------------------------- the `gh` row (§35, mission 19 U1)
@@ -2506,3 +2745,434 @@ def test_gh_absent_from_path_is_a_warning_naming_gh_auth_login(
     assert row["status"] == "warn", row
     assert "no `gh` on PATH" in strip_paths(row["detail"])
     assert "gh auth login" in strip_paths(row["detail"])
+
+
+# ------------------------- the `gh` row, one host and every remedy (§36, mission 20 U1)
+
+
+def test_gh_row_reads_the_active_github_com_account_not_the_first_host_listed(
+    tmp_home: Path, tmp_path: Path, fake_mode: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Review 19 should-fix 3. In `multihost` the fake's plain `gh auth status`
+    lists a GHE host first (another login, no `repo`) and exits 1 for a bad
+    account on a third host; only `--active --hostname github.com` answers with
+    github.com alone. The row must be ok with github.com's login."""
+    monkeypatch.setenv("FAKE_GH_MODE", "multihost")
+    code, row, text = _gh_row(tmp_home, tmp_path)
+    assert code == 0
+    assert row["status"] == "ok", row
+    for detail in (row["detail"], text):
+        assert "fake-login" in strip_paths(detail)
+        assert "ghe-login" not in strip_paths(detail)
+
+
+def test_gh_version_that_does_not_answer_is_a_warning_naming_gh_auth_login(
+    tmp_home: Path, tmp_path: Path, fake_mode: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Review 19 should-fix 4: every WARN of the row names the remedy."""
+    monkeypatch.setenv("FAKE_GH_MODE", "noversion")
+    code, row, text = _gh_row(tmp_home, tmp_path)
+    assert code == 0
+    assert row["status"] == "warn", row
+    assert "--version did not answer" in strip_paths(row["detail"])
+    assert "gh auth login" in strip_paths(row["detail"]) and "gh auth login" in strip_paths(text)
+
+
+def test_gh_auth_status_that_does_not_return_is_a_warning_naming_gh_auth_login(
+    tmp_home: Path, tmp_path: Path, fake_mode: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Review 19 should-fix 4: `gh auth status` timing out is a WARN with the remedy.
+    The probe timeout is shortened so the fake's 60-second sleep is cut at 1s."""
+    import hands.doctor
+
+    monkeypatch.setenv("FAKE_GH_MODE", "hang")
+    monkeypatch.setattr(hands.doctor, "PROBE_S", 1.0)
+    write_config(tmp_home, tmp_path)
+    code, found = checks()
+    assert code == 0, found
+    row = found["gh"]
+    assert row["status"] == "warn", row
+    assert "`gh auth status` did not run" in strip_paths(row["detail"])
+    assert "gh auth login" in strip_paths(row["detail"])
+
+
+# ------------------------------------- the architect's write permission (§36, H-041)
+
+#: §36: the three allows architect/settings.json ships, and the only write allows.
+KITS_WRITES = ["Edit(kits/**)", "Write(kits/**)", "MultiEdit(kits/**)"]
+
+
+def test_the_shipped_architect_settings_allow_exactly_the_three_writes_under_kits(
+    tmp_home: Path, tmp_path: Path, fake_mode: None
+) -> None:
+    """§36 (H-041): headless `claude -p` denies a tool no allow names, so without
+    these the role could not write a byte. The shipped file, loaded through the row,
+    carries the three and no other write allow, and the row is ok."""
+    allow = json.loads(ARCHITECT_SETTINGS.read_text(encoding="utf-8"))["permissions"]["allow"]
+    writes = [e for e in allow if re.match(r"\s*(Edit|Write|MultiEdit)\b", e, re.IGNORECASE)]
+    assert sorted(writes) == sorted(KITS_WRITES), allow
+    d = architect_dir(tmp_path)
+    add_architect(write_config(tmp_home, tmp_path), d)
+    code, found = checks()
+    row = found["role architect"]
+    assert code == 0 and row["status"] == "ok", row
+    assert "write allow: Edit(kits/**), Write(kits/**), MultiEdit(kits/**)" in strip_paths(
+        row["detail"]
+    ), row
+
+
+def _architect_allow(d: Path, allow: list[str], file: str = "settings.json") -> None:
+    path = d / ".claude" / file
+    data = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+    data.setdefault("permissions", {})["allow"] = allow
+    path.write_text(json.dumps(data), encoding="utf-8")
+
+
+@pytest.mark.parametrize("missing", KITS_WRITES)
+def test_an_architect_settings_without_one_of_the_three_write_allows_fails_doctor(
+    tmp_home: Path, tmp_path: Path, fake_mode: None, missing: str
+) -> None:
+    d = architect_dir(tmp_path)
+    allow = json.loads(ARCHITECT_SETTINGS.read_text(encoding="utf-8"))["permissions"]["allow"]
+    _architect_allow(d, [entry for entry in allow if entry != missing])
+    add_architect(write_config(tmp_home, tmp_path), d)
+    code, found = checks()
+    row = found["role architect"]
+    assert code == 1 and row["status"] == "fail", row
+    assert f"no {missing}" in strip_paths(row["detail"]), row
+
+
+@pytest.mark.parametrize(
+    ("extra", "file"),
+    [
+        ("Write(repo/**)", "settings.json"),
+        ("Edit(.claude/**)", "settings.json"),
+        ("MultiEdit(./kits/**)", "settings.json"),
+        ("write(kits/**/../..)", "settings.json"),
+        ("Edit(~/**)", "settings.local.json"),
+    ],
+    ids=["Write-repo", "Edit-claude", "MultiEdit-dot-kits", "lowercase-write", "local-Edit-home"],
+)
+def test_an_architect_write_allow_naming_anything_but_kits_fails_doctor(
+    tmp_home: Path, tmp_path: Path, fake_mode: None, extra: str, file: str
+) -> None:
+    """§36: an allow for a write tool that names anything but `kits/**`, in any of
+    the settings layers the row reads, fails the row."""
+    d = architect_dir(tmp_path)
+    allow = json.loads(ARCHITECT_SETTINGS.read_text(encoding="utf-8"))["permissions"]["allow"]
+    if file == "settings.json":
+        _architect_allow(d, [*allow, extra])
+    else:
+        _architect_allow(d, [extra], file)
+    add_architect(write_config(tmp_home, tmp_path), d)
+    code, found = checks()
+    row = found["role architect"]
+    assert code == 1 and row["status"] == "fail", row
+    assert repr(extra) in strip_paths(row["detail"]), row
+
+
+#: §36, §37: the one-file kit `doctor --live` has the architect write and check —
+#: `kits/hands-doctor-live-<8 hex>`, unique per run. The tests pin the name doctor
+#: draws (`live_kit_name`) so the scripted turn can name it.
+LIVE_KIT = "hands-doctor-live-0123abcd"
+LIVE_FILE = "DOCTOR-LIVE.md"
+
+
+def _live_architect(
+    tmp_home: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    tools: Any,
+    *,
+    job: bool = True,
+    layout: str = "repo",
+    setup: Any = None,
+) -> tuple[dict[str, Any], Path, str | None]:
+    """`hands doctor --live` against a running daemon, the architect's turn scripted
+    by `tools(kit_file, job_id)` — the fake performs the calls a real turn would
+    make. The builder's and aux's live turns take the first two replies. `layout`
+    is where the clone is: `repo` (`<cwd>/repo`), `cwd` (the cwd itself) or `none`;
+    `setup(d)` runs on the role's directory before doctor does."""
+    import sys
+
+    import hands.doctor
+
+    monkeypatch.setenv("PATH", f"{Path(sys.executable).parent}{os.pathsep}{os.environ['PATH']}")
+    monkeypatch.setattr(hands.doctor, "live_kit_name", lambda: LIVE_KIT)
+    d = architect_dir(tmp_path, clone=layout == "repo")
+    if layout == "cwd":
+        fetch_only_clone(d)
+    if setup is not None:
+        setup(d)
+    add_architect(write_config(tmp_home, tmp_path), d)
+    kit_file = d / "kits" / LIVE_KIT / LIVE_FILE
+    seen: dict[str, Any] = {}
+
+    async def body(daemon: Daemon) -> None:
+        job_id = None
+        if job:
+            job_id = daemon.spool.create_job(
+                role="aux", context="clear", prompt="hello", origin="cli", state="held"
+            ).id
+        replies = tmp_home / "replies.json"
+        replies.write_text(json.dumps(
+            ["VERDICT: doctor ok", "VERDICT: doctor ok",
+             {"result": "VERDICT: doctor ok", "tools": tools(kit_file, job_id)}]
+        ))  # fmt: skip
+        monkeypatch.setenv("HANDS_FAKE_CLAUDE_REPLIES", str(replies))
+        out, err = io.StringIO(), io.StringIO()
+        await asyncio.to_thread(
+            main, ["--project", "demo", "doctor", "--json", "--live"], stdout=out, stderr=err
+        )
+        assert out.getvalue(), err.getvalue()
+        seen["found"] = {c["name"]: c for c in json.loads(out.getvalue())["checks"]}
+        seen["job"] = job_id
+
+    drive(body)
+    return seen["found"], kit_file, seen["job"]
+
+
+def _write(path: Path, *, denied: bool = False) -> dict[str, Any]:
+    call = {"name": "Write", "input": {"file_path": str(path), "content": "doctor\n"}}
+    return {**call, "denied": True} if denied else call
+
+
+def _bash(command: str, *, denied: bool = False) -> dict[str, Any]:
+    call: dict[str, Any] = {"name": "Bash", "input": {"command": command}}
+    return {**call, "denied": True} if denied else call
+
+
+def _kit_check(kit: str = LIVE_KIT, repo: str = "./repo") -> str:
+    return f"hands kit check kits/{kit} --repo {repo}"
+
+
+KIT_CHECK = _kit_check()
+
+
+def test_doctor_live_for_the_architect_writes_checks_shows_and_removes(
+    tmp_home: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """§36 (H-041): a scripted live turn that writes the one file under kits/, runs
+    `hands kit check` on that one-file kit against the clone and `hands show` on a
+    job of the spool passes the row; doctor removes the file afterwards."""
+    found, kit_file, job_id = _live_architect(
+        tmp_home, tmp_path, monkeypatch,
+        lambda path, job: [_write(path), _bash(KIT_CHECK), _bash(f"hands show {job}")],
+    )  # fmt: skip
+    row = found["live architect"]
+    assert row["status"] == "ok", row
+    for step in ("wrote", "kit check", f"hands show {job_id}", "removed", "--repo ./repo"):
+        assert step in strip_paths(row["detail"]), row
+    assert not kit_file.exists() and not kit_file.parent.exists()
+
+
+def test_doctor_live_for_an_architect_whose_cwd_is_the_clone_checks_against_the_cwd(
+    tmp_home: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """§37 (review 20 should-fix 4): `driver_clone` takes the role's cwd itself as the
+    clone when it is the git repository, so the live turn names it as `--repo` (`.`),
+    and a turn that checks the live kit against it passes the row."""
+    check = _kit_check(repo=".")
+    found, kit_file, job_id = _live_architect(
+        tmp_home, tmp_path, monkeypatch,
+        lambda path, job: [_write(path), _bash(check), _bash(f"hands show {job}")],
+        layout="cwd",
+    )  # fmt: skip
+    row = found["live architect"]
+    assert row["status"] == "ok", row
+    assert f"`{check}`" in strip_paths(row["detail"]), row
+    assert not kit_file.parent.exists()
+
+
+def test_doctor_live_for_an_architect_with_no_clone_fails_before_the_turn(
+    tmp_home: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """§37: a role with no clone (neither `<cwd>/repo` nor the cwd is a git
+    repository) fails the row before a turn is spent; no kit is written."""
+    found, kit_file, job_id = _live_architect(
+        tmp_home, tmp_path, monkeypatch,
+        lambda path, job: [_write(path), _bash(KIT_CHECK), _bash(f"hands show {job}")],
+        layout="none",
+    )  # fmt: skip
+    row = found["live architect"]
+    assert row["status"] == "fail", row
+    assert "no clone" in strip_paths(row["detail"]), row
+    assert "Not run" in strip_paths(row["detail"]), row
+    assert not kit_file.parent.exists()
+
+
+def _other_kit(d: Path) -> None:
+    other = d / "kits" / "other-kit"
+    other.mkdir(parents=True)
+    (other / "OTHER.md").write_text("other\n")
+
+
+def _other_repo(d: Path) -> None:
+    fetch_only_clone(d / "elsewhere")
+
+
+@pytest.mark.parametrize(
+    ("setup", "check"),
+    [
+        (_other_kit, _kit_check(kit="other-kit")),
+        (_other_repo, _kit_check(repo="./elsewhere")),
+    ],
+    ids=["another-kit", "another-repo"],
+)
+def test_doctor_live_for_an_architect_whose_turn_checks_another_kit_fails(
+    tmp_home: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, setup: Any, check: str
+) -> None:
+    """§37 (review 20 should-fix 4): the judged `hands kit check` must name the live
+    kit's own path and the clone's `--repo`. A passing check of another one-file kit,
+    or of the live kit against another repository, does not pass the step."""
+    found, _, _ = _live_architect(
+        tmp_home, tmp_path, monkeypatch,
+        lambda path, job: [_write(path), _bash(check), _bash(f"hands show {job}")],
+        setup=setup,
+    )  # fmt: skip
+    row = found["live architect"]
+    assert row["status"] == "fail", row
+    assert "did not happen: kit check" in strip_paths(row["detail"]), row
+
+
+def test_doctor_live_leaves_an_existing_kit_of_its_name_untouched_and_fails(
+    tmp_home: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """§37 (review 20 should-fix 5): when the live kit's path already exists the row
+    fails without running the turn, and what was there is left as it was."""
+
+    def existing(d: Path) -> None:
+        kit = d / "kits" / LIVE_KIT
+        kit.mkdir(parents=True)
+        (kit / "KEEP.md").write_text("mine\n")
+
+    found, kit_file, _ = _live_architect(
+        tmp_home, tmp_path, monkeypatch,
+        lambda path, job: [_write(path), _bash(KIT_CHECK), _bash(f"hands show {job}")],
+        setup=existing,
+    )  # fmt: skip
+    row = found["live architect"]
+    assert row["status"] == "fail", row
+    assert "already exists" in strip_paths(row["detail"]), row
+    assert "Not run" in strip_paths(row["detail"]), row
+    assert (kit_file.parent / "KEEP.md").read_text() == "mine\n"
+    assert not kit_file.exists()
+
+
+def test_the_live_kit_name_is_unique_per_run() -> None:
+    """§37: `kits/hands-doctor-live-<8 hex>`, a fresh name each run."""
+    from hands.doctor import live_kit_name
+
+    names = {live_kit_name() for _ in range(20)}
+    assert len(names) == 20
+    assert all(re.fullmatch(r"hands-doctor-live-[0-9a-f]{8}", name) for name in names), names
+
+
+@pytest.mark.parametrize(
+    ("step", "tools"),
+    [
+        ("write", lambda path, job: [
+            _write(path, denied=True), _bash(KIT_CHECK), _bash(f"hands show {job}")]),
+        ("kit check", lambda path, job: [
+            _write(path), _bash(KIT_CHECK, denied=True), _bash(f"hands show {job}")]),
+        ("hands show", lambda path, job: [
+            _write(path), _bash(KIT_CHECK), _bash(f"hands show {job}", denied=True)]),
+        ("hands show", lambda path, job: [_write(path), _bash(KIT_CHECK)]),
+        ("remove", lambda path, job: [
+            _write(path), _bash(KIT_CHECK), _bash(f"hands show {job}"),
+            _bash(f"chmod 555 kits/{LIVE_KIT}")]),
+    ],
+    ids=["write-denied", "kit-check-denied", "show-denied", "show-not-run", "not-removable"],
+)
+def test_doctor_live_for_an_architect_that_cannot_do_all_four_fails(
+    tmp_home: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, step: str, tools: Any
+) -> None:
+    """§36: a live turn that cannot do all four fails the row, naming what did not
+    happen. `not-removable` leaves the kit directory unwritable, so doctor cannot
+    remove the file."""
+    found, kit_file, _ = _live_architect(tmp_home, tmp_path, monkeypatch, tools)
+    if kit_file.parent.exists():
+        kit_file.parent.chmod(0o755)
+    row = found["live architect"]
+    assert row["status"] == "fail", row
+    assert f"did not happen: {step}" in strip_paths(row["detail"]), row
+
+
+def test_doctor_live_for_the_architect_fails_without_a_job_to_show(
+    tmp_home: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """§36: `hands show` needs a job of the spool; with none the row fails before a
+    turn is spent, and says how to make one."""
+    found, kit_file, _ = _live_architect(
+        tmp_home, tmp_path, monkeypatch, lambda path, job: [_write(path)], job=False
+    )
+    row = found["live architect"]
+    assert row["status"] == "fail", row
+    assert "no job in the spool" in strip_paths(row["detail"]), row
+    assert not kit_file.exists()
+
+
+# --------------------------------------------- §36 "The runner" (H-042, H-043)
+
+
+def _commit(repo: Path, name: str) -> str:
+    (repo / name).write_text(name)
+    _git(repo, "add", "--", name)
+    _git(repo, "-c", "user.name=t", "-c", "user.email=t@t.invalid", "-c", "commit.gpgsign=false",
+         "-c", "core.hooksPath=/dev/null", "commit", "-q", "-m", name)
+    out = subprocess.run(["git", "-C", str(repo), "rev-parse", "HEAD"], check=True,
+                         capture_output=True, text=True)
+    return out.stdout.strip()
+
+
+@pytest.mark.parametrize("role", ["driver", "architect"])
+def test_a_role_row_prints_the_clone_head_against_origin_and_the_project(
+    tmp_home: Path, tmp_path: Path, fake_mode: None, monkeypatch: pytest.MonkeyPatch, role: str
+) -> None:
+    """§36: doctor's role rows print the clone's HEAD against origin and the project
+    the job will see — the config's, not doctor's own `HANDS_PROJECT`. The clone is
+    one commit behind origin/main as last fetched."""
+    monkeypatch.setenv("HANDS_PROJECT", "other")
+    d, add = _role_dir(tmp_path, role)
+    repo = d / "repo"
+    old = _commit(repo, "old.txt")
+    new = _commit(repo, "new.txt")
+    _git(repo, "update-ref", "refs/remotes/origin/main", new)
+    _git(repo, "checkout", "-q", "--detach", old)
+    code, row = _row(tmp_home, tmp_path, role, d, add)
+    assert code == 0 and row["status"] == "ok", row
+    detail = row["detail"]
+    assert f"clone HEAD {old[:12]}, origin/main {new[:12]} as last fetched" in strip_paths(detail)
+    assert "HANDS_PROJECT=demo" in strip_paths(detail), detail
+    assert "HANDS_PROJECT=other" not in strip_paths(detail), detail
+
+
+def test_a_role_row_names_the_configured_branch(
+    tmp_home: Path, tmp_path: Path, fake_mode: None
+) -> None:
+    """§36: `[roles.<role>] branch` is the origin branch the row compares HEAD with;
+    HEAD at it is said so, and an origin branch the clone has not fetched is named."""
+    d = driver_dir(tmp_path)
+    repo = d / "repo"
+    tip = _commit(repo, "a.txt")
+    _git(repo, "update-ref", "refs/remotes/origin/trunk", tip)
+    add_driver(write_config(tmp_home, tmp_path), d, 'branch = "trunk"')
+    _code, found = checks()
+    detail = found["role driver"]["detail"]
+    assert f"clone HEAD {tip[:12]} at origin/trunk as last fetched" in strip_paths(detail), detail
+
+    _git(repo, "update-ref", "-d", "refs/remotes/origin/trunk")
+    _code, found = checks()
+    detail = found["role driver"]["detail"]
+    assert f"clone HEAD {tip[:12]}, origin/trunk not fetched" in strip_paths(detail), detail
+
+
+def test_a_builder_row_prints_the_project_its_jobs_see(
+    tmp_home: Path, tmp_path: Path, fake_mode: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """§36 (H-043): every role job carries `HANDS_PROJECT` from the config."""
+    monkeypatch.setenv("HANDS_PROJECT", "other")
+    write_config(tmp_home, tmp_path)
+    _code, found = checks()
+    detail = found["role builder"]["detail"]
+    assert "HANDS_PROJECT=demo" in strip_paths(detail), detail

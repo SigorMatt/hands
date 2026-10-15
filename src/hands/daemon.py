@@ -43,7 +43,7 @@ from hands.config import CONSULT_ROLES, Config, ConfigError, load_config, resolv
 from hands.limits import LimitManager
 from hands.monitor import MonitorSupervisor
 from hands.notify import Notifier
-from hands.phone import ARCHITECT_TITLE, PhoneChannel, reply_answer
+from hands.phone import ARCHITECT_TITLE, BUILDER_TITLE, PhoneChannel, answer_reply, reply_answer
 from hands.playbook import PlaybookEngine, series_roles_problem
 from hands.runner import LINE_LIMIT, Runner, RunnerError, reconcile_orphans
 from hands.spool import (
@@ -53,6 +53,7 @@ from hands.spool import (
     Spool,
     flat_layout,
     is_architect_reply,
+    is_builder_answer,
     now_iso,
 )
 
@@ -165,6 +166,9 @@ class Daemon:
             approve=self.api.decide_from_playbook,
             # §33: and its denial, of a kit the consultation may not file.
             deny=self.api.deny_from_playbook,
+            # §36: the hold of a kit the role filed is published by the engine once
+            # it has decided it — with its buttons through this, when not approved.
+            hold=self.publish_hold,
         )
         #: §24's command channel: on only when `[notify] cmd_topic` is set, which
         #: the config refuses without `cmd_secret`. Its stream is an attribute, so
@@ -374,15 +378,22 @@ class Daemon:
         """
         held = [job for job in self.spool.list_jobs() if job.state == "held"]
         for job in held:
-            gate = job.gate or {}
-            payload: dict[str, Any] = {"job": job.id, "role": job.role, "state": "held"}
-            if gate.get("reason"):
-                payload["reason"] = gate["reason"]
-            if gate.get("kind"):
-                payload["gate"] = gate["kind"]
-            actions = self.phone.actions(job.id) if self.phone is not None else None
-            self.notifier.notify(NOTIFY_KINDS["job.held"], payload, actions=actions, fold=False)
+            self.publish_hold(job)
         return [job.id for job in held]
+
+    def publish_hold(self, job: Job) -> None:
+        """One held job's notification, published at once with §34's buttons (a
+        nonce minted now) — its payload rebuilt from the job record as `send`
+        shapes it. §36: also the engine's seam for a deferred hold it did not
+        approve (`PlaybookEngine._announce_hold`)."""
+        gate = job.gate or {}
+        payload: dict[str, Any] = {"job": job.id, "role": job.role, "state": "held"}
+        if gate.get("reason"):
+            payload["reason"] = gate["reason"]
+        if gate.get("kind"):
+            payload["gate"] = gate["kind"]
+        actions = self.phone.actions(job.id) if self.phone is not None else None
+        self.notifier.notify(NOTIFY_KINDS["job.held"], payload, actions=actions, fold=False)
 
     async def serve_forever(self) -> None:
         if self._server is None:  # pragma: no cover - defensive
@@ -661,11 +672,17 @@ class Daemon:
                           job.id, job.role)
 
     def _reply_ended(self, job: Job) -> None:
-        """§33: a phone `reply` to the architect ended on this worker: "the reply's
+        """§33, §36: a phone `reply` to the architect (or `answer` to the builder) ended
+        on this worker: "the reply's
         text is published on `ntfy_topic` with title `architect`" — the architect's
         final message as it is, with no cap or escaping (no publish of hands applies
         one), or which job ended how when there is none. Raised through `notify`, so
         it never holds the worker (§11), and the message is exactly that text."""
+        if is_builder_answer(job):
+            # §36: "the builder's final reply is published on `ntfy_topic` titled
+            # `builder`"; the engine has already heard its end (`on_job`).
+            self.notifier.notify(BUILDER_TITLE, {"message": answer_reply(job)})
+            return
         if not is_architect_reply(job):
             return
         self.notifier.notify(ARCHITECT_TITLE, {"message": reply_answer(job)})
@@ -740,6 +757,9 @@ class Daemon:
         if self.phone is not None and event.kind == "gate.decided" and job_id:
             self.phone.discard(str(job_id))
         title = NOTIFY_KINDS.get(event.kind)
+        if event.kind == "job.held" and job_id and self.playbook.hold_deferred(str(job_id)):
+            # §36 (H-045): the engine decides this hold before anything is published.
+            title = None
         if title is not None:
             actions = None
             if self.phone is not None and event.kind == "job.held" and job_id:

@@ -42,6 +42,7 @@ __all__ = [
     "INITIAL_STATES",
     "JOB_FIELDS",
     "KIT_CHECK_PASSED",
+    "ANSWER_ORIGIN",
     "REPLY_ORIGIN",
     "STATES",
     "TERMINAL_STATES",
@@ -55,6 +56,7 @@ __all__ = [
     "SpoolError",
     "flat_layout",
     "is_architect_reply",
+    "is_builder_answer",
     "migrate_flat",
     "new_job_id",
     "kit_apply_problem",
@@ -125,6 +127,10 @@ ARCHITECT_ORIGIN = "architect"
 #: last session. An architect job of this origin is a reply, never a consultation
 #: (which the engine files with origin `playbook`): `is_architect_reply`.
 REPLY_ORIGIN = "phone"
+#: §36: the origin of an `answer <secret> <text>` from the phone to the builder's last
+#: session. A builder job of this origin with `context: keep` is an answer; the
+#: phone's `go` files a `clear` one (`is_builder_answer`).
+ANSWER_ORIGIN = "phone"
 #: §32: where handsd stores a kit the architect role filed, under the spool: one
 #: directory per `kit_id`, outside `HANDS_KITS`, holding `<name>.zip` and the record
 #: `kit.json` — the kit's id, its name, the architect job it was filed during, and
@@ -174,6 +180,7 @@ EVENT_KINDS = frozenset(
         "kit.received",  # a kit sent from the phone was written to kit_dir (§26)
         "kit.refused",  # a kit command with the secret was refused, with the check (§27);
         # or (§34) the engine refused a kit whose stored zip no longer has its recorded sha256
+        "answer.sent",  # a phone `answer` filed to the builder: text, attachment, hash (§36)
         "consult.sent",  # a playbook `consult` started a driver job (§27)
         "consult.done",  # that driver job ended, with its verdict line (§27)
         # §29: `hands migrate-spool` moved the flat layout into this spool. The name
@@ -636,8 +643,14 @@ class Spool:
 
         `started` is stamped on entering `running` and `ended` on entering a
         terminal state, unless the caller passes them explicitly.
+
+        §37 "The cancel race": the edge is judged against the record on disk, never
+        against the caller's object. The job is reloaded by id first; a caller whose
+        object is stale gets `IllegalTransition` from the on-disk state and nothing
+        it carries is written. A `Job` passed in is refreshed to the written record
+        and returned, so a caller that keeps using its object sees the move.
         """
-        record = self.load_job(job) if isinstance(job, str) else job
+        record = self.load_job(job if isinstance(job, str) else job.id)
         if state not in TRANSITIONS:
             raise IllegalTransition(f"{record.state} -> {state}: {state!r} is not a job state")
         if state not in TRANSITIONS[record.state]:
@@ -656,6 +669,10 @@ class Spool:
         if state in TERMINAL_STATES and record.ended is None:
             record.ended = now_iso()
         self.save_job(record)
+        if isinstance(job, Job):
+            for f in fields(Job):
+                setattr(job, f.name, getattr(record, f.name))
+            return job
         return record
 
     @staticmethod
@@ -859,6 +876,13 @@ def is_architect_reply(job: Job) -> bool:
     refuses the architect role from every socket client (§32), so the one route to an
     architect job of origin `phone` is `Api.reply_architect`."""
     return job.role == "architect" and job.origin == REPLY_ORIGIN  # `ARCHITECT_ROLE`
+
+
+def is_builder_answer(job: Job) -> bool:
+    """§36: is `job` a phone `answer` to the builder? The phone files a builder job of
+    origin `phone` by two routes only: `go`, always `clear`, and `answer`, always
+    `keep` (`Api.answer_builder`)."""
+    return job.role == "builder" and job.origin == ANSWER_ORIGIN and job.context == "keep"
 
 
 def kit_apply_problem(spool: Spool, job: Job) -> str | None:

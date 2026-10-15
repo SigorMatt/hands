@@ -145,7 +145,12 @@ files. With `architect = "role"` and `autonomous = true` (DESIGN §32):
   and notifies with the reason, the architect's session id and the `claude
   --resume <id>` line;
 - `[series] kickoff` is sent to the builder when that apply, approved by the
-  engine, replies `VERDICT: kit applied`.
+  engine, replies `VERDICT: kit applied`;
+- the hold of that apply is not published when it is filed: the engine decides
+  it first (DESIGN §36). Approved, you get one notification without buttons,
+  `kit <name> filed by the architect; apply approved by the playbook`; not
+  approved (the kit is not the one the verdict named, the hash mismatches), the
+  held notification with its Approve and Deny buttons.
 
 Say it in the human's words before turning it on: **the human who approves an
 `autonomous` playbook is approving every apply the architect files under it.**
@@ -184,7 +189,10 @@ other job a rule starts, so it does not clear a stop. With `autonomous` set and
 no `[series] kickoff` to send, the engine stops and says so. The rule fires only
 for that apply — one hands filed from the architect's kit and the engine itself
 approved (DESIGN §32); any other `builder.done` replying `VERDICT: kit applied`,
-a `hands send` job's among them, meets the file's own rules.
+a `hands send` job's among them, meets the file's own rules. Before deciding
+that apply's `builder.done` the engine reloads the playbook from the committed
+file (DESIGN §36), so the kickoff it sends is the one the kit just committed; a
+playbook that no longer loads stops the pipeline with the loader's reason.
 
 ## Events (`on`)
 
@@ -497,16 +505,23 @@ commit: §10's example says "commits since the last review: commit on the
 branch", and the protocol the prompt points at says how to find it.
 
 Since DESIGN §35 a mission may be a pull request (docs/ARCHITECT-HANDBOOK.md
-§9), and the review prompt `templates/PLAYBOOK-missions.toml` and this
+§9), and the review prompt that `templates/PLAYBOOK-missions.toml` and this
 repository's `PLAYBOOK.toml` ship says the protocol finds the mission's
 commits itself (its pull request, or main since the last review: commit).
-The protocol looks for the PR with `gh pr list --head mission-N --state open
---json number,baseRefName,headRefOid`. With one, the commits under review are
-`git log <base>..origin/mission-N`, where the base is the merge-base with
-`main` for a first review of the branch, or the `reviewed: <sha>` the previous
-REVIEW file recorded for a closer mission; without one, the base is the last
-`review:` commit on `main`, as above. Either way the prompt still names no
-commit and no PR, and the verdict line is unchanged.
+The Branch section of the brief decides which, and nothing else does
+(meta/REVIEW-PROTOCOL.md, DESIGN §36). Only a brief whose Branch section says
+"Direct" is reviewed on `main`: the base is the last `review:` commit there,
+as above, and the commits are `git log --oneline <base>..origin/main`.
+Otherwise the review is of the branch the brief names, `<branch>` (`mission-N`,
+or the open branch a closer mission continues), and the protocol looks for its
+PR with `gh pr list --head <branch> --state open --json
+number,baseRefName,headRefOid`. With none, the review goes no further: one
+blocker, "no pull request for <branch>". With one, the commits under review
+are the PR's own, without `main`'s history: `git log <base>..origin/<branch>
+^origin/main`, where the base is the merge-base with `main` for a first review
+of the branch, or the `reviewed:` sha the previous REVIEW file of this branch
+recorded for a closer mission. Either way the prompt still names no commit and
+no PR, and the verdict line is unchanged.
 
 `{job.head_at_start}` is the wrong review base. It is where the job that
 finished started, and that job may have resumed a mission mid-way — a limit

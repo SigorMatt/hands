@@ -25,6 +25,12 @@ TIMEOUT = 60.0
 BLOCK = "FAKE:block"
 
 
+def as_published(title: str, project: str = PROJECT) -> str:
+    """§36: "every title handsd publishes begins with `<project>: `" — the title a
+    transport is handed for a notification raised as `title`."""
+    return f"{project}: {title}"
+
+
 def config_body(
     home: Path, workdir: Path, *, builder: str = "", aux: str = "", extra: str = ""
 ) -> str:

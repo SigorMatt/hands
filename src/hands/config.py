@@ -13,6 +13,7 @@ import os
 import re
 import shlex
 import tomllib
+import unicodedata
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -22,6 +23,7 @@ __all__ = [
     "ARCHITECT_ROLE",
     "BG_WAIT_CEILING_ENV",
     "CLONE_ENV",
+    "BASH_TIMEOUT_ENV",
     "CONSULT_ROLES",
     "CONSULT_ROLE_ENV",
     "DEFAULT_GATE_PATTERNS",
@@ -29,6 +31,7 @@ __all__ = [
     "DRIVER_ROLE",
     "GUARDED_ROLES",
     "KITS_ENV",
+    "PROJECT_ENV",
     "Config",
     "ConfigError",
     "FilesConfig",
@@ -71,6 +74,8 @@ KNOWN_ROLES: tuple[str, ...] = ("builder", "aux", "driver", "architect")  # §27
 DEFAULT_QUEUE_DEPTH = {"builder": 1, "aux": 4, "driver": 1, "architect": 1}
 #: §6; §27 and §31 are silent for the two roles handsd starts one job at a time
 DEFAULT_MODEL = "opus"
+#: §36 (H-042): `[roles.<role>] branch` when the config does not set it.
+DEFAULT_ROLE_BRANCH = "main"
 DEFAULT_NTFY_URL = "https://ntfy.sh"
 #: §34: the public broker a token is never sent to. §34 does not define "a public
 #: broker"; hands' own default host and its subdomains are what it refuses.
@@ -95,6 +100,16 @@ BG_WAIT_CEILING_ENV = "CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS"
 #: What every role job's environment carries unless `[roles.<r>] env` sets the
 #: same name (§23): `0` is the harness's own "wait indefinitely".
 DEFAULT_ROLE_ENV: dict[str, str] = {BG_WAIT_CEILING_ENV: "0"}
+#: §36 (HF-006): the harness moves a foreground Bash command past its default limit
+#: to the background, where the no-background hook cannot see it. Builder and aux
+#: jobs carry both limits at 15 minutes unless `[roles.<r>] env` sets them.
+BASH_DEFAULT_TIMEOUT_ENV = "BASH_DEFAULT_TIMEOUT_MS"
+BASH_MAX_TIMEOUT_ENV = "BASH_MAX_TIMEOUT_MS"
+BASH_TIMEOUT_ROLES: tuple[str, ...] = ("builder", "aux")
+BASH_TIMEOUT_ENV: dict[str, str] = {
+    BASH_DEFAULT_TIMEOUT_ENV: "900000",
+    BASH_MAX_TIMEOUT_ENV: "900000",
+}
 #: §27: the driver guard's role mode is this name set to `driver` in the environment.
 ROLE_ENV = "HANDS_ROLE"
 #: §28: the role a consultation names, in its driver job's environment (the runner
@@ -108,6 +123,9 @@ CLONE_ENV = "HANDS_CLONE"
 #: argument of `mkdir|cp|mv` and every write to that directory; §32 took `zip` and
 #: `unzip` out, and `hands kit file` refuses a kit directory outside it).
 KITS_ENV = "HANDS_KITS"
+#: §36 (H-043): the project, in every role job's environment (the runner sets it
+#: from the config's project name, never from handsd's environment).
+PROJECT_ENV = "HANDS_PROJECT"
 DRIVER_ROLE = "driver"
 ARCHITECT_ROLE = "architect"
 #: §27, §31: the roles handsd starts headless, each with its own guard mode and
@@ -196,6 +214,9 @@ class RoleConfig:
     #: `[roles.<r>] env` as written (§23); `spawn_env` is what a job gets. Not
     #: part of the hash: a dict cannot be hashed, and the name identifies a role.
     env: dict[str, str] = field(default_factory=dict, hash=False)
+    #: §36 (H-042): the branch an architect or driver job's clone is checked out
+    #: at, detached, before the job starts (`origin/<branch>`). Read by no other role.
+    branch: str = DEFAULT_ROLE_BRANCH
 
     @property
     def spawn_env(self) -> dict[str, str]:
@@ -205,10 +226,13 @@ class RoleConfig:
         wins and an unset ceiling is `0` — whatever handsd itself inherited.
         A driver-role job also carries `HANDS_ROLE=driver` (§27) and an
         architect-role job `HANDS_ROLE=architect` (§31), on top of the table:
-        the guard's mode is not something a config can switch off.
+        the guard's mode is not something a config can switch off. A builder
+        or aux job also carries `BASH_TIMEOUT_ENV` under the table (§36).
         """
         if self.name in GUARDED_ROLES:
             return {**DEFAULT_ROLE_ENV, **self.env, ROLE_ENV: self.name}
+        if self.name in BASH_TIMEOUT_ROLES:
+            return {**DEFAULT_ROLE_ENV, **BASH_TIMEOUT_ENV, **self.env}
         return {**DEFAULT_ROLE_ENV, **self.env}
 
     @property
@@ -555,6 +579,7 @@ def parse_config(data: dict[str, Any], *, project: str, path: Path) -> Config:
         ntfy_url = _str(
             server_t, "ntfy_url", DEFAULT_NTFY_URL, "[server]", path, blank=default_url
         )
+    _check_url_ascii(ntfy_url, path)
     url_set = "ntfy_url" in notify_t or "ntfy_url" in server_t
     notify = NotifyConfig(
         ntfy_url=ntfy_url,
@@ -764,7 +789,10 @@ def _role(name: str, table: Any, path: Path) -> RoleConfig:
         raise ConfigError(f"{path}: {where} must be a table")
     _check_keys(
         table,
-        ("cwd", "model", "permission_flags", "resume_line", "queue_depth", "cancel_gated", "env"),
+        (
+            "cwd", "model", "permission_flags", "resume_line", "queue_depth", "cancel_gated",
+            "env", "branch",
+        ),
         where,
         path,
     )
@@ -822,6 +850,18 @@ def _role(name: str, table: Any, path: Path) -> RoleConfig:
                 "value",
             ),
         ),
+        branch=_str(
+            table,
+            "branch",
+            DEFAULT_ROLE_BRANCH,
+            where,
+            path,
+            blank=_omit(
+                f"an architect or driver job's clone is then checked out at "
+                f"origin/{DEFAULT_ROLE_BRANCH}",
+                "branch name",
+            ),
+        ),
     )
 
 
@@ -861,6 +901,10 @@ def is_public_ntfy_url(url: str) -> bool:
     to: the host `ntfy.sh` or any subdomain of it, in any letter case, scheme,
     port, path, or with a trailing dot. A url no host can be read from counts as
     public, so a token is only ever sent beside a url that names another host.
+    §36 (review 18 should-fix 1): the host is compared after NFKC normalisation and
+    ASCII folding (`ntfy。sh` is `ntfy.sh`, as httpx's IDNA reads it), and a host
+    that does not fold to ASCII counts as public; the load refuses any non-ASCII
+    `ntfy_url` before this is asked.
     """
     try:
         host = urlsplit(url if "//" in url else f"//{url}").hostname
@@ -868,8 +912,38 @@ def is_public_ntfy_url(url: str) -> bool:
         return True
     if not host:
         return True
+    host = _fold_host(host)
+    if host is None:
+        return True
     host = host.rstrip(".")
     return host == PUBLIC_NTFY_HOST or host.endswith("." + PUBLIC_NTFY_HOST)
+
+
+#: The full stops IDNA (UTS 46) maps to "." after NFKC: U+FF0E and U+FF61 fold
+#: to these under NFKC, and U+3002 is itself one.
+_IDEOGRAPHIC_STOPS = {"\u3002": "."}
+
+
+def _fold_host(host: str) -> str | None:
+    """§36 (review 18 should-fix 1): the host after NFKC normalisation and ASCII
+    folding, lowercased; None for a host that does not fold to ASCII."""
+    folded = unicodedata.normalize("NFKC", host)
+    folded = "".join(_IDEOGRAPHIC_STOPS.get(char, char) for char in folded).lower()
+    return folded if folded.isascii() else None
+
+
+def _check_url_ascii(url: str, path: Path) -> None:
+    """§36 (review 18 should-fix 1): a non-ASCII character anywhere in `ntfy_url`
+    is refused at load. The refusal names the character and its position, not the
+    url (which may carry the token's text)."""
+    for index, char in enumerate(url):
+        if not char.isascii():
+            raise ConfigError(
+                f"{path}: ntfy_url must be ASCII; it carries U+{ord(char):04X} at "
+                f"position {index + 1} (§36) — an HTTP client may read a non-ASCII "
+                "character as another host's (U+3002 as a '.'); write the url in "
+                "ASCII, a non-ASCII host in its punycode (xn--) form"
+            )
 
 
 def _check_token_url(notify: NotifyConfig, url_set: bool, path: Path) -> None:

@@ -23,6 +23,7 @@ from hands.api import Api
 from hands.config import parse_config
 from hands.daemon import NOTIFY_KINDS, START_FOLD_S
 from hands.playbook import ACTIONS, EVENTS
+from harness import as_published
 
 ROOT = Path(__file__).parents[1]
 DOCS = [
@@ -140,6 +141,27 @@ def test_the_playbook_doc_says_a_review_reads_from_the_last_review_commit() -> N
         "exactly the job that finished",
     ):
         assert must in prose, f"docs/PLAYBOOK.md's prose does not say {must!r} (§23)"
+
+
+def test_the_playbook_docs_review_range_is_the_protocols() -> None:
+    """§36 (mission 19 should-fix 1, 2; carried from mission 20 U2 to U9): the
+    prose names the commits under review as meta/REVIEW-PROTOCOL.md does — the
+    branch once as `<branch>`, `main`'s own history excluded — and the direct
+    shape only on a "Direct" Branch section, a branch with no PR a blocker."""
+    doc = (ROOT / "docs" / "PLAYBOOK.md").read_text(encoding="utf-8")
+    prose = flattened(doc.split("## The example (DESIGN §10, verbatim)")[0])
+    protocol = flattened((ROOT / "meta" / "REVIEW-PROTOCOL.md").read_text(encoding="utf-8"))
+    for must in (
+        "`git log <base>..origin/<branch> ^origin/main`",
+        "gh pr list --head <branch> --state open --json number,baseRefName,headRefOid",
+        "`git log --oneline <base>..origin/main`",
+        "\"no pull request for <branch>\"",
+    ):
+        assert must in protocol, f"meta/REVIEW-PROTOCOL.md no longer says {must!r}"
+        assert must in prose, f"docs/PLAYBOOK.md's prose does not say {must!r} (§36)"
+    assert "says \"Direct\"" in prose
+    assert "origin/mission-N" not in prose
+    assert "--head mission-N" not in prose
 
 
 def test_the_playbook_doc_maps_the_mission_8_detectors_and_says_the_group_is_weaker() -> None:
@@ -578,6 +600,25 @@ def test_reply_is_documented_where_the_phone_commands_and_the_architect_are() ->
     assert "`reply <secret> <text>`" in role and "may not file a kit" in role
     assert "`reply <secret> <text>`" in flattened((ROOT / "README.md").read_text("utf-8"))
     assert "reply <secret> <text>" in (phone.__doc__ or "")
+
+
+def test_answer_is_documented_in_the_command_channel_and_the_phone_module() -> None:
+    """§36: `answer <secret> <text>` is in the command channel's list and its own
+    bullet in INTEGRATION, and in the phone module's own command list."""
+    from hands import phone
+    from hands.phone import ANSWER_TITLE, BUILDER_TITLE
+
+    integration = (ROOT / "docs" / "INTEGRATION.md").read_text(encoding="utf-8")
+    channel = integration.split("### The command channel: approve from the phone", 1)[1]
+    channel = flattened(channel.split("\n### ", 1)[0])
+    assert "answer <secret> <text>" in channel
+    assert "takes nine commands" in channel
+    for said in ("`origin: phone`", f"titled `{BUILDER_TITLE}`", f"`{ANSWER_TITLE}`",
+                 '--context keep "<text>"', "never held by the gate patterns",
+                 "`answer.sent`", "no resumable session", "sha256",
+                 "Decided by the human since your last consultation"):
+        assert flattened(said) in channel, f"the command channel does not say {said!r}"
+    assert "answer <secret> <text>" in (phone.__doc__ or "")
 
 
 def test_the_readme_names_kit_check_go_and_the_kit_transport() -> None:
@@ -1350,7 +1391,10 @@ def test_the_inbox_kinds_hands_publishes_by_itself_are_stop_and_job_held(
         await daemon.notifier.drain()
 
     asyncio.run(scenario())
-    assert sorted(sent) == ["hands: a job is held for a human", "hands: the pipeline stopped"]
+    assert sorted(sent) == [
+        as_published("hands: a job is held for a human"),
+        as_published("hands: the pipeline stopped"),
+    ]
 
 
 def test_the_start_notification_doc_says_one_and_folds_what_the_start_raised() -> None:
@@ -2091,7 +2135,7 @@ def test_the_playbook_doc_describes_the_review_prompt_the_templates_ship() -> No
         .split("### The review base", 1)[1].split("\n## ", 1)[0]
     )
     assert said in base, f"docs/PLAYBOOK.md's review base does not say {said!r}"
-    for must in ("`gh pr list --head mission-N", "`reviewed: <sha>`", "DESIGN §35"):
+    for must in ("`gh pr list --head <branch>", "`reviewed:` sha", "DESIGN §35"):
         assert must in base, f"docs/PLAYBOOK.md's review base does not say {must!r}"
 
 
@@ -2112,3 +2156,24 @@ def test_every_gh_command_the_docs_show_is_one_the_flow_uses(name: str) -> None:
         assert words in GH_COMMANDS or words.split()[0] == "api", (
             f"{name} shows `gh {words}`, which §35's flow does not use"
         )
+
+
+def test_integration_says_the_gh_row_reads_the_active_github_com_account() -> None:
+    """DESIGN §36 "Doctor's `gh` row" (review 19 should-fix 3, 4): the doc names the
+    command the row runs, and its claim that every warn names the remedy is the
+    code's (tests/test_doctor.py tests each warn for `gh auth login`)."""
+    text = flattened((ROOT / "docs" / "INTEGRATION.md").read_text(encoding="utf-8"))
+    row = text.split("The `gh` row (DESIGN §35", 1)[1].split("A config that will not load", 1)[0]
+    assert "`gh auth status --active --hostname github.com`" in row, row
+    assert "`gh --version` that does not answer" in row, row
+    assert "run `gh auth login` as this user" in row, row
+
+
+def test_the_playbook_doc_review_base_sentence_is_not_garbled() -> None:
+    """Review 19 should-fix 5: "the review prompt X and Y ship says" is reworded."""
+    text = flattened((ROOT / "docs" / "PLAYBOOK.md").read_text(encoding="utf-8"))
+    assert "the review prompt `templates/PLAYBOOK-missions.toml`" not in text
+    assert (
+        "the review prompt that `templates/PLAYBOOK-missions.toml` and this repository's "
+        "`PLAYBOOK.toml` ship says"
+    ) in text

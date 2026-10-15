@@ -2021,4 +2021,173 @@ clear `HANDS_*` from the environment before they run. This is test code
 outside mission 19's scope. Mission 19 runs its gate as `env -u HANDS_PROJECT
 -u HANDS_JOB ./scripts/check` and says so in every commit body.
 
-Status: open
+Status: resolved (code: mission 20 U1 — the autouse fixture in tests/conftest.py
+clears every `HANDS_*` variable for every test; tests/test_hermetic.py)
+
+---
+
+## H-041 — the architect role cannot write: no allow for the write tools; the `--write` hook only denies
+
+Severity: high · Component: `architect/settings.json`, `src/hands/doctor.py`
+(the architect row); DESIGN §31 (the architect role), §36 "The architect
+role's write permission"
+Filed by: mission 20 orchestrator, U0 (2026-10-14).
+Evidence: the first role-mode series (discotrade, 2026-10-12 to 2026-10-14;
+meta/BACKLOG.md "Mission 20" item 1, laptop workaround applied 2026-10-12).
+
+Symptom. Headless `claude -p` without a bypass denies any tool that is not
+allowed. `architect/settings.json` allows no `Edit`, `Write` or `MultiEdit`,
+and the `--write` hook only ever denies, so the role could not write a byte
+under `kits/`. Doctor's architect row said `ok`.
+
+Direction. §36: allow exactly `Edit(kits/**)`, `Write(kits/**)`,
+`MultiEdit(kits/**)`; doctor's row fails without them or with a wider write
+allow; `doctor --live` writes, checks, shows and removes. Mission 20 U3.
+
+Status: resolved (code: mission 20 U3 — architect/settings.json allows the
+three writes under kits/; doctor's architect row and its `--live` turn judge them)
+
+---
+
+## H-042 — the role's clone never advances: `git fetch` only; `kit check --repo ./repo` judges the working tree
+
+Severity: high · Component: `src/hands/runner.py` (role jobs),
+`src/hands/config.py`, `src/hands/doctor.py`; DESIGN §31, §36 "The runner"
+Filed by: mission 20 orchestrator, U0 (2026-10-14).
+Evidence: the first role-mode series (meta/BACKLOG.md "Mission 20" item 2;
+laptop workaround: a transient timer pulling every minute).
+
+Symptom. Nothing advances the architect's or the driver's clone. A `git
+fetch` moves the remote-tracking refs only; `hands kit check --repo ./repo`
+judges the working tree, so the role checked its kits against the tree of
+the day the clone was made and reviewed a project it could not see.
+
+Direction. §36: before every architect and driver job the runner runs `git
+-C <clone> fetch -q origin` and `git -C <clone> checkout -q --detach
+origin/<branch>` (`[roles.<role>] branch`, default `main`); a failure fails
+the job before `claude` starts. Mission 20 U4.
+
+Status: resolved (code: mission 20 U4 — the runner fetches origin and checks out
+origin/<branch> detached before every architect and driver job, `[roles.<role>]
+branch` default main; a clone that cannot be advanced fails the job, spawn_error,
+git's message in stderr_tail; doctor's role rows print HEAD against origin/<branch>)
+
+---
+
+## H-043 — no role job carries `HANDS_PROJECT`
+
+Severity: medium · Component: `src/hands/runner.py`, `src/hands/doctor.py`;
+DESIGN §36 "The runner"
+Filed by: mission 20 orchestrator, U0 (2026-10-14).
+Evidence: the first role-mode series (meta/BACKLOG.md "Mission 20" item 3;
+laptop workaround: the unit's env file).
+
+Symptom. A role job's environment had `HANDS_PROJECT` only when handsd's own
+environment did; the role's `hands` calls and the guard's project
+resolution had no project on a laptop with two.
+
+Direction. §36: every role job's environment carries `HANDS_PROJECT` from
+the config's project name, never from handsd's environment; doctor's role
+rows print it. Mission 20 U4.
+
+Status: resolved (code: mission 20 U4 — every job's environment carries
+HANDS_PROJECT=<config project> over handsd's environment and the env table;
+doctor's role rows print it)
+
+---
+
+## H-044 — the kickoff after an autonomous apply comes from the pre-apply playbook
+
+Severity: high · Component: `src/hands/playbook.py`, `src/hands/daemon.py`
+(the engine); DESIGN §33, §34, §36 "The engine"
+Filed by: mission 20 orchestrator, U0 (2026-10-14).
+Evidence: discotrade HF-001 (meta/BACKLOG.md "Mission 20" item 4).
+
+Symptom. Under `autonomous`, an apply the engine approved itself rewrote and
+committed the playbook's `[series] kickoff`; the engine decided the apply's
+`builder.done` with the playbook it had loaded before the apply and sent the
+old kickoff to the builder.
+
+Direction. §36: reload the playbook from the committed file before deciding
+that `builder.done`; a playbook that no longer loads stops the pipeline with
+the loader's reason. Regression test: a scripted apply that rewrites and
+commits the kickoff, then the kickoff job's prompt is the committed line.
+Mission 20 U5.
+
+Status: resolved-by-code (mission 20 U5 — the engine reloads the committed
+playbook before deciding the builder.done of an apply it approved itself; a
+playbook that no longer loads stops with the loader's reason; tests in
+tests/test_playbook.py)
+
+---
+
+## H-045 — a hold for a kit the role filed is published with buttons before the engine approves it
+
+Severity: medium · Component: `src/hands/daemon.py`, `src/hands/api.py`,
+`src/hands/notify.py`; DESIGN §34, §36 "The engine"
+Filed by: mission 20 orchestrator, U0 (2026-10-14).
+Evidence: the first role-mode series (meta/BACKLOG.md "Mission 20" item 6).
+
+Symptom. Under `autonomous`, the hold for a kit the architect filed was
+published with Approve/Deny buttons, and the engine approved it a moment
+later; the human saw buttons for a decision already taken.
+
+Direction. §36: decide the hold before anything is published; one
+buttonless "kit <name> filed by the architect; apply approved by the
+playbook" when approved, the §34 buttons when not. Mission 20 U5.
+
+Status: resolved-by-code (mission 20 U5 — Api.send defers the hold of a
+role-filed kit under autonomous; the engine publishes one buttonless approval
+line, or the hold with its buttons when it does not approve; tests in
+tests/test_playbook.py)
+
+## H-046 — `handswho` publishes every ~20 s and spends the public broker's daily cap
+
+Severity: medium · Component: `src/hands/who.py`, `src/hands/doctor.py`,
+docs/INTEGRATION.md; DESIGN §37 "What the laptop found"
+Filed by: mission 21 orchestrator, U0 (2026-10-15).
+Evidence: the laptop, 2026-10-14, while mission 20 ran (DESIGN §37).
+
+Symptom. Both `handswho` units published every ~20 s because the who
+text's relative-time line counts as a change; ~350 publishes an hour from
+one address spent the public broker's free daily cap (HTTP 429), so the
+daemons' own stops and holds were refused too.
+
+Direction. §37: `handswho` publishes on a real state change only, compared
+without the relative-time text, with a floor on the interval; doctor WARNS
+on a public `ntfy_url` that the cap exists and names the self-hosted path.
+
+Status: open (scheduled for mission 22)
+
+## H-047 — a `handsd` restart kills the running builder job and nothing resumes it
+
+Severity: medium · Component: `src/hands/daemon.py`, `src/hands/playbook.py`;
+DESIGN §37 "What the laptop found"
+Filed by: mission 21 orchestrator, U0 (2026-10-15).
+Evidence: the laptop, 2026-10-14, while mission 20 ran (DESIGN §37).
+
+Symptom. A `handsd` restart (every install) kills the running builder job;
+the `task_killed` rule only notifies, so each install cost a `go` from the
+phone.
+
+Direction. §37: the daemon re-queues the kickoff for a builder job its own
+stop killed, bounded as `resume` is.
+
+Status: open (scheduled for mission 22)
+
+## H-048 — under `autonomous` a builder's `blocked` verdict stops for the human
+
+Severity: medium · Component: `src/hands/playbook.py`; DESIGN §37 "What the
+laptop found"
+Filed by: mission 21 orchestrator, U0 (2026-10-15).
+Evidence: the laptop, 2026-10-14, while mission 20 ran (DESIGN §37).
+
+Symptom. Under `autonomous`, a builder's `VERDICT: mission N blocked <unit>`
+stops the pipeline for the human, who can only re-fire the role through the
+aux by hand.
+
+Direction. §37: the playbook may consult the architect on `builder.done`
+with a `blocked` verdict, the consult prompt carrying the builder's reply in
+place of a review, counted against the same consultation budget.
+
+Status: open (scheduled for mission 22)

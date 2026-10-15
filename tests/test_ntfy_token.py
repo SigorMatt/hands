@@ -29,12 +29,12 @@ from conftest import strip_paths
 from hands import phone as phone_mod
 from hands import who
 from hands.cli import main
-from hands.config import ConfigError, load_config
+from hands.config import ConfigError, is_public_ntfy_url, load_config
 from hands.daemon import Daemon
 from hands.notify import Notifier, http_post, http_stream
 from hands.phone import KIT_TITLE, STATUS_TITLE
 from hands.spool import Spool
-from harness import PROJECT, TIMEOUT, config_body, poll, write_project
+from harness import PROJECT, TIMEOUT, as_published, config_body, poll, write_project
 
 NTFY = "https://ntfy.tailnet.example"
 TOKEN = "tk_U6selfhostedBearer0123456789ab"
@@ -213,6 +213,35 @@ def test_a_token_with_a_self_hosted_ntfy_url_loads(
     config = load_config(write(tmp_home, workdir, url=url))
     assert config.notify.ntfy_token == TOKEN
     assert config.notify.ntfy_url == url
+
+
+# §36 (review 18 should-fix 1): httpx maps U+3002, U+FF0E and U+FF61 to "." when
+# it sends, so `https://ntfy。sh` reached ntfy.sh with the bearer.
+UNICODE_DOT_URLS = ["https://ntfy\u3002sh", "https://NTFY\uff0eSH", "https://ntfy\uff61sh"]
+
+
+@pytest.mark.parametrize("url", UNICODE_DOT_URLS, ids=["u3002", "uff0e", "uff61"])
+@pytest.mark.parametrize("token", [TOKEN, None], ids=["token", "no_token"])
+def test_a_non_ascii_ntfy_url_is_refused_at_load(
+    tmp_home: Path, workdir: Path, url: str, token: str | None
+) -> None:
+    with pytest.raises(ConfigError) as exc:
+        load_config(write(tmp_home, workdir, token=token, url=url))
+    assert "ntfy_url" in strip_paths(str(exc.value)), exc.value
+    assert "ASCII" in strip_paths(str(exc.value)), exc.value
+    assert_no_token(str(exc.value))
+
+
+@pytest.mark.parametrize(
+    "url",
+    [*UNICODE_DOT_URLS, "https://docs\u3002ntfy\uff0esh/", "https://ex\u00e4mple.com"],
+)
+def test_the_public_broker_check_folds_the_host_and_counts_what_does_not_fold(
+    url: str,
+) -> None:
+    """The check itself, beneath the load's refusal: the host after NFKC and
+    ASCII folding is ntfy.sh (or a subdomain), or does not fold to ASCII at all."""
+    assert is_public_ntfy_url(url)
 
 
 @pytest.mark.parametrize("url", [None, "https://ntfy.sh"], ids=["default", "explicit"])
@@ -454,7 +483,7 @@ def test_the_command_channel_subscribes_with_the_bearer_and_takes_a_command(
     answers = [
         request
         for request in ntfy.requests
-        if request.method == "POST" and request.headers.get("Title") == STATUS_TITLE
+        if request.method == "POST" and request.headers.get("Title") == as_published(STATUS_TITLE)
     ]
     if token is not None:
         assert len(answers) == 1
@@ -576,7 +605,7 @@ def test_a_kit_on_the_ntfy_server_is_fetched_with_the_bearer_and_a_foreign_one_w
                         if e.kind == "kit.received"]  # fmt: skip
             assert received == ["ours.zip", "foreign.zip"]
             titles = [request.headers.get("Title") for request in ntfy.requests]
-            assert titles.count(KIT_TITLE) == 2
+            assert titles.count(as_published(KIT_TITLE)) == 2
             assert set(ntfy.auth()) == {BEARER}
         finally:
             await daemon.stop()

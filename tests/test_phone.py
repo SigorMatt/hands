@@ -39,6 +39,7 @@ from harness import (
     PROJECT,
     TIMEOUT,
     architect_table,
+    as_published,
     close_consultation,
     config_body,
     ok,
@@ -550,7 +551,8 @@ def test_a_daemon_start_publishes_exactly_one_start_notification(
         await asyncio.sleep(0.2)  # anything the start scheduled has had its turn
         await daemon.notifier.drain()
         titles = sorted(item["title"] for item in posts.sent)
-        assert titles == [HELD_TITLE] * len(held_ids) + ["hands: handsd started"], posts.sent
+        started = as_published("hands: handsd started")
+        assert titles == [as_published(HELD_TITLE)] * len(held_ids) + [started], posts.sent
         (started,) = posts.titled("started")
         message = strip_paths(started["message"])
         for job in held_ids:
@@ -620,7 +622,7 @@ def test_a_daemon_start_folds_what_a_queued_job_that_fails_at_once_raises(
         await daemon.playbook.drain()
         await daemon.notifier.drain()
         titles = [item["title"] for item in posts.sent]
-        assert titles == ["hands: handsd started"], posts.sent
+        assert titles == [as_published("hands: handsd started")], posts.sent
         message = strip_paths(posts.sent[0]["message"])
         stopped = (await ok("pipeline"))["stop_reason"]
         assert stopped, "the queued job's end stops a playbook with no rule"
@@ -658,7 +660,10 @@ def test_a_queued_job_still_running_does_not_hold_the_start_notification_past_it
 
         await poll(stopped, "the stop the failed job raised")
         titles = [item["title"] for item in posts.sent]
-        assert titles == ["hands: handsd started", "hands: the pipeline stopped"], posts.sent
+        assert titles == [
+            as_published("hands: handsd started"),
+            as_published("hands: the pipeline stopped"),
+        ], posts.sent
 
     phone_drive(body, start_fold_s=0.5)
 
@@ -707,7 +712,7 @@ def test_a_job_held_inside_the_start_fold_window_is_published_at_once_with_its_b
             return posts.delivered
 
         note, *_ = await poll(published, "the first notification after the hold")
-        assert note["title"] == HELD_TITLE, posts.called  # first, inside the window
+        assert note["title"] == as_published(HELD_TITLE), posts.called  # first, inside the window
         assert note.get("actions"), note
         assert (await ok("show", queued))["state"] == "running"
         bodies = sorted(action["body"].split()[0] for action in note["actions"])
@@ -728,7 +733,8 @@ def test_a_job_held_inside_the_start_fold_window_is_published_at_once_with_its_b
         await daemon.playbook.drain()
         await daemon.notifier.drain()
         titles = sorted(item["title"] for item in posts.sent)
-        assert titles == [HELD_TITLE, "hands: handsd started"], posts.called
+        started = as_published("hands: handsd started")
+        assert titles == [as_published(HELD_TITLE), started], posts.called
         assert "hands: the pipeline stopped" in strip_paths(start["message"]), start
 
     phone_drive(body, posts)
@@ -760,7 +766,7 @@ def test_a_stop_inside_the_start_fold_window_delivers_the_start_notification(
 
     phone_drive(body, posts)
     titles = [item["title"] for item in posts.delivered]
-    assert titles == ["hands: handsd started"], posts.called
+    assert titles == [as_published("hands: handsd started")], posts.called
     assert "hands: the pipeline stopped" in strip_paths(posts.delivered[0]["message"]), posts
 
 
@@ -860,7 +866,8 @@ def test_unknown_malformed_and_not_held_commands_are_ignored(
         await daemon.notifier.drain()
 
         assert (await ok("show", done["id"]))["gate"] is None
-        assert [item["title"] for item in posts.sent[published:]] == ["hands: status"]
+        status = as_published("hands: status")
+        assert [item["title"] for item in posts.sent[published:]] == [status]
         assert (await ok("pipeline"))["paused"] is False
 
     phone_drive(body)
@@ -880,7 +887,7 @@ def with_playbook(workdir: Path, series: str = f'[series]\nkickoff = "{KICKOFF}"
 
 
 def go_answers(daemon: Daemon) -> list[dict[str, Any]]:
-    return [item for item in daemon.notifier.post.sent if item["title"] == GO_TITLE]
+    return titled(daemon, GO_TITLE)
 
 
 def assert_refused(caplog: pytest.LogCaptureFixture, why: str) -> None:
@@ -1151,7 +1158,7 @@ async def consulted(daemon: Daemon, verdict: str = "VERDICT: series complete") -
 
 
 def titled(daemon: Daemon, title: str) -> list[dict[str, Any]]:
-    return [item for item in daemon.notifier.post.sent if item["title"] == title]
+    return [item for item in daemon.notifier.post.sent if item["title"] == as_published(title)]
 
 
 def assert_reply_refused(daemon: Daemon, caplog: pytest.LogCaptureFixture, why: str) -> None:
@@ -1835,7 +1842,7 @@ def kit_project(tmp_home: Path, workdir: Path, downloads: Path) -> str:
 
 
 def kit_answers(daemon: Daemon) -> list[dict[str, Any]]:
-    return [item for item in daemon.notifier.post.sent if item["title"] == KIT_TITLE]
+    return titled(daemon, KIT_TITLE)
 
 
 def kit_events(daemon: Daemon) -> list[dict[str, Any]]:
@@ -2322,7 +2329,7 @@ def test_a_kit_files_a_held_builder_apply_whose_prompt_is_kit_checks_byte_for_by
         nonce = await nonce_for(daemon, row["id"])
         (held_note,) = [
             item for item in daemon.notifier.post.sent
-            if item["title"] == daemon_mod.NOTIFY_KINDS["job.held"]
+            if item["title"] == as_published(daemon_mod.NOTIFY_KINDS["job.held"])
         ]  # fmt: skip
         assert [action["label"] for action in held_note["actions"]] == ["Approve", "Deny"]
         assert (await ok("jobs", "--origin", "kit"))["jobs"][0]["id"] == row["id"]
@@ -2593,12 +2600,12 @@ def test_a_kit_receipt_and_its_held_apply_are_spaced_for_ntfys_timestamps(
         zipped = kit_zip(good_entries("plan: mission 11 kit\n\nbody\n"))
         (row,) = await kit_jobs(daemon, fake, kit_server.attach("mission-11.zip", zipped))
         assert await state(row["id"]) == "held"
-        pair = (f"publish {KIT_TITLE}", f"publish {held_title}")
+        pair = (f"publish {as_published(KIT_TITLE)}", f"publish {as_published(held_title)}")
         kept = [item for item in order if item.startswith("sleep ") or item in pair]
         assert kept == [
-            f"publish {KIT_TITLE}",
+            f"publish {as_published(KIT_TITLE)}",
             f"sleep {PAIR_SPACING_S}",
-            f"publish {held_title}",
+            f"publish {as_published(held_title)}",
         ], order
 
     phone_drive(body, Timed())
@@ -2652,14 +2659,359 @@ def test_the_ordinary_kit_with_no_kit_md_spaces_all_three_of_its_publishes(
             if not answer["message"].startswith("kit received ")
         ]  # fmt: skip
         assert len(notices) == 1 and notices[0].startswith("apply mission-11: ")
-        wanted = (f"post {KIT_TITLE}", f"hand over {held_title}")
+        wanted = (f"post {as_published(KIT_TITLE)}", f"hand over {held_title}")
         kept = [item for item in order if item.startswith("sleep ") or item in wanted]
         assert kept == [
-            f"post {KIT_TITLE}",
+            f"post {as_published(KIT_TITLE)}",
             f"sleep {PAIR_SPACING_S}",
             f"hand over {held_title}",
             f"sleep {PAIR_SPACING_S}",
-            f"post {KIT_TITLE}",
+            f"post {as_published(KIT_TITLE)}",
         ], order
 
     phone_drive(body, Timed())
+
+
+# ------------------------------------------------------------ answer (§36)
+
+#: The builder's last turn: its question, in a session the answer resumes.
+BUILDER_SESSION = "sess-builder-36"
+BUILDER_QUESTION = "VERDICT: question which option, A or B?"
+#: The human's answer: its control lines script the resumed builder's reply, and the
+#: rest is kept verbatim (inner blank line, doubled blanks, trailing blank).
+ANSWER_REPLY = "VERDICT: answered option B taken"
+ANSWER_TEXT = f"Take option B.\n\n  Not  A. \nFAKE:result {ANSWER_REPLY}"
+
+
+def answers(daemon: Daemon) -> list[dict[str, Any]]:
+    return titled(daemon, phone_mod.ANSWER_TITLE)
+
+
+def answer_events(daemon: Daemon) -> list[dict[str, Any]]:
+    return [event.payload for event in daemon.spool.events() if event.kind == "answer.sent"]
+
+
+async def builder_asked(daemon: Daemon) -> dict[str, Any]:
+    """One builder turn run to its end, recording the session an `answer` resumes."""
+    job = await ok(
+        "send", "--role", "builder", "--context", "clear",
+        f"FAKE:session {BUILDER_SESSION}\nFAKE:result {BUILDER_QUESTION}",
+    )  # fmt: skip
+    record = await ok("wait", job["id"])
+    assert record["state"] == "done" and record["session_id"] == BUILDER_SESSION
+    return dict(record)
+
+
+async def builder_replied(daemon: Daemon) -> list[dict[str, Any]]:
+    async def published() -> list[dict[str, Any]] | None:
+        await daemon.notifier.drain()
+        return titled(daemon, phone_mod.BUILDER_TITLE) or None
+
+    return list(await poll(published, "the builder's reply on ntfy_topic"))
+
+
+def assert_answer_refused(
+    daemon: Daemon, caplog: pytest.LogCaptureFixture, why: str, jobs_before: int
+) -> None:
+    (answer,) = answers(daemon)
+    assert answer["url"] == f"{NTFY}/{EVENTS_TOPIC}"
+    assert answer["message"].startswith("answer refused: "), answer
+    assert why in strip_paths(answer["message"]), answer
+    assert f"phone: command ignored (answer: {why}" in strip_paths(caplog.text), caplog.text
+    assert len(daemon.spool.list_jobs()) == jobs_before, "a refused answer filed a job"
+    assert answer_events(daemon) == []
+    assert titled(daemon, phone_mod.BUILDER_TITLE) == []
+    assert SECRET not in strip_paths(caplog.text)
+    for item in daemon.notifier.post.sent:
+        assert SECRET not in strip_paths(json.dumps(item, default=str)), item
+
+
+def test_answer_resumes_the_builders_last_session_as_a_keep_job_of_origin_phone(
+    project: str, tmp_home: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """§36: `answer <secret> <text>` is delivered as `hands send --role builder
+    --context keep "<text>"` would be — the text verbatim, the last session resumed —
+    as one job of origin `phone`; the acceptance is answered under `hands: answer`,
+    the text is filed as `answer.sent`, and the builder's final reply is published
+    on ntfy_topic titled `builder`."""
+    caplog.set_level(logging.DEBUG)
+
+    async def body(daemon: Daemon, fake: FakeNtfy) -> None:
+        asked = await builder_asked(daemon)
+        await say(daemon, fake, f"answer {SECRET} {ANSWER_TEXT}")
+        (row,) = [r for r in (await ok("jobs"))["jobs"] if r["id"] != asked["id"]]
+        record = await ok("wait", row["id"])
+        assert (record["role"], record["context"], record["origin"]) == (
+            "builder", "keep", "phone",
+        )
+        assert record["prompt"] == ANSWER_TEXT
+        assert record["gate"] is None
+        assert record["state"] == "done"
+        assert record["session_id"] == BUILDER_SESSION
+        assert record["files_written"] == []
+        (reply,) = await builder_replied(daemon)
+        assert reply["url"] == f"{NTFY}/{EVENTS_TOPIC}"
+        assert reply["message"] == ANSWER_REPLY
+        assert reply.get("actions") is None
+        (accepted,) = answers(daemon)
+        assert accepted["message"] == f"answer: builder job {row['id']} queued"
+        assert answer_events(daemon) == [
+            {"job": row["id"], "text": ANSWER_TEXT, "attachment": None}
+        ]
+        for item in daemon.notifier.post.sent:
+            assert SECRET not in strip_paths(json.dumps(item, default=str)), item
+
+    phone_drive(body)
+    assert SECRET not in strip_paths(caplog.text)
+    assert "Not  A." not in strip_paths(caplog.text), "the answer's text was logged"
+
+
+def test_answer_un_pauses_a_stopped_pipeline_when_its_job_starts_and_its_verdict_fires_rules(
+    project: str, workdir: Path
+) -> None:
+    """§36: "it un-pauses a stopped pipeline when the job starts, as a cli send does",
+    and "its `VERDICT:` line fires the playbook's rules as any builder end does"."""
+    with_playbook(
+        workdir,
+        rules='[[rule]]\non = "builder.done"\nverdict = \'^VERDICT: answered (?P<what>.+)\'\n'
+        'then = "notify"\nmessage = "answered: {what}"\n',
+    )
+
+    async def body(daemon: Daemon, fake: FakeNtfy) -> None:
+        asked = await builder_asked(daemon)
+        await daemon.playbook.drain()
+        await ok("pause")
+        before = len(daemon.spool.events())
+        await say(daemon, fake, f"answer {SECRET} {ANSWER_TEXT}")
+        (row,) = [r for r in (await ok("jobs"))["jobs"] if r["id"] != asked["id"]]
+        assert (await ok("wait", row["id"]))["state"] == "done"
+
+        async def fired() -> list[Any] | None:
+            await daemon.playbook.drain()
+            events = daemon.spool.events()[before:]
+            rules = [e for e in events if e.kind == "playbook.rule"]
+            return events if rules else None
+
+        events = await poll(fired, "the builder.done rule to fire")
+        resumed = [e for e in events if e.kind == "pipeline.resumed"]
+        assert [e.payload["by"] for e in resumed] == ["start"]
+        (rule,) = [e for e in events if e.kind == "playbook.rule"]
+        assert rule.payload["job"] == row["id"]
+        assert (await ok("pipeline"))["paused"] is False
+
+    phone_drive(body)
+
+
+def test_an_answer_whose_text_names_a_decisions_file_is_not_held(
+    project: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    """§36: "the secret is the approval: an `answer` is not held by the §8 gate
+    whatever its text says". The same text sent by the cli is held (the control)."""
+    text = "Recorded in meta/decisions/decisions-2026-10-14-owner.md: option B."
+
+    async def body(daemon: Daemon, fake: FakeNtfy) -> None:
+        asked = await builder_asked(daemon)
+        await say(daemon, fake, f"answer {SECRET} {text}")
+        (row,) = [r for r in (await ok("jobs"))["jobs"] if r["id"] != asked["id"]]
+        record = await ok("wait", row["id"])
+        assert record["state"] == "done" and record["gate"] is None
+        assert record["prompt"] == text
+        assert [e for e in daemon.spool.events() if e.kind == "job.held"] == []
+        control = await ok("send", "--role", "builder", "--context", "keep", text)
+        assert control["state"] == "held"
+        assert "decisions-" in strip_paths(control["gate"]["reason"])
+        await ok("deny", control["id"])
+
+    phone_drive(body)
+
+
+def test_answer_is_refused_when_the_builder_has_no_resumable_session(
+    project: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level(logging.DEBUG)
+
+    async def body(daemon: Daemon, fake: FakeNtfy) -> None:
+        await say(daemon, fake, f"answer {SECRET} {ANSWER_TEXT}")
+        await daemon.notifier.drain()
+        assert_answer_refused(daemon, caplog, "the builder has no resumable session", 0)
+
+    phone_drive(body)
+
+
+def test_answer_is_refused_while_the_builder_runs_a_job(
+    project: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level(logging.DEBUG)
+
+    async def body(daemon: Daemon, fake: FakeNtfy) -> None:
+        await builder_asked(daemon)
+        busy = await ok("send", "--role", "builder", "--context", "clear", "FAKE:block")
+        assert (await running_job())["id"] == busy["id"]
+        await say(daemon, fake, f"answer {SECRET} {ANSWER_TEXT}")
+        await daemon.notifier.drain()
+        assert_answer_refused(
+            daemon, caplog, f"the builder has a job running ({busy['id']})", 2
+        )
+        await ok("cancel", busy["id"])
+
+    phone_drive(body)
+
+
+def test_answer_is_refused_while_the_builder_has_a_job_queued(
+    project: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level(logging.DEBUG)
+
+    async def body(daemon: Daemon, fake: FakeNtfy) -> None:
+        assert daemon.phone is not None
+        await builder_asked(daemon)
+        queued = daemon.enqueue(
+            role="builder", context="clear", prompt="FAKE:result ok", origin="cli"
+        )
+        await daemon.phone.command(f"answer {SECRET} {ANSWER_TEXT}")  # no await between
+        await ok("wait", queued.id)
+        await daemon.notifier.drain()
+        assert_answer_refused(
+            daemon, caplog, f"the builder has a job queued ({queued.id})", 2
+        )
+
+    phone_drive(body)
+
+
+def test_answer_is_refused_while_the_builder_has_a_job_held(
+    project: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level(logging.DEBUG)
+
+    async def body(daemon: Daemon, fake: FakeNtfy) -> None:
+        await builder_asked(daemon)
+        job = await ok(
+            "send", "--role", "builder", "--context", "clear", "--gate", "apply kit",
+            "FAKE:result ok",
+        )  # fmt: skip
+        await say(daemon, fake, f"answer {SECRET} {ANSWER_TEXT}")
+        await daemon.notifier.drain()
+        assert_answer_refused(
+            daemon, caplog, f"the builder has a job held ({job['id']})", 2
+        )
+
+    phone_drive(body)
+
+
+@pytest.mark.parametrize("text", [f"answer {SECRET}", f"answer {SECRET}   \n  "])
+def test_answer_is_refused_when_the_text_is_empty(
+    project: str, caplog: pytest.LogCaptureFixture, text: str
+) -> None:
+    caplog.set_level(logging.DEBUG)
+
+    async def body(daemon: Daemon, fake: FakeNtfy) -> None:
+        await builder_asked(daemon)
+        await say(daemon, fake, text)
+        await daemon.notifier.drain()
+        assert_answer_refused(daemon, caplog, "the text is empty", 1)
+
+    phone_drive(body)
+
+
+def test_answer_with_a_wrong_or_missing_secret_is_ignored_and_answers_nothing(
+    project: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level(logging.DEBUG)
+
+    async def body(daemon: Daemon, fake: FakeNtfy) -> None:
+        await builder_asked(daemon)
+        for text in ("answer", f"answer not-the-secret {ANSWER_TEXT}",
+                     f"answer {ANSWER_TEXT} {SECRET}"):
+            await say(daemon, fake, text)
+        await daemon.notifier.drain()
+        assert answers(daemon) == []
+        assert len(daemon.spool.list_jobs()) == 1
+
+    phone_drive(body)
+    assert "phone: command ignored (answer: bad secret)" in strip_paths(caplog.text)
+    assert SECRET not in strip_paths(caplog.text)
+
+
+def test_answer_parsing_keeps_the_text_verbatim_and_reads_an_empty_text_as_empty() -> None:
+    parse = phone_mod.parse_answer
+    assert parse(f"answer {SECRET} a  b \n\n c ") == (SECRET, "a  b \n\n c ")
+    assert parse(f"  Answer {SECRET}\n text") == (SECRET, "text")
+    assert parse(f"answer {SECRET}") == (SECRET, "")
+    assert parse(f"answer {SECRET} \n ") == (SECRET, "")
+    assert parse("answer") is None
+    assert parse(f"answering {SECRET} text") is None
+
+
+def test_answer_with_an_attachment_fetches_it_into_kit_dir_and_names_its_path(
+    kit_project: str,
+    downloads: Path,
+    kit_server: KitServer,
+    tmp_home: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """§36: the attachment is fetched into `kit_dir` as a kit is; the delivered text
+    ends with one sentence naming its path; the record keeps the sha256; the inbox
+    event carries the text, the attachment's name and its hash. Nothing is applied."""
+    caplog.set_level(logging.DEBUG)
+    digest = hashlib.sha256(ZIP).hexdigest()
+
+    async def body(daemon: Daemon, fake: FakeNtfy) -> None:
+        asked = await builder_asked(daemon)
+        attachment = kit_server.attach("evidence.zip", ZIP)
+        await say(daemon, fake, f"answer {SECRET} {ANSWER_TEXT}", attachment=attachment)
+        written = downloads / "evidence.zip"
+        assert written.read_bytes() == ZIP
+        assert [path.name for path in downloads.iterdir()] == ["evidence.zip"]
+        (row,) = [r for r in (await ok("jobs"))["jobs"] if r["id"] != asked["id"]]
+        record = await ok("wait", row["id"])
+        sentence = phone_mod.attachment_sentence(written)
+        assert sentence == f"The human attached a file to this answer; it is at {written}."
+        assert record["prompt"] == f"{ANSWER_TEXT}\n\n{sentence}"
+        assert record["files_written"] == [
+            {"path": str(written), "sha256": digest, "bytes": len(ZIP)}
+        ]
+        assert record["gate"] is None and record["context"] == "keep"
+        assert answer_events(daemon) == [
+            {
+                "job": row["id"],
+                "text": ANSWER_TEXT,
+                "attachment": {"name": "evidence.zip", "sha256": digest},
+            }
+        ]
+        assert kit_events(daemon) == [] and kit_refusals(daemon) == []
+        assert len(kit_server.hits) == 1
+
+    phone_drive(body)
+
+
+@pytest.mark.parametrize(
+    ("name", "size", "why"),
+    [
+        ("evidence.txt", None, "the attachment name is not a .zip basename"),
+        ("evidence.zip", 2 * 1024 * 1024,
+         "the attachment is 2097152 bytes, over [files] kit_max_mb = 1"),
+    ],
+)
+def test_an_answer_whose_attachment_breaks_the_kit_rules_is_refused_before_the_fetch(
+    kit_project: str,
+    downloads: Path,
+    kit_server: KitServer,
+    caplog: pytest.LogCaptureFixture,
+    name: str,
+    size: int | None,
+    why: str,
+) -> None:
+    """§36: "judged by the same size and name rules" as a kit (§26)."""
+    caplog.set_level(logging.DEBUG)
+
+    async def body(daemon: Daemon, fake: FakeNtfy) -> None:
+        await builder_asked(daemon)
+        fields = {} if size is None else {"size": size}
+        attachment = kit_server.attach(name, ZIP, **fields)
+        await say(daemon, fake, f"answer {SECRET} {ANSWER_TEXT}", attachment=attachment)
+        await daemon.notifier.drain()
+        assert_answer_refused(daemon, caplog, why, 1)
+        assert kit_server.hits == []
+        assert list(downloads.iterdir()) == []
+
+    phone_drive(body)

@@ -56,6 +56,7 @@ import subprocess
 import tomllib
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -69,6 +70,7 @@ from hands.spool import (
     SpoolError,
     atomic_write,
     is_architect_reply,
+    is_builder_answer,
     kit_apply_problem,
     kits_filed_during,
     now_iso,
@@ -222,6 +224,12 @@ _SERIES_COMPLETE_RE = re.compile(r"\AVERDICT: series complete\s*\Z")
 #: §32: read as the playbook is — the committed file (`git show HEAD:./<path>`), so it
 #: is the branch's own roadmap and never an uncommitted edit.
 ROADMAP = Path("meta") / "ROADMAP.md"
+#: §36: the owner's decision files the architect is told about — `meta/decisions/
+#: *-owner.md` under the builder's cwd, read from the commits — and the heading of
+#: the consult prompt's section that lists them with the human's sends.
+DECISIONS_DIR = Path("meta") / "decisions"
+OWNER_SUFFIX = "-owner.md"
+DECIDED_HEADING = "Decided by the human since your last consultation"
 #: §32: a milestone of the roadmap is a top-level list item whose text begins with
 #: a bold `M` (`- **M4c The architect role** — …`), running over the indented lines
 #: that follow it. §33: it is marked DONE when its *heading* is (`_heading_done`).
@@ -735,6 +743,51 @@ def _committed_text(path: Path, cwd: Path) -> str:
         return proc.stdout.decode("utf-8")
     except UnicodeDecodeError as exc:
         raise PlaybookError(f"the committed copy is not valid UTF-8: {exc}") from exc
+
+
+def _owner_decisions(cwd: Path, since: str | None) -> list[str]:
+    """§36: each `meta/decisions/*-owner.md` a commit touched since `since` (an
+    ISO-8601 job time; None is every commit), oldest first, as `[<path>, committed]`
+    and its committed text — or one line of why the files could not be listed."""
+    command = ["git", "log", "--format=", "--name-only", "--no-renames"]
+    if since is not None:
+        try:
+            moment = datetime.fromisoformat(since.replace("Z", "+00:00")).astimezone(UTC)
+        except ValueError:
+            moment = None
+        if moment is not None:
+            command.append(f"--since={moment.strftime('%Y-%m-%d %H:%M:%S')} +0000")
+    command += ["--", f"{DECISIONS_DIR.as_posix()}/"]
+    env = {name: value for name, value in os.environ.items() if name not in GIT_ENV_CLEARED}
+    try:
+        proc = subprocess.run(
+            command, cwd=cwd, env=env, stdin=subprocess.DEVNULL, capture_output=True,
+            timeout=GIT_SHOW_TIMEOUT_S, check=False,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        return [f"[hands: the files under {DECISIONS_DIR}/ could not be listed: {exc}]"]
+    if proc.returncode != 0:
+        lines = proc.stderr.decode("utf-8", errors="replace").strip().splitlines()
+        said = lines[0] if lines else f"exit {proc.returncode}"
+        return [f"[hands: the files under {DECISIONS_DIR}/ could not be listed: {said}]"]
+    names: list[str] = []
+    for line in reversed(proc.stdout.decode("utf-8", errors="replace").splitlines()):
+        path = Path(line.strip())
+        if (
+            path.parent == DECISIONS_DIR
+            and path.name.endswith(OWNER_SUFFIX)
+            and len(path.name) > len(OWNER_SUFFIX)
+            and str(path) not in names
+        ):
+            names.append(str(path))
+    blocks = []
+    for name in names:
+        try:
+            text = _committed_text(cwd / name, cwd)
+        except PlaybookError as exc:
+            text = f"[hands: {exc}]"
+        blocks.append(f"[{name}, committed]\n{text}")
+    return blocks
 
 
 def _lf(data: bytes) -> bytes:
@@ -1313,6 +1366,12 @@ class PlaybookEngine:
     * `deny` — `Api.deny_from_playbook`, the same authority's other answer, for a
       kit §33 forbids: a second kit of one consultation, or one whose name is not
       the verdict's `next kit <name>`;
+    * `hold` — the daemon's publisher of a held job's notification with §34's
+      Approve/Deny buttons (`Daemon.publish_hold`). §36: under `autonomous`, the
+      hold of a kit the role filed is not published when it is filed
+      (`defer_hold`); the engine decides it first and then publishes one buttonless
+      "kit <name> filed by the architect; apply approved by the playbook", or,
+      when it does not approve it, the hold through this seam;
     * `sleep` — an attribute, `asyncio.sleep` by default: §32's `kit_wait_s` is
       waited through it, so a test never waits one out (as `LimitManager.sleep`).
     """
@@ -1328,6 +1387,7 @@ class PlaybookEngine:
         notify: Callable[[str, dict[str, Any]], Any] | None = None,
         approve: Callable[..., Awaitable[dict[str, Any]]] | None = None,
         deny: Callable[..., Awaitable[dict[str, Any]]] | None = None,
+        hold: Callable[[Job], Any] | None = None,
     ) -> None:
         self.config = config
         self.spool = spool
@@ -1340,6 +1400,12 @@ class PlaybookEngine:
         #: §33's seam: `Api.deny_from_playbook`. None in a caller that does not wire
         #: it: a forbidden kit then stays held for the human, and the stop says so.
         self.deny = deny
+        #: §36's seam: publish a held job with its buttons. None in a caller that
+        #: does not wire it: no hold is then deferred (`defer_hold`).
+        self.hold = hold
+        #: §36: the held applies whose notification waits for the engine's decision.
+        #: In memory: a daemon that restarts publishes every held job at its start.
+        self._deferred_holds: set[str] = set()
         #: §6's manager, when there is one: §10's `[limits] max_resumes` overrides
         #: the config's, and the counter both units read is the role's.
         self.limits = limits
@@ -1549,7 +1615,7 @@ class PlaybookEngine:
         await self._ensure_loaded()
         if job is None and payload:
             job = self._job(payload.get("job"))
-        enforced = driver_stop(event, job)
+        enforced = driver_stop(event, job, asked=self._asked(job))
         if self.state.paused:
             if enforced is not None:
                 # §29: the engine's consult stops apply over a paused pipeline too:
@@ -1559,6 +1625,20 @@ class PlaybookEngine:
                 return
             log.info("playbook: paused (%s); %s fires nothing", self.state.paused_by, event)
             return
+        if event == "builder.done" and job is not None and self._engine_applied_kit(job):
+            # §36 (H-044): the apply may have committed a new playbook — its kickoff
+            # above all — after the load its job's start made. The builder.done of
+            # an apply the engine approved itself is decided with the committed
+            # file, reloaded now; one that no longer loads stops (`_load`).
+            await self._load()
+            if self.playbook is None and self.load_error is None:
+                # §37: the apply left no playbook file — a stop, not §10's
+                # no-playbook path that would end chaining in silence.
+                await self.stop(
+                    f"the apply removed {self.config.playbook.path}",
+                    _payload(event, job),
+                )
+                return
         book = self.playbook
         if book is None:
             if enforced is not None:  # §28: the engine's stop needs no playbook
@@ -1576,6 +1656,14 @@ class PlaybookEngine:
                 f"{event}: the playbook engine failed ({type(exc).__name__}: {exc})",
                 _payload(event, job),
             )
+
+    def _asked(self, job: Job | None) -> Job | None:
+        """§36: the job a driver consultation was about (its prompt's head names it),
+        or None for any other job or one the spool does not hold."""
+        if job is None or job.role != DRIVER:
+            return None
+        about = (consult_head(job.prompt) or {}).get("job")
+        return self._job(about) if about else None
 
     async def _match(
         self,
@@ -1733,6 +1821,73 @@ class PlaybookEngine:
         await self._decide_kits(consulted)
         return True
 
+    def defer_hold(self, job: Job) -> bool:
+        """§36 (H-045): called by `Api.send` before a hold's `job.held` is filed. True
+        when the notification of that hold is the engine's to publish once it has
+        decided it: a held apply of a kit the role filed (`kit_apply_problem`), under
+        a playbook in role mode with `autonomous`, over a pipeline that is not
+        paused, with a `hold` seam to publish it through. Any other hold is published
+        when it is filed, with its buttons, as §34 says.
+
+        The playbook judged is the one loaded already (the consultation's start
+        loaded it): this does not load it, so a playbook that cannot load stops the
+        pipeline where it always did, after the `job.held`, and defers nothing."""
+        if job.origin != ARCHITECT_ORIGIN or self.hold is None or self.state.paused:
+            return False
+        book = self.playbook
+        if book is None or not book.architect_is_autonomous:
+            return False
+        if kit_apply_problem(self.spool, job) is not None:
+            return False
+        self._deferred_holds.add(job.id)
+        return True
+
+    def hold_deferred(self, job_id: str) -> bool:
+        """§36: True while the notification of the hold `job_id` waits for the engine."""
+        return job_id in self._deferred_holds
+
+    def _announce_hold(self, job: Job, *, approved: bool) -> None:
+        """§36 (H-045): the engine decided the deferred hold `job`. Approved: one
+        buttonless notification naming the kit. Not approved: the hold, published
+        with its buttons as §34 publishes every hold. A hold that was not deferred
+        was published when it was filed, and nothing more is said here."""
+        if job.id not in self._deferred_holds:
+            return
+        self._deferred_holds.discard(job.id)
+        record = self.spool.read_kit_record(job.kit_id) if job.kit_id is not None else None
+        name = record["name"] if record is not None else job.kit_id
+        if approved:
+            self._notify(
+                f"hands: kit {name} filed by the architect; apply approved by the playbook",
+                {
+                    "job": job.id,
+                    "role": job.role,
+                    "kit_id": job.kit_id,
+                    "name": name,
+                    "consultation": record["consultation"] if record is not None else None,
+                },
+            )
+            return
+        if self.hold is not None:
+            outcome = self.hold(job)
+            if inspect.isawaitable(outcome):  # pragma: no cover - the daemon's is sync
+                task = asyncio.create_task(_await(outcome), name="hands-playbook-hold")
+                self._tasks.add(task)
+                task.add_done_callback(self._tasks.discard)
+
+    def _publish_undecided(self, consulted: Job) -> None:
+        """§36: every kit of `consulted` whose hold is still deferred and was not
+        approved — the engine did not decide it, or decided it is the human's — is
+        published with its buttons. A hold decided already is not deferred."""
+        for filed, _ in self._kits_of(consulted):
+            job = self._job(filed.id)
+            if job is None:
+                continue
+            if job.state != "held":
+                self._deferred_holds.discard(job.id)  # decided by someone already
+                continue
+            self._announce_hold(job, approved=False)
+
     def _kits_of(self, consulted: Job) -> list[tuple[Job, str]]:
         """§33: every apply of origin `architect` whose kit record names the
         consultation `consulted` (`kits_filed_during`)."""
@@ -1774,6 +1929,13 @@ class PlaybookEngine:
         kits = self._kits_of(consulted)
         if not kits:
             return False
+        try:
+            return await self._decide_filed(consulted, kits)
+        finally:
+            self._publish_undecided(consulted)  # §36: what was not approved is the human's
+
+    async def _decide_filed(self, consulted: Job, kits: list[tuple[Job, str]]) -> bool:
+        """`_decide_kits` for a consultation that filed `kits`."""
         event = f"{ARCHITECT}.{consulted.state}"
         stop = self._architect_stop(event, consulted)
         named = _NEXT_KIT_RE.match(consulted.verdict or "") if stop is None else None
@@ -1808,18 +1970,22 @@ class PlaybookEngine:
         apply hands filed from a checked kit (`kit_apply_problem`)."""
         job = self._job(filed.id)
         if job is None or job.state != "held":
+            self._deferred_holds.discard(filed.id)
             return  # decided already (by the engine on its hold, or by a human)
         if self.state.paused:
             log.info("playbook: paused; the architect's apply %s stays held (§10, §33)", job.id)
+            self._announce_hold(job, approved=False)  # §36: the hold is the human's
             return
         problem = kit_apply_problem(self.spool, job)
         if problem is not None:  # its `job.held` already took the human's path
             log.warning("playbook: %s is not approved (%s; §32)", job.id, problem)
+            self._announce_hold(job, approved=False)
             return
         where = _payload("job.held", job)
         if not await self._kit_bytes_unchanged(job, where):
             return
         if self.approve is None:  # pragma: no cover - wired by the daemon and the tests
+            self._announce_hold(job, approved=False)
             await self.stop(
                 f"job.held: {job.id} is the architect's apply under an autonomous playbook "
                 "and this engine has no approve seam to release it with (§31)",
@@ -1831,11 +1997,13 @@ class PlaybookEngine:
         except asyncio.CancelledError:
             raise
         except Exception as exc:
+            self._announce_hold(job, approved=False)
             await self.stop(
                 f"job.held: the engine could not approve the architect's apply {job.id}: {exc}",
                 where,
             )
             return
+        self._announce_hold(job, approved=True)  # §36: one buttonless line, no buttons
         # No inbox event of its own: the decision is recorded exactly as every
         # other gate decision is, by `Api._gate_decided` — one `gate.decided`
         # carrying `decided_by: playbook` and the reason above — and, as today,
@@ -1856,6 +2024,7 @@ class PlaybookEngine:
         if stored == recorded:
             return True
         shown = stored if stored is not None else "unreadable"
+        self._announce_hold(job, approved=False)  # §36: the hold is the human's, with buttons
         self.spool.append_event(
             "kit.refused",
             {
@@ -1899,6 +2068,8 @@ class PlaybookEngine:
         )
         if stop is not None:
             reason += f"; its own end: {stop}"
+        for job in held:  # §36: a hold the engine does not approve is published as before
+            self._announce_hold(job, approved=False)
         await self.stop(reason, _payload(event, consulted), notify_suppressed=True)
         if self.deny is None:  # pragma: no cover - wired by the daemon and the tests
             return
@@ -2161,7 +2332,42 @@ class PlaybookEngine:
             max_consults=book.max_architect_consults,
             gate_failures=book.gate_failures,
             escalate_on=book.escalate_on,
+            decided=self.human_decisions(),
         )
+
+    def human_decisions(self) -> str:
+        """§36: every `answer`, every cli `--context keep` send to the builder, and every
+        `meta/decisions/*-owner.md` committed since the architect's last consultation,
+        verbatim, each under a one-line label; "" when there is none.
+
+        The last consultation is the newest architect job that is neither a phone
+        `reply` nor a §6 resume, and "since" is the jobs after it in the spool's order
+        and the commits from the second it was created on (the boundary second
+        included: the inclusive direction tells the role too much rather than too
+        little). With no consultation before, everything counts — the same safe
+        direction. The jobs come first, oldest first, then the files, oldest commit
+        first, each as committed at HEAD.
+        """
+        jobs = self.spool.list_jobs()
+        start, since = 0, None
+        for index, record in enumerate(jobs):
+            if (
+                record.role == ARCHITECT
+                and record.resumed_from is None
+                and not is_architect_reply(record)
+            ):
+                start, since = index + 1, record.created
+        blocks: list[str] = []
+        for record in jobs[start:]:
+            if is_builder_answer(record):
+                said = "`answer` from the phone"
+            elif record.role == "builder" and record.context == "keep" and record.origin == "cli":
+                said = "`hands send --role builder --context keep`"
+            else:
+                continue
+            blocks.append(f"[{said}: builder job {record.id}, {record.created}]\n{record.prompt}")
+        blocks.extend(_owner_decisions(self.config.role("builder").cwd, since))
+        return "\n\n".join(blocks)
 
     def architect_consults_used(self) -> int:
         """§31: the architect consultations of this *series* — architect jobs (a §6
@@ -2288,7 +2494,9 @@ class PlaybookEngine:
         event = f"{ARCHITECT}.{job.state}"
         reason = self._architect_stop(event, job)
         book = self.playbook
-        if book is not None and book.architect_is_autonomous and await self._decide_kits(job):
+        if book is None or not book.architect_is_autonomous:
+            self._publish_undecided(job)  # §36: no longer the engine's to decide
+        elif await self._decide_kits(job):
             return  # §33: the consultation's kits made it escalate, and it has stopped
         if reason is not None:
             await self.stop(reason, _payload(event, job), notify_suppressed=True)
@@ -2401,6 +2609,9 @@ class PlaybookEngine:
             reason = render(rule.message, groups=groups, job=job)
         else:
             reason = f"{event} matched rule {rule.index}, whose action is stop (§10)"
+        question = escalation_question(job, self._asked(job))
+        if question is not None:  # §36: the question and the answer on one screen
+            reason = f"{reason}; {question}"
         self._fired(rule, event, job, message=reason)
         await self.stop(reason, _payload(event, job, rule=rule.index))
 
@@ -2697,10 +2908,14 @@ def _choose(rules: list[Rule], job: Job | None) -> tuple[Rule | None, re.Match[s
     return None, None
 
 
-def driver_stop(event: str, job: Job | None) -> str | None:
+def driver_stop(event: str, job: Job | None, *, asked: Job | None = None) -> str | None:
     """§27, §28: the stop reason the engine enforces for a driver event, or None
     for a `driver.done` whose verdict is `VERDICT: resolved …` (and every event
-    that is not a driver's)."""
+    that is not a driver's).
+
+    §36: `asked` is the job the consultation was about; an escalation's stop keeps
+    its question — that job's last reply — verbatim, "so the question and the answer
+    are on one screen"."""
     role, _, state = event.partition(".")
     if role != DRIVER:
         return None
@@ -2717,11 +2932,26 @@ def driver_stop(event: str, job: Job | None) -> str | None:
     escalated = _ESCALATE_RE.match(verdict)
     if escalated is not None:
         reason = escalated.group("reason") or "(no reason given)"
-        return f"{event}: the driver escalated: {reason} (§27, §28)"
+        stop = f"{event}: the driver escalated: {reason} (§27, §28)"
+        question = escalation_question(job, asked)
+        return stop if question is None else f"{stop}; {question}"
     return (
         f"{event}: the driver's verdict {verdict!r} is neither resolved nor escalate, "
         "so it stops (§27, §28)"
     )
+
+
+def escalation_question(job: Job | None, asked: Job | None) -> str | None:
+    """§36: for a driver job whose verdict is `VERDICT: escalate …`, the question of
+    the job it was consulted about — that job's last reply, verbatim, after one line
+    naming it — or None. Every stop that escalation produces carries it: the engine's
+    own (`driver_stop`) and a playbook `stop` rule's (`_act_stop`)."""
+    if job is None or job.role != DRIVER or asked is None:
+        return None
+    if job.verdict is None or _ESCALATE_RE.match(job.verdict) is None:
+        return None
+    question = asked.result if asked.result is not None else "(it recorded no reply)"
+    return f"the {asked.role}'s question (job {asked.id}), verbatim:\n{question}"
 
 
 def _resume_line(job: Job) -> str:
@@ -2762,6 +2992,9 @@ class ArchitectBrief:
     max_consults: int = DEFAULT_MAX_ARCHITECT_CONSULTS
     gate_failures: int = DEFAULT_GATE_FAILURES
     escalate_on: tuple[str, ...] = ()
+    #: §36: what the human decided since the architect's last consultation, verbatim
+    #: (`PlaybookEngine.human_decisions`); empty when nothing was.
+    decided: str = ""
 
 
 def consult_prompt(
@@ -2846,6 +3079,13 @@ def _architect_prompt(event: str, job: Job, brief: ArchitectBrief | None) -> str
         "----- BEGIN REVIEW -----\n"
         f"{review_sections(job.result, job.verdict)}\n"
         "----- END REVIEW -----\n"
+        "\n"
+        f"{DECIDED_HEADING} — every `answer` from the phone, every `hands send --role "
+        f"builder --context keep`, and every {DECISIONS_DIR}/*{OWNER_SUFFIX} committed "
+        "since then — verbatim between the markers:\n"
+        "----- BEGIN DECISIONS -----\n"
+        f"{brief.decided or '[hands: nothing]'}\n"
+        "----- END DECISIONS -----\n"
         "\n"
         f"The roadmap is {brief.roadmap_path}; read it whole from your clone. Its next "
         f"unmet milestone — the first milestone in {brief.roadmap_path} whose heading "

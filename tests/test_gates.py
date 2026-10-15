@@ -291,10 +291,15 @@ def test_the_playbook_decider_releases_nothing_but_an_architects_hold(
     other: a kit from the phone and a human's own gated send stay §8's to decide."""
 
     async def body(daemon: Daemon) -> None:
-        job = await daemon.api.send(
-            role="builder", context="clear", prompt="please open the PR now", origin=origin,
+        prompt = "please open the PR now"
+        # §37: `origin: phone` on a builder `clear` job is the phone's `go`, which
+        # `send` refuses to a socket client.
+        job = await (
+            daemon.api.go_builder(prompt) if origin == "phone" else daemon.api.send(
+                role="builder", context="clear", prompt=prompt, origin=origin,
+            )
         )
-        assert job["state"] == "held"
+        assert job["state"] == "held" and job["origin"] == origin
         with pytest.raises(ApiError) as caught:
             await daemon.api.decide_from_playbook(job["id"])
         assert "architect" in strip_paths(str(caught.value))

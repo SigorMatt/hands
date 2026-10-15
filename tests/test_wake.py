@@ -34,7 +34,17 @@ from hands.notify import (
     send_test,
 )
 from hands.spool import Job, Spool, resolve_kinds
-from harness import BLOCK, PROJECT, cli, config_body, drive, ok, poll, write_project
+from harness import (
+    BLOCK,
+    PROJECT,
+    as_published,
+    cli,
+    config_body,
+    drive,
+    ok,
+    poll,
+    write_project,
+)
 
 NOW = datetime(2026, 9, 11, 12, 0, tzinfo=UTC)
 
@@ -283,7 +293,7 @@ def test_a_notification_is_published_to_the_configured_topic(
     asyncio.run(body())
     assert len(posts.sent) == 1
     assert posts.sent[0]["url"] == "https://ntfy.example/hands-abc123"
-    assert posts.sent[0]["title"] == "hands: the pipeline stopped"
+    assert posts.sent[0]["title"] == as_published("hands: the pipeline stopped")
     assert "blockers" in strip_paths(posts.sent[0]["message"])
 
 
@@ -602,7 +612,7 @@ def test_notify_test_prints_the_delivery_as_json(
         "delivered": True,
         "message": "hi",
         "status": 202,
-        "title": TEST_TITLE,
+        "title": as_published(TEST_TITLE),
         "topic": "hands-abc123",
         "url": "https://ntfy.example/hands-abc123",
     }
@@ -814,7 +824,7 @@ def test_a_publish_that_answers_no_status_is_a_failed_delivery(
         await note.drain()
 
     asyncio.run(body())
-    assert posts.sent == ["hands: the pipeline stopped"]
+    assert posts.sent == [as_published("hands: the pipeline stopped")]
     events = spool.events()
     assert [event.kind for event in events] == ["notify"]
     assert events[0].payload["delivered"] is False

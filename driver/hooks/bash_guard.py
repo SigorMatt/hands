@@ -171,11 +171,21 @@ guards the architect ROLE, a headless session handsd starts to write one kit:
   `cp -s`, `cp -l` are refused), so one under `HANDS_KITS` was planted by
   something else, and the rule is the simplest that closes the class: `cp` and
   `mv` are refused while **anything** under `HANDS_KITS` (walked, links not
-  followed) is a symlink, wherever it sits and wherever it points. `mkdir` still
+  followed) is a symlink, wherever it sits and wherever it points — or (§36,
+  REVIEW-18 should-fix 4) a regular file with a link count above one, a hard
+  link `cp` would write through into a file another name shares. `mkdir` still
   runs: it moves no link and writes no file content. And `HANDS_KITS` itself
   must not be a symlink: when its realpath is not its parent's realpath joined
   to its own last name (a link, or a `..` through one), every `mkdir`, `cp`,
   `mv` and every write the matcher below judges is refused.
+- `cp` from the clone (§36, HF-003): `cp` and `cp -r` also run with **every
+  source** under `HANDS_CLONE` and the target (the last path) under
+  `HANDS_KITS`, both by the same realpath containment, so the role re-issues a
+  file by copying it and editing the copy. With `HANDS_CLONE` unset or empty that
+  shape does not pass; a source that is a symlink, or a source directory with one
+  anywhere inside it, refuses it, and so does a symlink anywhere under
+  `HANDS_KITS`, as for every `cp`. Sources from both roots in one `cp` are not
+  either shape and are refused.
 - `zip` and `unzip` are rows of no table (§32, REVIEW-15 blocker 2): an
   `unzip` writes where its entries say, relative to the cwd — the parent of
   `HANDS_KITS` — whatever its arguments are, so they are refused by name in
@@ -544,9 +554,15 @@ def kits_link(kits):
     return None
 
 
-def kits_symlink(kits):
+def kits_symlink(kits, hardlinks=True):
     """§33 (REVIEW-16 should-fix 2): the first symlink anywhere under `HANDS_KITS`,
     walked without following links, or None.
+
+    §36 (REVIEW-18 should-fix 4): with `hardlinks`, a regular file whose link count
+    is above one is returned too (`<path> (a regular file with N hard links)`): `cp`
+    onto it writes into an inode another name shares, wherever that name sits.
+    `source_problem` walks a clone source without it — reading a hardlinked file
+    writes nothing through it.
 
     §34 (REVIEW-17 should-fix 3): `os.lstat` on every path from the root down, and
     nothing else decides what a path is. `os.walk` skipped a directory it could not
@@ -559,7 +575,8 @@ def kits_symlink(kits):
     while pending:
         top = pending.pop()
         try:
-            mode = os.lstat(top).st_mode
+            info = os.lstat(top)
+            mode, links = info.st_mode, info.st_nlink
         except FileNotFoundError:
             if top == kits:  # no kits directory holds no link; what `os.walk` did
                 return None
@@ -568,6 +585,8 @@ def kits_symlink(kits):
             return f"{top} (cannot be stat'ed: {e.strerror})"
         if stat.S_ISLNK(mode):
             return top
+        if hardlinks and stat.S_ISREG(mode) and links > 1:
+            return f"{top} (a regular file with {links} hard links)"
         if not stat.S_ISDIR(mode):
             continue
         try:
@@ -984,7 +1003,7 @@ class Command:
     """
 
     def __init__(self, flags=(), values=(), words=None, count=False, judge=None,
-                 kits=False, reads=None, private=None, moves=False):
+                 kits=False, reads=None, private=None, moves=False, from_clone=False):
         self.flags = frozenset(flags)
         self.values = dict(values)
         self.words = words
@@ -1003,6 +1022,9 @@ class Command:
         # §33: a `KITS_TABLE` row that moves or copies what is already there (`cp`,
         # `mv`), refused while a symlink is anywhere under `HANDS_KITS`.
         self.moves = moves
+        # §36 (HF-003): a `KITS_TABLE` row (`cp`) whose sources may instead all be
+        # under `HANDS_CLONE`, the last path (the target) still under `HANDS_KITS`.
+        self.from_clone = from_clone
 
     def listed(self) -> str:
         return ", ".join(sorted(self.flags | set(self.values))) or "no options"
@@ -1126,7 +1148,7 @@ COMMAND_TABLE = {
 # remain what `FORBIDDEN_PATTERNS` calls them — a file mutation.
 KITS_TABLE = {
     "mkdir": Command(flags={"-p"}, kits=True),
-    "cp": Command(flags={"-r"}, kits=True, moves=True),
+    "cp": Command(flags={"-r"}, kits=True, moves=True, from_clone=True),
     "mv": Command(kits=True, moves=True),
 }
 
@@ -1143,7 +1165,36 @@ def value_option(row, word):
     return None, None
 
 
-def option_violation(name, row, args, amasks, cmd, kits=None, reads=None):
+def clone_sources(row, plain, clone):
+    """§36 (HF-003): the source words of a `cp` that copies from the clone into the
+    kits, or None when this is not that shape.
+
+    It is that shape when the row allows it, `HANDS_CLONE` is set, there are at
+    least two path words, and every one but the last (the target) is under the
+    clone by realpath, as `under` decides for the kits. The target is then judged
+    as every kits path is, and each source by `source_problem`.
+    """
+    if not (row.from_clone and clone and len(plain) >= 2):
+        return None
+    sources = [word for word, _ in plain[:-1]]
+    if all(under(word, clone) for word in sources):
+        return sources
+    return None
+
+
+def source_problem(word, clone, name):
+    """§36: why the clone source `word` may not be copied, or None. A source that is
+    a symlink is refused wherever it points; so is a directory with one anywhere
+    inside it (walked as the kits are, links not followed), since `cp -r` would
+    carry it into the kits as a link."""
+    link = kits_symlink(word, hardlinks=False)
+    if link is None:
+        return None
+    return (f"`{name}` copies from the role's clone ({CLONE_ENV}={clone!r}) only what "
+            f"holds no symlink, and {word!r} does or cannot be walked ({link!r}, §36)")
+
+
+def option_violation(name, row, args, amasks, cmd, kits=None, reads=None, clone=None):
     """The reason this command's words are not the ones its row lists, or None.
 
     Every token beginning with `-` must be listed by the row; what is left are
@@ -1153,7 +1204,9 @@ def option_violation(name, row, args, amasks, cmd, kits=None, reads=None):
     remembered to name it.
 
     For a `KITS_TABLE` row (§31) every one of those words, and every value its
-    options take, must also be a path under `HANDS_KITS`. In a role mode
+    options take, must also be a path under `HANDS_KITS` — or, for `cp` (§36),
+    every source under `HANDS_CLONE` with no symlink in it and the target under
+    `HANDS_KITS`. In a role mode
     (`reads`, §32) the paths the row reads must be under the clone or the spool.
     """
     plain, i = [], 0
@@ -1191,15 +1244,22 @@ def option_violation(name, row, args, amasks, cmd, kits=None, reads=None):
     if row.kits:
         if not plain:
             return f"`{name}` takes at least one path under {KITS_ENV} (§31): {cmd!r}"
-        for word, _ in plain:
+        sources = clone_sources(row, plain, clone)
+        for word, _ in (plain if sources is None else plain[-1:]):
             problem = kits_problem(word, kits, name)
+            if problem is not None:
+                return f"{problem}: {cmd!r}"
+        for word in sources or ():
+            problem = source_problem(word, clone, name)
             if problem is not None:
                 return f"{problem}: {cmd!r}"
         link = kits_symlink(kits) if row.moves else None
         if link is not None:
-            return (f"`{name}` is refused while anything under {KITS_ENV} is a symlink "
+            return (f"`{name}` is refused while anything under {KITS_ENV} is a symlink, "
+                    f"a hard link (a regular file with more than one link, §36) "
                     f"or cannot be walked ({link!r}, §34): realpath judges where a path resolves now, and `{name}` "
-                    f"can move a link so the next write lands outside it (§33): {cmd!r}")
+                    f"can move a link so the next write lands outside it (§33), or write "
+                    f"through a hard link into a file outside it: {cmd!r}")
     if row.words is not None:
         reason = row.words(name, [word for word, _ in plain], cmd)
         if reason is not None:
@@ -1253,7 +1313,7 @@ def judge(words, marks, cmd, role, consult_role, clone=None, kits=None, reads=No
         return f"find {action}: {cmd!r}"
     if row.judge is not None:
         return row.judge(words, marks, cmd, role, consult_role, reads)
-    return option_violation(name, row, words[1:], marks[1:], cmd, kits, reads)
+    return option_violation(name, row, words[1:], marks[1:], cmd, kits, reads, clone)
 
 
 def check(cmd: str, role=None, consult_role=None, clone=None, kits=None, spool=None):
@@ -1322,7 +1382,37 @@ def write_violation(data, role=None, kits=None):
     if not isinstance(path, str) or not path:
         return (f"the {tool} call carries no {WRITE_PATH_KEY} the guard can read "
                 f"({path!r}, §31: fail closed)")
-    return kits_problem(path, kits, tool)
+    outside = kits_problem(path, kits, tool)
+    if outside is not None:
+        return outside
+    return write_link_problem(path, kits, tool)
+
+
+def write_link_problem(path: str, kits, tool: str):
+    """§37 (review 20 should-fix 2): why a write to `path`, already under
+    `HANDS_KITS`, would reach a file through a link, or None.
+
+    A target that exists as a regular file with a link count above one shares its inode with another
+    name, wherever that name sits, so writing it in place writes there too. And
+    while the kits walk (`kits_symlink(kits, hardlinks=True)`) reports anything,
+    every write is refused, as `cp` and `mv` are: the refusal names the link.
+    """
+    try:
+        info = os.stat(path)
+        links = info.st_nlink if stat.S_ISREG(info.st_mode) else 0  # a directory has 2+
+    except (FileNotFoundError, NotADirectoryError):
+        links = 0  # a new file: nothing shares its inode
+    except OSError as e:
+        return (f"`{tool}` {path!r} cannot be stat'ed ({e.strerror}), so it is not "
+                f"known to be one file (§37: fail closed)")
+    if links > 1:
+        return (f"`{tool}` {path!r} is a file with {links} hard links: writing it writes "
+                f"every other name of the same inode (§37)")
+    linked = kits_symlink(kits, hardlinks=True)
+    if linked is not None:
+        return (f"`{tool}` {path!r}: {KITS_ENV} holds {linked}, and every architect write "
+                f"is refused until it is gone (§37)")
+    return None
 
 
 # §30: review 13 blocker 1's `<<` shape, verbatim (bash's decoding of the
@@ -1728,8 +1818,15 @@ ARCHITECT_SELFTEST = [
     ("mv ./kits/m16/BRIEF.md ./kits/m16/meta/BRIEF.md", True),
     ("mkdir -p /tmp/evil", False),
     ("mkdir -p ./kits/../evil", False),
-    ("cp ./repo/DESIGN.md ./kits/DESIGN.md", False),
     ("mv ./kits/a ../a", False),
+    # §36 (HF-003): `cp`/`cp -r` with every source under HANDS_CLONE, target under KITS
+    ("cp ./repo/DESIGN.md ./kits/DESIGN.md", True),
+    ("cp -r ./repo/docs ./kits/m17/docs", True),
+    ("cp /etc/passwd ./kits/passwd", False),
+    ("cp ./repo/DESIGN.md /tmp/DESIGN.md", False),
+    ("cp ./repo/DESIGN.md ./repo/COPY.md", False),
+    ("cp ./repo/DESIGN.md ./kits/a ./kits/m17/", False),
+    ("mv ./repo/DESIGN.md ./kits/DESIGN.md", False),
     ("mkdir", False),
     # §32 (REVIEW-15 blocker 2, H-030): `zip` and `unzip` are rows of no table
     *[(probe, False) for probe in REVIEW_15_ARCHIVE_PROBES],
@@ -1795,11 +1892,27 @@ WRITE_SELFTEST = [
 # architect directory (`.claude/hooks/`, `kits/pay/h`); `planted` adds the
 # reviewer's `kits/a/h -> ../.claude/hooks/bash_guard.py`; `xonly` (§34, REVIEW-17
 # should-fix 3) plants the same link in `kits/d` and makes `kits/d` mode 0111;
-# `kits-link` makes `kits` a symlink to `.claude`.
+# `kits-link` makes `kits` a symlink to `.claude`; `hardlinked` (§36, REVIEW-18
+# should-fix 4) plants `kits/h` as a hard link to `.claude/hooks/bash_guard.py`, and §37
+# (review 20 should-fix 2) refuses every `--write` while it is there. §36 (HF-003): every shape but
+# `kits-link` has a clone `repo/` (`DESIGN.md`, `docs/A.md`); `clone-link` adds
+# `repo/h -> ../.claude/hooks/bash_guard.py` and `repo/docs/l -> ../DESIGN.md`.
 SYMLINK_SELFTEST = [
     ("clean", "cp -r kits/pay kits/m17", True),
+    ("clean", "cp repo/DESIGN.md kits/pay/D.md", True),
+    ("clean", "cp -r repo/docs kits/docs", True),
+    ("clean", "cp .claude/settings.json kits/s.json", False),
+    ("clean", "cp repo/DESIGN.md .claude/settings.json", False),
+    ("planted", "cp repo/DESIGN.md kits/pay/D.md", False),
+    ("clone-link", "cp repo/h kits/h", False),
+    ("clone-link", "cp -r repo/docs kits/docs", False),
+    ("clone-link", "cp repo/DESIGN.md kits/pay/D.md", True),
     ("clean", "mv kits/pay/h kits/h", True),
     ("clean", "--write kits/pay/KIT.md", True),
+    ("clean", "--write kits/pay/h", True),
+    ("planted", "--write kits/pay/KIT.md", False),
+    ("hardlinked", "--write kits/h", False),
+    ("hardlinked", "--write kits/pay/KIT.md", False),
     ("planted", "cp -r kits/a/h kits/", False),
     ("planted", "cp kits/pay/h kits/", False),
     ("planted", "mv kits/a/h kits/", False),
@@ -1807,6 +1920,10 @@ SYMLINK_SELFTEST = [
     ("xonly", "cp -r kits/d/h kits/", False),
     ("xonly", "cp kits/pay/h kits/", False),
     ("xonly", "mv kits/d/h kits/", False),
+    ("hardlinked", "cp kits/pay/h kits/h", False),
+    ("hardlinked", "mv kits/pay/h kits/h", False),
+    ("hardlinked", "cp repo/DESIGN.md kits/pay/D.md", False),
+    ("hardlinked", "mkdir -p kits/m17", True),
     ("kits-link", "mkdir -p kits/x", False),
     ("kits-link", "cp kits/settings.json kits/y", False),
     ("kits-link", "--write .claude/settings.json", False),
@@ -1824,9 +1941,22 @@ def _symlink_scratch(root, shape):
     os.makedirs(os.path.join(root, "kits", "pay"))
     with open(os.path.join(root, "kits", "pay", "h"), "w", encoding="utf-8") as f:
         f.write("x")
+    os.makedirs(os.path.join(root, "repo", "docs"))
+    for name in ("DESIGN.md", os.path.join("docs", "A.md")):
+        with open(os.path.join(root, "repo", name), "w", encoding="utf-8") as f:
+            f.write("x")
+    if shape == "clone-link":
+        os.symlink("../.claude/hooks/bash_guard.py", os.path.join(root, "repo", "h"))
+        os.symlink("../DESIGN.md", os.path.join(root, "repo", "docs", "l"))
     if shape == "planted":
         os.makedirs(os.path.join(root, "kits", "a"))
         os.symlink("../.claude/hooks/bash_guard.py", os.path.join(root, "kits", "a", "h"))
+    if shape == "hardlinked":  # §36: REVIEW-18's hard link to the hook
+        with open(os.path.join(root, ".claude", "hooks", "bash_guard.py"), "w",
+                  encoding="utf-8") as f:
+            f.write("x")
+        os.link(os.path.join(root, ".claude", "hooks", "bash_guard.py"),
+                os.path.join(root, "kits", "h"))
     if shape == "xonly":  # §34: REVIEW-17's link in a directory of mode 0111
         os.makedirs(os.path.join(root, "kits", "d"))
         os.symlink("../.claude/hooks/bash_guard.py", os.path.join(root, "kits", "d", "h"))
@@ -1933,7 +2063,8 @@ def main() -> int:
               f"file, and {', '.join(sorted(set(COMMAND_TABLE) - {'hands', 'git'}))} with "
               f"the options their rows list — plus "
               f"{', '.join(sorted(KITS_TABLE))} with every path argument under "
-              f"${KITS_ENV} — never zip or unzip (§32): stage kits/<name> and file it "
+              f"${KITS_ENV}, or cp/cp -r from ${CLONE_ENV} into ${KITS_ENV} (§36) — "
+              f"never zip or unzip (§32): stage kits/<name> and file it "
               f"with `hands kit file kits/<name>`, which builds the zip. Its reads are "
               f"confined to the clone and the spool "
               f"({spool or 'none named'}) and ${KITS_ENV}, and the command is one line of "

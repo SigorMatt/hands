@@ -208,6 +208,27 @@ def test_unknown_state_is_refused(tmp_home: Path) -> None:
         spool.transition(job, "finished")
 
 
+def test_a_transition_from_a_stale_object_is_judged_against_the_record_on_disk(
+    tmp_home: Path,
+) -> None:
+    """§37 "The cancel race": the edge is judged against the record on disk, not
+    the caller's object. A copy taken while the job was `queued` cannot move it to
+    `running` once the job on disk is `killed`, and the updates it carries are not
+    written."""
+    spool = Spool("~/.hands/demo")
+    job = make(spool)
+    stale = spool.load_job(job.id)
+    spool.transition(job, "killed")
+    before = (spool.jobs_dir / f"{job.id}.json").read_bytes()
+    assert stale.state == "queued"
+    with pytest.raises(IllegalTransition) as exc:
+        spool.transition(stale, "running", head_at_start="abc123")
+    assert "killed -> running" in strip_paths(str(exc.value))
+    assert (spool.jobs_dir / f"{job.id}.json").read_bytes() == before
+    on_disk = spool.load_job(job.id)
+    assert on_disk.state == "killed" and on_disk.head_at_start is None
+
+
 def test_denied_is_terminal(tmp_home: Path) -> None:
     """U4 depends on this: nothing releases a denied job."""
     spool = Spool("~/.hands/demo")

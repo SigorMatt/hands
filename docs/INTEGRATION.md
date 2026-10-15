@@ -138,19 +138,22 @@ cwd` is optional.
     socket = "~/.hands/<project>/handsd.sock"  # default (§29)
 
     [notify]                             # the two ntfy keys are also read from
-    ntfy_topic = "hands-<something-random>"  # [server], where older configs have
-    ntfy_url = "https://ntfy.sh"         # them (default); never in both places
+                                         # [server], where older configs have
+                                         # them; never in both places
+    ntfy_topic = "hands-<project>-<something-random>"
+    ntfy_url = "https://ntfy.sh"         # default
     # ntfy_token = "tk_<…>"                     # optional: a self-hosted ntfy's access
     #                                           # token, sent as a bearer (§33); only
     #                                           # beside an ntfy_url naming that server,
     #                                           # never ntfy.sh (§34); see
     #                                           # "Self-hosted ntfy over Tailscale"
-    # cmd_topic = "hands-cmd-<another-random>"  # optional: the command channel,
-    # cmd_secret = "<one long random word>"     # required with cmd_topic
-    # who_topic = "hands-who-<random>"          # optional: the who view, and
-    # who_cmd_topic = "hands-who-cmd-<random>"  # its commands; see "Optional:
-    #                                           # notifications, the command
-    #                                           # channel and the who view"
+    # the command channel, optional (cmd_secret is required with cmd_topic),
+    # and the who view and its commands, optional; see "Optional:
+    # notifications, the command channel and the who view":
+    # cmd_topic = "hands-<project>-cmd-<another-random>"
+    # cmd_secret = "<one long random word>"
+    # who_topic = "who-<project>-<random>"
+    # who_cmd_topic = "whocmd-<project>-<random>"
 
     [roles.builder]
     cwd = "~/git/<project>"              # required; the only required key
@@ -165,6 +168,8 @@ cwd` is optional.
     [roles.builder.env]                  # optional: added to handsd's environment
     CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS = "0"  # for this role's jobs. hands sets
                                          # this one to "0" unless you set it here
+    BASH_DEFAULT_TIMEOUT_MS = "900000"   # builder and aux: hands sets both Bash
+    BASH_MAX_TIMEOUT_MS = "900000"       # limits to "900000" unless set here (§36)
 
     [roles.aux]
     cwd = "~/git/<project>"
@@ -175,11 +180,14 @@ cwd` is optional.
     cwd = "~/hands-driver/hands"         # the driver directory and its repo/ clone
                                          # (~/hands-driver/<project>; this is hands'
                                          # own); permission_flags must stay empty
+    branch = "main"                      # default (§36): the clone is checked out
+                                         # at origin/<branch> before every job
 
     [roles.architect]                    # optional (§31): the architect role
     cwd = "~/hands-architect/hands"      # the architect directory, its repo/ clone
                                          # and its kits/; permission_flags must stay
                                          # empty, as for the driver
+    branch = "main"                      # default (§36), as for the driver
 
     [ops]
     repo = "~/<project>-ops"
@@ -232,13 +240,27 @@ Notes that are easy to get wrong:
   environment carries `HANDS_ROLE=driver`, on top of its `env` table and
   whatever that table says, which puts the guard in role mode. The driver role
   is started by handsd only through a playbook `consult` action: `hands send
-  --role driver` is refused. `hands doctor` prints a `role driver` row with the
-  cwd, the clone, the settings, the guard and its mode (§28). The row fails on
+  --role driver` is refused. Before every driver and architect job (§36,
+  H-042) the runner advances the role's clone: `git -C <clone> fetch -q origin`,
+  then `git -C <clone> checkout -q --detach origin/<branch>`, where `<branch>` is
+  the role's `branch` key (default `main`; read by these two roles only). A
+  clone that cannot be advanced (an unreachable origin, a branch origin does not
+  have, local changes in the way) fails the job before `claude` starts:
+  `failed`, `failure_reason` `spawn_error`, and `stderr_tail` holding the git
+  command and git's own message. A role with no clone has nothing to advance;
+  its job runs, and the guard refuses every `git -C`. `hands doctor` prints a
+  `role driver` row with the
+  cwd, the project its jobs see (`env HANDS_PROJECT=<project>`), the clone, the
+  clone's HEAD against `origin/<branch>` as last fetched (doctor reads the
+  clone's refs and does not fetch; the line does not change the row's status),
+  the settings, the guard and its mode (§28, §36). The row fails on
   a permission bypass, when the driver directory's `.claude/settings.json` does
   not name the hook (a `PreToolUse` command hook for `Bash` that runs
   `.claude/hooks/bash_guard.py`), and when that hook's `--selftest` is not green
   run with the role's environment (`HANDS_ROLE=driver`). The hook self-tested
-  is the file the settings' command names (§29). The command must run it as
+  is the file the settings' command names (§29), run as `python3 -I` with an
+  empty `PYTHONPATH` (§36), so a module planted beside the guard is not imported
+  by the self-test. The command must run it as
   the guard (§30): exactly `python3` and a path ending in
   `.claude/hooks/bash_guard.py`, with `$CLAUDE_PROJECT_DIR` and a relative path
   read against the driver directory, and nothing else: no further argument
@@ -321,6 +343,15 @@ Notes that are easy to get wrong:
   value. With Claude Code's default ceiling (600 s), a `claude -p` whose turn
   ended while a sub-agent it started was still running is terminated and exits 0.
   `hands doctor` prints the effective value on each role's row.
+  Builder and aux jobs also get `BASH_DEFAULT_TIMEOUT_MS=900000` and
+  `BASH_MAX_TIMEOUT_MS=900000` unless this table sets them (§36, HF-006): the
+  harness moves a foreground command past its default limit to the background,
+  where the no-background hook cannot see it, and a three-minute gate was moved
+  so. Driver and architect jobs do not get them from hands. Doctor prints both
+  effective values on the builder and aux rows.
+  Every role job's environment also carries `HANDS_PROJECT`, the config's
+  project name (§36, H-043), over handsd's own environment and this table
+  alike; doctor prints it on each role's row as `env HANDS_PROJECT=<project>`.
 - **How a job ends** (§6, §23). A job is `failed` when the process ends without
   a final `result` event, with a `result` of subtype `error` (claude's `error_*`
   family, `error_max_turns` included, whatever its `is_error` says), without
@@ -374,18 +405,21 @@ are on, and whether handsd is answering. A daemon
 that is not running is a **warning**, not a failure — this step comes before
 you have to have started one. Exit code 1 means a check failed.
 
-The `gh` row (DESIGN §35) runs `gh --version` and `gh auth status` as the
-user doctor runs as — handsd's user when the daemon answers `doctor` — and
-reports the version, the path, the login and whether the token's scopes
-include `repo`:
+The `gh` row (DESIGN §35, §36) runs `gh --version` and `gh auth status
+--active --hostname github.com` as the user doctor runs as — handsd's user
+when the daemon answers `doctor` — and reports the version, the path, the
+login of the active github.com account and whether its token's scopes
+include `repo`. Another host listed by `gh auth status` (a GitHub Enterprise
+host, say) or a bad account on one does not decide the row:
 
     ok    gh   gh version 2.92.0 (2026-04-28)  (/usr/bin/gh)
                logged in as <login> (user <user>); token scopes include `repo`
 
-No `gh` on PATH, a `gh --version` that does not answer, not logged in, or a
-token without `repo` is a `warn` naming the remedy — run `gh auth login` as
-this user (and grant the `repo` scope) — and is a warning, not a failure,
-because a project may commit direct.
+No `gh` on PATH, a `gh --version` that does not answer, a `gh auth status`
+that does not return, not logged in, or a token without `repo` is a `warn`
+naming the remedy — run `gh auth login` as this user (and grant the `repo`
+scope) — and is a warning, not a failure, because a project may commit
+direct.
 
 A config that will not load at all is reported the same way, not as a crash:
 doctor prints its usual report with a failed `config` row carrying the error
@@ -410,8 +444,8 @@ It publishes one message to `ntfy_topic` through the same transport
 §11's `stop` and `job.held` notifications use, and prints the HTTP status ntfy
 answered with — **whatever that status was**:
 
-    ntfy 200  https://ntfy.sh/hands-<random>
-    ntfy 403  https://ntfy.sh/hands-<random>     # printed too, and exits 1
+    ntfy 200  https://ntfy.sh/hands-<project>-<random>
+    ntfy 403  https://ntfy.sh/hands-<project>-<random>     # printed too, and exits 1
 
 A 2xx exits 0; any other code is printed with the same `ntfy <code> <url>` line
 and exits 1, because the message did not reach the topic. With no `ntfy_topic`
@@ -432,7 +466,12 @@ Three uses of ntfy, each on its own random topic in `[notify]` (DESIGN §11,
 read their command topics by outbound long polls, so nothing listens on this
 machine. With `ntfy_token` set, every publish and every subscription carries it
 as a bearer ("Self-hosted ntfy over Tailscale", below). All three are off unless
-configured, and hands runs without any of them:
+configured, and hands runs without any of them. Every topic name carries the
+project (`hands-<project>-…`, `hands-<project>-cmd-…`, `who-<project>-…`,
+`whocmd-<project>-…`, DESIGN §36), and every title handsd publishes begins with
+`<project>: ` — `demo: hands: the pipeline stopped` — so two projects on one
+phone are told apart by topic and by title; the titles this page names
+(`hands: reply`, `builder`, …) are what follows that prefix:
 
 | what | on when | who reads the topic |
 |---|---|---|
@@ -453,7 +492,9 @@ that is not there; `kit transport` is on when the command channel is on and
 names what is missing. It prints no topic and no secret. The
 `config` row also warns when `ntfy_topic` is missing, since you then learn you
 are needed only by looking; and a config that does not load (a `cmd_topic`
-without a `cmd_secret`, below) is the failed `config` row, as always.
+without a `cmd_secret`, below) is the failed `config` row, as always. The
+`topics` row warns, never fails, when a configured topic's name does not carry
+the project, naming the key and the shape to rename it to — never the topic.
 
 ### Notifications
 
@@ -484,7 +525,14 @@ start notification; what its end raises later is published on its own.
 A held job is never folded (DESIGN §34). Its `job.held` notification is
 published at once, with its Approve and Deny buttons, whether the job was held
 before the start (every job still held is published again, with fresh buttons)
-or during it; the start notification names it by title only. Stopping handsd
+or during it; the start notification names it by title only. One hold is
+decided before it is published (DESIGN §36): under a playbook with `architect =
+"role"` and `autonomous = true`, the held apply of a kit the architect filed is
+published only once the engine has decided it — as one notification without
+buttons, `kit <name> filed by the architect; apply approved by the playbook`,
+when it approves it, and as the held notification with its buttons when it does
+not (the kit is not the one the verdict named, the stored zip's hash is not the
+checked one). Stopping handsd
 inside the window publishes the start notification first, and handsd waits for
 what is already queued to publish instead of cancelling it.
 
@@ -502,18 +550,18 @@ is stamped before anything the resumed job goes on to publish. An exhausted
 ### The command channel: approve from the phone
 
 With `[notify] cmd_topic` set, handsd subscribes to that topic — an outbound
-long poll to ntfy, nothing listening on this machine — and takes eight commands
+long poll to ntfy, nothing listening on this machine — and takes nine commands
 from it. Set it up once:
 
-    python3 -c 'import secrets; print("hands-cmd-" + secrets.token_urlsafe(16))'
+    python3 -c 'import secrets; print("hands-<project>-cmd-" + secrets.token_urlsafe(16))'
     python3 -c 'import secrets; print(secrets.token_urlsafe(32))'
 
 The first line is a topic name, the second the secret. Put both in the config
 beside the events topic, which must be a different topic:
 
     [notify]
-    ntfy_topic = "hands-<something-random>"
-    cmd_topic = "hands-cmd-<the first line>"
+    ntfy_topic = "hands-<project>-<something-random>"
+    cmd_topic = "<the first line>"
     cmd_secret = "<the second line>"
 
 Restart handsd (`systemctl --user restart handsd@<project>`). A `cmd_topic` without a
@@ -522,7 +570,7 @@ to start. So does a secret with a blank inside it, and a `cmd_topic` equal to
 `ntfy_topic`.
 
 Publish a command to `cmd_topic` from the ntfy app. The last word is the token
-(but for `reply`, whose second word is the secret):
+(but for `reply` and `answer`, whose second word is the secret):
 
     approve <job> <secret>
     deny <job> [reason words] <secret>
@@ -532,6 +580,7 @@ Publish a command to `cmd_topic` from the ntfy app. The last word is the token
     go <secret>
     kit <secret>                  (with a .zip attached to the message)
     reply <secret> <text>
+    answer <secret> <text>        (a .zip may be attached to the message)
 
 - `approve` and `deny` decide a **held** job, exactly as `hands approve|deny`
   does, and the job record says `decided_by: phone`. `pause` and `resume` are
@@ -595,6 +644,32 @@ Publish a command to `cmd_topic` from the ntfy app. The last word is the token
   un-pause a stopped pipeline, it does not count against
   `max_architect_consults`, and a `hands kit file` while it runs is refused. The
   text goes over ntfy: see "Old messages" and the privacy note below.
+- `answer` is the phone answering the builder (DESIGN §36). `answer <secret>
+  <text>` is delivered as `hands send --role builder --context keep "<text>"`
+  would be, to the builder's last session: one job, `origin: phone`, whose
+  prompt is `<text>` as typed after the whitespace that follows the secret. The
+  secret is the approval: an answer is never held by the gate patterns, whatever
+  its text says (a text naming a decisions file included). Its job un-pauses a
+  stopped pipeline when it starts, as a `cli` send's does, because answering the
+  question is answering the stop. handsd answers on `ntfy_topic` titled `hands:
+  answer` with the job id and state, files the text in the inbox as
+  `answer.sent`, and when the job ends publishes the builder's final reply
+  there titled `builder`; its `VERDICT:` line fires the playbook's rules as any
+  builder end does. It is refused, and the refusal answered under `hands:
+  answer`, when the text is empty, while the builder has a job running, queued
+  or held, and when the builder has no resumable session. A file attached to
+  the message is judged by the `kit` rules above (a plain `.zip` name,
+  `kit_max_mb`, an http(s) URL, `kit_dir` inside `allowed_roots`) before
+  anything is fetched, and fetched into `kit_dir` as a kit is; nothing is
+  unzipped or applied. The delivered text then ends with one sentence naming the
+  file's path, the job record's `files_written` keeps its sha256, and
+  `answer.sent` carries the attachment's name and hash. A refused attachment
+  refuses the answer. When the driver escalates, the stop's message carries the
+  builder's question verbatim, so the question and your answer are on one
+  screen; the architect's next consultation lists every `answer` (with every
+  `hands send --role builder --context keep` and every committed
+  `meta/decisions/*-owner.md`) since its last one, under "Decided by the human
+  since your last consultation".
 - **The buttons.** With the channel on, a held job's notification has Approve
   and Deny buttons. Each publishes `approve <job> <nonce>` or `deny <job>
   <nonce>` to `cmd_topic`. The nonce is 32 random bytes minted for that one job
@@ -606,8 +681,8 @@ Publish a command to `cmd_topic` from the ntfy app. The last word is the token
   `hands approve <job>` / `hands deny <job>`, or `approve <job> <secret>` on
   `cmd_topic`, decide a held job all the same. `pause`, `resume`,
   `status` and `go` take the secret only, never a nonce.
-- **Nothing is answered except `status`, an accepted `go`, a written kit and a
-  `reply` whose secret was right.** A wrong secret or nonce, a command
+- **Nothing is answered except `status`, an accepted `go`, a written kit, and a
+  `reply` or an `answer` whose secret was right.** A wrong secret or nonce, a command
   hands does not know, or a job that is not held is logged in handsd's journal
   (`journalctl --user -u handsd@<project>`) and ignored. If a command seems to do
   nothing, look there. The log never contains the token.
@@ -749,8 +824,8 @@ is not answering, and exits 0.
 To have it pushed to your phone, add two more random topics:
 
     [notify]
-    who_topic = "hands-who-<something-random>"
-    who_cmd_topic = "hands-who-cmd-<something-random>"   # optional
+    who_topic = "who-<project>-<something-random>"
+    who_cmd_topic = "whocmd-<project>-<something-random>"   # optional
 
 and run `handswho --project <project>` (the same as `hands who --daemon`).
 `systemd/handswho@.service` is an optional user unit, off unless you enable it;
@@ -786,7 +861,9 @@ printing it. The token is accepted only beside an explicit `ntfy_url` that is
 not a public broker (§34): with `ntfy_url` unset (so `https://ntfy.sh`), or set
 to a url whose host is `ntfy.sh` or a subdomain of it (any letter case, scheme,
 port or path), the config does not load, and the refusal names the url, not the
-token. handsd, `handswho`, every `hands` command and `hands doctor` (as its
+token. A non-ASCII character anywhere in `ntfy_url` does not load either, token
+or not (§36: an HTTP client reads `https://ntfy。sh` as `ntfy.sh`); the refusal
+names the character and its position, and a host is written in its `xn--` form. handsd, `handswho`, every `hands` command and `hands doctor` (as its
 failed `config` row) read the config the same way. `hands doctor` says `ntfy
 token on` or `ntfy token off`.
 
@@ -859,9 +936,13 @@ presses them. Keep the config file private (`chmod 600`). It already holds
 Make each name fresh, because an old name may already be known to whoever read
 it on ntfy.sh:
 
-    python3 -c 'import secrets; print("hands-" + secrets.token_urlsafe(16))'
+    python3 -c 'import secrets; print("hands-<project>-" + secrets.token_urlsafe(16))'      # ntfy_topic
+    python3 -c 'import secrets; print("hands-<project>-cmd-" + secrets.token_urlsafe(16))'  # cmd_topic
+    python3 -c 'import secrets; print("who-<project>-" + secrets.token_urlsafe(16))'        # who_topic
+    python3 -c 'import secrets; print("whocmd-<project>-" + secrets.token_urlsafe(16))'     # who_cmd_topic
 
-Once per topic. Then:
+One line per topic you set, with your project's name for `<project>` (DESIGN
+§36: two projects on one phone are then told apart by the topic too). Then:
 
 1. Put the new names in `[notify]` beside `ntfy_url` and `ntfy_token`. Keep
    `cmd_secret` if only you have seen it; if it was ever typed on a topic
@@ -951,8 +1032,11 @@ one `-C`, whose realpath must equal `HANDS_CLONE`'s (a second `-C` is refused,
 because git applies each `-C` relative to the one before). Architect mode
 (`HANDS_ROLE=architect`) is the same read-only table with `hands
 show|jobs|inbox|pipeline|status|kit check|kit file`, plus `mkdir -p`, `cp -r`
-and `mv` (no other option) with every path under `HANDS_KITS`, `cp` and `mv`
-refused while anything under `HANDS_KITS` is a symlink, and every `mkdir`, `cp`,
+and `mv` (no other option) with every path under `HANDS_KITS`, `cp` and `cp -r`
+also with every source under `HANDS_CLONE` and the target under `HANDS_KITS`
+(§36), `cp` and `mv`
+refused while anything under `HANDS_KITS` is a symlink or (§36) a regular file
+with more than one hard link, and every `mkdir`, `cp`,
 `mv` and write refused when `HANDS_KITS` itself is one (§33); `zip` and `unzip`
 are in no mode's table (§32). In both
 role modes reads are confined to the clone and the spool: every path that
@@ -1015,10 +1099,19 @@ writes once it has moved a link (review 16 should-fix 2: `cp -r kits/a/h kits/`
 moved a relative link planted inside `kits/` so it pointed out, and `cp
 kits/pay/h kits/` wrote through it over the guard), so `cp` and `mv` are refused
 while anything under `HANDS_KITS` — walked, links not followed — is a symlink;
-the architect cannot make one, and `mkdir` still runs. Since §34 (review 17
+the architect cannot make one, and `mkdir` still runs. Since §36 (HF-003) `cp`
+and `cp -r` also copy from the role's clone: every source under `HANDS_CLONE`
+and the target (the last path) under `HANDS_KITS`, judged by the same realpath
+containment, refused with `HANDS_CLONE` unset, while anything under
+`HANDS_KITS` is a symlink, and when a source is one or (for `cp -r`) holds one
+anywhere inside it; a `cp` whose sources mix the clone and the kits is refused.
+The role re-issues a file by copying it and editing the copy. Since §34 (review 17
 should-fix 3: a link in a directory of mode 0111 was skipped by the walk) the
 walk is `os.lstat` on every path from `HANDS_KITS` down, and a directory it
-cannot list or a path it cannot stat refuses `cp` and `mv` as a link does. A `HANDS_KITS` that is
+cannot list or a path it cannot stat refuses `cp` and `mv` as a link does. Since §36
+(review 18 should-fix 4: `cp kits/pay/h kits/h`, with `kits/h` a planted hard link
+to the guard, wrote into the guard) a regular file under `HANDS_KITS` whose link
+count is above one refuses `cp` and `mv` as a symlink does. A `HANDS_KITS` that is
 itself a symlink (its realpath is not its parent's realpath joined to its name)
 refuses every `mkdir`, `cp`, `mv` and every write (§33, review 16 should-fix 3:
 `kits -> .claude` let the write matcher pass the role's own settings). `zip` and `unzip`
@@ -1031,7 +1124,9 @@ write only under `HANDS_KITS`; the driver has no equivalent, because the driver
 writes nothing at all.
 
 `hands doctor` prints a `role architect` row beside the `role driver` one: the
-cwd, the clone, the kits directory, the settings, the write matcher, the
+cwd, the project its jobs see, the clone and its HEAD against `origin/<branch>`
+(as the driver row prints them; the clone is advanced before every architect
+job as it is before every driver job, §36), the kits directory, the settings, the write matcher, the
 guard's self-test run in architect mode, the mode itself, and the `verified:`
 lines the driver row prints plus the kits realpath. It fails on a
 permission bypass (`permission_flags`, or the driver row's settings rules, above,
@@ -1045,9 +1140,31 @@ green run with `HANDS_ROLE=architect` and `HANDS_KITS` set, on a clone whose
 push is not disabled (the driver row's rule, above), on a kits
 directory that is missing or does not resolve under the architect's cwd
 (§32), and (§33) on a kits directory that is a symlink or holds one (§34: or
-holds a directory the same walk as the guard's cannot list), or when
+holds a directory the same walk as the guard's cannot list; §36: or holds a
+regular file with more than one hard link), or when
 `.claude`, its hooks directory, either settings file, either guard file or the
-clone resolves under the kits directory; a missing clone warns.
+clone resolves under the kits directory; a missing clone warns. Since §36
+(finding H-041) it also fails when the settings lack any of the three allows
+`architect/settings.json` ships — `Edit(kits/**)`, `Write(kits/**)` and
+`MultiEdit(kits/**)`; headless `claude -p` denies a tool no allow names, and the
+`--write` hook only ever denies, so without them the role cannot write a byte —
+or when any allow for `Edit`, `Write` or `MultiEdit`, in any settings layer it
+reads, names anything but `kits/**`. `hands doctor --live` gives the architect
+a turn that does its work in miniature: it writes one file,
+`kits/hands-doctor-live-<8 hex>/DOCTOR-LIVE.md` (a fresh name each run), with
+the Write tool, runs `hands kit check kits/hands-doctor-live-<8 hex> --repo
+<clone>` on that one-file kit — `<clone>` is `./repo`, or `.` when the role's
+directory is itself the clone — and `hands show <job>` on the newest job of the
+spool (so a daemon must be running, and a spool with no job fails the row before
+a turn is spent); doctor then removes the directory, which the role cannot (its
+settings deny `rm`). Since §37 (review 20 should-fix 4, 5) a role with no clone,
+or a kit directory of the chosen name that already exists, fails the row before
+the turn, and doctor removes only the directory it created; a `hands kit check`
+of any other kit or against any other `--repo` does not count. The row is judged
+from what happened — the file on disk, the two commands and their results in
+the turn's stream, the path gone — and names whichever of the four did not
+happen. The tests prove it with the fake `claude` performing scripted tool
+calls; a real turn under the real settings and guard is not proven by them.
 
 **Directory kits (finding H-030, resolved by DESIGN v3.15 §32; code: mission 16
 U2).** Under §31 the architect's `zip` could store entries only under
@@ -1094,7 +1211,9 @@ apply `hands kit file` files, whose `kit_id` handsd minted and checked against
 the spool — the stored zip and its record naming the kit and the consultation
 it was filed during, and the passing check handsd itself ran on that zip (§33)
 — never by origin alone; the record holds the sha256 of the bytes that check
-passed on, and the engine re-hashes the stored zip when it approves, refusing a
+read (§36: the stored zip is read once, and the same bytes are checked and
+hashed), a hash that differs from the sha256 of the bytes the client sent
+refuses the filing, and the engine re-hashes the stored zip when it approves, refusing a
 mismatch with `kit.refused` carrying both hashes and a stop (§34). A socket client cannot set `origin:
 architect` (`hands send` refuses it, naming §32), handsd takes `hands kit file`
 only while an architect consultation runs or the engine waits for its `next
@@ -1109,7 +1228,11 @@ consultation" before it is checked (§34); a consultation that tried to file a
 second kit, or filed a kit of another name, ends `escalate`, and its kit, if
 still held, is denied by the engine (`decided_by: playbook`). `[series] kickoff` is sent when
 that apply, approved by the engine, replies `VERDICT: kit applied` — a rule the
-engine adds, which no playbook writes. What this cannot tell apart is another
+engine adds, which no playbook writes. The kickoff it sends is read from the
+playbook as committed when that reply is decided — the engine reloads the file
+first, so a kit that rewrote the kickoff is followed by its own line, and a
+playbook that no longer loads stops the pipeline with the loader's reason
+(DESIGN §36). What this cannot tell apart is another
 process of your user calling the socket during a consultation from the
 architect's own `hands kit file` — though such a kit must pass the check and be
 the one kit its consultation's verdict names. Read that
