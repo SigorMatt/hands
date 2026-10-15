@@ -248,12 +248,20 @@ REVIEW_SECTIONS: tuple[str, ...] = ("Blockers", "Should-fix")
 #: §27, §31: the events each consulted role may be consulted on, refused at load and
 #: never when the rule fires. The driver's is every event but its own — §27 leaves
 #: "which events consult" to the playbook and only the driver's own ends would have
-#: it consult itself. The architect's is the review outcome §31 names, and one only:
-#: its prompt is written out of a review.
+#: it consult itself. The architect's is the review outcome §31 names, and — §38,
+#: H-048 — a builder's blocked verdict: its prompt is written out of a review or out
+#: of that reply.
 CONSULT_EVENTS: dict[str, tuple[str, ...]] = {
     DRIVER: tuple(event for event in EVENTS if not event.startswith(f"{DRIVER}.")),
-    ARCHITECT: ("aux.done",),
+    ARCHITECT: ("aux.done", "builder.done"),
 }
+#: §38: the builder's end the architect is consulted on, and the word its rule's
+#: verdict regex must name — the prompt calls the reply a blocked verdict.
+BUILDER_DONE = "builder.done"
+BLOCKED = "blocked"
+#: §38: the heading of the consult prompt's section that carries a builder's blocked
+#: verdict line and its full reply, in place of the review's.
+BLOCKED_HEADING = "The builder's blocked verdict and its reply"
 #: §31: the reply the engine's own `builder.done` rule matches. It is the verdict
 #: line the apply prompt asks for (`hands.kit.APPLY_VERDICT`), anchored.
 KIT_APPLIED = r"^VERDICT: kit applied"
@@ -1105,6 +1113,16 @@ def _rule(index: int, table: dict[str, Any], path: Path, *, auto_runs: tuple[int
             raise PlaybookError(
                 f'{where}: a consult with role = "{ARCHITECT}" is on the review outcome '
                 f"§31 names ({', '.join(CONSULT_EVENTS[ARCHITECT])}), got {on}"
+            )
+        if role == ARCHITECT and on == BUILDER_DONE and (
+            verdict is None or BLOCKED not in verdict.pattern
+        ):
+            # §38: the architect is consulted on a builder's *blocked* verdict, and
+            # its prompt says so; a rule that could fire on another end would hand it
+            # a finished or applied reply under that heading.
+            raise PlaybookError(
+                f'{where}: a consult with role = "{ARCHITECT}" on {BUILDER_DONE} is on the '
+                f"builder's {BLOCKED} verdict (§38): its verdict regex must name {BLOCKED!r}"
             )
         if context is not None and context != "clear":
             raise PlaybookError(
@@ -3057,7 +3075,8 @@ def _driver_prompt(event: str, job: Job) -> str:
 
 def _architect_prompt(event: str, job: Job, brief: ArchitectBrief | None) -> str:
     """§31: the event, the review's verdict line and its Blockers and Should-fix
-    sections verbatim, the roadmap's next unmet milestone (§32) with the roadmap's
+    sections verbatim — §38: for a builder's end, its blocked verdict line and full
+    reply instead — the roadmap's next unmet milestone (§32) with the roadmap's
     path, and the instruction.
 
     The escalation conditions of `[series]` are here too: §31 has the architect
@@ -3074,11 +3093,7 @@ def _architect_prompt(event: str, job: Job, brief: ArchitectBrief | None) -> str
         "\n"
         f"{record}"
         "\n"
-        f"The review's verdict line and its {_and_sections()} sections, verbatim between "
-        "the markers:\n"
-        "----- BEGIN REVIEW -----\n"
-        f"{review_sections(job.result, job.verdict)}\n"
-        "----- END REVIEW -----\n"
+        f"{_architect_subject(event, job)}"
         "\n"
         f"{DECIDED_HEADING} — every `answer` from the phone, every `hands send --role "
         f"builder --context keep`, and every {DECISIONS_DIR}/*{OWNER_SUFFIX} committed "
@@ -3110,6 +3125,31 @@ def _architect_prompt(event: str, job: Job, brief: ArchitectBrief | None) -> str
         "Your reply's first line is exactly one of:\n"
         "\n"
         + "".join(f"    {line}\n" for line in ARCHITECT_VERDICTS)
+    )
+
+
+def _architect_subject(event: str, job: Job) -> str:
+    """What the architect is consulted about, between its markers: the review's
+    verdict line and sections (§31), or — §38 — a builder's blocked verdict line and
+    its full reply, verbatim."""
+    if event == BUILDER_DONE:
+        verdict = job.verdict if job.verdict else "(the reply has no VERDICT: line)"
+        result = job.result if job.result is not None else ""
+        return (
+            f"{BLOCKED_HEADING} — the verdict line, then the builder's full reply, "
+            "verbatim between the markers:\n"
+            "----- BEGIN REPLY -----\n"
+            f"{verdict}\n"
+            "\n"
+            f"{result}\n"
+            "----- END REPLY -----\n"
+        )
+    return (
+        f"The review's verdict line and its {_and_sections()} sections, verbatim between "
+        "the markers:\n"
+        "----- BEGIN REVIEW -----\n"
+        f"{review_sections(job.result, job.verdict)}\n"
+        "----- END REVIEW -----\n"
     )
 
 

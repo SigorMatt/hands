@@ -1583,12 +1583,48 @@ def test_each_template_loads_with_its_architect_block_uncommented(path: Path) ->
     assert book.gate_failures == 2 and book.escalate_on == ESCALATE_ON
     assert book.max_architect_consults == DEFAULT_MAX_ARCHITECT_CONSULTS
     consults = [rule for rule in book.rules if rule.then == "consult"]
-    assert len(consults) == 1, consults
-    assert consults[0].on == "aux.done" and consults[0].role == "architect"
+    reviews = [rule for rule in consults if rule.on == "aux.done"]
+    assert len(reviews) == 1, consults
+    assert all(rule.role == "architect" for rule in consults)
     # §10: the first matching rule fires, so the consult must stand before the
     # template's own `aux.done` stops or it would never run.
     outcomes = [rule.index for rule in book.rules if rule.on == "aux.done"]
-    assert outcomes and min(outcomes) == consults[0].index
+    assert outcomes and min(outcomes) == reviews[0].index
+    # §38: the missions template alone also consults on a builder's blocked verdict.
+    expected = 1 if path.name == "PLAYBOOK-missions.toml" else 0
+    assert len(consults) - len(reviews) == expected, consults
+
+
+def test_the_missions_templates_role_mode_consults_the_architect_on_blocked() -> None:
+    """§38 (H-048): uncommented, the missions template consults the architect on
+    `builder.done` with a verdict naming `blocked`, ahead of the blocked stop, and a
+    comment says so; shipped (phone mode), the stop is the first blocked rule."""
+    from hands.playbook import parse_playbook
+
+    path = ROOT / "templates" / "PLAYBOOK-missions.toml"
+    shipped = path.read_text(encoding="utf-8")
+    text, _blocks = uncommented(shipped)
+    book = parse_playbook(text, path=path)
+    reply = "VERDICT: mission 3 blocked U2"
+    first = next(
+        rule for rule in book.rules
+        if rule.on == "builder.done" and rule.verdict and rule.verdict.search(reply)
+    )
+    assert first.then == "consult" and first.role == "architect"
+    assert first.verdict is not None and "blocked" in first.verdict.pattern
+    stops = [rule for rule in book.rules if rule.on == "builder.done" and rule.then == "stop"
+             and rule.verdict and rule.verdict.search(reply)]
+    assert stops and stops[0].index > first.index
+    phone = parse_playbook(shipped, path=path)
+    first = next(
+        rule for rule in phone.rules
+        if rule.on == "builder.done" and rule.verdict and rule.verdict.search(reply)
+    )
+    assert first.then == "stop"
+    comment = flattened(shipped.split("then = \"stop\"\nmessage = \"Mission {n} blocked", 1)[0]
+                        .rsplit("[[rule]]\non = \"builder.done\"\nverdict = '^VERDICT: kit", 1)[1])
+    for said in ("blocked", "architect", "§38"):
+        assert said in comment, f"the template's blocked rule has no comment saying {said!r}"
 
 
 # ------------------------------------- the architect role in the docs (§31, U6)
@@ -1687,7 +1723,7 @@ def test_the_integration_doc_names_the_series_keys_and_the_verdicts_from_code() 
     assert f"max_architect_consults` (default {DEFAULT_MAX_ARCHITECT_CONSULTS})" in section
     for verdict in ARCHITECT_VERDICTS:
         assert f"`{verdict}`" in section, f"the architect section does not name {verdict!r}"
-    assert CONSULT_EVENTS["architect"] == ("aux.done",)
+    assert CONSULT_EVENTS["architect"] == ("aux.done", "builder.done")
     assert "`aux.done`" in section
     assert "claude --resume" in section
 
@@ -1840,7 +1876,7 @@ def test_the_playbook_doc_no_longer_calls_consult_driver_only() -> None:
     from hands.playbook import ARCHITECT_VERDICTS, CONSULT_EVENTS, DEFAULT_MAX_ARCHITECT_CONSULTS
 
     section = playbook_doc('## Consult (`then = "consult"`, DESIGN §27, §31)')
-    assert CONSULT_EVENTS["architect"] == ("aux.done",)
+    assert CONSULT_EVENTS["architect"] == ("aux.done", "builder.done")
     for said in (
         '`role = "architect"`',
         "`aux.done`",
@@ -1852,6 +1888,22 @@ def test_the_playbook_doc_no_longer_calls_consult_driver_only() -> None:
     for verdict in ARCHITECT_VERDICTS:
         assert f"`{verdict}`" in section, f"the consult section does not name {verdict!r}"
     assert "A consult asks the driver role instead of stopping." not in section
+
+
+def test_the_playbook_doc_says_a_blocked_mission_consults_the_architect() -> None:
+    """§38 (H-048): the consult section names the builder's blocked verdict as the
+    architect's second event, the prompt's heading for it, the shared budget, and
+    that the missions template carries the rule in its role-mode variant."""
+    section = playbook_doc('## Consult (`then = "consult"`, DESIGN §27, §31)')
+    for said in (
+        "`builder.done`",
+        "The builder's blocked verdict and its reply",
+        "the same budget",
+        "`templates/PLAYBOOK-missions.toml`",
+        "§38",
+    ):
+        assert said in section, f"the consult section does not say {said!r}"
+    assert "the architect on `aux.done` only" not in section
 
 
 def test_the_playbook_doc_says_architect_events_cannot_be_matched() -> None:

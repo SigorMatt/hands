@@ -318,8 +318,11 @@ The rule takes no `prompt` and no `run`, and `context`, when given, is `clear`:
 every consultation is a fresh session with no memory of the last. Which events
 a role may be consulted on is checked when the file is parsed: the driver on any
 event but its own ends (a consult on `driver.done` or `driver.failed` is
-refused), and the architect on `aux.done` only — the review outcome §31 names,
-because its prompt is written out of a review.
+refused), and the architect on `aux.done` — the review outcome §31 names — and
+on `builder.done` with a verdict regex that names `blocked` (DESIGN §38), because
+its prompt is written out of a review or out of a builder's blocked reply; an
+architect consult on `builder.done` with no verdict, or one that does not name
+`blocked`, is refused.
 
 ### The driver's consultation (DESIGN §27)
 
@@ -440,6 +443,26 @@ instead, and the consultation goes ahead:
     VERDICT: next kit <name>
     VERDICT: series complete
     VERDICT: escalate <reason>
+
+A blocked mission consults the architect too (DESIGN §38). Under `[series]
+architect = "role"` a rule on the builder's blocked verdict asks the role instead
+of stopping for the human:
+
+    [[rule]]                  # the builder's blocked verdict → the architect
+    on = "builder.done"
+    verdict = '^VERDICT: mission (?P<n>\d+) blocked'
+    then = "consult"
+    role = "architect"
+
+The prompt for a builder's end is the review's prompt with one part replaced: in
+place of the review's markers it carries the builder's verdict line and its full
+reply, verbatim between `----- BEGIN REPLY -----` and `----- END REPLY -----`,
+headed "The builder's blocked verdict and its reply". The roadmap's milestone,
+the escalation conditions, the instruction and the three verdicts are as above,
+and the consultation counts against the same budget, `max_architect_consults`.
+`hands kit check` accepts the rule. `templates/PLAYBOOK-missions.toml` carries it
+in its role-mode variant (inside the `# >>> architect` markers, with a comment),
+ahead of the blocked stop; the phone-mode variant, as shipped, keeps the stop.
 
 The engine reads that verdict itself; no rule matches it, because `architect.*`
 is not an event. `VERDICT: next kit <name>` waits for the specific apply the

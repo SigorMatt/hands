@@ -1096,6 +1096,47 @@ def test_the_filled_missions_templates_pass_six_of_six_against_a_clone_of_this_r
         assert line(out, name).startswith(f"PASS {name}: "), out
 
 
+def test_the_role_mode_missions_templates_pass_six_of_six_with_the_blocked_consult(
+    tmp_home: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """§38 (H-048): a kit from the filled missions templates with the architect
+    blocks uncommented — the role-mode variant, whose `builder.done` blocked verdict
+    consults the architect — checked against a clone of this repository and a config
+    with `[roles.architect]`, passes every check."""
+    monkeypatch.delenv("HANDS_PROJECT", raising=False)
+    _config(tmp_home, tmp_path, architect=True)
+    clone = tmp_path / "clone"
+    subprocess.run(
+        ["git", "clone", "--quiet", str(ROOT), str(clone)], check=True, capture_output=True
+    )
+    # "Uncomment" as a human does (and test_docs' `uncommented`): strip one `# `
+    # from each line between the `# >>> architect` markers, drop the markers.
+    lines, inside = [], False
+    for text in template("PLAYBOOK-missions.toml").splitlines():
+        if text.strip() in ("# >>> architect", "# <<< architect"):
+            inside = text.strip() == "# >>> architect"
+            continue
+        lines.append(text[2:] if inside and text.startswith("# ") else text)
+    book = "\n".join(lines) + "\n"
+    parsed = parse_playbook(book, path=TEMPLATES / "PLAYBOOK-missions.toml")
+    assert [rule for rule in parsed.rules if rule.then == "consult" and rule.on == "builder.done"
+            and rule.verdict is not None
+            and rule.verdict.search("VERDICT: mission 11 blocked <unit>")]
+    kit = write_tree(
+        tmp_path / "k",
+        {
+            "meta/BUILDER-11-PROMPT.md": template("BUILDER-N-PROMPT.md"),
+            "PLAYBOOK.toml": book,
+            "meta/REVIEW-PROTOCOL.md": template("REVIEW-PROTOCOL.md"),
+        },
+    )
+    code, out, err = run_check(kit, clone)
+    assert code == 0, out + err
+    for name in CHECK_NAMES:
+        assert line(out, name).startswith(f"PASS {name}: "), out
+    assert len(CHECK_NAMES) == 6
+
+
 def test_the_handbook_section_11_names_every_check_and_the_apply_literal() -> None:
     handbook = (ROOT / "docs" / "ARCHITECT-HANDBOOK.md").read_text(encoding="utf-8")
     section = handbook.split("## 11. `hands kit check`")[1].split("\n## 12.")[0]

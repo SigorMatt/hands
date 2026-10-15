@@ -49,6 +49,20 @@ verdict = '^VERDICT: kit applied'
 then = "notify"
 message = "Kit applied; the next kickoff is the driver's"
 
+# A blocked mission goes to the architect, which answers it with a kit or
+# escalates (§38). Its prompt carries the builder's blocked verdict and its full
+# reply in place of a review, and it counts against the same
+# max_architect_consults. It stands before the blocked stop below on purpose:
+# §10 fires the first rule that matches. Without the architect role (phone
+# mode, as shipped) the stop below is the first blocked rule.
+# >>> architect
+# [[rule]]
+# on = "builder.done"
+# verdict = '^VERDICT: mission (?P<n>\d+) blocked'
+# then = "consult"
+# role = "architect"
+# <<< architect
+
 # The builder stopped for a reason → the human.
 [[rule]]
 on = "builder.done"

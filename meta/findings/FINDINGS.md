@@ -2207,7 +2207,15 @@ Direction. §37: the playbook may consult the architect on `builder.done`
 with a `blocked` verdict, the consult prompt carrying the builder's reply in
 place of a review, counted against the same consultation budget.
 
-Status: in progress (mission 22, U4)
+Status: resolved-by-code (mission 22 U4 — `hands.playbook.CONSULT_EVENTS`
+gives the architect `builder.done`, refused at load unless the rule's verdict
+regex names `blocked`; `_architect_subject` writes the builder's verdict line
+and full reply under "The builder's blocked verdict and its reply" in place of
+the review markers; `templates/PLAYBOOK-missions.toml` carries the rule in its
+role-mode block. Tests: tests/test_playbook.py `test_a_role_mode_blocked_*`,
+`test_a_blocked_consultation_counts_*`, `test_a_phone_mode_template_stops_*`;
+tests/test_kit.py `test_the_role_mode_missions_templates_pass_six_of_six_*`;
+tests/test_docs.py `test_the_missions_templates_role_mode_*`)
 
 ## H-049 — the protocol's revert step fails for a file the commit adds
 

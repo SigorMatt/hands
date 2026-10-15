@@ -3995,7 +3995,8 @@ def test_a_consult_may_name_the_architect_on_a_review_outcome(workdir: Path) -> 
     assert rule.context == "clear"  # §27: a consultation is a fresh session
     assert CONSULT_ROLES == ("driver", ARCHITECT)
     # Each role's events are explicit, and the driver's are exactly today's.
-    assert CONSULT_EVENTS[ARCHITECT] == ("aux.done",)
+    # §38 (H-048): the architect is consulted on a builder's blocked verdict too.
+    assert CONSULT_EVENTS[ARCHITECT] == ("aux.done", "builder.done")
     assert CONSULT_EVENTS["driver"] == tuple(
         event for event in EVENTS if not event.startswith("driver.")
     )
@@ -4005,9 +4006,20 @@ def test_a_consult_may_name_the_architect_on_a_review_outcome(workdir: Path) -> 
     ("body", "because"),
     [
         (
-            'version = 1\n[series]\narchitect = "role"\n[[rule]]\non = "builder.done"\n'
+            'version = 1\n[series]\narchitect = "role"\n[[rule]]\non = "builder.failed"\n'
             'then = "consult"\nrole = "architect"',
             "aux.done",
+        ),
+        (
+            'version = 1\n[series]\narchitect = "role"\n[[rule]]\non = "builder.done"\n'
+            'then = "consult"\nrole = "architect"',
+            "blocked",
+        ),
+        (
+            'version = 1\n[series]\narchitect = "role"\n[[rule]]\non = "builder.done"\n'
+            "verdict = '^VERDICT: mission (?P<n>\\d+) finished'\n"
+            'then = "consult"\nrole = "architect"',
+            "blocked",
         ),
         (
             'version = 1\n[[rule]]\non = "aux.done"\nthen = "consult"\nrole = "architect"',
@@ -4018,7 +4030,13 @@ def test_a_consult_may_name_the_architect_on_a_review_outcome(workdir: Path) -> 
             "on must be one of",
         ),
     ],
-    ids=["architect on a builder verdict", "architect rule in phone mode", "an architect event"],
+    ids=[
+        "architect on another builder event",
+        "architect on a builder end with no verdict",
+        "architect on a builder verdict that is not blocked",
+        "architect rule in phone mode",
+        "an architect event",
+    ],
 )
 def test_the_architect_consult_is_refused_at_load_not_when_it_fires(
     workdir: Path, body: str, because: str
@@ -4035,7 +4053,7 @@ def test_the_architect_events_are_not_playbook_events(tmp_home: Path, workdir: P
     `EVENTS` stays the closed list it is today, without the architect's states."""
     ends = {f"{ARCHITECT}.{state}" for state in ("done", "failed", "killed", "orphaned")}
     assert set(EVENTS).isdisjoint(ends | {f"{ARCHITECT}.limited"})
-    assert CONSULT_EVENTS[ARCHITECT] == ("aux.done",)
+    assert CONSULT_EVENTS[ARCHITECT] == ("aux.done", "builder.done")
 
 
 # ---- the prompt (§31: the event, the review's sections, the roadmap, the instruction)
@@ -5910,3 +5928,139 @@ def test_with_nothing_decided_the_architect_is_told_so(tmp_home: Path, workdir: 
     prompt = recorder.enqueued[0]["prompt"]
     section = prompt[prompt.index(DECIDED):]
     assert "[hands: nothing]" in strip_paths(section.split("----- BEGIN MILESTONE -----")[0])
+
+
+# ---- §38 (H-048): a blocked mission consults the role
+
+BLOCKED_VERDICT = "VERDICT: mission 17 blocked U3"
+BLOCKED_REPLY = (
+    f"{BLOCKED_VERDICT}\n\n"
+    "## What stops the unit\n\n"
+    "The brief names `src/hands/wake.py`, which no commit on the branch adds.\n\n"
+    "## Notes\n\nU1 and U2 are pushed; the tree is clean.\n"
+)
+#: The role-mode series of §31 with §38's rule: a builder's blocked verdict goes to
+#: the architect, ahead of the stop a phone-mode series keeps.
+BLOCKED_BOOK = ARCHITECT_BOOK + """
+[[rule]]
+on = "builder.done"
+verdict = '^VERDICT: mission (?P<n>\\d+) blocked'
+then = "consult"
+role = "architect"
+
+[[rule]]
+on = "builder.done"
+verdict = '^VERDICT: mission (?P<n>\\d+) blocked'
+then = "stop"
+message = "Mission {n} blocked; see the builder's reply"
+"""
+
+
+def blocked(spool: Spool, result: str = BLOCKED_REPLY) -> Job:
+    """The builder job a blocked mission is (§10's `builder.done`)."""
+    job = spool.create_job(role="builder", context="keep", prompt="go on", origin="cli")
+    spool.transition(job, "running")
+    return spool.transition(job, "done", verdict=result.splitlines()[0], result=result)
+
+
+def test_a_role_mode_blocked_verdict_consults_the_architect_with_the_reply(
+    tmp_home: Path, workdir: Path
+) -> None:
+    """§38: the consult prompt for a builder's end carries the verdict line and the
+    full reply between markers headed "The builder's blocked verdict and its reply",
+    in place of the review markers; the roadmap, the conditions, the instruction and
+    the vocabulary are as for a review."""
+    engine, recorder = architect_engine(tmp_home, workdir, BLOCKED_BOOK)
+    job = blocked(engine.spool)
+
+    run(engine.on_job(job))
+
+    assert not engine.state.paused, engine.state.stop_reason
+    assert recorder.sent == []
+    [call] = recorder.enqueued
+    assert call["role"] == ARCHITECT and call["context"] == "clear"
+    assert call["origin"] == "playbook"
+    prompt = call["prompt"]
+    assert strip_paths(prompt).startswith(
+        f"hands consult: builder.done on job {job.id} (role builder)\n"
+    )
+    heading = "The builder's blocked verdict and its reply"
+    assert strip_paths(prompt).count(heading) == 1
+    after = prompt.split(heading, 1)[1]
+    assert "----- BEGIN REPLY -----" in strip_paths(after)
+    assert "----- END REPLY -----" in strip_paths(after)
+    between = after.split("----- BEGIN REPLY -----\n", 1)[1]
+    between = between.split("\n----- END REPLY -----", 1)[0]
+    assert strip_paths(between).startswith(BLOCKED_VERDICT)
+    assert BLOCKED_REPLY.rstrip("\n") in strip_paths(between)  # the full reply, Notes included
+    # in place of the review markers, and of the review's section headings
+    assert "BEGIN REVIEW" not in strip_paths(prompt) and "END REVIEW" not in strip_paths(prompt)
+    assert "Blockers" not in strip_paths(prompt) and "Should-fix" not in strip_paths(prompt)
+    # the rest unchanged
+    assert ROADMAP_NEXT in strip_paths(prompt) and str(ROADMAP) in strip_paths(prompt)
+    assert ARCHITECT_INSTRUCTION in strip_paths(prompt)
+    for line in ARCHITECT_VERDICTS:
+        assert line in strip_paths(prompt)
+    assert "gate_failures = 2" in strip_paths(prompt)
+    assert "consultation 1 of 12" in strip_paths(prompt)
+    [sent] = [event for event in engine.spool.events() if event.kind == "consult.sent"]
+    assert sent.payload["consulted"] == ARCHITECT
+    assert sent.payload["about"] == job.id
+    assert sent.payload["event"] == "builder.done"
+
+
+def test_the_review_prompt_is_unchanged_by_the_blocked_variant(
+    tmp_home: Path, workdir: Path
+) -> None:
+    """An `aux.done` consultation still carries the review markers and not the
+    builder's heading (§31, §38)."""
+    engine, recorder = architect_engine(tmp_home, workdir, BLOCKED_BOOK)
+    run(engine.on_job(reviewed(engine.spool)))
+    prompt = recorder.enqueued[0]["prompt"]
+    assert "----- BEGIN REVIEW -----" in strip_paths(prompt)
+    assert "The builder's blocked verdict and its reply" not in strip_paths(prompt)
+
+
+def test_a_blocked_consultation_counts_against_the_series_budget(
+    tmp_home: Path, workdir: Path
+) -> None:
+    """§38: "the consultation counts against the same budget". With a budget of 2, a
+    review consultation and a blocked one spend it, and a third blocked verdict
+    stops naming budget-exhausted."""
+    body = BLOCKED_BOOK.replace("max_architect_consults = 12", "max_architect_consults = 2")
+    engine, recorder = architect_engine(tmp_home, workdir, body)
+    review = reviewed(engine.spool)
+    run(engine.on_job(review))
+    _architect_job(engine.spool, verdict="VERDICT: next kit m18", about=review)
+    engine.state.paused = False
+    engine.state.stop_reason = None
+    first = blocked(engine.spool)
+    run(engine.on_job(first))
+    assert len(recorder.enqueued) == 2
+    assert "consultation 2 of 2" in strip_paths(recorder.enqueued[1]["prompt"])
+    _architect_job(engine.spool, verdict="VERDICT: escalate stuck", about=first)
+    engine.state.paused = False
+    engine.state.stop_reason = None
+
+    run(engine.on_job(blocked(engine.spool)))
+
+    assert len(recorder.enqueued) == 2, "a consult beyond the budget started an architect job"
+    assert engine.state.paused
+    said = engine.state.stop_reason or ""
+    assert "max_architect_consults is 2" in strip_paths(said), said
+    assert "budget-exhausted" in strip_paths(said), said
+
+
+def test_a_phone_mode_template_stops_on_a_blocked_verdict(
+    tmp_home: Path, workdir: Path
+) -> None:
+    """§38: the missions template as shipped (phone mode) keeps the stop; nothing is
+    consulted."""
+    text = (
+        Path(__file__).parents[1] / "templates" / "PLAYBOOK-missions.toml"
+    ).read_text(encoding="utf-8")
+    engine, recorder = engine_for(tmp_home, workdir, text, architect=architect_dir(tmp_home))
+    run(engine.on_job(blocked(engine.spool)))
+    assert recorder.enqueued == [] and recorder.sent == []
+    assert engine.state.paused
+    assert "Mission 17 blocked" in strip_paths(engine.state.stop_reason or "")
