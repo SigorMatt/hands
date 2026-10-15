@@ -1,4 +1,4 @@
-# hands — DESIGN v3.19
+# hands — DESIGN v3.20
 
 Machinery that replaces the human relay between the planning brain and the two
 Claude Code roles (builder, aux) on the Ubuntu laptop, and that keeps a series
@@ -1747,3 +1747,104 @@ for a `keep` answer; the handbook's onboarding shape, the ruling round, the
 separation rule (another project appears in hands' files only as evidence),
 re-firing a consultation; HF-004, HF-005 and the first plan kit's silent
 apply in the docs.
+
+## 37. Changes from v3.19 (mission 20 review; the closer; the notification move)
+
+Mission 20 was the first mission run through a pull request (PR #2), and
+the flow held: the cold review found the pull request itself, read the
+hosted review's nine findings as claims, confirmed four of them (one as the
+blocker, which its own sub-agent had reproduced separately), dismissed
+five with reasons, and left the PR open on `blockers=1 should-fix=6`
+(REVIEW-20, `reviewed: 62f5618`). Mission 21 is the closer: it continues
+the branch `mission-20` and its review merges when clean. The onboarding
+half that §36 named "mission 21" moves to mission 22, together with what
+the laptop found on 2026-10-14 while mission 20 ran (below). Roadmap
+renumbering: mission 21 is this closer; mission 22 is the onboarding half
+and the operational findings; M5–M8 are unchanged.
+
+**The cancel race (review 20 blocker 1).** `Spool.transition` judges every
+edge against the record on disk, never against the caller's object: it
+reloads the job by id before testing the edge, and a caller whose record is
+stale gets `IllegalTransition` from the on-disk state. That closes the
+window everywhere §6 allowed it in milliseconds and §36's advance widened
+to a network fetch. The runner, in addition, reloads the record after
+`advance_clone` returns and, when the job is no longer `queued`, leaves it
+as it is and spawns nothing: a `hands cancel` during the advance ends in
+`killed`, the consultation the engine closed stays closed, and no `claude`
+starts. The regression test cancels during a slow fake advance and expects
+`killed`, no spawn, and the inbox event the cancel filed and nothing after
+it.
+
+**The live hook (review 20 should-fix 1; REVIEW-18 should-fix 2, again).**
+The hook command in `driver/settings.json` and `architect/settings.json` is
+`python3 -I "$CLAUDE_PROJECT_DIR"/.claude/hooks/bash_guard.py` (and `--write`),
+so the guard Claude Code runs ignores the user site and `PYTHONPATH` as
+doctor's self-test does; doctor's guard row additionally FAILS when any
+`.py` file or any package directory other than the guard itself sits beside
+it, naming the file, and the row's self-test runs the hook command as the
+settings file spells it, not a command of its own. A planted `shlex.py`
+beside the guard is then both inert and reported.
+
+**Writes through a hardlink (review 20 should-fix 2).** The `--write` hook
+refuses a target that exists with a link count above one, and refuses every
+write while the kits walk (`kits_symlink(kits, hardlinks=True)`) reports
+anything, as `cp` and `mv` are refused; the refusal names the link. Doctor's
+kits walk is unchanged.
+
+**Provenance of an `answer` (review 20 should-fix 3).** `Api.send` refuses
+`origin: phone` from a socket client as it refuses `origin: architect`
+(§32): only the daemon's own `answer` path sets it. A raw socket send
+cannot be published as the builder's answer or listed to the architect as
+a human decision.
+
+**`doctor --live` for the architect (review 20 should-fix 4, 5).** The
+live turn names the clone `driver_clone` resolves for the role (the cwd
+itself when that is the clone) as `--repo`, and the row FAILS before the
+turn when the role has no clone. The judged `hands kit check` must name the
+live kit's own path and that `--repo`; a check of any other kit does not
+pass the step. The live kit's name is unique per run,
+`kits/hands-doctor-live-<8 hex>`; the row refuses to run, and FAILS, when
+that path already exists, and it removes only the directory it created.
+
+**The protocol's revert step (review 20 should-fix 6).** Both protocol
+files say what every sub-agent of review 20 did: in the worktree at the
+commit, `git checkout <sha>~1 -- <the non-test files the body lists>`,
+run the new tests and expect red, then `git checkout <sha> -- <the same
+files>`; "stash" leaves the text.
+
+**An apply that leaves no playbook (review 20 note on U5).** After an apply
+the engine approved itself, a playbook file that is absent from the
+committed tree stops the pipeline with the reason "the apply removed
+PLAYBOOK.toml", as one that no longer loads stops with the loader's reason;
+§36's sentence covers both.
+
+**What the laptop found while mission 20 ran (mission 22).** Recorded here
+so the numbering is on disk; the entries are filed by mission 21's U0 and
+built by mission 22. H-046: both `handswho` units published every ~20 s
+because the who text's relative-time line counts as a change, and ~350
+publishes an hour from one address spent the public broker's free daily
+cap (429) for the daemons' own stops and holds too; `handswho` publishes on
+a real state change only, compared without the relative-time text, with a
+floor on the interval, and doctor WARNS on a public `ntfy_url` that the cap
+exists and names the self-hosted path. H-047: a `handsd` restart kills the
+running builder job and nothing resumes it (the `task_killed` rule only
+notifies), so every install cost a `go` from the phone; the daemon
+re-queues the kickoff for a builder job its own stop killed, bounded as
+`resume` is. H-048: under `autonomous`, a builder's `blocked` verdict stops
+for the human, who can only re-fire the role through the aux by hand; the
+playbook may consult the architect on `builder.done` with a `blocked`
+verdict, the consult prompt carrying the builder's reply in place of a
+review, counted against the same budget. The self-hosted ntfy of §33 was
+set up on 2026-10-14 from docs/INTEGRATION.md and the doc was wrong in the
+image name (`binwiederhier/ntfy`), silent on a tailnet without a
+certificate domain (bind the container to the tailnet address, plain http
+over Tailscale), on `base-url` before the first start, on configs written
+before `[notify]` existed (an `ntfy_topic` left under `[server]` refuses to
+load), and on the access rule (`hands-*` must cover the who topics too);
+mission 22 corrects it and makes the self-hosted server the documented
+default for role mode. A phone `progress <secret>` (job id and age, the
+working tree's branch, the last three commit subjects, the checkpoint's
+unit line) replaces the aux's read-only line, because `status` says only
+running or idle and `pipeline`'s `auto-runs` counts playbook-started runs
+only. The §36 list for the onboarding half is unchanged and is mission
+22's with these.

@@ -28,7 +28,61 @@ item names the mission it is scheduled for; unscheduled items say so.
 
 ## Mission 19 — DONE 2026-10-14 (review 19: blockers=0, should-fix=5; installed 2026-10-14).
 
-## Mission 20 (scheduled 2026-10-14) — the machinery half of the first role-mode series' findings, review 19, review 18. Spec: DESIGN v3.19 §36. First mission through the flow. Items 1–7, 9 (HF-003 only), the review-18 items and the title/topic item below are its; items 8 (HF-002, HF-004, HF-005, the silent first apply) and 10 are mission 21's, with the review-protocol texts of HF-007/HF-008 in 20.
+## Mission 20 — BUILT 2026-10-14 on branch mission-20 (PR #2); review 20 (2026-10-15): blockers=1, should-fix=6; the PR stays open. Items 1–7, 9 (HF-003 only), the review-18 items and the title/topic item below landed; items 8 (HF-002, HF-004, HF-005, the silent first apply) and 10 are mission 22's.
+
+## Mission 21 (scheduled 2026-10-15) — closer for review 20. Spec: DESIGN v3.20 §37. Continues mission-20; its review merges PR #2.
+
+1. Review 20 blocker 1: the cancel race during the clone advance —
+   `Spool.transition` judges the on-disk record; the runner re-reads after
+   the advance and spawns nothing for a job no longer queued.
+2. Review 20 should-fix 1, 2: `python3 -I` in both hook commands and
+   doctor failing on a module beside the guard; the `--write` hook refuses
+   hardlinked targets and any write while a link exists under `kits/`.
+3. Review 20 should-fix 3, 4, 5: `origin: phone` refused from a socket
+   client; `doctor --live` judges the resolved clone, a unique kit name,
+   removes only what it made.
+4. Review 20 should-fix 6: the protocol's revert step as the sub-agents did
+   it (`git checkout <sha>~1 -- <files>`).
+5. Review 20's note on U5: an apply that leaves no playbook stops.
+6. Files H-046, H-047, H-048 for mission 22.
+
+## Mission 22 (scheduled 2026-10-15) — the operational findings of 2026-10-14 and the onboarding half. Spec: DESIGN §37 last paragraph and §36 "Mission 21 (specified next)". Kit after mission 21 is installed.
+
+1. H-046: `handswho` publishes on a real state change only, compared
+   without the relative-time text, with a floor on the interval; doctor
+   WARNS on a public `ntfy_url` naming the daily cap and the self-hosted
+   path. The laptop's who units stay stopped until this ships.
+2. H-047: the daemon re-queues the kickoff for a builder job its own stop
+   killed, bounded as `resume` is; the install routine stops costing a `go`.
+3. H-048: under `autonomous`, a `blocked` builder verdict may consult the
+   architect role (playbook rule), the consult prompt carrying the
+   builder's reply in place of a review, against the same budget.
+4. docs/INTEGRATION.md "Self-hosted ntfy over Tailscale" corrected from the
+   2026-10-14 setup: the image `binwiederhier/ntfy`; no certificate domain
+   → bind the tailnet address, plain http over Tailscale; `base-url` before
+   the first start; `ntfy_topic` left under `[server]` refuses to load (the
+   migration removes it); the access rule covers the who topics; the phone
+   app's WebSockets option is fine without a proxy; the self-hosted server
+   is the documented default for role mode.
+5. Phone `progress <secret>`: job id and age, the working tree's branch,
+   the last three commit subjects, the checkpoint's unit line. Handbook:
+   `pipeline`'s `auto-runs` counts playbook-started runs only; `jobs`
+   lists newest first.
+6. Review 20's minor notes on U6: "since the last consultation" by the
+   consultation's recorded sha rather than `git log --since`; the decisions
+   path comparison for a builder cwd below the repository root.
+7. Handbook: sub-agents refuse to author attack-shaped test content (a
+   safety classifier; evidence: discotrade mission 13 U4, 2026-10-15), so a
+   brief delivers such a suite as generated fixtures from a neutral spec;
+   re-firing a consultation goes through the aux role's reply, never a
+   direct send to the architect (refused by §31).
+8. The onboarding half, as §36 lists it: HF-002 (handbook and templates
+   from the installed hands), `hands project add`, the Purpose block,
+   `templates/DECISIONS-owner.md` with the protocol's one-commit exception,
+   the brief template's recovery rule for a `keep` answer, the handbook's
+   onboarding shape, ruling round and separation rule, HF-004, HF-005, the
+   first plan kit's silent apply. INSTRUCTION PASTE DUE after mission 22.
+
 
 1. The architect role's write permission: `architect/settings.json` allows
    `Edit(kits/**)`, `Write(kits/**)`, `MultiEdit(kits/**)` and nothing wider;
