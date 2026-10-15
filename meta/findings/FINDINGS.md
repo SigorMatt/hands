@@ -1917,7 +1917,7 @@ buttons carry, or (c) the buttons are dropped when `ntfy_token` is set and the
 notification says to type the command. A real ntfy server and phone app should
 settle whether the app signs action requests before choosing.
 
-Status: open
+Status: in progress (mission 22, U1)
 
 ---
 
@@ -2157,7 +2157,7 @@ Direction. §37: `handswho` publishes on a real state change only, compared
 without the relative-time text, with a floor on the interval; doctor WARNS
 on a public `ntfy_url` that the cap exists and names the self-hosted path.
 
-Status: open (scheduled for mission 22)
+Status: in progress (mission 22, U2)
 
 ## H-047 — a `handsd` restart kills the running builder job and nothing resumes it
 
@@ -2173,7 +2173,7 @@ phone.
 Direction. §37: the daemon re-queues the kickoff for a builder job its own
 stop killed, bounded as `resume` is.
 
-Status: open (scheduled for mission 22)
+Status: in progress (mission 22, U3)
 
 ## H-048 — under `autonomous` a builder's `blocked` verdict stops for the human
 
@@ -2190,4 +2190,44 @@ Direction. §37: the playbook may consult the architect on `builder.done`
 with a `blocked` verdict, the consult prompt carrying the builder's reply in
 place of a review, counted against the same consultation budget.
 
-Status: open (scheduled for mission 22)
+Status: in progress (mission 22, U4)
+
+## H-049 — the protocol's revert step fails for a file the commit adds
+
+Severity: medium · Component: templates/REVIEW-PROTOCOL.md,
+meta/REVIEW-PROTOCOL.md; DESIGN §37 "The protocol's revert step", §38
+Filed by: mission 22 orchestrator, U0 (2026-10-15).
+Evidence: REVIEW-21 should-fix 2 (the U4 sub-agent, in a scratch repo).
+
+Symptom. `git checkout <sha>~1 -- <files>` exits 1 with `pathspec … did
+not match` when a listed file does not exist at the parent, and then
+reverts none of the listed files. A sub-agent that misses the error runs
+the new tests against unreverted code; a red run caused by the missing
+file can hide a weak test.
+
+Direction. §38: for each non-test file the body lists, `git checkout
+<sha>~1 -- <file>` when the file exists at `<sha>~1`, else `rm` it; run
+the commit's new tests and expect red; then `git checkout <sha> --
+<files>`. A commit body names added files as added. Mission 22 U7.
+
+Status: in progress (mission 22, U7)
+
+## H-050 — review 21 ran its sub-agents concurrently against the protocol's one-at-a-time rule
+
+Severity: low · Component: templates/REVIEW-PROTOCOL.md,
+meta/REVIEW-PROTOCOL.md; DESIGN §38 "The reviewer's schedule is written
+down"
+Filed by: mission 22 orchestrator, U0 (2026-10-15).
+Evidence: REVIEW-21 Notes ("the five sub-agents ran concurrently");
+discotrade HF-008.
+
+Symptom. The protocol says one per-commit sub-agent at a time; REVIEW-21
+ran five at once and nothing in the review records the schedule, so the
+breach is visible only because the review mentions it.
+
+Direction. §38: the protocol's Notes section requires one line per
+sub-agent with its start and end time and states the rule's reason (one
+`./scripts/check` at a time inside the 20-minute cap); a review whose
+Notes lack the schedule is a should-fix for the next review. Mission 22 U7.
+
+Status: in progress (mission 22, U7)
