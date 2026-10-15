@@ -110,19 +110,26 @@ then an install (`uv tool install --force`) and a driver-kit refresh.
   of an `answer`, `doctor --live` for the architect, the protocol's revert
   step, the apply that leaves no playbook; files H-046..H-048. Gate:
   mission 21 merged by its own review through the flow (PR #2), with a
-  `## Hosted review` section in REVIEW-21. Mission 22: the operational
-  findings of 2026-10-14 (H-046 the who publish rate and doctor's warning
-  on the public broker's cap; H-047 the restart that kills the builder;
-  H-048 the blocked verdict consulting the role; the self-hosted ntfy as
-  the documented default with docs/INTEGRATION.md corrected; a phone
-  `progress` command) and the onboarding half — the role
+  `## Hosted review` section in REVIEW-21 — DONE 2026-10-15 (review 21:
+  blockers=0, should-fix=3; the review merged PR #2 itself: 791f767;
+  installed 2026-10-15). GATE MET. Mission 22 (DESIGN §38, the last of
+  M4d): the buttons carrying the token (H-037, live since the move to the
+  self-hosted server), the operational findings of 2026-10-14 (H-046 the
+  who publish rate and doctor's warning on the public broker's cap; H-047
+  the restart that kills the builder; H-048 the blocked verdict consulting
+  the role; the self-hosted ntfy as the documented default with
+  docs/INTEGRATION.md corrected; a phone `progress` command), review 21's
+  three should-fix items (H-049 the revert step for added files, H-050 the
+  reviewer's schedule), and the onboarding half — the role
   reads the handbook and templates from the installed hands (HF-002),
   `hands project add`, the Purpose block in both instruction templates, the
   owner-decisions file as a template with the review protocol's one-commit
   exception, the brief template's recovery rule for a `keep` answer, the
   handbook's onboarding shape, ruling round, separation rule and consultation
   re-firing, HF-004, HF-005 and the first plan kit's silent apply in the
-  docs. INSTRUCTION PASTE DUE after mission 22 for every Project.
+  docs. Gate: mission 22 merged by its own review; `hands project add
+  --dry-run` and the authenticated buttons exercised on the laptop.
+  INSTRUCTION PASTE DUE after mission 22 for every Project.
 - **M5 Pet projects from scratch (discotrade)** — decided 2026-09-17: before
   any integration, hands drives a new project from an empty repository in
   role mode, as the shakedown of the whole loop. discotrade

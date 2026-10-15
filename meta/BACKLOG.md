@@ -30,7 +30,7 @@ item names the mission it is scheduled for; unscheduled items say so.
 
 ## Mission 20 — BUILT 2026-10-14 on branch mission-20 (PR #2); review 20 (2026-10-15): blockers=1, should-fix=6; the PR stays open. Items 1–7, 9 (HF-003 only), the review-18 items and the title/topic item below landed; items 8 (HF-002, HF-004, HF-005, the silent first apply) and 10 are mission 22's.
 
-## Mission 21 (scheduled 2026-10-15) — closer for review 20. Spec: DESIGN v3.20 §37. Continues mission-20; its review merges PR #2.
+## Mission 21 — DONE 2026-10-15 (review 21: blockers=0, should-fix=3; PR #2 merged by the review, 791f767; installed 2026-10-15). Spec: DESIGN v3.20 §37.
 
 1. Review 20 blocker 1: the cancel race during the clone advance —
    `Spool.transition` judges the on-disk record; the runner re-reads after
@@ -46,7 +46,7 @@ item names the mission it is scheduled for; unscheduled items say so.
 5. Review 20's note on U5: an apply that leaves no playbook stops.
 6. Files H-046, H-047, H-048 for mission 22.
 
-## Mission 22 (scheduled 2026-10-15) — the operational findings of 2026-10-14 and the onboarding half. Spec: DESIGN §37 last paragraph and §36 "Mission 21 (specified next)". Kit after mission 21 is installed.
+## Mission 22 (scheduled 2026-10-15, kit issued) — the operational findings and the onboarding half. Spec: DESIGN v3.21 §38. Items 1–8 below plus: H-037 the buttons carry the token (FIRST; live on the self-hosted server since 2026-10-14, 403 on every button); review 21 should-fix 1–3 (H-049 the revert step for added files, H-050 the reviewer's schedule, the `-I` hook text in INTEGRATION); the human-supplied unit shape in the brief template and the protocol.
 
 1. H-046: `handswho` publishes on a real state change only, compared
    without the relative-time text, with a floor on the interval; doctor

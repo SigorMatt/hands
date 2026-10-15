@@ -1,4 +1,4 @@
-# hands — DESIGN v3.20
+# hands — DESIGN v3.21
 
 Machinery that replaces the human relay between the planning brain and the two
 Claude Code roles (builder, aux) on the Ubuntu laptop, and that keeps a series
@@ -1848,3 +1848,180 @@ unit line) replaces the aux's read-only line, because `status` says only
 running or idle and `pipeline`'s `auto-runs` counts playbook-started runs
 only. The §36 list for the onboarding half is unchanged and is mission
 22's with these.
+
+## 38. Changes from v3.20 (mission 21 review; the operational findings; the onboarding half)
+
+Mission 21 closed review 20 and was merged by its own review (PR #2,
+REVIEW-21 `reviewed: 2b5a7fc`, `blockers=0 should-fix=3`): the M4d gate is
+met. The same two days produced the operational findings §37 recorded
+(H-046, H-047, H-048, filed open by mission 21's U0), one finding that was
+on file since mission 17 and became live the moment the notifications moved
+to an authenticated server (H-037), review 21's three should-fix items, and
+the onboarding half that §36 specified and §37 deferred. Mission 22 builds
+all of it; it is the last mission of M4d. Roadmap: mission 22 as below;
+M5–M8 unchanged.
+
+**The buttons carry the token (H-037; review 21 of the move).** On the
+self-hosted server every Approve and Deny button fails with 403, because
+the `http` action the hold notification carries has no `headers` and the
+server denies anonymous publishing. When `[notify] ntfy_token` is set, every
+action hands publishes carries `headers.Authorization=Bearer <token>` in
+ntfy's short action form, beside `method=POST` and `body=…`; without a token
+the actions are as before. The token is already the subscriber's own (the
+phone reads the events topic with it), so nothing new is exposed by carrying
+it in an action the same subscriber receives. Doctor's `phone` row says
+whether the buttons are authenticated ("buttons: bearer on" | "buttons: no
+token; a token-protected server refuses them"). The test reads the published
+`Actions` header and finds the bearer on both actions.
+
+**`handswho` publishes on change only (H-046).** Both who daemons published
+every ~20 s because the picture's relative-time text ("N minutes since the
+last write") changed on every scan, and ~350 publishes an hour from one
+address spent the public broker's free daily cap for the daemons' own stops
+and holds too. The watcher compares the picture with every relative-time
+rendering blanked, publishes only when that comparison differs, and never
+publishes twice within `[notify] who_min_interval_s` (default 60) unless a command
+on `who_cmd_topic` requested it; the picture the phone receives still shows
+the times. Doctor WARNS on a public `ntfy_url` (the default broker, or any
+host that is not on a private address or the tailnet) with the cap and the
+self-hosted path named; it does not fail.
+
+**A daemon stop does not strand the builder (H-047).** A `handsd` stop ends
+its running jobs; today their records become `killed`, which is terminal
+and which no rule resumes, so every restart cost a `go` from the phone. Now
+a job the daemon's own stop ends is recorded `orphaned` with `reason:
+daemon_stop` (the process is still signalled as §2 requires), `killed` stays
+the record of a cancel, and at the next start every job reconciled or
+recorded as orphaned is fed to the engine as `<role>.orphaned` once the
+workers are up, so the playbook's `builder.orphaned → resume` rule re-sends
+the kickoff from a fresh context, bounded by `max_resumes` as every resume
+is, and an orphaned consultation stops as §28 and §31 say. The start
+notification names what was resumed. A daemon that was stopped with the
+builder idle resumes nothing.
+
+**A blocked mission consults the role (H-048).** Under `[series] architect
+= "role"` a builder's `VERDICT: mission N blocked <unit>` stopped for the
+human, who could reach the role only by having the aux role recite a
+review-shaped text. The architect may now be consulted on `builder.done` as
+well as on `aux.done` (`CONSULT_EVENTS`), and the consult prompt written for
+a builder's end says so: in place of the review's sections it carries the
+builder's verdict line and its full reply between the markers, headed "The
+builder's blocked verdict and its reply", with the roadmap milestone, the
+conditions and the instruction as before; the role's verdict vocabulary is
+unchanged, the consultation counts against the same budget, and `kit check`
+accepts a consult rule on a `builder.done` blocked verdict for the architect.
+`templates/PLAYBOOK-missions.toml` carries that rule in its role-mode
+variant with a comment, and the phone-mode variant keeps the stop; this
+repository's playbook, phone mode, keeps its stop.
+
+**`progress <secret>` (the tenth command).** `status` says running or idle;
+progress lives in the repository. `progress` publishes, titled `progress`:
+the builder's current job id and age (or the last ended job and its
+verdict), the working tree's branch and tip (`git -C <builder cwd> rev-parse
+--abbrev-ref HEAD` and `log --oneline -3`), and the first line of
+`meta/CHECKPOINT.md` that names a unit in progress (or "no checkpoint").
+Read-only; it starts no job. The handbook says what
+`pipeline`'s `auto-runs` counts and that `jobs` lists newest first.
+
+**The protocol's revert step for a file the commit adds (review 21
+should-fix 2; H-049).** `git checkout <sha>~1 -- <files>` fails for a file
+that does not exist at the parent and then reverts none of the listed files,
+so a sub-agent that misses the error tests unreverted code. The step now
+reads: for each non-test file the body lists, `git checkout <sha>~1 --
+<file>` when the file exists at `<sha>~1`, else `rm` it; then run the
+commit's new tests and expect red; then `git checkout <sha> -- <files>`. The
+template and this repository's protocol change together, and the sentence
+of §37 that prescribed the old wording is superseded here.
+
+**The reviewer's schedule is written down (H-050).** REVIEW-21 ran its five
+per-commit sub-agents concurrently although the protocol says one at a time
+(HF-008). The protocol's Notes section now requires one line per sub-agent
+with its start and end time, and says the rule's reason (one `./scripts/check`
+at a time inside the 20-minute cap); a review whose Notes lack the schedule
+is itself a should-fix for the next review. The merge step is unchanged.
+
+**Two small corrections from review 20's notes on U6.** "Since the last
+consultation" is computed from the sha the last consultation recorded
+(`git log <sha>..HEAD`), not from `git log --since`; and the decisions-path
+comparison is made on repository-root-relative paths taken from `git
+ls-files --full-name`, so a builder cwd below the repository root sees its
+owner files.
+
+**The owner-decisions round, as a template (§36's deferred half).**
+`templates/DECISIONS-owner.md`: `O-n` numbering continued from the last
+owner file on the branch, a precedence header (this file wins over DESIGN
+and earlier decisions), a "Findings closed:" line, and a last section "For
+the builder" with the exact steps, which is the only section the builder is
+told to read; the review-protocol template's one-commit exception for `plan:
+decisions <date> (owner)` (the commit is read for what it says it does and
+is not reviewed as a unit); the brief template's recovery rule: a `keep`
+send after `VERDICT: question` is the answer, carried out, the mission
+continued from the checkpoint, a `VERDICT:` line always, even when a file
+had to be committed first; both instruction templates carry the paragraph
+that tells a project's architect to answer rulings with this file.
+
+**Human-supplied content (§37's evidence, the handbook).** Attack-shaped
+test content — hostile corpora for a sandbox, exploit-shaped fixtures and
+the like — is authored by no agent in the chain: a builder's sub-agents, a
+project's architect chat and the hands architect chat were each stopped on
+it by a safety classifier (discotrade mission 13 U4 and its ruling O-21,
+2026-10-15). The brief template gains a "human-supplied unit" shape: the
+unit names the files, their paths and the commit message, the human places
+them under `~/Downloads/<name>/`, the builder copies and commits them by
+path without opening them, and the review protocol checks such a commit by
+`git show --stat` alone. The handbook's rule: a design that needs such a
+suite names the human-supplied unit up front, or is reshaped so that no
+agent has to author the content.
+
+**Onboarding (HF-002, HF-004, HF-005; `hands project add`).** The installed
+hands ships `docs/ARCHITECT-HANDBOOK.md` and `templates/` as package data;
+`hands handbook` prints the path of the installed handbook and `hands
+handbook --templates` the templates directory, and the runner exports
+`HANDS_DOCS=<that directory>` to every role job, so the architect role reads
+the handbook and the templates of the hands that runs it, never a pinned
+copy in its clone (HF-002); `architect/CLAUDE.md` and
+`docs/ARCHITECT-INSTRUCTION.md` say so. The handbook's §6 lists every
+`[series]` key with its default and meaning (HF-004, verified against
+`playbook.py`), and §12 names the laptop check of a role-mode plan kit —
+`hands kit check <kit> --repo <clone>` before the apply (HF-005) — and the
+first plan kit's silent apply (the engine's own `builder.done` rule
+approves it; the first thing the phone sees is the kickoff). `hands project
+add <name> --repo <url>` does what docs/INTEGRATION.md's setup section does
+by hand: writes `~/.hands/<name>.toml` from the installed config template
+with four generated topics carrying the project name and a command secret
+in `~/.hands/<name>.cmd_secret` (mode 600), creates `~/hands-driver/<name>/`
+and `~/hands-architect/<name>/` with the shipped settings and guard and a
+fetch-only clone of `<url>` whose push URL is `no_push`, writes the
+architect's `CLAUDE.md` from `docs/ARCHITECT-INSTRUCTION.md` with the
+Parameters filled, enables `handsd@<name>` (and leaves `handswho@<name>`
+for the human to enable), runs doctor, and ends by printing the filled
+Project instruction for pasting with its verification question ("What are
+your Parameters?"). It refuses an existing project or a non-empty
+directory, and `--dry-run` prints what it would write. The Purpose block
+is a standard slot in both instruction templates: three lines the human
+fills (what the project is for, what it is not, who decides), kept
+verbatim at the top of the instruction.
+
+**The handbook's new sections.** The onboarding shape (the human's Project
+chat writes the plan kit; from the switch point the role writes every kit;
+the hands architect audits kits only for hands-shaped content); the ruling
+round end to end (the stop, the owner file, the send, the §8 hold answered
+by typing, the resume); the separation rule (another project appears in
+hands' files only as evidence — name, commit, date, review number, finding
+id — never its content); re-firing a consultation after a stop (the aux
+role recites a review-shaped reply; a direct send to the architect is
+refused by design); `hands send` takes the prompt as a plain argument;
+`status` hides the architect row, `jobs` lists newest first. docs/
+INTEGRATION.md is corrected from the 2026-10-14 setup: the image is
+`binwiederhier/ntfy`; a tailnet without a certificate domain binds the
+container to the tailnet address and uses plain http over Tailscale;
+`base-url` is set before the first start; a config written before
+`[notify]` existed carries `ntfy_topic` under `[server]` and refuses to load
+until it is moved; the access rule `hands-*` must cover the who topics; the
+phone app's WebSockets option is fine with no proxy in front; the hook is
+spelled `python3 -I <guard>` everywhere (review 21 should-fix 3); the
+self-hosted server is the documented default for role mode, with what is
+proven (publish, subscribe, typed commands, attachments, buttons after this
+mission) stated as such. Review 21 should-fix 1 is a sentence in
+FINAL-REPORT-21; mission 22's report says which test is red without the
+spool half (the unit test in `test_spool`) and claims nothing wider.
