@@ -643,8 +643,14 @@ class Spool:
 
         `started` is stamped on entering `running` and `ended` on entering a
         terminal state, unless the caller passes them explicitly.
+
+        §37 "The cancel race": the edge is judged against the record on disk, never
+        against the caller's object. The job is reloaded by id first; a caller whose
+        object is stale gets `IllegalTransition` from the on-disk state and nothing
+        it carries is written. A `Job` passed in is refreshed to the written record
+        and returned, so a caller that keeps using its object sees the move.
         """
-        record = self.load_job(job) if isinstance(job, str) else job
+        record = self.load_job(job if isinstance(job, str) else job.id)
         if state not in TRANSITIONS:
             raise IllegalTransition(f"{record.state} -> {state}: {state!r} is not a job state")
         if state not in TRANSITIONS[record.state]:
@@ -663,6 +669,10 @@ class Spool:
         if state in TERMINAL_STATES and record.ended is None:
             record.ended = now_iso()
         self.save_job(record)
+        if isinstance(job, Job):
+            for f in fields(Job):
+                setattr(job, f.name, getattr(record, f.name))
+            return job
         return record
 
     @staticmethod

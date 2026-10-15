@@ -617,7 +617,17 @@ class Runner:
                 advance_error = await advance_clone(clone, role.branch)
 
         head_at_start = await _git_head(role.cwd)
-        job = self.spool.transition(job, "running", head_at_start=head_at_start)
+        # §37 "The cancel race": the advance is a network fetch, and a `hands cancel`
+        # may have moved the job meanwhile. Reload it after the awaits, with none
+        # between here and the transition; a job no longer `queued` is left as it is
+        # and nothing is spawned. RunnerError, because the daemon's worker then
+        # files nothing more for a job that is no longer queued.
+        current = self.spool.load_job(job.id)
+        if current.state != "queued":
+            raise RunnerError(
+                f"job {job.id} became {current.state} before it started; nothing spawned"
+            )
+        job = self.spool.transition(current, "running", head_at_start=head_at_start)
         if advance_error is not None:
             return await self._finish(
                 job, role, "failed", _Parsed(), None, advance_error,

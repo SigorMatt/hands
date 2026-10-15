@@ -174,6 +174,66 @@ def test_a_queued_job_can_be_cancelled_before_it_runs(project: str) -> None:
     drive(body)
 
 
+def test_a_cancel_during_the_clone_advance_ends_killed_and_spawns_nothing(
+    tmp_home: Path, workdir: Path, monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """§37 "The cancel race" (review 20 blocker 1): a driver job is cancelled while
+    the runner's `advance_clone` is still running (a slow fake that waits on an
+    event). The job ends `killed`, claude never starts (no pid, no session), and
+    the inbox holds only what the cancel itself filed, `job.killed` first (then
+    §28's `consult.done` and stop for a driver end): nothing is filed after the
+    cancel returns — no `job.done`, no second `consult.done`."""
+    from hands import runner as runner_mod
+
+    write_project(
+        tmp_home,
+        config_body(
+            tmp_home, workdir,
+            extra=f'[roles.driver]\ncwd = "{workdir}"\ncancel_gated = false',
+        ),
+    )
+    gates: dict[str, asyncio.Event] = {}
+
+    async def slow_advance(clone: Path, branch: str) -> str | None:
+        gates["started"].set()
+        await gates["release"].wait()
+        return None
+
+    monkeypatch.setattr(runner_mod, "driver_clone", lambda cwd: cwd)
+    monkeypatch.setattr(runner_mod, "advance_clone", slow_advance)
+
+    async def body(daemon: Daemon) -> None:
+        gates["started"] = asyncio.Event()
+        gates["release"] = asyncio.Event()
+        job = daemon.enqueue(
+            role="driver", context="clear", prompt="FAKE:result ran", origin="playbook"
+        )
+        await asyncio.wait_for(gates["started"].wait(), TIMEOUT)
+        assert daemon.spool.load_job(job.id).state == "queued"
+
+        cancelled = await ok("cancel", job.id, "--reason", "during the advance")
+        assert cancelled["state"] == "killed"
+        filed = [(e.kind, e.payload) for e in daemon.spool.events()]
+        kinds = [kind for kind, _ in filed]
+        assert kinds[0] == "job.killed", kinds  # the cancel's own events, from here on
+        gates["release"].set()
+
+        async def idle() -> bool:
+            return (await ok("status"))["roles"]["driver"]["running"] is None
+
+        await poll(idle, "the driver worker to finish")
+        await asyncio.sleep(0.2)  # room for anything the worker would still file
+        record = daemon.spool.load_job(job.id)
+        assert record.state == "killed"
+        assert record.pid is None and record.session_id is None and record.started is None
+        assert [(e.kind, e.payload) for e in daemon.spool.events()] == filed
+
+    caplog.set_level(logging.WARNING)
+    drive(body)
+    assert not [r for r in caplog.records if r.levelno >= logging.ERROR], caplog.text
+
+
 # ------------------------------------------------------------ startup facts
 
 
