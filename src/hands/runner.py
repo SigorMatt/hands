@@ -95,7 +95,7 @@ from hands.monitor import (
     start_time,
 )
 from hands.playbook import GIT_ENV_CLEARED, consult_head
-from hands.spool import TERMINAL_STATES, Job, Spool, SpoolError
+from hands.spool import ORPHAN_DAEMON_STOP, TERMINAL_STATES, Job, Spool, SpoolError
 
 __all__ = [
     "FAILURE_REASONS",
@@ -391,13 +391,16 @@ def reconcile_orphans(spool: Spool) -> list[Job]:
 
 
 def _event_payload(job: Job) -> dict[str, Any]:
-    return {
+    payload: dict[str, Any] = {
         "job": job.id,
         "role": job.role,
         "state": job.state,
         "session_id": job.session_id,
         "verdict": job.verdict,
     }
+    if job.state == "orphaned":  # §38: `daemon_stop`, or null for a reconciled orphan
+        payload["reason"] = job.orphan_reason
+    return payload
 
 
 # ---------------------------------------------------------- stream parsing
@@ -446,6 +449,8 @@ class Runner:
         self.spool = spool
         self._procs: dict[str, asyncio.subprocess.Process] = {}
         self._cancelled: set[str] = set()
+        #: §38: the jobs the daemon's own stop signalled; they end `orphaned`.
+        self._daemon_stop: set[str] = set()
         self._running: dict[str, asyncio.Event] = {}
         self._session_ready: dict[str, asyncio.Event] = {}
         #: job id → the open append handle of its stream log, for the length of
@@ -703,18 +708,29 @@ class Runner:
 
         cancelled = job.id in self._cancelled
         self._cancelled.discard(job.id)
-        state, failure_reason = _final_state(parsed, exit_code, cancelled=cancelled)
+        daemon_stop = job.id in self._daemon_stop
+        self._daemon_stop.discard(job.id)
+        state, failure_reason = _final_state(
+            parsed, exit_code, cancelled=cancelled, daemon_stop=daemon_stop
+        )
         tail = "\n".join(stderr_lines[-_STDERR_TAIL_LINES:]) or None
         return await self._finish(
             job, role, state, parsed, exit_code, tail, failure_reason=failure_reason
         )
 
-    async def cancel(self, job_id: str, *, grace_s: float | None = None) -> bool:
-        """SIGINT, wait `cancel_grace_s`, then SIGTERM (§2). False if not running."""
+    async def cancel(
+        self, job_id: str, *, grace_s: float | None = None, daemon_stop: bool = False
+    ) -> bool:
+        """SIGINT, wait `cancel_grace_s`, then SIGTERM (§2). False if not running.
+
+        §38 (H-047): `daemon_stop` is the daemon's own stop, not a human's cancel: the
+        process is signalled the same way, and the job ends `orphaned` with
+        `orphan_reason: daemon_stop` instead of `killed`. A human's cancel already
+        under way keeps `killed`."""
         proc = self._procs.get(job_id)
         if proc is None or proc.returncode is not None:
             return False
-        self._cancelled.add(job_id)
+        (self._daemon_stop if daemon_stop else self._cancelled).add(job_id)
         grace = self.config.runner.cancel_grace_s if grace_s is None else grace_s
         _signal(proc, signal.SIGINT)
         try:
@@ -1014,6 +1030,8 @@ class Runner:
             "limit": limit,
             "failure_reason": failure_reason if state == "failed" else None,
         }
+        if state == "orphaned":  # §38: only the daemon's own stop ends a run orphaned
+            updates["orphan_reason"] = ORPHAN_DAEMON_STOP
         updates["head_at_end"] = await _git_head(role.cwd)
         finished = self.spool.transition(job, state, **updates)
         self.spool.append_event(f"job.{state}", _event_payload(finished))
@@ -1021,11 +1039,16 @@ class Runner:
 
 
 def _final_state(
-    parsed: _Parsed, exit_code: int | None, *, cancelled: bool
+    parsed: _Parsed, exit_code: int | None, *, cancelled: bool, daemon_stop: bool = False
 ) -> tuple[str, str | None]:
-    """The terminal state and, for `failed`, its `failure_reason` (§6, §23)."""
+    """The terminal state and, for `failed`, its `failure_reason` (§6, §23).
+
+    §38: a job the daemon's own stop signalled is `orphaned`, whatever the process
+    said as it went; a human's cancel still wins over that, as `killed`."""
     if cancelled:
         return "killed", None  # a human asked; nothing the process said changes that
+    if daemon_stop:
+        return "orphaned", None  # §38: the next start feeds it to the engine
     if parsed.limit_category is not None:
         # Decided in U1 of mission 7a: a limit wins over the terminating line. §6
         # owns the limit resume and waits out the reset; `failed` would hand the

@@ -253,11 +253,11 @@ class Daemon:
             raise
 
     async def _start(self) -> None:
+        # §38: what is reconciled here is fed to the engine below, once the workers
+        # are up, with every orphan a stopped daemon recorded (`_feed_orphans`).
         orphans = reconcile_orphans(self.spool)
         for job in orphans:
             log.warning("job %s was running with no process; marked orphaned", job.id)
-        for job in orphans:
-            await self._consultation_ended(job)  # §28, §31: an orphaned consultation stops
 
         self._bind_guard()
         self._server = await asyncio.start_unix_server(
@@ -278,12 +278,20 @@ class Daemon:
         self._beat = asyncio.create_task(self._heartbeat(), name="hands-heartbeat")
         # §6: a resume scheduled by a daemon that then died is owed by this one.
         await self.limits.reschedule_pending()
+        # §38 (H-047): every orphan owed to the engine — reconciled above, or recorded
+        # by the daemon whose stop ended it — is fed now, once, the workers being up.
+        resumed = await self._feed_orphans()
         if self.phone is not None:
             self.phone.start()
         # §34: every job still held is published at once with fresh buttons, and the
         # start notification names each by title.
         still_held = self._publish_held()
         message = f"{self.config.project} on {self.socket_path}"
+        for job in resumed:  # §38: the start notification names what was resumed
+            message += (
+                f"\nResumed: {job.role} job {job.id}, from job {job.resumed_from} "
+                "which a daemon stop orphaned"
+            )
         log.info(
             "handsd %s listening on %s (project %s)",
             __version__, self.socket_path, self.config.project,
@@ -296,6 +304,27 @@ class Daemon:
             )
         else:
             self._publish_start()
+
+    async def _feed_orphans(self) -> list[Job]:
+        """§38 (H-047): feed every orphan owed to the engine as `<role>.orphaned`,
+        oldest first, and return the jobs the engine resumed from them.
+
+        Each orphan is marked fed before the engine hears it, so no later start feeds
+        it again, even if this one dies deciding it (at most once). An orphaned
+        consultation stops as §28 and §31 say; a builder orphan meets the playbook's
+        `builder.orphaned` rule, whose `resume` is bounded by `max_resumes` (§6)."""
+        owed = self.spool.orphans_owed()
+        for job in owed:
+            fed = self.spool.mark_orphan_fed(job.id)
+            try:
+                await self.playbook.on_job(fed)
+            except Exception:  # pragma: no cover - a bug here must not stop the start
+                log.exception("job %s (%s): its orphaned end could not be decided",
+                              job.id, job.role)
+        if not owed:
+            return []
+        ids = {job.id for job in owed}
+        return [job for job in self.spool.list_jobs() if job.resumed_from in ids]
 
     def _publish_start(self) -> None:
         """§32: the one publish of a start; what was held since the start is folded in.
@@ -444,11 +473,12 @@ class Daemon:
                 await self._server.wait_closed()
 
         # A running claude must never outlive the daemon: SIGINT, then SIGTERM
-        # (§2). Its record becomes `killed`; a job still `queued` stays queued
-        # and the next daemon picks it up.
+        # (§2). §38 (H-047): its record becomes `orphaned` with `orphan_reason:
+        # daemon_stop`, which the next start feeds to the engine; `killed` is a
+        # cancel's. A job still `queued` stays queued and the next daemon picks it up.
         for job_id in [value for value in self._running.values() if value]:
             with contextlib.suppress(Exception):
-                await self._signal_stop(job_id)
+                await self._signal_stop(job_id, daemon_stop=True)
         for role in self._roles:
             self._tokens[role].put_nowait(None)
         if self._workers:
@@ -628,6 +658,10 @@ class Daemon:
             log.info("job %s (%s) starting", job_id, role)
             finished = await self.runner.run(job)
             log.info("job %s (%s) %s", job_id, role, finished.state)
+            if finished.state == "orphaned":
+                # §38: the daemon's own stop ended it. The engine hears it at the next
+                # start (`_feed_orphans`), not in a daemon going down.
+                return
             # §6: a `limited` job schedules its own resume, a `done` one clears
             # the resume counter. Both are the limit manager's, not the queue's.
             await self.limits.on_job_finished(finished)
@@ -661,7 +695,7 @@ class Daemon:
 
     async def _consultation_ended(self, job: Job) -> None:
         """§28, §31: a consulted role's job that ended outside the worker's run (never
-        spawned, cancelled while queued, orphaned by a dead daemon) is still the end of
+        spawned, cancelled while queued) is still the end of
         its consultation, so the engine hears it. Other roles' such ends are unchanged."""
         if job.role not in CONSULT_ROLES:
             return
@@ -852,7 +886,7 @@ class Daemon:
         finished = await self.wait_for_terminal(job.id, timeout=grace)
         return finished if finished is not None else self.spool.load_job(job.id)
 
-    async def _signal_stop(self, job_id: str) -> None:
+    async def _signal_stop(self, job_id: str, *, daemon_stop: bool = False) -> None:
         """SIGINT then SIGTERM the job's process (§2), even if it was just spawned.
 
         `send` → spawn is not instantaneous, so a cancel (or a shutdown) that
@@ -864,7 +898,7 @@ class Daemon:
                 return
             with contextlib.suppress(TimeoutError):
                 await self.runner.wait_until_running(job_id, timeout=5.0)
-        await self.runner.cancel(job_id)
+        await self.runner.cancel(job_id, daemon_stop=daemon_stop)
 
     # ---------------------------------------------------------------- status
 

@@ -2185,7 +2185,12 @@ phone.
 Direction. §37: the daemon re-queues the kickoff for a builder job its own
 stop killed, bounded as `resume` is.
 
-Status: in progress (mission 22, U3)
+Status: resolved-by-code (mission 22 U3 — a daemon stop records its running jobs
+`orphaned` with `orphan_reason: daemon_stop` (runner `cancel(daemon_stop=True)`,
+`_final_state`); every new orphan carries `orphan_fed: false` until a start feeds it
+once as `<role>.orphaned` after the workers are up (`Daemon._feed_orphans`,
+`Spool.orphans_owed`/`mark_orphan_fed`), and the start notification names the resumed
+job; tests in tests/test_daemon_stop.py)
 
 ## H-048 — under `autonomous` a builder's `blocked` verdict stops for the human
 
