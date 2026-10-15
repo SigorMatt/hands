@@ -96,6 +96,12 @@ A `go` job or a kit's apply (`origin: kit`), like a `cli` send, un-pauses a
 stopped pipeline when it starts, not when it is filed or held (DESIGN §27). A stopped pipeline still has its playbook, so `go` is accepted
 while it is paused.
 
+Once a series runs, `progress <secret>` on the same topic (DESIGN §38) says
+where it is without starting anything: the builder's running job and its age
+(or its last ended job and verdict), the branch and last three commits of the
+builder's cwd, and the line of `meta/CHECKPOINT.md` naming the unit in
+progress (docs/INTEGRATION.md, the command channel).
+
 ### The series' architect (DESIGN §31)
 
 `architect = "phone" | "role"` (default `phone`) says which architect this

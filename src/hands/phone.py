@@ -4,7 +4,7 @@
        ▲                                                   │
        └──────────── one JSON line per message ────────────┘
 
-The daemon subscribes to `[notify] cmd_topic` with a long-poll and accepts nine
+The daemon subscribes to `[notify] cmd_topic` with a long-poll and accepts ten
 commands, each ending in its token but `reply` and `answer`, whose secret is their
 second word:
 
@@ -13,6 +13,7 @@ second word:
     pause <secret>
     resume <secret>
     status <secret>
+    progress <secret>
     go <secret>
     kit <secret>        (a message that carries an ntfy attachment)
     reply <secret> <text>
@@ -46,6 +47,14 @@ checked by the `kit` rules below (a `.zip` basename, `kit_max_mb`, the url,
 unzipped or applied: the delivered text ends with one sentence naming the file's
 path (`attachment_sentence`), and the job record's `files_written` keeps its
 sha256. The text and the attachment's name and hash are filed as `answer.sent`.
+
+**`progress`** (§38) publishes on `ntfy_topic`, titled `progress`, what `status`
+does not say: the builder's running job and its age, or the last ended builder
+job, its state and its verdict line; `branch: <name>` and `git log --oneline -3`
+of the builder's cwd (`git -C <cwd> rev-parse --abbrev-ref HEAD`), or one plain
+line when that cwd is not a repository or has no commit; and the first line of
+the working tree's `meta/CHECKPOINT.md` naming a unit in progress, or "no
+checkpoint" (`Api.progress_report`). It is read-only and starts no job.
 
 **`go`** (§26) is the one way to start work from the phone: it sends the
 playbook's `[series] kickoff` line to the builder as a `clear` send with
@@ -109,10 +118,11 @@ nothing. It is dropped when the job is decided by any route (the daemon calls
 mints a fresh nonce for every job still held (§25; `Daemon._publish_held`) and
 publishes each job's held notification again with those buttons (§34, reversing
 §31's no-re-send); the `handsd started` notification names each by title. `pause`, `resume`,
-`status` and `go` take the secret only. The secret is compared with
+`status`, `progress` and `go` take the secret only. The secret is compared with
 `hmac.compare_digest` and never published: a notification carries only nonces.
 
-**What is answered.** `status` publishes a short summary to `ntfy_topic`, an
+**What is answered.** `status` publishes a short summary to `ntfy_topic`,
+`progress` the builder's job, branch, last commits and checkpoint line, an
 accepted `go` publishes the id and state of the job it filed there, a
 written kit publishes its name, size and sha256, and a `reply` with the secret
 publishes the job it filed or why it was refused (then the architect's answer),
@@ -163,7 +173,7 @@ if TYPE_CHECKING:  # pragma: no cover
 
 __all__ = [
     "ANSWER_TITLE", "ARCHITECT_TITLE", "BACKOFF_S", "BUILDER_TITLE", "GO_TITLE", "KIT_TITLE",
-    "NONCE_BYTES", "REPLY_TITLE", "STATUS_TITLE", "PhoneChannel", "answer_reply",
+    "NONCE_BYTES", "PROGRESS_TITLE", "REPLY_TITLE", "STATUS_TITLE", "PhoneChannel", "answer_reply",
     "attachment_sentence", "parse_answer", "parse_reply", "reply_answer", "status_summary",
 ]  # fmt: skip
 
@@ -189,6 +199,8 @@ ARCHITECT_TITLE = "architect"
 ANSWER_TITLE = "hands: answer"
 #: §36: "the builder's final reply is published on `ntfy_topic` titled `builder`".
 BUILDER_TITLE = "builder"
+#: §38: "`progress` publishes, titled `progress`".
+PROGRESS_TITLE = "progress"
 
 #: §26's size cap is in MB; hands reads that as MiB.
 MIB = 1024 * 1024
@@ -200,7 +212,7 @@ KIT_DEADLINE_S = 300.0
 KIT_TEMP_PREFIX = ".hands-kit-"
 KIT_SUFFIX = ".zip"
 
-_SECRET_ONLY = ("pause", "resume", "status", "go", "kit")
+_SECRET_ONLY = ("pause", "resume", "status", "progress", "go", "kit")
 #: §33: `reply <secret> <text>`. The secret is the second word, not the last, and the
 #: text is the rest of the message as typed: whitespace before `reply`, the run
 #: between `reply` and the secret, and the run between the secret and the text are
@@ -363,6 +375,9 @@ class PhoneChannel:
                 await self.daemon.playbook.pause(by="phone")
             elif verb == "resume":
                 await self.daemon.api.resume()
+            elif verb == "progress":  # §38: read-only; it starts no job
+                report = await self.daemon.api.progress_report()
+                await self.daemon.notifier.answer(PROGRESS_TITLE, report)
             else:
                 await self.daemon.notifier.answer(STATUS_TITLE, status_summary(self.daemon))
             log.info("phone: %s", verb)

@@ -612,13 +612,32 @@ def test_answer_is_documented_in_the_command_channel_and_the_phone_module() -> N
     channel = integration.split("### The command channel: approve from the phone", 1)[1]
     channel = flattened(channel.split("\n### ", 1)[0])
     assert "answer <secret> <text>" in channel
-    assert "takes nine commands" in channel
+    assert "takes ten commands" in channel
     for said in ("`origin: phone`", f"titled `{BUILDER_TITLE}`", f"`{ANSWER_TITLE}`",
                  '--context keep "<text>"', "never held by the gate patterns",
                  "`answer.sent`", "no resumable session", "sha256",
                  "Decided by the human since your last consultation"):
         assert flattened(said) in channel, f"the command channel does not say {said!r}"
     assert "answer <secret> <text>" in (phone.__doc__ or "")
+
+
+def test_progress_is_documented_in_the_command_channel_the_playbook_doc_and_the_module() -> None:
+    """§38: `progress <secret>`, the tenth command, is in the command channel's list
+    with what it answers, in docs/PLAYBOOK.md, and in the phone module's list."""
+    from hands import phone
+    from hands.phone import PROGRESS_TITLE
+
+    integration = (ROOT / "docs" / "INTEGRATION.md").read_text(encoding="utf-8")
+    channel = integration.split("### The command channel: approve from the phone", 1)[1]
+    channel = flattened(channel.split("\n### ", 1)[0])
+    assert "progress <secret>" in channel
+    for said in (f"titled `{PROGRESS_TITLE}`", "rev-parse --abbrev-ref HEAD",
+                 "log --oneline -3", "meta/CHECKPOINT.md", "no checkpoint", "starts no job"):
+        assert flattened(said) in channel, f"the command channel does not say {said!r}"
+    playbook_doc = flattened((ROOT / "docs" / "PLAYBOOK.md").read_text(encoding="utf-8"))
+    assert "`progress <secret>`" in playbook_doc
+    assert "progress <secret>" in (phone.__doc__ or "")
+    assert "accepts ten" in flattened(phone.__doc__ or "")
 
 
 def test_the_readme_names_kit_check_go_and_the_kit_transport() -> None:
