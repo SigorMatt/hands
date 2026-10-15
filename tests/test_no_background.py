@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import re
 import subprocess
 import sys
@@ -696,3 +697,40 @@ def test_the_bash_refusals_are_byte_identical_to_before(payload: object, stderr:
 def test_the_bash_selftest_line_is_unchanged() -> None:
     done = run_hook("", "--selftest")
     assert "selftest: 65/65 ok" in done.stdout.splitlines(), done.stdout
+
+
+def test_the_settings_command_runs_the_hook_isolated_from_a_planted_module(
+    tmp_path: Path,
+) -> None:
+    """§39 (H-056, review 22 should-fix 12): the settings run the hook as `python3
+    -I`, so a `json.py` planted beside it is not imported. The settings' own
+    command is run by a shell with `CLAUDE_PROJECT_DIR` set, as Claude Code runs
+    it; without `-I` the planted module would answer instead of the hook."""
+    settings = json.loads(SETTINGS.read_text(encoding="utf-8"))
+    commands = [
+        h["command"]
+        for e in settings["hooks"]["PreToolUse"]
+        for h in e["hooks"]
+        if "no_background.py" in h["command"]
+    ]
+    assert commands == ['python3 -I "$CLAUDE_PROJECT_DIR"/.claude/hooks/no_background.py']
+    hooks = tmp_path / ".claude" / "hooks"
+    hooks.mkdir(parents=True)
+    (hooks / "no_background.py").write_bytes(HOOK.read_bytes())
+    (hooks / "json.py").write_text("import sys\nprint('planted')\nsys.exit(0)\n")
+    payload = {"tool_name": "Bash", "tool_input": {"command": "sleep 30 &"}}
+    for command, planted in ((commands[0], False), (commands[0].replace(" -I", ""), True)):
+        done = subprocess.run(
+            ["bash", "-c", command],
+            input=json.dumps(payload),
+            capture_output=True,
+            text=True,
+            timeout=60,
+            env={"PATH": os.environ["PATH"], "CLAUDE_PROJECT_DIR": str(tmp_path)},
+            cwd=tmp_path,
+        )
+        if planted:  # the control: the same command without -I imports the plant
+            assert "planted" in done.stdout and done.returncode == 0, done
+        else:
+            assert "planted" not in done.stdout, done
+            assert done.returncode == 2, done

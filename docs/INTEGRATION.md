@@ -106,6 +106,20 @@ one laptop" below).
 
 Without systemd, `handsd --project <project>` in a terminal is the same thing.
 
+**A restart kills running work (§38, §39).** A restart of handsd kills every
+running job of the project, not only the builder's: the stop signals each
+running `claude` and records it `orphaned` (`orphan_reason: daemon_stop`), and
+the next start feeds each orphan to the playbook once as `<role>.orphaned`. What
+resumes is the playbook's rules: the shipped playbooks (this repository's
+`PLAYBOOK.toml` and both templates) carry `builder.orphaned → resume` and
+`aux.orphaned → resume`, so a killed run or review is re-sent to a fresh
+context — the builder's as `[roles.builder] resume_line` (else its own prompt),
+the review as its own prompt, a phone `answer` as a `keep` — bounded by
+`[limits] max_resumes`. An orphaned consultation (a driver or architect job) is not
+resumed: it stops the pipeline, and the start notification says so. A job still
+queued stays queued and the next start runs it. So restart between jobs when you
+can: `hands status` shows what is running.
+
 ## Two projects on one laptop (§29)
 
 Each project has its own config, its own daemon and its own spool, and one
@@ -654,8 +668,8 @@ Publish a command to `cmd_topic` from the ntfy app. The last word is the token
   jobs --origin kit` lists those; both origins, like `cli`, un-pause a stopped
   pipeline when their job starts.) The send takes the same path as `hands send`, so the
   gate patterns still apply. handsd answers on `ntfy_topic` with the job id and
-  its state. It is refused, and logged, while the builder has a job running or
-  queued, when there is no playbook (or it cannot be loaded), and when the
+  its state. It is refused, and the refusal answered titled `go`, while the
+  builder has a job running or queued, when there is no playbook (or it cannot be loaded), and when the
   playbook has no `[series] kickoff`. A stopped pipeline still has its playbook:
   `go` is accepted, and its job un-pauses the pipeline when it starts, as a
   `cli` send's does, so the builder's `done` fires its rule.
@@ -743,11 +757,22 @@ Publish a command to `cmd_topic` from the ntfy app. The last word is the token
   `status`, `progress` and `go` take the secret only, never a nonce. With
   `ntfy_token` set each button also carries the bearer, so a token-protected
   server accepts the press (§38; "Self-hosted ntfy over Tailscale").
-- **Nothing is answered except `status`, an accepted `go`, a written kit, and a
-  `reply` or an `answer` whose secret was right.** A wrong secret or nonce, a command
-  hands does not know, or a job that is not held is logged in handsd's journal
-  (`journalctl --user -u handsd@<project>`) and ignored. If a command seems to do
-  nothing, look there. The log never contains the token.
+- **A command with the right secret is always answered; nothing else is**
+  (§39, H-058). `status`, `progress`, an accepted `go`, a written kit, a
+  `reply` and an `answer` answer as above. A command carrying the right secret
+  (or, for `approve` and `deny`, the job's nonce) that handsd refuses — no such
+  job, a job that is not held, a builder with a job held, no resumable
+  session, a malformed line — is published on `ntfy_topic` titled
+  `<command>` with `<command> refused: <reason>`. Only a wrong or missing
+  secret or nonce, and a message whose first word is no command, stay silent:
+  each is logged in handsd's journal (`journalctl --user -u
+  handsd@<project>`) and ignored. If a command seems to do nothing, look there.
+  The log never contains the token.
+- **Job ids are lenient** (§39, H-059). The id in `approve`, `deny` and `hands
+  cancel` is matched case-insensitively, with `O` read as `0` and `l` or `I` as
+  `1`, and a unique prefix of four or more characters is accepted; an
+  ambiguous one is refused with the candidates. (`answer` and `reply` carry no
+  id.) A held job's notification prints its id on a line of its own.
 - **Old messages are not replayed.** handsd acts only on messages sent after
   it subscribed, judged by the time ntfy stamps on each message against this
   machine's clock. After a dropped connection it resumes after the last
@@ -820,13 +845,16 @@ when all of that holds, and says what is missing when it does not.
 4. **Send `go <secret>`** to `cmd_topic`. handsd reads the committed playbook,
    sends its `[series] kickoff` line to the builder (`clear`, `origin:
    phone`), and answers `go: builder job <id> <state>` (title `hands: go`). It
-   is refused, and only logged, while a builder job is running, queued or
-   held — the apply of step 3, if you have not approved it yet, is such a job,
+   is refused, and the refusal answered titled `go`, while a builder job is
+   running, queued or held — the apply of step 3, if you have not approved it yet, is such a job,
    and the refusal names it.
 5. **Wait for the buzz.** The playbook chains the builder's verdict to the
    review and on to a stop. Every stop reaches the phone as `hands: the
    pipeline stopped` with the reason, which is the rule's message. Paste it to
-   the architect, and the loop starts again at step 1.
+   the architect, and the loop starts again at step 1. A clean review is a
+   stop, so it pauses the pipeline too (the missions template's `blockers=0`
+   rule is a `stop`, §39): the next kit's apply and the `go` after it un-pause
+   it when each job starts, as step 3 says, so no `resume <secret>` is needed.
 
 Throughout, the driver is the inspector: it reads `hands inbox`, `hands show`
 and the fetched branch in its clone when you ask it to `check`, and reports.
@@ -1041,8 +1069,10 @@ presses them. Keep the config file private (`chmod 600`). It already holds
 #### A config written before `[notify]`
 
 A config written before §24 carries `ntfy_topic` (and perhaps `ntfy_url`)
-under `[server]`. It loads as it is. Once step 4 or step 5 adds the same key
-under `[notify]`, the config does not load, and the refusal names the key:
+under `[server]`. It loads as it is: `[server]` is read as the fallback for a
+config written before `[notify]`, and a key set in both tables refuses to load
+(§39, H-054). Once step 4 or step 5 adds the same key under `[notify]`, the
+config does not load, and the refusal names the key:
 `ntfy_topic is set in both [server] and [notify]; set it once, in [notify]`.
 Move the line: delete it from `[server]` and keep the `[notify]` one. handsd,
 `handswho`, every `hands` command and doctor's `config` row refuse the same
@@ -1118,6 +1148,13 @@ Fill in the parameter block at the top of `CLAUDE.md`. The driver never
 writes: the deny-list, the Bash guard hook and the push-disabled clone are
 three separate layers, and none of them is prose (§12).
 
+The driver kit has one hook: `driver/settings.json`'s `Bash` matcher running
+`python3 -I` on the guard. The architect kit has two: the same `Bash` hook and
+the `Write|Edit|MultiEdit` matcher running the guard with `--write` ("The
+architect role", below). A builder or aux cwd carries another hook, the
+no-background one ("No background tasks in a role session", below), which is
+neither kit's.
+
 **The guard's language (§30, §32).** The driver's shell is one line of words,
 quotes and separators, and the Bash guard judges nothing else. Before any
 tokenizing it refuses, in every mode and in any position, quoted or not: a
@@ -1154,7 +1191,8 @@ and `hands send --context keep` to `$HANDS_CONSULT_ROLE` — and its `git` takes
 one `-C`, whose realpath must equal `HANDS_CLONE`'s (a second `-C` is refused,
 because git applies each `-C` relative to the one before). Architect mode
 (`HANDS_ROLE=architect`) is the same read-only table with `hands
-show|jobs|inbox|pipeline|status|kit check|kit file`, plus `mkdir -p`, `cp -r`
+show|jobs|inbox|pipeline|status|handbook|kit check|kit file` (`handbook` since
+§39, H-051), plus `mkdir -p`, `cp -r`
 and `mv` (no other option) with every path under `HANDS_KITS`, `cp` and `cp -r`
 also with every source under `HANDS_CLONE` and the target under `HANDS_KITS`
 (§36), `cp` and `mv`
@@ -1168,7 +1206,9 @@ role modes reads are confined to the clone and the spool: every path that
 `-C` value) and `hands` (`--prompt-file`, `--socket`, `--repo`, a kit) read must
 resolve by realpath under `HANDS_CLONE`, under the spool `~/.hands/<project>/`
 (the project `$HANDS_PROJECT` names, else the only `~/.hands/*.toml`) or, for
-the architect, under `HANDS_KITS`; with none of them named every path read is
+the architect, under `HANDS_KITS` or `HANDS_DOCS` (the installed hands' handbook
+and templates, so `cat $HANDS_DOCS/docs/ARCHITECT-HANDBOOK.md` runs; §39,
+H-051); with none of them named every path read is
 refused, a read of stdin through a pipe is allowed, and a role's `jq` filter may
 not name `env`. The human's session reads anywhere. Text that needs a refused
 character travels as a file, with `hands send --prompt-file`.
@@ -1544,9 +1584,12 @@ background job:
     mkdir -p .claude/hooks
     cp ~/git/hands/.claude/settings.json .claude/settings.json
     cp ~/git/hands/.claude/hooks/no_background.py .claude/hooks/
-    python3 .claude/hooks/no_background.py --selftest
+    python3 -I .claude/hooks/no_background.py --selftest
 
-The settings run the hook before every Bash tool call. It exits 2 — which
+The settings run the hook as `python3 -I` (§39, H-056), as the driver's and the
+architect's settings run the guard (§37): `-I` keeps a module planted beside the
+hook from being imported before it. The settings run the hook before every Bash
+tool call. It exits 2 — which
 blocks the call and hands the reason back to the agent — when the call sets
 `run_in_background`, or when the command daemonizes by hand: `nohup`,
 `setsid`, `disown`, a trailing `&` outside quotes, or an `&` before `)`.

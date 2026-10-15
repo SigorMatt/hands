@@ -681,6 +681,9 @@ killed tasks and orphan processes stop and call you; failures and orphans resume
 That is §10's example as §10 writes it today. This repository's `PLAYBOOK.toml`
 and both templates only `notify` on a killed task, since the detector cannot say
 who killed it, and a job that ends `failed` is what stops (DESIGN §32; H-034
-asks §10 to follow).
+asks §10 to follow). This repository's `PLAYBOOK.toml` and both templates also
+carry `aux.orphaned` → `resume` (DESIGN §39, H-057), which §10's example
+predates: a review a daemon restart killed is re-sent to a fresh context,
+bounded by `max_resumes`.
 A rate limit is not in the playbook at all: §6 owns that resume and schedules
 it for the reset.

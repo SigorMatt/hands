@@ -430,6 +430,15 @@ the templates directory, and every role job carries their directory as
 `$HANDS_DOCS/templates/`). A copy in a project's clone is not the hands
 that runs the project and may be older (HF-002).
 
+**A restart kills running work (DESIGN §38, §39).** A restart of handsd
+kills every running job of the project, not only the builder's: a run, a
+review and a consultation alike end `orphaned`, and the next start hands each
+to the playbook once. The shipped playbooks carry `builder.orphaned → resume`
+and `aux.orphaned → resume`, so a killed run or review is re-sent to a fresh
+context, bounded by `[limits] max_resumes`; a playbook you write should carry
+both. An orphaned consultation is not resumed: it stops. Restart between jobs
+when you can (docs/INTEGRATION.md, "Run handsd").
+
 **The laptop check of a role-mode plan kit (HF-005).** A kit whose playbook
 sets `[series] architect = "role"` is judged against the project's hands
 config, which a chat sandbox does not have, so its playbook check fails
@@ -562,12 +571,23 @@ A ruling is a question only the human (the owner) can answer. End to end:
    text ends with its path), or at the laptop `hands send --role builder
    --context keep "<text>"`. The builder commits the file as `plan: decisions
    <date> (owner)`, the one commit the review protocol reads for what it says
-   it does and does not review as a unit.
+   it does and does not review as a unit. After an escalation the builder's
+   tree holds the consultation's uncommitted journal line (DESIGN §27, §39,
+   H-060), so the send tells the builder to commit a dirty `meta/journal.md`
+   first, on its own, as `journal: <consultation>`. On an `answer` and on a
+   `hands send` to the builder, hands puts that sentence before the text itself
+   while the file is dirty; a ruling sent any other way says it.
 4. **The §8 hold, answered by typing.** A laptop or driver send whose text
    matches a gate pattern (`Apply ~/Downloads/`, `decisions-`, `playbook-`, …)
    is held for a human. Answer it by typing `approve <job> <secret>` on
    `cmd_topic`, or `hands approve <job>` at the laptop. The phone's `answer` is
-   never held: its secret is the approval.
+   never held: its secret is the approval. A job id, on the phone and at the
+   laptop alike, is matched case-insensitively, with `O` read as `0` and `l` or
+   `I` as `1`, and a unique prefix of four or more characters is accepted
+   (DESIGN §39, H-059). A command with the right secret that handsd refuses (no
+   such job, a job not held, no resumable session) is answered on `ntfy_topic`
+   titled `<command>` with the reason; only a wrong or missing secret stays
+   silent (H-058).
 5. **The resume.** The brief template's recovery rule: a `keep` send after
    `VERDICT: question` is the answer. The builder carries it out, continues the
    mission from `meta/CHECKPOINT.md`, and ends the reply with one of the brief's
@@ -623,8 +643,8 @@ opening them; and the review checks that commit by `git show --stat` alone.
 - **`hands send` takes the prompt as a plain argument**, after the flags:
   `hands send --role builder --context keep "<text>"`. There is no `--prompt`
   flag; prose with quotes goes through `--prompt-file <path>` or `--stdin`.
-- **`hands status`** prints one line per configured role: running a job, or
-  idle, and `queued N/M`. It says nothing about how far the work has got.
+- **`hands status`** prints one line per configured role, the architect's
+  included (DESIGN §39, H-053): running a job, or idle, and `queued N/M`. It says nothing about how far the work has got.
 - **`hands jobs` lists newest first**, 20 by default (`-n`), filtered by
   `--role`, `--origin`, `--grep` (the prompt) and `--since`.
 - **`hands pipeline`'s `auto-runs` counts only the runs a `send` rule with
