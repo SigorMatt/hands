@@ -56,8 +56,7 @@ import subprocess
 import tomllib
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 from hands.config import ARCHITECT_ROLE, CONSULT_ROLES, Config
@@ -753,47 +752,70 @@ def _committed_text(path: Path, cwd: Path) -> str:
         raise PlaybookError(f"the committed copy is not valid UTF-8: {exc}") from exc
 
 
-def _owner_decisions(cwd: Path, since: str | None) -> list[str]:
-    """§36: each `meta/decisions/*-owner.md` a commit touched since `since` (an
-    ISO-8601 job time; None is every commit), oldest first, as `[<path>, committed]`
-    and its committed text — or one line of why the files could not be listed."""
-    command = ["git", "log", "--format=", "--name-only", "--no-renames"]
-    if since is not None:
-        try:
-            moment = datetime.fromisoformat(since.replace("Z", "+00:00")).astimezone(UTC)
-        except ValueError:
-            moment = None
-        if moment is not None:
-            command.append(f"--since={moment.strftime('%Y-%m-%d %H:%M:%S')} +0000")
-    command += ["--", f"{DECISIONS_DIR.as_posix()}/"]
+def _git(cwd: Path, *args: str) -> str:
+    """`git <args>` in `cwd` (git's environment cleared as for the playbook, §26):
+    its stdout, or a `PlaybookError` carrying git's first line of why not."""
     env = {name: value for name, value in os.environ.items() if name not in GIT_ENV_CLEARED}
     try:
         proc = subprocess.run(
-            command, cwd=cwd, env=env, stdin=subprocess.DEVNULL, capture_output=True,
-            timeout=GIT_SHOW_TIMEOUT_S, check=False,
+            ["git", "-c", "core.quotepath=off", *args], cwd=cwd, env=env,
+            stdin=subprocess.DEVNULL, capture_output=True, timeout=GIT_SHOW_TIMEOUT_S,
+            check=False,
         )
     except (OSError, subprocess.SubprocessError) as exc:
-        return [f"[hands: the files under {DECISIONS_DIR}/ could not be listed: {exc}]"]
+        raise PlaybookError(str(exc)) from exc
     if proc.returncode != 0:
         lines = proc.stderr.decode("utf-8", errors="replace").strip().splitlines()
-        said = lines[0] if lines else f"exit {proc.returncode}"
-        return [f"[hands: the files under {DECISIONS_DIR}/ could not be listed: {said}]"]
+        raise PlaybookError(lines[0] if lines else f"exit {proc.returncode}")
+    return proc.stdout.decode("utf-8", errors="replace")
+
+
+def _git_head(cwd: Path) -> str | None:
+    """§38: the sha of HEAD in `cwd`, or None when git cannot name one."""
+    try:
+        head = _git(cwd, "rev-parse", "--verify", "-q", "HEAD^{commit}").strip()
+    except PlaybookError:
+        return None
+    return head or None
+
+
+def _owner_decisions(cwd: Path, since: str | None) -> list[str]:
+    """§36: each `meta/decisions/*-owner.md` under `cwd` a commit touched since
+    `since` — §38: the commits of `git log <since>..HEAD`; None is every commit —
+    oldest first, as `[<path>, committed]` and its text at HEAD, or one line of why
+    the files could not be listed.
+
+    §38: the owner files are the ones `git ls-files --full-name` lists at
+    `meta/decisions/*-owner.md` below `cwd`, so their paths are relative to the
+    repository root, as `git log --name-only` writes them, wherever below the root
+    `cwd` is; the path shown is that root-relative one. A file no longer tracked is
+    not listed.
+    """
+    pattern = f":(glob){DECISIONS_DIR.as_posix()}/*{OWNER_SUFFIX}"
+    revisions = [f"{since}..HEAD"] if since is not None else []
+    try:
+        owned = {
+            name
+            for name in _git(cwd, "ls-files", "-z", "--full-name", "--", pattern).split("\0")
+            if len(PurePosixPath(name).name) > len(OWNER_SUFFIX)
+        }
+        log = _git(
+            cwd, "log", "--format=", "--name-only", "--no-renames", *revisions,
+            "--", f"{DECISIONS_DIR.as_posix()}/",
+        )
+    except PlaybookError as exc:
+        return [f"[hands: the files under {DECISIONS_DIR}/ could not be listed: {exc}]"]
     names: list[str] = []
-    for line in reversed(proc.stdout.decode("utf-8", errors="replace").splitlines()):
-        path = Path(line.strip())
-        if (
-            path.parent == DECISIONS_DIR
-            and path.name.endswith(OWNER_SUFFIX)
-            and len(path.name) > len(OWNER_SUFFIX)
-            and str(path) not in names
-        ):
-            names.append(str(path))
+    for line in reversed(log.splitlines()):
+        name = line.strip()
+        if name in owned and name not in names:
+            names.append(name)
     blocks = []
     for name in names:
         try:
-            text = _committed_text(cwd / name, cwd)
+            text = _git(cwd, "-c", "core.autocrlf=false", "show", f"HEAD:{name}")
         except PlaybookError as exc:
-            text = f"[hands: {exc}]"
+            text = f"[hands: no committed copy (`git show HEAD:{name}` in {cwd}: {exc})]"
         blocks.append(f"[{name}, committed]\n{text}")
     return blocks
 
@@ -2268,10 +2290,14 @@ class PlaybookEngine:
                     {**where, "consults": used, "max_consults": budget, "consulted": role},
                 )
                 return
+            # §38: the HEAD of the builder's cwd now, which the consult.sent event
+            # records, so the next consultation's "since" is `git log <sha>..HEAD`.
+            recorded: dict[str, Any] = {"head": _git_head(self.config.role("builder").cwd)}
             prompt = consult_prompt(
                 event, job, role=role, brief=self.architect_brief(book, used + 1)
             )
         else:
+            recorded = {}
             used, budget = self.consults_used(book), book.max_consults
             if used >= budget:
                 await self.stop(
@@ -2308,6 +2334,7 @@ class PlaybookEngine:
                 "rule": rule.index,
                 "consults": used + 1,
                 "max_consults": budget,
+                **recorded,
             },
         )
         self._fired(rule, event, job, fired_job=started.id)
@@ -2360,21 +2387,28 @@ class PlaybookEngine:
 
         The last consultation is the newest architect job that is neither a phone
         `reply` nor a §6 resume, and "since" is the jobs after it in the spool's order
-        and the commits from the second it was created on (the boundary second
-        included: the inclusive direction tells the role too much rather than too
-        little). With no consultation before, everything counts — the same safe
-        direction. The jobs come first, oldest first, then the files, oldest commit
-        first, each as committed at HEAD.
+        and — §38 — the commits of `git log <sha>..HEAD`, `<sha>` being the HEAD of
+        the builder's cwd its `consult.sent` event recorded. With no consultation
+        before, or one whose event recorded no sha (a consultation from before §38,
+        or a cwd with no commit then), every commit counts: the inclusive direction
+        tells the role too much rather than too little. The jobs come first, oldest
+        first, then the files, oldest commit first, each as committed at HEAD.
         """
         jobs = self.spool.list_jobs()
-        start, since = 0, None
+        start, last = 0, None
         for index, record in enumerate(jobs):
             if (
                 record.role == ARCHITECT
                 and record.resumed_from is None
                 and not is_architect_reply(record)
             ):
-                start, since = index + 1, record.created
+                start, last = index + 1, record.id
+        since = None
+        if last is not None:
+            for sent in self.spool.events():
+                if sent.kind == "consult.sent" and sent.payload.get("job") == last:
+                    head = sent.payload.get("head")
+                    since = head if isinstance(head, str) and head else None
         blocks: list[str] = []
         for record in jobs[start:]:
             if is_builder_answer(record):

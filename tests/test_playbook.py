@@ -5855,6 +5855,35 @@ def _commit_dated(
 DECIDED = "Decided by the human since your last consultation"
 
 
+def _consultation(engine: PlaybookEngine, recorder: Recorder) -> Job:
+    """A real architect consultation, started by the engine on a review outcome and
+    filed in the spool (the recorder's own `enqueue` files nothing), then ended."""
+
+    async def enqueue(**fields: Any) -> Job:
+        await recorder.enqueue(**fields)
+        return engine.spool.create_job(
+            role=fields["role"], context=fields["context"], prompt=fields["prompt"],
+            origin=fields["origin"],
+        )
+
+    engine.enqueue = enqueue
+    time.sleep(0.003)  # job ids sort by millisecond; keep the order the test means
+    run(engine.on_job(reviewed(engine.spool)))
+    [sent] = [e for e in engine.spool.events() if e.kind == "consult.sent"][-1:]
+    job = engine.spool.load_job(sent.payload["job"])
+    engine.spool.transition(job, "running")
+    done = engine.spool.transition(job, "done", verdict="VERDICT: series complete")
+    time.sleep(0.003)
+    return done
+
+
+def _head(cwd: Path) -> str:
+    return subprocess.run(
+        ["git", "-C", str(cwd), "rev-parse", "HEAD"], check=True, capture_output=True,
+        text=True,
+    ).stdout.strip()
+
+
 def test_the_architect_prompt_lists_what_the_human_decided_since_its_last_consultation(
     tmp_home: Path, workdir: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -5868,11 +5897,7 @@ def test_the_architect_prompt_lists_what_the_human_decided_since_its_last_consul
                             prompt="OLD answer before the consultation")
     _commit_dated(monkeypatch, workdir, "meta/decisions/001-owner.md",
                   "OLD owner decision\n", "2001-01-01T00:00:00+00:00")
-    time.sleep(0.003)
-    previous = spool.create_job(role="architect", context="clear", prompt="a consultation",
-                                origin="playbook")
-    spool.transition(previous, "running")
-    spool.transition(previous, "done", verdict="VERDICT: series complete")
+    _consultation(engine, recorder)  # §38: it records HEAD; "since" is what follows
     answer = _human_job(spool, role="builder", context="keep", origin="phone",
                         prompt="Take option B.\n\n  Not  A. ")
     keep = _human_job(spool, role="builder", context="keep", origin="cli",
@@ -5891,7 +5916,7 @@ def test_the_architect_prompt_lists_what_the_human_decided_since_its_last_consul
 
     run(engine.on_job(reviewed(spool)))
 
-    prompt = strip_paths(recorder.enqueued[0]["prompt"])
+    prompt = strip_paths(recorder.enqueued[-1]["prompt"])
     assert DECIDED in strip_paths(prompt)
     section = strip_paths(prompt[prompt.index(DECIDED):])
     assert "Take option B.\n\n  Not  A. " in strip_paths(section)
@@ -5920,6 +5945,66 @@ def test_with_no_earlier_consultation_the_architect_is_told_every_human_decision
     section = strip_paths(prompt[prompt.index(DECIDED):])
     assert "FIRST answer" in strip_paths(section)
     assert "FIRST owner decision" in strip_paths(section)
+
+
+def test_an_owner_file_committed_with_an_old_committer_date_after_the_consultation_is_listed(
+    tmp_home: Path, workdir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """§38 (review 20, U6): "since the last consultation" is `git log <sha>..HEAD`
+    from the HEAD the last consultation recorded, never `--since`: a commit's date
+    does not decide which side of the consultation it falls on."""
+    engine, recorder = architect_engine(tmp_home, workdir)
+    _commit_dated(monkeypatch, workdir, "meta/decisions/001-owner.md",
+                  "BEFORE the consultation, dated in the future\n", "2099-01-01T00:00:00+00:00")
+    head = _head(workdir)
+    first = _consultation(engine, recorder)
+    [sent] = [e for e in engine.spool.events() if e.kind == "consult.sent"]
+    assert sent.payload["job"] == first.id
+    assert sent.payload["head"] == head  # the sha the consultation recorded
+    _commit_dated(monkeypatch, workdir, "meta/decisions/002-owner.md",
+                  "AFTER the consultation, dated in the past\n", "2001-01-01T00:00:00+00:00")
+
+    run(engine.on_job(reviewed(engine.spool)))
+
+    prompt = strip_paths(recorder.enqueued[-1]["prompt"])
+    section = prompt[prompt.index(DECIDED):prompt.index("----- END DECISIONS -----")]
+    assert "[meta/decisions/002-owner.md, committed]" in strip_paths(section)
+    assert "AFTER the consultation, dated in the past" in strip_paths(section)
+    assert "001-owner" not in strip_paths(section)
+    assert "BEFORE the consultation" not in strip_paths(section)
+
+
+def test_a_builder_cwd_two_levels_below_the_root_lists_its_owner_files(
+    tmp_home: Path, tmp_path: Path
+) -> None:
+    """§38 (review 20, U6): the decisions-path comparison is made on the
+    repository-root-relative paths `git ls-files --full-name` gives, so a builder
+    cwd two levels below the root lists the owner files under its own
+    `meta/decisions/` — and not the root's."""
+    root = tmp_path / "repo"
+    commit_file(root, "meta/decisions/000-owner.md", "the ROOT's owner file\n")
+    cwd = root / "a" / "b"
+    commit_file(root, "a/b/PLAYBOOK.toml", ARCHITECT_BOOK)
+    commit_file(root, f"a/b/{ROADMAP.as_posix()}", ROADMAP_TEXT)
+    commit_file(root, "a/b/meta/decisions/001-owner.md", "# 001\n\nThe owner decides: A.\n")
+    commit_file(root, "a/b/meta/decisions/002-review.md", "NOT an owner file\n")
+    commit_file(root, "a/b/meta/decisions/003-owner.md", "# 003\n\nThe owner decides: C.\n")
+    engine, recorder = engine_for(
+        tmp_home, cwd, None, architect=architect_dir(tmp_home)
+    )
+
+    run(engine.on_job(reviewed(engine.spool)))
+
+    prompt = strip_paths(recorder.enqueued[-1]["prompt"])
+    section = prompt[prompt.index(DECIDED):prompt.index("----- END DECISIONS -----")]
+    first = section.index("[a/b/meta/decisions/001-owner.md, committed]\n# 001\n\n"
+                          "The owner decides: A.\n")
+    third = section.index("[a/b/meta/decisions/003-owner.md, committed]\n# 003\n\n"
+                          "The owner decides: C.\n")
+    assert first < third  # oldest commit first
+    assert "NOT an owner file" not in strip_paths(section)
+    assert "ROOT's owner file" not in strip_paths(section)
+    assert "could not" not in strip_paths(section)
 
 
 def test_with_nothing_decided_the_architect_is_told_so(tmp_home: Path, workdir: Path) -> None:
