@@ -43,6 +43,7 @@ import importlib.machinery
 import json
 import os
 import re
+import secrets
 import shlex
 import shutil
 import stat
@@ -120,9 +121,11 @@ WRITE_TOOLS: tuple[str, ...] = ("Write", "Edit", "MultiEdit")
 #: headless `claude -p` denies a tool no allow names, and the `--write` hook only
 #: ever denies, so without them the role cannot write a byte.
 KITS_SPECIFIER = "kits/**"
-#: §36: the one-file kit `doctor --live` has the architect write under `kits/` and
-#: check. Doctor removes it (the role cannot: its settings deny `rm`).
-LIVE_KIT = "hands-doctor-live"
+#: §36, §37: the one-file kit `doctor --live` has the architect write under `kits/`
+#: and check, `kits/hands-doctor-live-<8 hex>`, a fresh name each run
+#: (`live_kit_name`). Doctor creates the directory and removes it (the role cannot:
+#: its settings deny `rm`); a path of that name already there fails the row.
+LIVE_KIT_PREFIX = "hands-doctor-live-"
 LIVE_FILE = "DOCTOR-LIVE.md"
 LIVE_CONTENT = "doctor"
 #: §36: what `hands kit check` prints for a one-file kit it read against a repository.
@@ -1975,6 +1978,38 @@ def _live_turn(
     return result, proc.stdout
 
 
+def live_kit_name() -> str:
+    """§37: the live kit's name, unique per run: `hands-doctor-live-<8 hex>`."""
+    return f"{LIVE_KIT_PREFIX}{secrets.token_hex(4)}"
+
+
+def _kit_check_names(argv: list[str], cwd: Path, kit: Path, clone: Path) -> bool:
+    """§37: does this `hands kit check` argv name the live kit's own path and, as an
+    explicit `--repo`, the clone? Relative paths are the role's cwd's, where the turn
+    runs. Any other kit or repository, or no `--repo`, is not the live check."""
+    if argv[:3] != ["hands", "kit", "check"]:
+        return False
+    positional: list[str] = []
+    repo: str | None = None
+    words = iter(argv[3:])
+    for word in words:
+        if word == "--repo":
+            repo = next(words, None)
+        elif word.startswith("--repo="):
+            repo = word.removeprefix("--repo=")
+        elif word == "--project":
+            next(words, None)
+        elif not word.startswith("-"):
+            positional.append(word)
+    if len(positional) != 1 or not repo:
+        return False
+
+    def same(named: str, path: Path) -> bool:
+        return (cwd / named).resolve() == path.resolve()
+
+    return same(positional[0], kit) and same(repo, clone)
+
+
 def _architect_live(config: Config, role: RoleConfig) -> Check:
     """§36 (H-041): the architect's live turn does the role's work in miniature —
     writes one file under `kits/` with the Write tool, runs `hands kit check` on that
@@ -1984,6 +2019,12 @@ def _architect_live(config: Config, role: RoleConfig) -> Check:
     in the turn's stream, and the path gone afterwards. Any of the four missing
     fails the row.
 
+    §37: `--repo` is the clone `driver_clone` resolves for the role (`.` when the
+    cwd is the clone), and the row FAILS before the turn when there is none; only a
+    `hands kit check` naming the live kit's path and that `--repo` counts. The kit is
+    `kits/hands-doctor-live-<8 hex>`; doctor creates that directory (exclusively, so
+    an existing path FAILS the row and the turn is not run) and removes only it.
+
     The turn's environment is an architect job's (`hands.runner.job_env`: the role's
     `spawn_env`, `HANDS_CLONE`, `HANDS_KITS`) plus `HANDS_PROJECT`, the config's
     project, so `hands show` reaches this project's daemon. The design is silent on
@@ -1991,7 +2032,7 @@ def _architect_live(config: Config, role: RoleConfig) -> Check:
     """
     name = f"live {role.name}"
     kits_dir = role.cwd / "kits"
-    kit = kits_dir / LIVE_KIT
+    kit = kits_dir / live_kit_name()
     target = kit / LIVE_FILE
     try:
         jobs = Spool(config.spool_root).list_jobs()
@@ -2007,10 +2048,27 @@ def _architect_live(config: Config, role: RoleConfig) -> Check:
     job_id = jobs[-1].id
     if not kits_dir.is_dir() or kits_dir.is_symlink():
         return Check(name, FAIL, f"no kits directory {kits_dir} to write under (§31, §36)")
-    removed = _remove_live_kit(kit)
-    if removed is not None:
-        return Check(name, FAIL, f"cannot clear {kit} before the turn: {removed}")
-    kit_check = f"hands kit check kits/{LIVE_KIT} --repo ./repo"
+    clone = driver_clone(role.cwd)
+    if clone is None:
+        return Check(
+            name,
+            FAIL,
+            f"no clone for the turn's `hands kit check --repo`: neither {role.cwd / 'repo'} "
+            f"nor {role.cwd} is a git repository (§29, §37). Not run",
+        )
+    repo = "." if clone == role.cwd else f"./{clone.relative_to(role.cwd)}"
+    if kit.exists() or kit.is_symlink():
+        return Check(
+            name,
+            FAIL,
+            f"{kit} already exists; doctor removes only a kit it created, so it leaves "
+            "this one as it is (§37). Not run",
+        )
+    try:
+        kit.mkdir()
+    except OSError as exc:
+        return Check(name, FAIL, f"cannot create {kit} for the turn: {exc} (§37). Not run")
+    kit_check = f"hands kit check kits/{kit.name} --repo {repo}"
     show = f"hands show {job_id}"
     prompt = (
         "hands doctor --live: prove this role can do its work. Do exactly these three "
@@ -2024,10 +2082,7 @@ def _architect_live(config: Config, role: RoleConfig) -> Check:
         "line and nothing else:\nVERDICT: doctor ok\n"
     )
     env = {**os.environ, **role.spawn_env, KITS_ENV: str(kits_dir), "HANDS_PROJECT": config.project}
-    env.pop(CLONE_ENV, None)
-    clone = driver_clone(role.cwd)
-    if clone is not None:
-        env[CLONE_ENV] = str(clone)
+    env[CLONE_ENV] = str(clone)
     turn = _live_turn(config, role, prompt, env)
     if isinstance(turn, Check):
         _remove_live_kit(kit)
@@ -2043,7 +2098,7 @@ def _architect_live(config: Config, role: RoleConfig) -> Check:
         wrote = False
     (done if wrote else missing).append("write")
     checked = any(
-        argv[:3] == ["hands", "kit", "check"] and LIVE_KIT_CHECKED in text
+        _kit_check_names(argv, role.cwd, kit, clone) and LIVE_KIT_CHECKED in text
         for argv, text, _ in calls
     )
     (done if checked else missing).append("kit check")

@@ -378,8 +378,32 @@ def test_no_socket_client_sets_origin_architect(project: str) -> None:
             assert word in strip_paths(str(caught.value)), caught.value
         assert daemon.spool.list_jobs() == []
         # Every other origin a client may name is still taken as it was.
-        job = await daemon.api.send(role="aux", context="clear", prompt="x", origin="phone")
-        assert job["origin"] == "phone"
+        job = await daemon.api.send(role="aux", context="clear", prompt="x", origin="limit")
+        assert job["origin"] == "limit"
+
+    drive(body)
+
+
+def test_no_socket_client_sets_origin_phone(project: str) -> None:
+    """§37 (review 20 should-fix 3): `Api.send` refuses `origin: phone` from a socket
+    client as it refuses `origin: architect` — only the daemon's own `answer` path
+    sets it, so a raw send cannot pass for the builder's answer. Nothing is filed,
+    for the builder's `keep` (the answer's shape) or any other role and context."""
+    from hands.api import ApiError
+    from hands.cli import call
+
+    async def body(daemon: Daemon) -> None:
+        for role, context in (("builder", "keep"), ("builder", "clear"), ("aux", "clear")):
+            params = {"role": role, "context": context, "prompt": "x", "origin": "phone"}
+            with pytest.raises(Exception) as caught:
+                await asyncio.to_thread(
+                    call, daemon.socket_path, "send", params, project=PROJECT
+                )
+            for word in ("origin", "phone", "answer"):
+                assert word in strip_paths(str(caught.value)), caught.value
+            with pytest.raises(ApiError):
+                await daemon.api.send(**params)
+        assert daemon.spool.list_jobs() == []
 
     drive(body)
 

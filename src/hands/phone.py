@@ -420,9 +420,7 @@ class PhoneChannel:
         if busy is not None:
             return self._ignore(f"go: {busy}")
         try:
-            job = await self.daemon.api.send(
-                role="builder", context="clear", prompt=book.kickoff, origin="phone"
-            )
+            job = await self.daemon.api.go_builder(book.kickoff)
         except ApiError as exc:
             return self._ignore(f"go: the send was refused ({exc})")
         log.info("phone: go filed builder job %s (%s)", job["id"], job["state"])

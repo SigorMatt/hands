@@ -2871,8 +2871,10 @@ def test_an_architect_write_allow_naming_anything_but_kits_fails_doctor(
     assert repr(extra) in strip_paths(row["detail"]), row
 
 
-#: §36: the one-file kit `doctor --live` has the architect write and check.
-LIVE_KIT = "hands-doctor-live"
+#: §36, §37: the one-file kit `doctor --live` has the architect write and check —
+#: `kits/hands-doctor-live-<8 hex>`, unique per run. The tests pin the name doctor
+#: draws (`live_kit_name`) so the scripted turn can name it.
+LIVE_KIT = "hands-doctor-live-0123abcd"
 LIVE_FILE = "DOCTOR-LIVE.md"
 
 
@@ -2883,14 +2885,25 @@ def _live_architect(
     tools: Any,
     *,
     job: bool = True,
+    layout: str = "repo",
+    setup: Any = None,
 ) -> tuple[dict[str, Any], Path, str | None]:
     """`hands doctor --live` against a running daemon, the architect's turn scripted
     by `tools(kit_file, job_id)` — the fake performs the calls a real turn would
-    make. The builder's and aux's live turns take the first two replies."""
+    make. The builder's and aux's live turns take the first two replies. `layout`
+    is where the clone is: `repo` (`<cwd>/repo`), `cwd` (the cwd itself) or `none`;
+    `setup(d)` runs on the role's directory before doctor does."""
     import sys
 
+    import hands.doctor
+
     monkeypatch.setenv("PATH", f"{Path(sys.executable).parent}{os.pathsep}{os.environ['PATH']}")
-    d = architect_dir(tmp_path)
+    monkeypatch.setattr(hands.doctor, "live_kit_name", lambda: LIVE_KIT)
+    d = architect_dir(tmp_path, clone=layout == "repo")
+    if layout == "cwd":
+        fetch_only_clone(d)
+    if setup is not None:
+        setup(d)
     add_architect(write_config(tmp_home, tmp_path), d)
     kit_file = d / "kits" / LIVE_KIT / LIVE_FILE
     seen: dict[str, Any] = {}
@@ -2929,7 +2942,11 @@ def _bash(command: str, *, denied: bool = False) -> dict[str, Any]:
     return {**call, "denied": True} if denied else call
 
 
-KIT_CHECK = f"hands kit check kits/{LIVE_KIT} --repo ./repo"
+def _kit_check(kit: str = LIVE_KIT, repo: str = "./repo") -> str:
+    return f"hands kit check kits/{kit} --repo {repo}"
+
+
+KIT_CHECK = _kit_check()
 
 
 def test_doctor_live_for_the_architect_writes_checks_shows_and_removes(
@@ -2944,9 +2961,111 @@ def test_doctor_live_for_the_architect_writes_checks_shows_and_removes(
     )  # fmt: skip
     row = found["live architect"]
     assert row["status"] == "ok", row
-    for step in ("wrote", "kit check", f"hands show {job_id}", "removed"):
+    for step in ("wrote", "kit check", f"hands show {job_id}", "removed", "--repo ./repo"):
         assert step in strip_paths(row["detail"]), row
     assert not kit_file.exists() and not kit_file.parent.exists()
+
+
+def test_doctor_live_for_an_architect_whose_cwd_is_the_clone_checks_against_the_cwd(
+    tmp_home: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """§37 (review 20 should-fix 4): `driver_clone` takes the role's cwd itself as the
+    clone when it is the git repository, so the live turn names it as `--repo` (`.`),
+    and a turn that checks the live kit against it passes the row."""
+    check = _kit_check(repo=".")
+    found, kit_file, job_id = _live_architect(
+        tmp_home, tmp_path, monkeypatch,
+        lambda path, job: [_write(path), _bash(check), _bash(f"hands show {job}")],
+        layout="cwd",
+    )  # fmt: skip
+    row = found["live architect"]
+    assert row["status"] == "ok", row
+    assert f"`{check}`" in strip_paths(row["detail"]), row
+    assert not kit_file.parent.exists()
+
+
+def test_doctor_live_for_an_architect_with_no_clone_fails_before_the_turn(
+    tmp_home: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """§37: a role with no clone (neither `<cwd>/repo` nor the cwd is a git
+    repository) fails the row before a turn is spent; no kit is written."""
+    found, kit_file, job_id = _live_architect(
+        tmp_home, tmp_path, monkeypatch,
+        lambda path, job: [_write(path), _bash(KIT_CHECK), _bash(f"hands show {job}")],
+        layout="none",
+    )  # fmt: skip
+    row = found["live architect"]
+    assert row["status"] == "fail", row
+    assert "no clone" in strip_paths(row["detail"]), row
+    assert "Not run" in strip_paths(row["detail"]), row
+    assert not kit_file.parent.exists()
+
+
+def _other_kit(d: Path) -> None:
+    other = d / "kits" / "other-kit"
+    other.mkdir(parents=True)
+    (other / "OTHER.md").write_text("other\n")
+
+
+def _other_repo(d: Path) -> None:
+    fetch_only_clone(d / "elsewhere")
+
+
+@pytest.mark.parametrize(
+    ("setup", "check"),
+    [
+        (_other_kit, _kit_check(kit="other-kit")),
+        (_other_repo, _kit_check(repo="./elsewhere")),
+    ],
+    ids=["another-kit", "another-repo"],
+)
+def test_doctor_live_for_an_architect_whose_turn_checks_another_kit_fails(
+    tmp_home: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, setup: Any, check: str
+) -> None:
+    """§37 (review 20 should-fix 4): the judged `hands kit check` must name the live
+    kit's own path and the clone's `--repo`. A passing check of another one-file kit,
+    or of the live kit against another repository, does not pass the step."""
+    found, _, _ = _live_architect(
+        tmp_home, tmp_path, monkeypatch,
+        lambda path, job: [_write(path), _bash(check), _bash(f"hands show {job}")],
+        setup=setup,
+    )  # fmt: skip
+    row = found["live architect"]
+    assert row["status"] == "fail", row
+    assert "did not happen: kit check" in strip_paths(row["detail"]), row
+
+
+def test_doctor_live_leaves_an_existing_kit_of_its_name_untouched_and_fails(
+    tmp_home: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """§37 (review 20 should-fix 5): when the live kit's path already exists the row
+    fails without running the turn, and what was there is left as it was."""
+
+    def existing(d: Path) -> None:
+        kit = d / "kits" / LIVE_KIT
+        kit.mkdir(parents=True)
+        (kit / "KEEP.md").write_text("mine\n")
+
+    found, kit_file, _ = _live_architect(
+        tmp_home, tmp_path, monkeypatch,
+        lambda path, job: [_write(path), _bash(KIT_CHECK), _bash(f"hands show {job}")],
+        setup=existing,
+    )  # fmt: skip
+    row = found["live architect"]
+    assert row["status"] == "fail", row
+    assert "already exists" in strip_paths(row["detail"]), row
+    assert "Not run" in strip_paths(row["detail"]), row
+    assert (kit_file.parent / "KEEP.md").read_text() == "mine\n"
+    assert not kit_file.exists()
+
+
+def test_the_live_kit_name_is_unique_per_run() -> None:
+    """§37: `kits/hands-doctor-live-<8 hex>`, a fresh name each run."""
+    from hands.doctor import live_kit_name
+
+    names = {live_kit_name() for _ in range(20)}
+    assert len(names) == 20
+    assert all(re.fullmatch(r"hands-doctor-live-[0-9a-f]{8}", name) for name in names), names
 
 
 @pytest.mark.parametrize(

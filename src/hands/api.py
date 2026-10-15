@@ -206,13 +206,23 @@ class Api:
         No `kit_id` parameter: that id is minted by handsd for an apply it files
         itself (`file_apply`, §32), so no socket client can put one on a job. And
         no `origin: architect`: §32, "a socket client cannot set `origin:
-        architect`" — only `kit_file` files an architect-origin job.
+        architect`" — only `kit_file` files an architect-origin job. Nor `origin:
+        phone`: §37, only the daemon's own phone channel sets it (`answer_builder`,
+        `reply_architect`, `go_builder`), so a raw send cannot be published as the
+        builder's answer or listed to the architect as a human decision.
         """
         if origin == ARCHITECT_ORIGIN:
             raise ApiError(
                 f"origin {ARCHITECT_ORIGIN!r} is handsd's own: it marks the apply handsd files "
                 "for a kit the architect role filed with `hands kit file`, and a socket client "
                 "cannot set it (§32)"
+            )
+        if origin == ANSWER_ORIGIN:
+            raise ApiError(
+                f"origin {ANSWER_ORIGIN!r} is handsd's own: the phone's `answer <secret> "
+                "<text>` is the only path that files a builder answer of that origin (the "
+                "phone's `reply` and `go` are handsd's too), and a socket client cannot set "
+                "it (§37)"
             )
         return await self._send(
             role=role,
@@ -362,6 +372,15 @@ class Api:
             )
         return await self._send(
             role=ARCHITECT_ROLE, context="keep", prompt=text, origin=REPLY_ORIGIN, reply=True
+        )
+
+    async def go_builder(self, prompt: str) -> dict[str, Any]:
+        """The phone's `go`: the playbook's kickoff to the builder, one `clear` job of
+        origin `phone`. Not a command of §4 and in neither `COMMANDS` nor
+        `KIT_METHODS`, so the phone channel is its only caller; `send` refuses the
+        origin to a socket client (§37). Gated by §8 as `send` is."""
+        return await self._send(
+            role="builder", context="clear", prompt=prompt, origin=ANSWER_ORIGIN
         )
 
     def answer_refusal(self, text: str) -> str | None:
