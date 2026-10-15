@@ -2140,3 +2140,54 @@ Status: resolved-by-code (mission 20 U5 — Api.send defers the hold of a
 role-filed kit under autonomous; the engine publishes one buttonless approval
 line, or the hold with its buttons when it does not approve; tests in
 tests/test_playbook.py)
+
+## H-046 — `handswho` publishes every ~20 s and spends the public broker's daily cap
+
+Severity: medium · Component: `src/hands/who.py`, `src/hands/doctor.py`,
+docs/INTEGRATION.md; DESIGN §37 "What the laptop found"
+Filed by: mission 21 orchestrator, U0 (2026-10-15).
+Evidence: the laptop, 2026-10-14, while mission 20 ran (DESIGN §37).
+
+Symptom. Both `handswho` units published every ~20 s because the who
+text's relative-time line counts as a change; ~350 publishes an hour from
+one address spent the public broker's free daily cap (HTTP 429), so the
+daemons' own stops and holds were refused too.
+
+Direction. §37: `handswho` publishes on a real state change only, compared
+without the relative-time text, with a floor on the interval; doctor WARNS
+on a public `ntfy_url` that the cap exists and names the self-hosted path.
+
+Status: open (scheduled for mission 22)
+
+## H-047 — a `handsd` restart kills the running builder job and nothing resumes it
+
+Severity: medium · Component: `src/hands/daemon.py`, `src/hands/playbook.py`;
+DESIGN §37 "What the laptop found"
+Filed by: mission 21 orchestrator, U0 (2026-10-15).
+Evidence: the laptop, 2026-10-14, while mission 20 ran (DESIGN §37).
+
+Symptom. A `handsd` restart (every install) kills the running builder job;
+the `task_killed` rule only notifies, so each install cost a `go` from the
+phone.
+
+Direction. §37: the daemon re-queues the kickoff for a builder job its own
+stop killed, bounded as `resume` is.
+
+Status: open (scheduled for mission 22)
+
+## H-048 — under `autonomous` a builder's `blocked` verdict stops for the human
+
+Severity: medium · Component: `src/hands/playbook.py`; DESIGN §37 "What the
+laptop found"
+Filed by: mission 21 orchestrator, U0 (2026-10-15).
+Evidence: the laptop, 2026-10-14, while mission 20 ran (DESIGN §37).
+
+Symptom. Under `autonomous`, a builder's `VERDICT: mission N blocked <unit>`
+stops the pipeline for the human, who can only re-fire the role through the
+aux by hand.
+
+Direction. §37: the playbook may consult the architect on `builder.done`
+with a `blocked` verdict, the consult prompt carrying the builder's reply in
+place of a review, counted against the same consultation budget.
+
+Status: open (scheduled for mission 22)
