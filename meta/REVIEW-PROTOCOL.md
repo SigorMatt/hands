@@ -54,8 +54,9 @@ the last has reported. Each sub-agent, in a `git worktree` at that commit:
 1. Names the unit and the DESIGN sections it claims to implement.
 2. Confirms test-first: the commit adds or changes tests that exercise the
    claimed behaviour, and the tests fail when the product change is
-   reverted in the worktree (`git stash` the non-test files, run the
-   relevant tests, expect red, restore). A commit that changes only tests
+   reverted: in the worktree at the commit, `git checkout <sha>~1 -- <the
+   non-test files the body lists>`, run the commit's new tests and expect
+   red, then `git checkout <sha> -- <the same files>`. A commit that changes only tests
    must name in its body each wrong change that would make them red; the
    sub-agent makes each one in the worktree, without committing, runs the
    relevant tests, expects red, and restores. A tests-only commit whose body

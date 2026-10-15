@@ -1021,6 +1021,26 @@ PROTOCOL_36_SENTENCES = {
 }
 
 
+#: §37 "The protocol's revert step" (review 20 should-fix 6): what every
+#: sub-agent of review 20 did, in the protocol's words.
+PROTOCOL_37_REVERT_STEP = (
+    "in the worktree at the commit, `git checkout <sha>~1 -- <the non-test files"
+    " the body lists>`, run the commit's new tests and expect red, then"
+    " `git checkout <sha> -- <the same files>`"
+)
+
+
+@pytest.mark.parametrize("name", ["templates", "meta"])
+def test_the_protocol_reverts_by_checkout_and_never_says_stash(name: str) -> None:
+    """§37: both protocol files carry the checkout revert step; "stash" is gone
+    from each (the files differ only in the project's names, tests/test_docs.py)."""
+    path = Path(__file__).resolve().parents[1] / name / "REVIEW-PROTOCOL.md"
+    text = " ".join(path.read_text(encoding="utf-8").split())
+    lacks = f"{name}/REVIEW-PROTOCOL.md lacks the revert step"
+    assert PROTOCOL_37_REVERT_STEP in strip_paths(text), lacks
+    for word in ("stash", "Stash", "STASH"):
+        assert word not in strip_paths(text), f"{name}/REVIEW-PROTOCOL.md still says {word}"
+
 @pytest.mark.parametrize("key", sorted(PROTOCOL_36_SENTENCES))
 def test_the_protocol_template_carries_section_36s_sentence(key: str) -> None:
     text = " ".join((TEMPLATES / "REVIEW-PROTOCOL.md").read_text(encoding="utf-8").split())
