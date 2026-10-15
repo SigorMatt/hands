@@ -1,0 +1,28 @@
+[
+ {
+  "id": 5002,
+  "user": {
+   "login": "some-human",
+   "id": 2,
+   "type": "User"
+  },
+  "body": "LGTM",
+  "state": "APPROVED",
+  "commit_id": "baa0b6eadb0678e8440170938277fbc46d184dfa",
+  "submitted_at": "2026-10-15T15:20:00Z",
+  "html_url": "x"
+ },
+ {
+  "id": 5001,
+  "user": {
+   "login": "qodo-code-review[bot]",
+   "id": 1,
+   "type": "Bot"
+  },
+  "body": "",
+  "state": "COMMENTED",
+  "commit_id": "baa0b6eadb0678e8440170938277fbc46d184dfa",
+  "submitted_at": "2026-10-15T15:09:47Z",
+  "html_url": "https://github.com/o/r/pull/3#pullrequestreview-5001"
+ }
+]

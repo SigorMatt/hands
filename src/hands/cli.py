@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import Any, TextIO
 
 from hands import __version__, doctor
+from hands import hosted as hosted_mod
 from hands import kit as kit_mod
 from hands import notify as notify_mod
 from hands import project as project_mod
@@ -390,6 +391,24 @@ def build_parser() -> argparse.ArgumentParser:
     project_add.add_argument("--repo", required=True, metavar="URL", help="the repository url")
     project_add.add_argument(
         "--dry-run", action="store_true", help="print every path and command; write nothing"
+    )
+    # §39: answered by the client with no daemon and no config, like `kit check`:
+    # it reads the hosted review through `gh` and archives it in the repository.
+    hosted = command(
+        "hosted-review",
+        "read the hosted review of a pull request (§39, docs/QODO-EXTRACTION.md): fetch "
+        "its issue comments, reviews and review comments, every page, keep the bot's, "
+        "archive each body byte for byte with its JSON under meta/reviews/hosted/PR-<n>/<k>/ "
+        "at the repository root, print the Code Review comment's categories, findings and "
+        "verdict and the diff against the previous <k>; exit "
+        f"{hosted_mod.EXIT_NOT_YET} with nothing written when the bot has not commented yet",
+    )
+    hosted.add_argument("pr", type=int, help="the pull request number")
+    hosted.add_argument(
+        "--bot",
+        default=hosted_mod.DEFAULT_BOT,
+        metavar="LOGIN",
+        help=f"the reviewer bot's login (default: {hosted_mod.DEFAULT_BOT})",
     )
     check = command("doctor", "check the install end to end (§4, §14)")
     check.add_argument(
@@ -803,6 +822,8 @@ def main(
             return _migrate_spool(out=out, err=err, as_json=as_json)
         if command == "handbook":
             return _handbook(args.templates, out=out, err=err, as_json=as_json)
+        if command == "hosted-review":
+            return hosted_mod.run(args.pr, args.bot, out=out, err=err)
         if command == "project":
             return project_mod.add(args.name, args.repo, dry_run=args.dry_run, out=out, err=err)
         if command == "send":
