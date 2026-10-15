@@ -11,19 +11,19 @@ merged into `mission-20` at 5dfab55.
 - [x] U0 Plan, the branch and the findings (`plan:`) (this commit) — this
       file, meta/CHECKPOINT.md, meta/journal.md, meta/findings/FINDINGS.md
       (H-046..H-048, open, mission 22)
-- [ ] U1 The cancel race (review 20 blocker 1) — src/hands/spool.py,
+- [x] U1 The cancel race (review 20 blocker 1) 44f7494 — src/hands/spool.py,
       src/hands/runner.py, tests
-- [ ] U2 The live hook and writes through a hardlink (review 20 should-fix
+- [x] U2 The live hook and writes through a hardlink 97d1666 (review 20 should-fix
       1, 2; REVIEW-18 should-fix 2, 4) — driver/settings.json,
       architect/settings.json, driver/hooks/bash_guard.py,
       src/hands/doctor.py, tests
-- [ ] U3 Provenance and `doctor --live` (review 20 should-fix 3, 4, 5) —
+- [x] U3 Provenance and `doctor --live` 056f044 (review 20 should-fix 3, 4, 5) —
       src/hands/api.py, src/hands/doctor.py, tests
-- [ ] U4 The protocol's revert step (review 20 should-fix 6) —
+- [x] U4 The protocol's revert step 3dc5a32 (review 20 should-fix 6) —
       templates/REVIEW-PROTOCOL.md, meta/REVIEW-PROTOCOL.md, tests
-- [ ] U5 The apply that leaves no playbook (review 20 note on U5) —
+- [x] U5 The apply that leaves no playbook 37d2c51 (review 20 note on U5) —
       src/hands/playbook.py, tests
-- [ ] U6 Final report (meta/FINAL-REPORT-21.md) — drafted under meta/drafts/
+- [x] U6 Final report (meta/FINAL-REPORT-21.md) (the commit that carries this line) — drafted under meta/drafts/
 
 Review items. REVIEW-20 blocker 1 → U1; should-fix 1, 2 → U2; should-fix
 3, 4, 5 → U3; should-fix 6 → U4; the note on U5 → U5.
