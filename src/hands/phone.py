@@ -53,8 +53,9 @@ does not say: the builder's running job and its age, or the last ended builder
 job, its state and its verdict line; `branch: <name>` and `git log --oneline -3`
 of the builder's cwd (`git -C <cwd> rev-parse --abbrev-ref HEAD`), or one plain
 line when that cwd is not a repository or has no commit; and the first line of
-the working tree's `meta/CHECKPOINT.md` naming a unit in progress, or "no
-checkpoint" (`Api.progress_report`). It is read-only and starts no job.
+`meta/CHECKPOINT.md` at the repository root (`git rev-parse --show-toplevel` of
+the builder's cwd, §39; the cwd itself outside a repository) naming a unit in
+progress, or "no checkpoint" (`Api.progress_report`). It is read-only and starts no job.
 
 **`go`** (§26) is the one way to start work from the phone: it sends the
 playbook's `[series] kickoff` line to the builder as a `clear` send with

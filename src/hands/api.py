@@ -1336,8 +1336,9 @@ class Api:
         beside `status` because it reads the same daemon state. Three parts, one
         or more lines each: the builder's running job and its age, or the last
         ended builder job and its verdict; the branch and `git log --oneline -3`
-        of the builder's cwd; and the first line of the working tree's
-        `meta/CHECKPOINT.md` that names a unit in progress, or "no checkpoint".
+        of the builder's cwd; and the first line of `meta/CHECKPOINT.md` at the
+        repository root (`git rev-parse --show-toplevel` of the builder's cwd, §39)
+        that names a unit in progress, or "no checkpoint".
         The git calls and the file read run in a thread, so the queue keeps moving.
         """
         cwd = self.config.role("builder").cwd
@@ -1421,10 +1422,33 @@ def _progress_git(cwd: Path) -> list[str]:
     return [f"branch: {branch.strip()}", *log.splitlines()]
 
 
-def _checkpoint_line(cwd: Path) -> str:
-    """§38: `checkpoint: <the first line naming a unit in progress>`, or "no checkpoint"."""
+def _checkpoint_root(cwd: Path) -> Path:
+    """§39: `git -C <cwd> rev-parse --show-toplevel`, or `cwd` itself when git gives none.
+
+    The design names only the repository root; a cwd outside a repository (or a
+    git that fails or hangs) falls back to the cwd, the simplest reading.
+    """
     try:
-        text = (cwd / PROGRESS_CHECKPOINT).read_text(encoding="utf-8", errors="replace")
+        done = subprocess.run(
+            ["git", "-C", str(cwd), "rev-parse", "--show-toplevel"],
+            capture_output=True,
+            text=True,
+            errors="replace",
+            timeout=PROGRESS_GIT_TIMEOUT_S,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return cwd
+    top = done.stdout.strip() if done.returncode == 0 else ""
+    return Path(top) if top else cwd
+
+
+def _checkpoint_line(cwd: Path) -> str:
+    """§38, §39: `checkpoint: <the first line naming a unit in progress>` of the
+    `meta/CHECKPOINT.md` at the repository root of `cwd`, or "no checkpoint"."""
+    try:
+        path = _checkpoint_root(cwd) / PROGRESS_CHECKPOINT
+        text = path.read_text(encoding="utf-8", errors="replace")
     except OSError:
         return "no checkpoint"
     for line in text.splitlines():

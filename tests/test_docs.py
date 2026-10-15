@@ -640,6 +640,28 @@ def test_progress_is_documented_in_the_command_channel_the_playbook_doc_and_the_
     assert "accepts ten" in flattened(phone.__doc__ or "")
 
 
+#: §39 (REVIEW-22 should-fix 6): the ten phone commands, in the phone module's order.
+PHONE_COMMANDS = ("approve", "deny", "pause", "resume", "status", "progress", "go", "kit",
+                  "reply", "answer")
+
+
+def test_the_readme_phone_command_list_names_all_ten_commands() -> None:
+    """§39: README's command-channel bullet names each of the ten phone commands,
+    and says ten; the phone module's own list has the same ten."""
+    from hands import phone
+
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    bullet = readme.split("- **The command channel**", 1)[1].split("\n- ", 1)[0]
+    bullet = flattened(bullet)
+    for name in PHONE_COMMANDS:
+        assert f"`{name}`" in bullet, f"README's command list omits `{name}`"
+    assert "ten commands" in bullet
+    listed = (phone.__doc__ or "").split("second word:", 1)[1].split("**`reply`**", 1)[0]
+    assert tuple(line.split()[0] for line in listed.splitlines() if line.strip()) == (
+        PHONE_COMMANDS
+    )
+
+
 def test_the_readme_names_kit_check_go_and_the_kit_transport() -> None:
     readme = flattened((ROOT / "README.md").read_text(encoding="utf-8"))
     for said in ("`hands kit check", "`go <secret>`", "`kit <secret>`", "kit_dir",

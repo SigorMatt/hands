@@ -1234,6 +1234,25 @@ def test_progress_outside_a_repository_with_no_job_answers_plain_lines(
     phone_drive(body)
 
 
+def test_progress_reads_the_checkpoint_at_the_repository_root_below_it(tmp_path: Path) -> None:
+    """§39 (REVIEW-22 should-fix 6): a builder cwd two levels below the repository
+    root finds `meta/CHECKPOINT.md` at `git rev-parse --show-toplevel`, not under
+    the cwd; a copy under the cwd itself is not the one read."""
+    from hands.api import _checkpoint_line
+
+    root = tmp_path / "repo"
+    commit_file(root, "one.txt", "1\n")
+    (root / "meta").mkdir()
+    (root / "meta" / "CHECKPOINT.md").write_text(f"# CHECKPOINT\n\n{UNIT_LINE}\n", "utf-8")
+    cwd = root / "sub" / "deeper"
+    cwd.mkdir(parents=True)
+    assert _checkpoint_line(cwd) == f"checkpoint: {UNIT_LINE}"
+    (cwd / "meta").mkdir()
+    (cwd / "meta" / "CHECKPOINT.md").write_text("Unit in progress: the cwd's copy\n", "utf-8")
+    assert _checkpoint_line(cwd) == f"checkpoint: {UNIT_LINE}"
+    assert _checkpoint_line(root) == f"checkpoint: {UNIT_LINE}"
+
+
 def test_progress_with_a_wrong_or_missing_secret_or_a_nonce_is_refused(
     project: str, workdir: Path, caplog: pytest.LogCaptureFixture
 ) -> None:

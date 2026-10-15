@@ -644,8 +644,9 @@ Publish a command to `cmd_topic` from the ntfy app. The last word is the token
   branch and last three commits of the builder's cwd (`git -C <cwd> rev-parse
   --abbrev-ref HEAD` and `git -C <cwd> log --oneline -3`), or one plain line
   when that directory is not a repository or has no commit yet; and the first
-  line of the working tree's `meta/CHECKPOINT.md` that names a unit in progress,
-  or `no checkpoint`. It is read-only and starts no job.
+  line of `meta/CHECKPOINT.md` at the repository root (`git rev-parse
+  --show-toplevel` of the builder's cwd, DESIGN §39) that names a unit in
+  progress, or `no checkpoint`. It is read-only and starts no job.
 - `go` is the only way to start work from the phone (DESIGN §26). It sends the
   playbook's `[series] kickoff` line (docs/PLAYBOOK.md) to the builder as a
   `clear` send, the job record says `origin: phone`, and `hands jobs --origin
