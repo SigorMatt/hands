@@ -2969,6 +2969,82 @@ def test_an_answer_whose_text_names_a_decisions_file_is_not_held(
     phone_drive(body)
 
 
+#: §39 (H-060): the sentence the resume path puts before a builder prompt while
+#: `meta/journal.md` is dirty in the builder's cwd.
+JOURNAL_SAID = "commit it first"
+CONSULTATION = "J-consultation-0001"
+
+
+def journal(workdir: Path, *, dirty: bool) -> None:
+    """A local repository (no remote) whose `meta/journal.md` is committed, and then,
+    when `dirty`, given one more line — the consult line §27 appends."""
+    commit_file(workdir, "meta/journal.md", "2026-10-15  mission 23 started\n")
+    if dirty:
+        with (workdir / "meta" / "journal.md").open("a", encoding="utf-8") as handle:
+            handle.write(f"2026-10-15  consult {CONSULTATION} (architect done)\n")
+
+
+def assert_reminded(prompt: str, text: str) -> None:
+    first, _, rest = prompt.partition("\n\n")
+    assert JOURNAL_SAID in strip_paths(first), prompt
+    assert "meta/journal.md" in strip_paths(first), prompt
+    assert f"`journal: {CONSULTATION}`" in strip_paths(first), prompt
+    assert "\n" not in strip_paths(first), "the reminder is one line"
+    assert rest == text, prompt
+
+
+@pytest.mark.parametrize("dirty", [True, False], ids=["dirty", "clean"])
+def test_an_answer_tells_the_builder_to_commit_a_dirty_journal_first(
+    project: str, workdir: Path, dirty: bool
+) -> None:
+    """§39 (H-060): the resume path prefixes the answer with one sentence telling the
+    builder to commit a dirty `meta/journal.md` first (`journal: <consultation>`),
+    only when `git status --porcelain -- meta/journal.md` in its cwd shows it; the
+    `answer.sent` event keeps the human's text alone."""
+    journal(workdir, dirty=dirty)
+
+    async def body(daemon: Daemon, fake: FakeNtfy) -> None:
+        asked = await builder_asked(daemon)
+        daemon.spool.append_event("consult.done", {"job": CONSULTATION})
+        await say(daemon, fake, f"answer {SECRET} {ANSWER_TEXT}")
+        (row,) = [r for r in (await ok("jobs"))["jobs"] if r["id"] != asked["id"]]
+        record = await ok("wait", row["id"])
+        if dirty:
+            assert_reminded(record["prompt"], ANSWER_TEXT)
+        else:
+            assert record["prompt"] == ANSWER_TEXT
+        assert answer_events(daemon) == [
+            {"job": row["id"], "text": ANSWER_TEXT, "attachment": None}
+        ]
+
+    phone_drive(body)
+
+
+@pytest.mark.parametrize("context", ["keep", "clear"])
+@pytest.mark.parametrize("dirty", [True, False], ids=["dirty", "clean"])
+def test_a_cli_send_to_the_builder_tells_it_to_commit_a_dirty_journal_first(
+    project: str, workdir: Path, dirty: bool, context: str
+) -> None:
+    """§39 (H-060): a cli `--context keep|clear` send to the builder carries the same
+    sentence, only while the journal is dirty; a send to aux never does."""
+    journal(workdir, dirty=dirty)
+    text = "FAKE:result VERDICT: mission 23 finished"
+
+    async def body(daemon: Daemon, fake: FakeNtfy) -> None:
+        await builder_asked(daemon)
+        daemon.spool.append_event("consult.done", {"job": CONSULTATION})
+        sent = await ok("send", "--role", "builder", "--context", context, text)
+        record = await ok("wait", sent["id"])
+        if dirty:
+            assert_reminded(record["prompt"], text)
+        else:
+            assert record["prompt"] == text
+        aux = await ok("send", "--role", "aux", "--context", "clear", text)
+        assert (await ok("wait", aux["id"]))["prompt"] == text
+
+    phone_drive(body)
+
+
 def test_answer_is_refused_when_the_builder_has_no_resumable_session(
     project: str, caplog: pytest.LogCaptureFixture
 ) -> None:

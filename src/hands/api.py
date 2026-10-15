@@ -277,6 +277,7 @@ class Api:
             gate=gate,
             origin=origin,
             playbook_sha256=playbook_sha256,
+            remind_journal=origin == "cli",
         )
 
     async def _send(
@@ -293,6 +294,7 @@ class Api:
         reply: bool = False,
         ungated: bool = False,
         attached: list[dict[str, Any]] | None = None,
+        remind_journal: bool = False,
     ) -> dict[str, Any]:
         if role not in self.config.roles:
             known = ", ".join(sorted(self.config.roles))
@@ -334,6 +336,14 @@ class Api:
         # its sha256 (§1 invariant 2). Every path is confined before any byte is
         # written, so a path outside the roots refuses the whole send.
         written = self._write_files(file or []) + list(attached or [])
+
+        if remind_journal and role == "builder":
+            # §39 (H-060): the resume path — an `answer`, a cli send to the builder —
+            # tells the builder to commit a dirty `meta/journal.md` first. Put
+            # before the prompt after §8's gate has judged the sender's own text.
+            reminder = self.daemon.playbook.journal_reminder()
+            if reminder is not None:
+                prompt = f"{reminder}\n\n{prompt}"
 
         job = self.daemon.enqueue(
             role=role,
@@ -486,6 +496,7 @@ class Api:
             origin=ANSWER_ORIGIN,
             ungated=True,
             attached=attached,
+            remind_journal=True,
         )
         self.spool.append_event(
             "answer.sent", {"job": job["id"], "text": text, "attachment": filed}
