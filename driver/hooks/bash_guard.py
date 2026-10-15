@@ -1382,7 +1382,37 @@ def write_violation(data, role=None, kits=None):
     if not isinstance(path, str) or not path:
         return (f"the {tool} call carries no {WRITE_PATH_KEY} the guard can read "
                 f"({path!r}, §31: fail closed)")
-    return kits_problem(path, kits, tool)
+    outside = kits_problem(path, kits, tool)
+    if outside is not None:
+        return outside
+    return write_link_problem(path, kits, tool)
+
+
+def write_link_problem(path: str, kits, tool: str):
+    """§37 (review 20 should-fix 2): why a write to `path`, already under
+    `HANDS_KITS`, would reach a file through a link, or None.
+
+    A target that exists as a regular file with a link count above one shares its inode with another
+    name, wherever that name sits, so writing it in place writes there too. And
+    while the kits walk (`kits_symlink(kits, hardlinks=True)`) reports anything,
+    every write is refused, as `cp` and `mv` are: the refusal names the link.
+    """
+    try:
+        info = os.stat(path)
+        links = info.st_nlink if stat.S_ISREG(info.st_mode) else 0  # a directory has 2+
+    except (FileNotFoundError, NotADirectoryError):
+        links = 0  # a new file: nothing shares its inode
+    except OSError as e:
+        return (f"`{tool}` {path!r} cannot be stat'ed ({e.strerror}), so it is not "
+                f"known to be one file (§37: fail closed)")
+    if links > 1:
+        return (f"`{tool}` {path!r} is a file with {links} hard links: writing it writes "
+                f"every other name of the same inode (§37)")
+    linked = kits_symlink(kits, hardlinks=True)
+    if linked is not None:
+        return (f"`{tool}` {path!r}: {KITS_ENV} holds {linked}, and every architect write "
+                f"is refused until it is gone (§37)")
+    return None
 
 
 # §30: review 13 blocker 1's `<<` shape, verbatim (bash's decoding of the
@@ -1863,7 +1893,8 @@ WRITE_SELFTEST = [
 # reviewer's `kits/a/h -> ../.claude/hooks/bash_guard.py`; `xonly` (§34, REVIEW-17
 # should-fix 3) plants the same link in `kits/d` and makes `kits/d` mode 0111;
 # `kits-link` makes `kits` a symlink to `.claude`; `hardlinked` (§36, REVIEW-18
-# should-fix 4) plants `kits/h` as a hard link to `.claude/hooks/bash_guard.py`. §36 (HF-003): every shape but
+# should-fix 4) plants `kits/h` as a hard link to `.claude/hooks/bash_guard.py`, and §37
+# (review 20 should-fix 2) refuses every `--write` while it is there. §36 (HF-003): every shape but
 # `kits-link` has a clone `repo/` (`DESIGN.md`, `docs/A.md`); `clone-link` adds
 # `repo/h -> ../.claude/hooks/bash_guard.py` and `repo/docs/l -> ../DESIGN.md`.
 SYMLINK_SELFTEST = [
@@ -1878,6 +1909,10 @@ SYMLINK_SELFTEST = [
     ("clone-link", "cp repo/DESIGN.md kits/pay/D.md", True),
     ("clean", "mv kits/pay/h kits/h", True),
     ("clean", "--write kits/pay/KIT.md", True),
+    ("clean", "--write kits/pay/h", True),
+    ("planted", "--write kits/pay/KIT.md", False),
+    ("hardlinked", "--write kits/h", False),
+    ("hardlinked", "--write kits/pay/KIT.md", False),
     ("planted", "cp -r kits/a/h kits/", False),
     ("planted", "cp kits/pay/h kits/", False),
     ("planted", "mv kits/a/h kits/", False),

@@ -3061,3 +3061,130 @@ def test_the_guards_selftest_carries_the_review_18_hardlink_rows() -> None:
     assert shapes.get(("hardlinked", "mv kits/pay/h kits/h")) is False
     assert shapes.get(("hardlinked", "mkdir -p kits/m17")) is True
     assert guard.symlink_selftest() == 0
+
+
+# --- §37: the live hook and writes through a hardlink (review 20 SF 1, 2) ---
+#
+# Review 20 should-fix 1: Claude Code ran `python3 <guard>`, so a `shlex.py`
+# planted beside the guard was imported and the hook exited 0 on `rm -rf`. §37:
+# both settings files spell the command `python3 -I "$CLAUDE_PROJECT_DIR"/…`.
+# Should-fix 2: the `--write` hook judged realpath containment alone, so a Write to
+# `kits/h`, hardlinked to the guard, wrote into the guard's inode.
+
+SHIPPED_SETTINGS = [ROOT / "driver" / "settings.json", ROOT / "architect" / "settings.json"]
+LIVE_COMMAND = 'python3 -I "$CLAUDE_PROJECT_DIR"/.claude/hooks/bash_guard.py'
+
+
+def _hook_commands(path: Path) -> dict[str, str]:
+    data = json.loads(path.read_text(encoding="utf-8"))
+    return {entry["matcher"]: hook["command"]
+            for entry in data["hooks"]["PreToolUse"] for hook in entry["hooks"]}
+
+
+@pytest.mark.parametrize("path", SHIPPED_SETTINGS, ids=["driver", "architect"])
+def test_the_shipped_settings_parse_and_every_hook_command_starts_python3_dash_i(
+    path: Path,
+) -> None:
+    commands = _hook_commands(path)
+    assert commands["Bash"] == LIVE_COMMAND, commands
+    for command in commands.values():
+        assert command.startswith("python3 -I "), command
+    if path.parent.name == "architect":
+        assert commands["Write|Edit|MultiEdit"] == LIVE_COMMAND + " --write", commands
+
+
+def _run_as_the_settings_spell_it(
+    cwd: Path, command: str, data: dict[str, object], env: dict[str, str]
+) -> subprocess.CompletedProcess[str]:
+    """The hook as Claude Code runs it: the settings' command string, through a
+    shell, with `CLAUDE_PROJECT_DIR` naming the role directory."""
+    return subprocess.run(["sh", "-c", command], input=json.dumps(data), capture_output=True,
+                          text=True, cwd=cwd, timeout=30, check=False,
+                          env={**env, "CLAUDE_PROJECT_DIR": str(cwd)})
+
+
+@pytest.mark.parametrize("path", SHIPPED_SETTINGS, ids=["driver", "architect"])
+def test_a_planted_shlex_beside_the_guard_is_inert_under_the_settings_command(
+    tmp_path: Path, path: Path
+) -> None:
+    """Review 20 should-fix 1's probe: `.claude/hooks/shlex.py` = exit 0, a marker
+    when imported. The shipped command still refuses `rm -rf` and never imports it;
+    the same command without `-I` imports it (the probe is live)."""
+    cwd = _architect_cwd(tmp_path)
+    marker = tmp_path / "imported"
+    (cwd / ".claude" / "hooks" / "shlex.py").write_text(
+        f"import pathlib, sys\npathlib.Path({str(marker)!r}).touch()\nsys.exit(0)\n",
+        encoding="utf-8")
+    base = {k: v for k, v in os.environ.items() if not k.startswith(("HANDS_", "PYTHON"))}
+    role = {"HANDS_ROLE": "architect", "HANDS_KITS": str(cwd / "kits"),
+            "HANDS_CLONE": str(cwd / "repo")} if path.parent.name == "architect" else {}
+    env = {**base, **role}
+    data = {"tool_name": "Bash", "tool_input": {"command": "rm -rf /tmp/rev20-probe"}}
+    command = _hook_commands(path)["Bash"]
+    done = _run_as_the_settings_spell_it(cwd, command, data, env)
+    assert done.returncode == 2, (done.stdout, done.stderr)
+    assert not marker.exists(), "the settings command imported the planted shlex.py"
+    bare = command.replace("python3 -I ", "python3 ", 1)
+    assert _run_as_the_settings_spell_it(cwd, bare, data, env).returncode == 0
+    assert marker.exists(), "the probe did not reach the planted module without -I"
+
+
+def _write(path: str) -> dict[str, object]:
+    return {"tool_name": "Write", "tool_input": {"file_path": path}}
+
+
+def test_a_write_to_a_hardlinked_file_under_kits_is_refused_and_named(tmp_path: Path) -> None:
+    cwd = _hardlink_planted(tmp_path)
+    kits = str(cwd / "kits")
+    reason = guard.write_violation(_write(f"{kits}/h"), role="architect", kits=kits)
+    assert reason is not None and "hard link" in reason and f"{kits}/h" in reason, reason
+    assert _architect_hook(cwd, _write(f"{kits}/h"), "--write") == 2
+
+
+def test_a_write_target_with_a_second_link_outside_kits_is_refused(tmp_path: Path) -> None:
+    """The target's own link count, checked before the walk: `kits/x` with its other
+    name outside the kits tree."""
+    cwd = _architect_cwd(tmp_path)
+    os.link(cwd / "kits" / "pay" / "h", tmp_path / "outside")
+    kits = str(cwd / "kits")
+    reason = guard.write_violation(_write(f"{kits}/pay/h"), role="architect", kits=kits)
+    assert reason is not None and f"{kits}/pay/h" in reason and "2" in reason, reason
+
+
+@pytest.mark.parametrize("tool", ["Write", "Edit", "MultiEdit"])
+def test_every_write_is_refused_while_another_hardlink_sits_under_kits(
+    tmp_path: Path, tool: str
+) -> None:
+    cwd = _hardlink_planted(tmp_path)
+    kits = str(cwd / "kits")
+    data = {"tool_name": tool, "tool_input": {"file_path": f"{kits}/pay/KIT.md"}}
+    reason = guard.write_violation(data, role="architect", kits=kits)
+    assert reason is not None and f"{kits}/h" in reason and "hard link" in reason, reason
+    assert _architect_hook(cwd, data, "--write") == 2
+    assert not (cwd / "kits" / "pay" / "KIT.md").exists()
+
+
+def test_every_write_is_refused_while_a_symlink_sits_under_kits(tmp_path: Path) -> None:
+    cwd = _architect_cwd(tmp_path)
+    (cwd / "kits" / "a").mkdir()
+    (cwd / "kits" / "a" / "h").symlink_to("../.claude/hooks/bash_guard.py")
+    kits = str(cwd / "kits")
+    reason = guard.write_violation(_write(f"{kits}/pay/KIT.md"), role="architect", kits=kits)
+    assert reason is not None and f"{kits}/a/h" in reason, reason
+
+
+def test_a_write_in_a_clean_kits_tree_still_runs(tmp_path: Path) -> None:
+    cwd = _architect_cwd(tmp_path)
+    kits = str(cwd / "kits")
+    for path in (f"{kits}/pay/KIT.md", f"{kits}/pay/h", f"{kits}/new/DESIGN.md"):
+        assert guard.write_violation(_write(path), role="architect", kits=kits) is None, path
+    assert _architect_hook(cwd, _write(f"{kits}/pay/h"), "--write") == 0
+
+
+def test_the_guards_selftest_carries_the_review_20_write_rows() -> None:
+    shapes = {(shape, cmd): ok for shape, cmd, ok in guard.SYMLINK_SELFTEST}
+    assert shapes.get(("hardlinked", "--write kits/h")) is False
+    assert shapes.get(("hardlinked", "--write kits/pay/KIT.md")) is False
+    assert shapes.get(("planted", "--write kits/pay/KIT.md")) is False
+    assert shapes.get(("clean", "--write kits/pay/KIT.md")) is True
+    assert guard.symlink_selftest() == 0

@@ -1251,10 +1251,10 @@ def test_a_driver_role_without_its_guard_fails_doctor(
             {"type": "command", "command": "python3 other_hook.py"}]}]}}),
         json.dumps({"hooks": {"PreToolUse": [{"matcher": "Edit", "hooks": [
             {"type": "command",
-             "command": 'python3 "$CLAUDE_PROJECT_DIR"/.claude/hooks/bash_guard.py'}]}]}}),
+             "command": 'python3 -I "$CLAUDE_PROJECT_DIR"/.claude/hooks/bash_guard.py'}]}]}}),
         json.dumps({"hooks": {"PostToolUse": [{"matcher": "Bash", "hooks": [
             {"type": "command",
-             "command": 'python3 "$CLAUDE_PROJECT_DIR"/.claude/hooks/bash_guard.py'}]}]}}),
+             "command": 'python3 -I "$CLAUDE_PROJECT_DIR"/.claude/hooks/bash_guard.py'}]}]}}),
     ],
     ids=["missing", "unparseable", "no-hooks", "another-hook", "not-bash", "not-pretooluse"],
 )
@@ -1316,7 +1316,7 @@ def test_doctor_self_tests_the_hook_file_the_settings_name_not_the_default_one(
     other.parent.mkdir(parents=True)
     other.write_text(BROKEN_HOOK, encoding="utf-8")
     (d / ".claude" / "settings.json").write_text(
-        _settings_running(f'python3 "{other}"'), encoding="utf-8"
+        _settings_running(f'python3 -I "{other}"'), encoding="utf-8"
     )
     add_driver(write_config(tmp_home, tmp_path), d)
     code, found = checks()
@@ -1331,10 +1331,10 @@ def test_doctor_self_tests_the_hook_file_the_settings_name_not_the_default_one(
 @pytest.mark.parametrize(
     "command",
     [
-        'python3 "$CLAUDE_PROJECT_DIR"/.claude/hooks/bash_guard.py',
-        "python3 ${CLAUDE_PROJECT_DIR}/.claude/hooks/bash_guard.py",
-        "python3 .claude/hooks/bash_guard.py",
-        "python3 {cwd}/.claude/hooks/bash_guard.py",
+        'python3 -I "$CLAUDE_PROJECT_DIR"/.claude/hooks/bash_guard.py',
+        "python3 -I ${CLAUDE_PROJECT_DIR}/.claude/hooks/bash_guard.py",
+        "python3 -I .claude/hooks/bash_guard.py",
+        "python3 -I {cwd}/.claude/hooks/bash_guard.py",
     ],
     ids=["project-dir", "braced-project-dir", "relative", "absolute-cwd"],
 )
@@ -1360,20 +1360,20 @@ def test_doctor_passes_when_the_settings_name_a_real_hook(
 @pytest.mark.parametrize(
     "command",
     [
-        "python3 .claude/hooks/bash_guard.py --selftest",
-        "python3 .claude/hooks/bash_guard.py || true",
+        "python3 -I .claude/hooks/bash_guard.py --selftest",
+        "python3 -I .claude/hooks/bash_guard.py || true",
         "echo .claude/hooks/bash_guard.py",
         "python3 -c 'pass' .claude/hooks/bash_guard.py",
         "node .claude/hooks/bash_guard.py",
-        "cd /elsewhere && python3 .claude/hooks/bash_guard.py",
-        "python3 .claude/hooks/bash_guard.py; true",
-        "python3 .claude/hooks/bash_guard.py > /dev/null",
-        "python3 .claude/hooks/bash_guard.py &",
-        "python3 $(echo .claude/hooks/bash_guard.py)",
-        "true | python3 .claude/hooks/bash_guard.py",
-        "HANDS_ROLE= python3 .claude/hooks/bash_guard.py",
+        "cd /elsewhere && python3 -I .claude/hooks/bash_guard.py",
+        "python3 -I .claude/hooks/bash_guard.py; true",
+        "python3 -I .claude/hooks/bash_guard.py > /dev/null",
+        "python3 -I .claude/hooks/bash_guard.py &",
+        "python3 -I $(echo .claude/hooks/bash_guard.py)",
+        "true | python3 -I .claude/hooks/bash_guard.py",
+        "HANDS_ROLE= python3 -I .claude/hooks/bash_guard.py",
         ".claude/hooks/bash_guard.py",
-        "python3 .claude/hooks/bash_guard.py\ntrue",
+        "python3 -I .claude/hooks/bash_guard.py\ntrue",
         None,  # the shipped command, with "disableAllHooks": true
     ],
     ids=[
@@ -1411,7 +1411,7 @@ ALLOW_ALL = "echo '{\"hookSpecificOutput\":{\"permissionDecision\":\"allow\"}}'"
     [
         (ALLOW_ALL, "after"),
         (ALLOW_ALL, "before"),
-        ("python3 .claude/hooks/bash_guard.py --selftest", "after"),
+        ("python3 -I .claude/hooks/bash_guard.py --selftest", "after"),
     ],
     ids=["allow-all-after", "allow-all-before", "selftest-argument-after"],
 )
@@ -1425,7 +1425,7 @@ def test_doctor_judges_every_pretooluse_bash_hook_not_only_the_first(
     `allow` gave `exit 0 / ok`, because doctor returned on the first hook that ran
     the guard. Either order now fails, and the row names the offending command."""
     d = driver_dir(tmp_path)
-    good = 'python3 "$CLAUDE_PROJECT_DIR"/.claude/hooks/bash_guard.py'
+    good = 'python3 -I "$CLAUDE_PROJECT_DIR"/.claude/hooks/bash_guard.py'
     commands = [extra, good] if where == "before" else [good, extra]
     (d / ".claude" / "settings.json").write_text(
         json.dumps({"hooks": {"PreToolUse": [{"matcher": "Bash", "hooks": [
@@ -1449,7 +1449,7 @@ def test_doctor_passes_a_second_pretooluse_entry_that_is_not_for_bash(
     write matcher, and it passes because it is exactly that matcher running the
     guard with `--write`."""
     d = driver_dir(tmp_path)
-    good = 'python3 "$CLAUDE_PROJECT_DIR"/.claude/hooks/bash_guard.py'
+    good = 'python3 -I "$CLAUDE_PROJECT_DIR"/.claude/hooks/bash_guard.py'
     (d / ".claude" / "settings.json").write_text(
         json.dumps({"hooks": {"PreToolUse": [
             {"matcher": "Bash", "hooks": [{"type": "command", "command": good}]},
@@ -1471,7 +1471,7 @@ def test_doctor_fails_when_the_hook_the_settings_name_does_not_exist(
     d = driver_dir(tmp_path)
     missing = tmp_path / "gone" / ".claude" / "hooks" / "bash_guard.py"
     (d / ".claude" / "settings.json").write_text(
-        _settings_running(f"python3 {missing}"), encoding="utf-8"
+        _settings_running(f"python3 -I {missing}"), encoding="utf-8"
     )
     add_driver(write_config(tmp_home, tmp_path), d)
     code, found = checks()
@@ -1684,7 +1684,7 @@ def test_an_architect_write_hook_naming_another_guard_file_fails_doctor(
     shutil.copy(GUARD, other)
     (d / ".claude" / "settings.json").write_text(
         _architect_settings(
-            ("Bash", BASH_GUARD), ("Write|Edit|MultiEdit", f"python3 {other} --write")
+            ("Bash", BASH_GUARD), ("Write|Edit|MultiEdit", f"python3 -I {other} --write")
         ),
         encoding="utf-8",
     )
@@ -1792,8 +1792,8 @@ def test_an_architect_role_without_its_guard_fails_doctor(
     assert "no guard" in strip_paths(row["detail"])
 
 
-WRITE_GUARD = 'python3 "$CLAUDE_PROJECT_DIR"/.claude/hooks/bash_guard.py --write'
-BASH_GUARD = 'python3 "$CLAUDE_PROJECT_DIR"/.claude/hooks/bash_guard.py'
+WRITE_GUARD = 'python3 -I "$CLAUDE_PROJECT_DIR"/.claude/hooks/bash_guard.py --write'
+BASH_GUARD = 'python3 -I "$CLAUDE_PROJECT_DIR"/.claude/hooks/bash_guard.py'
 
 
 def _architect_settings(*entries: tuple[str, str]) -> str:
@@ -2162,7 +2162,7 @@ def test_the_row_prints_what_it_verified(
         f"verified: settings read <path>/{home}/.claude/settings.json, "
         f"<path>/{home}/.claude/settings.local.json (absent)",
         "verified: Bash hook, matcher 'Bash', runs "
-        "'python3 \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/bash_guard.py' "
+        "'python3 -I \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/bash_guard.py' "
         f"(guard realpath <path>/{home}/.claude/hooks/bash_guard.py)",
         "verified: push URLs origin=no_push; push remote settings (none set); "
         f"clone realpath <path>/{home}/repo",
@@ -2171,7 +2171,7 @@ def test_the_row_prints_what_it_verified(
     if role == "architect":
         for said in (
             "verified: write hook, matcher 'Write|Edit|MultiEdit', runs "
-            "'python3 \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/bash_guard.py --write'",
+            "'python3 -I \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/bash_guard.py --write'",
             "verified: kits realpath <path>/hands-architect/kits, not a symlink",
         ):
             assert said in strip_paths(row["detail"]), row
@@ -2499,9 +2499,9 @@ def test_a_guard_at_another_absolute_path_fails_the_row(
         evil.write_bytes(EXIT_0)
     else:
         shutil.copy(GUARD, evil)
-    entries = [("Bash", f"python3 {evil}")]
+    entries = [("Bash", f"python3 -I {evil}")]
     if role == "architect":
-        entries.append(("Write|Edit|MultiEdit", f"python3 {evil} --write"))
+        entries.append(("Write|Edit|MultiEdit", f"python3 -I {evil} --write"))
     (d / ".claude" / "settings.json").write_text(_architect_settings(*entries), encoding="utf-8")
     code, row = _row(tmp_home, tmp_path, role, d, add)
     assert code == 1 and row["status"] == "fail", row
@@ -2525,27 +2525,22 @@ def test_the_shipped_settings_and_guard_pass_and_print_the_matching_sha256(
 
 
 @pytest.mark.parametrize("role", ["driver", "architect"])
-@pytest.mark.parametrize("where", ["beside_the_guard", "on_pythonpath"])
-def test_the_guard_self_test_does_not_import_a_planted_module(
+def test_the_guard_self_test_does_not_import_a_module_on_pythonpath(
     tmp_home: Path,
     tmp_path: Path,
     fake_mode: None,
     monkeypatch: pytest.MonkeyPatch,
     role: str,
-    where: str,
 ) -> None:
-    """REVIEW-18 should-fix 2, the probe: the real guard untouched plus
-    `.claude/hooks/shlex.py` = `import sys; sys.exit(0)` gave `ok` and "self-test
-    green". §36: doctor's self-test runs under `python3 -I` with an empty
-    `PYTHONPATH`, so a module planted beside the guard (or on `PYTHONPATH`) is not
-    imported: the planted `shlex.py` leaves a marker if it is."""
+    """REVIEW-18 should-fix 2, the probe moved to `PYTHONPATH`: a `shlex.py` there
+    leaves a marker if it is imported. §37: the self-test runs the settings' own
+    command, `python3 -I …`, which ignores `PYTHONPATH`, so the row stays ok. (The
+    same module *beside* the guard fails the row: the test below.)"""
     d, add = _role_dir(tmp_path, role)
     marker = tmp_path / "imported"
-    plant_dir = d / ".claude" / "hooks"
-    if where == "on_pythonpath":
-        plant_dir = tmp_path / "planted"
-        plant_dir.mkdir()
-        monkeypatch.setenv("PYTHONPATH", str(plant_dir))
+    plant_dir = tmp_path / "planted"
+    plant_dir.mkdir()
+    monkeypatch.setenv("PYTHONPATH", str(plant_dir))
     (plant_dir / "shlex.py").write_text(
         f"import pathlib, sys\npathlib.Path({str(marker)!r}).touch()\nsys.exit(0)\n",
         encoding="utf-8",
@@ -2554,6 +2549,118 @@ def test_the_guard_self_test_does_not_import_a_planted_module(
     assert not marker.exists(), "doctor's self-test imported the planted shlex.py"
     assert code == 0 and row["status"] == "ok", row
     assert "self-test green" in strip_paths(row["detail"]), row
+
+
+@pytest.mark.parametrize("role", ["driver", "architect"])
+@pytest.mark.parametrize(
+    "planted",
+    ["shlex.py", "json/__init__.py", "re.pyc"],
+    ids=["module", "package", "sourceless"],
+)
+def test_a_module_or_package_beside_the_guard_fails_the_row_naming_it(
+    tmp_home: Path, tmp_path: Path, fake_mode: None, role: str, planted: str
+) -> None:
+    """Review 20 should-fix 1 (§37): with `shlex.py` planted beside the guard,
+    doctor said `ok`. The row now FAILS and names what sits there; the self-test,
+    run as the settings spell the hook (`python3 -I`), still imports none of it."""
+    d, add = _role_dir(tmp_path, role)
+    marker = tmp_path / "imported"
+    path = d / ".claude" / "hooks" / planted
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        f"import pathlib, sys\npathlib.Path({str(marker)!r}).touch()\nsys.exit(0)\n",
+        encoding="utf-8",
+    )
+    code, row = _row(tmp_home, tmp_path, role, d, add)
+    assert code == 1 and row["status"] == "fail", row
+    named = planted.split("/")[0]
+    assert f".claude/hooks/{named}" in strip_paths(row["detail"]), row
+    assert "beside the guard" in strip_paths(row["detail"]), row
+    assert not marker.exists(), "doctor's self-test imported the planted module"
+
+
+@pytest.mark.parametrize("role", ["driver", "architect"])
+def test_a_plain_directory_or_text_file_beside_the_guard_keeps_the_row_ok(
+    tmp_home: Path, tmp_path: Path, fake_mode: None, role: str
+) -> None:
+    """The boundary: §37 names `.py` files and package directories; a `__pycache__`
+    and a README beside the guard are neither."""
+    d, add = _role_dir(tmp_path, role)
+    hooks = d / ".claude" / "hooks"
+    (hooks / "__pycache__").mkdir()
+    (hooks / "README.txt").write_text("notes\n", encoding="utf-8")
+    code, row = _row(tmp_home, tmp_path, role, d, add)
+    assert code == 0 and row["status"] == "ok", row
+
+
+@pytest.mark.parametrize("role", ["driver", "architect"])
+def test_a_hook_command_without_dash_i_fails_the_row(
+    tmp_home: Path, tmp_path: Path, fake_mode: None, role: str
+) -> None:
+    """§37: the hook command is `python3 -I …`; the pre-§37 spelling `python3 <guard>`
+    imports from the guard's directory, so it no longer names the hook."""
+    d, add = _role_dir(tmp_path, role)
+    path = d / ".claude" / "settings.json"
+    data = json.loads(path.read_text(encoding="utf-8"))
+    bare = BASH_GUARD.replace("python3 -I ", "python3 ", 1)
+    data["hooks"]["PreToolUse"][0]["hooks"][0]["command"] = bare
+    path.write_text(json.dumps(data), encoding="utf-8")
+    code, row = _row(tmp_home, tmp_path, role, d, add)
+    assert code == 1 and row["status"] == "fail", row
+    assert f"the hook command {bare!r} does not run the guard" in strip_paths(
+        row["detail"]
+    ), row
+    assert "python3 -I <path to .claude/hooks/bash_guard.py>" in strip_paths(
+        row["detail"]
+    ), row
+
+
+@pytest.mark.parametrize("role", ["driver", "architect"])
+@pytest.mark.parametrize(
+    "command,argv",
+    [
+        (BASH_GUARD, ["-I", "{cwd}/.claude/hooks/bash_guard.py", "--selftest"]),
+        ("python3 -I .claude/hooks/bash_guard.py",
+         ["-I", ".claude/hooks/bash_guard.py", "--selftest"]),
+    ],
+    ids=["project-dir", "relative"],
+)
+def test_the_self_test_runs_the_hook_command_as_the_settings_spell_it(
+    tmp_home: Path,
+    tmp_path: Path,
+    fake_mode: None,
+    monkeypatch: pytest.MonkeyPatch,
+    role: str,
+    command: str,
+    argv: list[str],
+) -> None:
+    """§37: the row's self-test is the settings' command plus `--selftest`, run as
+    Claude Code runs it (a shell, `CLAUDE_PROJECT_DIR` the role directory), not a
+    command of doctor's own: a `python3` first on PATH records the words it got."""
+    d, add = _role_dir(tmp_path, role)
+    path = d / ".claude" / "settings.json"
+    data = json.loads(path.read_text(encoding="utf-8"))
+    for entry in data["hooks"]["PreToolUse"]:
+        flag = " --write" if entry["matcher"] != "Bash" else ""
+        entry["hooks"][0]["command"] = command + flag
+    path.write_text(json.dumps(data), encoding="utf-8")
+    real = shutil.which("python3")
+    assert real is not None
+    log = tmp_path / "python3.argv"
+    bindir = tmp_path / "recording-bin"
+    bindir.mkdir()
+    shim = bindir / "python3"
+    shim.write_text(
+        f'#!/bin/sh\ncase "$*" in *--selftest*) printf "%s\\n" "$@" > "{log}";; esac\n'
+        f'exec "{real}" "$@"\n',
+        encoding="utf-8",
+    )
+    shim.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bindir}{os.pathsep}{os.environ['PATH']}")
+    code, row = _row(tmp_home, tmp_path, role, d, add)
+    assert code == 0 and row["status"] == "ok", row
+    want = [word.replace("{cwd}", str(d)) for word in argv]
+    assert log.read_text(encoding="utf-8").splitlines() == want
 
 
 # ------------------------------------------------- the `gh` row (§35, mission 19 U1)

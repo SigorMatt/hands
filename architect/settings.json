@@ -61,7 +61,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/bash_guard.py"
+            "command": "python3 -I \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/bash_guard.py"
           }
         ]
       },
@@ -70,7 +70,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/bash_guard.py --write"
+            "command": "python3 -I \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/bash_guard.py --write"
           }
         ]
       }

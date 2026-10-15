@@ -39,6 +39,7 @@ from __future__ import annotations
 
 import getpass
 import hashlib
+import importlib.machinery
 import json
 import os
 import re
@@ -46,7 +47,6 @@ import shlex
 import shutil
 import stat
 import subprocess
-import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -100,10 +100,17 @@ PROBE_S = 10.0
 #: §28: the hook the driver directory's settings.json must run before every Bash call.
 GUARD_HOOK = ".claude/hooks/bash_guard.py"
 #: §30: the one interpreter a driver hook command may name before the guard's
-#: path; the command driver/settings.json ships is `python3 <guard>`.
+#: path; the command driver/settings.json ships is `python3 -I <guard>`.
 GUARD_INTERPRETER = "python3"
+#: §37 (review 20 should-fix 1): the one option between the interpreter and the
+#: guard's path — isolated mode, so the live hook ignores the user site,
+#: `PYTHONPATH` and the guard's own directory as an import root.
+GUARD_ISOLATED = "-I"
+#: §37: what the self-test runs when the settings name no guard (the row has
+#: failed already): the command the kits ship.
+GUARD_COMMAND = f'{GUARD_INTERPRETER} {GUARD_ISOLATED} "$CLAUDE_PROJECT_DIR"/{GUARD_HOOK}'
 #: §31: the architect's second `PreToolUse` matcher and the one argument its hook
-#: command carries — `python3 <guard> --write`, the write judge, which the driver
+#: command carries — `python3 -I <guard> --write`, the write judge, which the driver
 #: has no equivalent of. The matcher `architect/settings.json` ships selects all
 #: three tools; doctor asks that each of them be judged, however it is spelled.
 WRITE_FLAG = "--write"
@@ -153,7 +160,7 @@ WRITE_MATCHER = "Write|Edit|MultiEdit"
 #: §33: permission modes that let a guarded tool call past the permission prompt.
 BYPASS_MODES: tuple[str, ...] = ("bypassPermissions", "acceptEdits")
 #: §30: a hook command containing any of these (outside the two
-#: `$CLAUDE_PROJECT_DIR` spellings) is more than `python3 <guard>` to a shell.
+#: `$CLAUDE_PROJECT_DIR` spellings) is more than `python3 -I <guard>` to a shell.
 _HOOK_SHELL_CHARS = frozenset(";&|<>`()\\*?[]{}!~#$\n\r")
 #: Seconds for one real `claude -p` turn. A one-line answer, not a task.
 LIVE_S = 180.0
@@ -690,7 +697,7 @@ def _driver_check(config: Config) -> Check:
 
     §28: the row proves the wiring, and fails otherwise: the settings name the hook
     (a `PreToolUse` entry whose matcher is exactly `Bash` and whose command is
-    exactly `python3 <.claude/hooks/bash_guard.py>`, §30, with hooks not disabled),
+    exactly `python3 -I <.claude/hooks/bash_guard.py>`, §30, §37, with hooks not disabled),
     and that hook file self-tests green (`--selftest`, exit 0) run with the role's
     own environment, so with `HANDS_ROLE=driver`.
 
@@ -771,7 +778,12 @@ def _driver_check(config: Config) -> Check:
     hook = named if named is not None else role.cwd / GUARD_HOOK
     mode = f"{ROLE_ENV}={role.spawn_env[ROLE_ENV]}"
     guard, green = _guard_selftest(
-        hook, cwd=role.cwd, env={**os.environ, **role.spawn_env}, mode=mode, words="role mode"
+        hook,
+        command=command if named is not None else None,
+        cwd=role.cwd,
+        env={**os.environ, **role.spawn_env},
+        mode=mode,
+        words="role mode",
     )
     if not green:
         failures.append(guard)
@@ -803,7 +815,7 @@ def _architect_check(config: Config) -> Check:
       clone — resolves under it, where a Write call could change it.
     - a **second** `PreToolUse` matcher: exactly `Write|Edit|MultiEdit`, running the
       guard with `--write` (§31). Every entry whose matcher could select a writing
-      tool must be that one, running exactly `python3 <guard> --write`, because a
+      tool must be that one, running exactly `python3 -I <guard> --write`, because a
       write hook that is not the guard is the architect writing wherever it likes.
 
     §32 adds, to both this row and the driver's where they share code: the clone's
@@ -893,8 +905,8 @@ def _architect_check(config: Config) -> Check:
     else:
         write = (
             f"write matcher ({write_problem}): every PreToolUse hook for "
-            f"{', '.join(WRITE_TOOLS)} must be exactly `{GUARD_INTERPRETER} <path to "
-            f"{GUARD_HOOK}> {WRITE_FLAG}` under the matcher {WRITE_MATCHER!r}, and all "
+            f"{', '.join(WRITE_TOOLS)} must be exactly `{GUARD_INTERPRETER} {GUARD_ISOLATED} "
+            f"<path to {GUARD_HOOK}> {WRITE_FLAG}` under the matcher {WRITE_MATCHER!r}, and all "
             "three must be judged; copy architect/settings.json again (§31, §33)"
         )
         failures.append(write)
@@ -923,6 +935,7 @@ def _architect_check(config: Config) -> Check:
     mode = f"{ROLE_ENV}={role.spawn_env[ROLE_ENV]}"
     guard, green = _guard_selftest(
         hook,
+        command=command if named is not None else None,
         cwd=role.cwd,
         env={**os.environ, **role.spawn_env, KITS_ENV: str(kits_dir)},
         mode=mode,
@@ -1103,7 +1116,13 @@ def _same_guard(named: Path | None, write_named: Path | None) -> str | None:
 
 
 def _guard_selftest(
-    hook: Path, *, cwd: Path, env: dict[str, str], mode: str, words: str
+    hook: Path,
+    *,
+    command: str | None,
+    cwd: Path,
+    env: dict[str, str],
+    mode: str,
+    words: str,
 ) -> tuple[str, bool]:
     """`<hook> --selftest`, run in the role's own environment (§28, §29, §31): the
     `guard` lines of the row, and whether it was green.
@@ -1116,9 +1135,15 @@ def _guard_selftest(
     (`<cwd>/.claude/hooks/bash_guard.py`, compared by realpath), so an absolute
     command path elsewhere fails, and its bytes must hash (sha256) to the guard the
     repository ships (`SHIPPED_GUARDS`), with both hashes printed when they differ.
-    The self-test still runs on that same path, whatever the hashes say, under
-    `python3 -I` with an empty `PYTHONPATH` (§36), so what runs is the guard and
-    the standard library, not a module planted beside it.
+    The self-test still runs on that same path, whatever the hashes say.
+
+    §37 (review 20 should-fix 1): the self-test is the hook `command` exactly as the
+    settings spell it, plus `--selftest`, run as Claude Code runs a hook — through
+    `/bin/sh -c` in `cwd`, with `CLAUDE_PROJECT_DIR` naming `cwd` — not a command of
+    doctor's own (the command the kits ship when the settings name none). The
+    command is `python3 -I …` (`_guard_command_path`), so the guard and the standard
+    library run, not a module on `PYTHONPATH`. And any importable module or package
+    beside the guard (`_beside_the_guard`) fails the row, named.
     """
     if not hook.is_file():
         return (
@@ -1137,12 +1162,15 @@ def _guard_selftest(
     same, said_bytes = _guard_bytes(hook)
     lines.append(said_bytes)
     green = green and same
-    # §36 (review 18 should-fix 2): isolated mode and an empty PYTHONPATH, so a
-    # module planted beside the guard (or on PYTHONPATH) is not imported.
+    beside = _beside_the_guard(hook)
+    if beside is not None:
+        lines.append(beside)
+        green = False
+    spelled = command if command is not None else GUARD_COMMAND
     probe = _run_probe(
-        [shutil.which("python3") or sys.executable, "-I", str(hook), "--selftest"],
+        ["/bin/sh", "-c", f"{spelled} --selftest"],
         cwd=cwd,
-        env={**env, "PYTHONPATH": ""},
+        env={**env, "CLAUDE_PROJECT_DIR": str(cwd)},
     )
     if probe is not None and probe.code == 0 and not probe.timed_out:
         lines.append(f"self-test green in {words} ({mode})")
@@ -1158,6 +1186,41 @@ def _guard_selftest(
         f"copy driver/hooks/bash_guard.py again (§28){tail}"
     )
     return "\n".join(lines), False
+
+
+def _beside_the_guard(hook: Path) -> str | None:
+    """§37 (review 20 should-fix 1): what sits beside the guard that Python could
+    import in its place — the first entry of the guard's directory (as the settings
+    name it and as it resolves) that is a module file (any suffix
+    `importlib.machinery.all_suffixes()` lists: `.py`, `.pyc`, an extension module)
+    or a package directory (one holding an `__init__` module), other than the guard
+    itself — named in the line saying so, or None. A directory that cannot be listed
+    is returned as what fails: the row cannot say it holds nothing."""
+    suffixes = tuple(importlib.machinery.all_suffixes())
+    real = os.path.realpath(hook)
+    for folder in dict.fromkeys((str(hook.parent), os.path.dirname(real))):
+        try:
+            names = sorted(os.listdir(folder))
+        except OSError as exc:
+            return (
+                f"the guard's directory {folder} cannot be listed ({exc.strerror}), so "
+                "what Python could import beside the guard is not known (§37)"
+            )
+        for name in names:
+            path = os.path.join(folder, name)
+            if os.path.realpath(path) == real:
+                continue
+            package = os.path.isdir(path) and any(
+                os.path.exists(os.path.join(path, "__init__" + suffix)) for suffix in suffixes
+            )
+            if package or (not os.path.isdir(path) and name.endswith(suffixes)):
+                kind = "a package directory" if package else "a module file"
+                return (
+                    f"{path} sits beside the guard {hook}: {kind} there could be imported in "
+                    "the guard's place; remove it, the hook directory holds the guard alone "
+                    "(§37)"
+                )
+    return None
 
 
 def _guard_bytes(hook: Path) -> tuple[bool, str]:
@@ -1274,8 +1337,8 @@ def _settings_name_the_guard(
     (§28, §29, §30), None, and its command; or None, why not, and None.
 
     §30: the command must run the file *as the guard*. `shlex` splits it into
-    exactly two words, `python3` (the interpreter driver/settings.json ships) and
-    a path that is `.claude/hooks/bash_guard.py` or ends in
+    exactly three words, `python3` (the interpreter driver/settings.json ships),
+    `-I` (§37) and a path that is `.claude/hooks/bash_guard.py` or ends in
     `/.claude/hooks/bash_guard.py`, with `$CLAUDE_PROJECT_DIR` (or
     `${CLAUDE_PROJECT_DIR}`) standing for `cwd` and a relative path read against
     `cwd`, where Claude Code runs the hook. Any other `$`, a shell operator,
@@ -1317,7 +1380,8 @@ def _settings_name_the_guard(
     if offenders:
         return None, (
             f"the hook command {offenders[0]!r} does not run the guard: every PreToolUse "
-            f"Bash hook must be exactly `{GUARD_INTERPRETER} <path to {GUARD_HOOK}>` (§31)"
+            f"Bash hook must be exactly `{GUARD_INTERPRETER} {GUARD_ISOLATED} <path to "
+            f"{GUARD_HOOK}>` (§31, §37)"
         ), None
     if not guards:
         return None, f"no PreToolUse command hook for Bash runs {GUARD_HOOK}", None
@@ -1332,7 +1396,7 @@ def _settings_name_the_write_guard(
     settings: _Settings, cwd: Path, *, required: bool
 ) -> tuple[Path | None, str | None, str | None]:
     """§31: the architect's second matcher — exactly `Write|Edit|MultiEdit`, running
-    `python3 <guard> --write` — the guard file it names, None, and its command; or
+    `python3 -I <guard> --write` — the guard file it names, None, and its command; or
     None, why not, and None.
 
     The Bash rule of `_settings_name_the_guard`, applied to the tools that write:
@@ -1630,9 +1694,11 @@ def _under_realpath(path: Path, root: Path) -> bool:
 
 
 def _guard_command_path(command: str, cwd: Path, *, flag: str | None = None) -> Path | None:
-    """The guard file `command` runs as `python3 <guard>` and nothing else (§30), or
-    None. With `flag` (§31's `--write`), that word and only that word follows the
-    path: the write matcher's command is `python3 <guard> --write`."""
+    """The guard file `command` runs as `python3 -I <guard>` and nothing else (§30,
+    §37), or None. With `flag` (§31's `--write`), that word and only that word follows
+    the path: the write matcher's command is `python3 -I <guard> --write`. §37: `-I`
+    is required, as the second word; without it the live hook imports from the
+    guard's directory, the user site and `PYTHONPATH`."""
     plain = command.replace("${CLAUDE_PROJECT_DIR}", "").replace("$CLAUDE_PROJECT_DIR", "")
     if any(char in _HOOK_SHELL_CHARS for char in plain):
         return None
@@ -1640,12 +1706,12 @@ def _guard_command_path(command: str, cwd: Path, *, flag: str | None = None) -> 
         words = shlex.split(command)
     except ValueError:
         return None
-    wanted = 2 if flag is None else 3
-    if len(words) != wanted or words[0] != GUARD_INTERPRETER:
+    wanted = 3 if flag is None else 4
+    if len(words) != wanted or words[:2] != [GUARD_INTERPRETER, GUARD_ISOLATED]:
         return None
-    if flag is not None and words[2] != flag:
+    if flag is not None and words[3] != flag:
         return None
-    word = words[1].replace("${CLAUDE_PROJECT_DIR}", str(cwd))
+    word = words[2].replace("${CLAUDE_PROJECT_DIR}", str(cwd))
     word = word.replace("$CLAUDE_PROJECT_DIR", str(cwd))
     if not (word == GUARD_HOOK or word.endswith("/" + GUARD_HOOK)):
         return None
