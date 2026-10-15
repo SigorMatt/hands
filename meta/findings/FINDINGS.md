@@ -2361,7 +2361,9 @@ picture), and the sentence is corrected in the next DESIGN revision; or
 `status` should leave the architect out, which is a code change with its
 own test.
 
-Status: decided (DESIGN §39, mission 23 U9) — §38's sentence was wrong: status prints one line per configured role, the architect's included, and the handbook says so
+Status: resolved-by-doc (mission 23 U9 515b736 — docs/ARCHITECT-HANDBOOK.md
+says status prints one line per configured role, the architect's included,
+checked against the CLI's status block by test)
 
 ## H-054 — §38 says a `[server] ntfy_topic` config refuses to load; the loader still reads it
 
@@ -2386,7 +2388,9 @@ DESIGN revision (the refusal is for a key set twice), or make the
 `[server]` spelling a load error with a migration message, which is a code
 change with its own test.
 
-Status: decided (DESIGN §39, mission 23 U9) — §38's sentence was wrong: [server] is read as the fallback, only a key set in both tables refuses to load; INTEGRATION says so and tells the migration to move the key
+Status: resolved-by-doc (mission 23 U9 515b736 — docs/INTEGRATION.md says
+[server] is the fallback, a key set in both tables refuses to load, and the
+migration moves the key; checked against the loader by test)
 
 
 ## H-055 — the protocol's revert step fails for a file the commit deletes
@@ -2405,7 +2409,10 @@ status` afterwards, so a reviewer can continue on a half-restored tree.
 Direction. §39: `git rm -q` a listed file absent at `<sha>` before the
 restore, and `git status --short` must be empty after it. Mission 23 U6.
 
-Status: open (mission 23 U6)
+Status: resolved-by-doc (mission 23 U6 dc9698e — both protocols git rm -q -f
+a listed file absent at <sha> before the restore (plain -q refuses the
+deletion the revert staged) and require git status --short empty after it; a
+scratch-repo test runs the steps)
 
 ## H-056 — `no_background.py` runs without `-I`
 
@@ -2423,7 +2430,9 @@ the guard.
 Direction. §39: `python3 -I` in the settings file, the copy line and the
 self-test, under the same rule as the guard. Mission 23 U9.
 
-Status: open (mission 23 U9)
+Status: resolved (mission 23 U9 515b736 — .claude/settings.json,
+INTEGRATION's copy line and self-test run python3 -I; a planted json.py
+beside the hook is ignored by the settings' command, imported without -I)
 
 ## H-057 — a daemon restart kills a running review and nothing resumes it
 
@@ -2442,7 +2451,11 @@ an aux job orphaned as it does a builder's; both templates and this
 repository's playbook carry `aux.orphaned → resume` (the review's prompt to
 a fresh context, bounded by `max_resumes`). Mission 23 U2.
 
-Status: open (mission 23 U2)
+Status: resolved-by-code (mission 23 U2 bcc3d53 — aux.orphaned in EVENTS,
+the stop records an aux job orphaned, aux.orphaned -> resume in
+PLAYBOOK.toml and both templates; a stop-orphaned review is resumed with its
+prompt in a fresh context at the next start; INTEGRATION and the handbook
+say a restart kills every running job, U9)
 
 ## H-058 — a refused phone command is logged, not published
 
@@ -2459,7 +2472,9 @@ Direction. §39: a command with the right secret that handsd refuses is
 published on `ntfy_topic` titled `<command>` with the reason; a wrong or
 missing secret stays silent. Mission 23 U2.
 
-Status: open (mission 23 U2)
+Status: resolved-by-code (mission 23 U2 bcc3d53 — a refusal of a command
+with the right secret is published titled <command> with the reason; wrong
+or missing secret silent)
 
 ## H-059 — job ids typed on a phone arrive with `O` for `0` and are refused
 
@@ -2477,7 +2492,10 @@ of four or more characters is accepted; an ambiguous prefix is refused with
 the candidates; the hold notification prints the id on its own line.
 Mission 23 U2.
 
-Status: open (mission 23 U2)
+Status: resolved-by-code (mission 23 U2 bcc3d53 — api.match_job_id: case-
+insensitive, O->0, l/I->1, unique prefix of four or more, ambiguous refused
+with candidates, in approve, deny, cancel (answer and reply carry no id);
+hold notification prints the id on its own line)
 
 ## H-060 — the consult journal line after an escalation is left uncommitted
 
@@ -2497,4 +2515,7 @@ builder to commit a dirty `meta/journal.md` first when `git status
 --porcelain -- meta/journal.md` in its cwd shows it; the handbook's ruling
 round says the same for a human. Mission 23 U3.
 
-Status: open (mission 23 U3)
+Status: resolved-by-code (mission 23 U3 e36d558 — an answer and a cli
+keep/clear send to the builder are prefixed with the commit-the-journal
+sentence when git status --porcelain -- meta/journal.md shows it; the
+handbook's ruling round says the same, U9 515b736)
