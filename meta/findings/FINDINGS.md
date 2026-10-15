@@ -2359,3 +2359,28 @@ picture), and the sentence is corrected in the next DESIGN revision; or
 own test.
 
 Status: open
+
+## H-054 — §38 says a `[server] ntfy_topic` config refuses to load; the loader still reads it
+
+Severity: low · Component: `src/hands/config.py` (`[server]`/`[notify]`
+keys), docs/INTEGRATION.md; DESIGN §38 "The handbook's new sections"
+Filed by: mission 22 orchestrator, U12 (2026-10-15), from the U11
+sub-agent's report.
+Evidence: src/hands/config.py reads `ntfy_topic` and `ntfy_url` from
+`[notify]`, falls back to `[server]` ("still read for configs written
+before it"), and raises `ConfigError` only when the same key is set in
+both tables.
+
+Symptom. §38 asks INTEGRATION to say that a config written before
+`[notify]` existed "carries `ntfy_topic` under `[server]` and refuses to
+load until it is moved". The loader loads such a config; it refuses only a
+key set in both tables (for instance after a `[notify]` section was added
+with the same key). U11 documented what the code does, not the design's
+sentence.
+
+Direction (for the architect): either correct §38's sentence in the next
+DESIGN revision (the refusal is for a key set twice), or make the
+`[server]` spelling a load error with a migration message, which is a code
+change with its own test.
+
+Status: open
