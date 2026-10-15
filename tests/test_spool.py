@@ -74,7 +74,11 @@ def test_job_record_has_exactly_the_design_fields(tmp_home: Path) -> None:
     # is §23's (H-014): which of the failure causes made a job `failed`. `kit_id` is
     # §32's: the id the daemon mints for an apply it files from a kit, recorded on
     # the job so an approval can be checked against the spool (§6's list predates it).
-    assert set(JOB_FIELDS) == design | {"state", "playbook_sha256", "failure_reason", "kit_id"}
+    # `orphan_reason` and `orphan_fed` are §38's (H-047): `daemon_stop` for a job the
+    # daemon's own stop ended, and whether a start has fed the orphan to the engine.
+    assert set(JOB_FIELDS) == design | {
+        "state", "playbook_sha256", "failure_reason", "kit_id", "orphan_reason", "orphan_fed"
+    }
 
     spool = Spool("~/.hands/demo")
     job = make(spool)

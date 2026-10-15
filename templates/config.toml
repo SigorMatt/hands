@@ -1,0 +1,32 @@
+# ~/.hands/<project>.toml — the config of one project (DESIGN §13, §29).
+#
+# The template `hands project add` fills (§38): every placeholder below is
+# replaced, the four topics are generated with the project's
+# name in them, and the command secret is generated and also kept in
+# ~/.hands/<project>.cmd_secret. This file holds that secret, so it is written
+# mode 600. docs/INTEGRATION.md step 3 lists every key a config may carry.
+
+[notify]
+ntfy_topic = "<ntfy_topic>"
+# ntfy_url = "https://ntfy.sh"     # default; a self-hosted server is the documented
+# ntfy_token = "tk_<...>"          # default for role mode (docs/INTEGRATION.md,
+#                                  # "Self-hosted ntfy over Tailscale")
+cmd_topic = "<cmd_topic>"
+cmd_secret = "<cmd_secret>"
+who_topic = "<who_topic>"
+who_cmd_topic = "<who_cmd_topic>"
+
+[roles.builder]
+cwd = "~/git/<project>"            # the builder's own clone, which it commits and pushes in
+
+[roles.aux]
+cwd = "~/git/<project>"
+
+[roles.driver]
+cwd = "~/hands-driver/<project>"   # the driver directory and its fetch-only repo/ clone
+
+[roles.architect]
+cwd = "~/hands-architect/<project>"  # the architect directory, its repo/ clone and kits/
+
+[files]
+allowed_roots = ["~/git/<project>", "~/Downloads"]

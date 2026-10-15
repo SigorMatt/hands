@@ -126,21 +126,29 @@ async def http_post(
 
     headers = {"Title": title, "Tags": "robot", **auth_headers(token)}
     if actions:
-        headers["Actions"] = actions_header(actions)
+        headers["Actions"] = actions_header(actions, token)
     async with httpx.AsyncClient(timeout=POST_TIMEOUT_S, transport=transport) as client:
         response = await client.post(url, content=message.encode("utf-8"), headers=headers)
     return int(response.status_code)
 
 
-def actions_header(actions: list[dict[str, str]]) -> str:
+def actions_header(actions: list[dict[str, str]], token: str | None = None) -> str:
     """ntfy's `Actions` header, short form: `http, <label>, <url>, method=POST, body=…`.
 
     Every value hands puts here is a label, a URL and a body of the shape
     `approve <job> <nonce>` — no comma or semicolon in any of them (job ids are
     base 36, the nonce is URL-safe base 64), so no quoting is needed.
+
+    §38: with `token` (`[notify] ntfy_token`) every action also carries
+    `headers.Authorization=Bearer <token>`, so a button press is authorized on a
+    token-protected server; without one the actions are as before. The config
+    loader refuses a token with a comma or a semicolon, which the short form
+    cannot quote. The bearer is added here, on the wire, not to the action dicts,
+    so the spooled notification never holds the token.
     """
+    bearer = f", headers.Authorization=Bearer {token}" if token else ""
     return "; ".join(
-        f"http, {a['label']}, {a['url']}, method=POST, body={a['body']}, clear=true"
+        f"http, {a['label']}, {a['url']}, method=POST{bearer}, body={a['body']}, clear=true"
         for a in actions
     )
 

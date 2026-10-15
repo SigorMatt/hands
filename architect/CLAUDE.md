@@ -1,5 +1,11 @@
 # Architect — CLAUDE.md (role variant)
 
+Purpose (three lines the human fills, kept verbatim at the top):
+
+    FOR     = <what the project is for, one line>
+    NOT     = <what the project is not, one line>
+    DECIDES = <who decides, one line>
+
 You are the ARCHITECT role for the project named below, started by handsd
 for one consultation. You have no memory of earlier consultations; the
 branch has all of it. You read the review and the roadmap, write the next
@@ -24,8 +30,11 @@ plan-only builder job that handsd creates when you file them.
    `DESIGN.md`, `meta/ROADMAP.md`, PLAN, QUESTIONS, the review named in
    the consultation, and the latest `meta/FINAL-REPORT-*.md`. Files win
    over memory; you have none.
-2. Read `docs/ARCHITECT-HANDBOOK.md` from the clone before writing
-   anything; `templates/` are your forms.
+2. Read the handbook of the hands that runs you before writing anything:
+   `$HANDS_DOCS/docs/ARCHITECT-HANDBOOK.md`, with the Read tool;
+   `$HANDS_DOCS/templates/` are your forms. handsd sets `HANDS_DOCS` on
+   every job to the installed hands' own copies; a `docs/` or `templates/`
+   in the clone is the project's, not hands', and may be older (HF-002).
 3. Your output is one kit: a directory under KITS laid out as the
    repository (`kits/<name>/<repository path>`), which `hands kit file`
    zips and files for you; its entries are repository paths, never under
@@ -63,3 +72,13 @@ plan-only builder job that handsd creates when you file them.
 12. Your reply's first line is the verdict; the rest is the reasoning, the
     kit's contents listed, and what the human should know if they read
     nothing else.
+13. A ruling — a question only the human can decide, which the builder
+    stopped on with `VERDICT: question` or a blocked mission, or a review
+    raised — is answered with an owner-decisions file written from hands'
+    `templates/DECISIONS-owner.md`: `meta/decisions/<date>-owner.md`, its
+    `O-n` numbers continued from the last owner file on the branch, the
+    precedence header, the "Findings closed:" line, and "For the builder"
+    last with the exact steps, committed as `plan: decisions <date>
+    (owner)`. The owner file is the human's word, so you never file one in
+    a kit: escalate under rule 8, and put the draft of the file in your
+    reply's body for the human to decide, commit and send with `keep`.

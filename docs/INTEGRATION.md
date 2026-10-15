@@ -45,6 +45,47 @@ with `git checkout main && git pull --ff-only`. A tree left on `mission-N`
 (a blocked mission, a review with blockers, a hand edit) is yours to put back
 the same way before the next `go`.
 
+## One command for steps 2, 3, 5 and 6: `hands project add` (§38)
+
+    hands project add <project> --repo <url> --dry-run   # every path and command; writes nothing
+    hands project add <project> --repo <url>
+
+does for one project what the sections below do by hand, from the hands that is
+installed (`hands handbook --templates` is where its templates are):
+
+- `~/.hands/<project>.toml` from the installed `templates/config.toml`, with four
+  generated topics that carry the project's name (`ntfy_topic`, `cmd_topic`,
+  `who_topic`, `who_cmd_topic`) and a generated `cmd_secret`, which is also
+  written alone to `~/.hands/<project>.cmd_secret`; both files mode 600. The
+  config names `[roles.builder]` and `[roles.aux]` at `~/git/<project>`, the
+  builder's own clone, which you make yourself; and `ntfy.sh` until you set
+  `ntfy_url` (see "Self-hosted ntfy over Tailscale").
+- `~/hands-driver/<project>/` and `~/hands-architect/<project>/` (and its
+  `kits/`), each with the shipped `.claude/settings.json`, the shipped guard at
+  `.claude/hooks/bash_guard.py`, the role's `CLAUDE.md` with the Parameters
+  filled (`driver/CLAUDE.md`, and for the architect role `architect/CLAUDE.md`,
+  the instruction's role variant), and `repo/`, a clone of `<url>` whose push
+  URL is `no_push`.
+- `~/.config/hands/<project>.env` (empty), `~/.config/systemd/user/handsd@.service`
+  when it is not there yet, then `systemctl --user daemon-reload` and
+  `systemctl --user enable handsd@<project>`. Starting it, and enabling
+  `handswho@<project>`, are left to you.
+- `hands --project <project> doctor`, printed. Its failures (no builder clone yet,
+  no `claude` on PATH) are your next steps; they do not change the command's exit
+  status, which is 1 only for a refusal or a failed `git` or `systemctl` step.
+- Last, the Project instruction of `docs/ARCHITECT-INSTRUCTION.md` with the
+  Parameters filled, for pasting into the Claude Project (fill its Purpose
+  block), and the question to ask it: "What are your Parameters?".
+
+The Parameters it fills: `PROJECT` and `REPO_URL` from the command line, and
+`BRANCH = main`, `PLAN = meta/CHECKPOINT.md meta/plan.md`, `QUESTIONS =
+meta/findings/FINDINGS.md`, `PLAYBOOK = PLAYBOOK.toml`, hands' own conventions;
+edit them where the project differs. It refuses, before writing anything, a
+project that exists (its config, its spool or its `.cmd_secret` is there), a role
+directory that is not empty, and a name outside the pattern below. Proven by
+tests against a temporary HOME, a stand-in `systemctl` and a local bare
+repository; it has not been run on a real laptop.
+
 ## 2. Run handsd (once per machine, per project)
 
     install -Dm644 ~/git/hands/systemd/handsd@.service ~/.config/systemd/user/handsd@.service
@@ -154,6 +195,8 @@ cwd` is optional.
     # cmd_secret = "<one long random word>"
     # who_topic = "who-<project>-<random>"
     # who_cmd_topic = "whocmd-<project>-<random>"
+    # who_min_interval_s = 60                   # default: handswho's floor between
+    #                                           # two publishes (§38)
 
     [roles.builder]
     cwd = "~/git/<project>"              # required; the only required key
@@ -261,7 +304,7 @@ Notes that are easy to get wrong:
   is the file the settings' command names (§29), run as `python3 -I` with an
   empty `PYTHONPATH` (§36), so a module planted beside the guard is not imported
   by the self-test. The command must run it as
-  the guard (§30): exactly `python3` and a path ending in
+  the guard (§30, §37): exactly `python3 -I` and a path ending in
   `.claude/hooks/bash_guard.py`, with `$CLAUDE_PROJECT_DIR` and a relative path
   read against the driver directory, and nothing else: no further argument
   (`--selftest`), no other interpreter, no `;`, `&`, `|`, redirection, `$`
@@ -401,7 +444,14 @@ It checks, all for free: the config, the `claude` binary and its `--version`,
 each role's `cwd` (and whether it is a git repository), the allowed roots, the
 ops script's flags, which per-job isolation is in force, the playbook, whether
 notifications, the command channel, `go`, the kit transport and the who view
-are on, and whether handsd is answering. A daemon
+are on, whether `ntfy_url` is a public broker, and whether handsd is answering.
+The `broker` row (§38) is a **warning** when `ntfy_url` is unset (so
+`https://ntfy.sh`) or names a host that is neither a private address (RFC 1918,
+loopback, link-local, IPv6 unique-local, `localhost`) nor a tailnet name (an
+address in `100.64.0.0/10`, or a name ending `.ts.net`): it names the public
+broker's daily cap on what one address may publish and the "Self-hosted ntfy
+over Tailscale" section below. A private or tailnet host is `ok`. Doctor
+judges the url's text only; it does not resolve the name or reach the server. A daemon
 that is not running is a **warning**, not a failure — this step comes before
 you have to have started one. Exit code 1 means a check failed.
 
@@ -550,7 +600,7 @@ is stamped before anything the resumed job goes on to publish. An exhausted
 ### The command channel: approve from the phone
 
 With `[notify] cmd_topic` set, handsd subscribes to that topic — an outbound
-long poll to ntfy, nothing listening on this machine — and takes nine commands
+long poll to ntfy, nothing listening on this machine — and takes ten commands
 from it. Set it up once:
 
     python3 -c 'import secrets; print("hands-<project>-cmd-" + secrets.token_urlsafe(16))'
@@ -577,6 +627,7 @@ Publish a command to `cmd_topic` from the ntfy app. The last word is the token
     pause <secret>
     resume <secret>
     status <secret>
+    progress <secret>
     go <secret>
     kit <secret>                  (with a .zip attached to the message)
     reply <secret> <text>
@@ -587,6 +638,14 @@ Publish a command to `cmd_topic` from the ntfy app. The last word is the token
   `hands pause` and `hands resume` (`hands pipeline` shows `paused yes
   (phone)`). `status` answers on `ntfy_topic` with a few lines: each role,
   the held job ids, whether the pipeline is paused, the unread inbox count.
+- `progress` (DESIGN §38) answers on `ntfy_topic`, titled `progress`, with
+  what `status` does not say: the builder's running job and how long it has
+  run, or its last ended job, that job's state and its `VERDICT:` line; the
+  branch and last three commits of the builder's cwd (`git -C <cwd> rev-parse
+  --abbrev-ref HEAD` and `git -C <cwd> log --oneline -3`), or one plain line
+  when that directory is not a repository or has no commit yet; and the first
+  line of the working tree's `meta/CHECKPOINT.md` that names a unit in progress,
+  or `no checkpoint`. It is read-only and starts no job.
 - `go` is the only way to start work from the phone (DESIGN §26). It sends the
   playbook's `[series] kickoff` line (docs/PLAYBOOK.md) to the builder as a
   `clear` send, the job record says `origin: phone`, and `hands jobs --origin
@@ -680,7 +739,9 @@ Publish a command to `cmd_topic` from the ntfy app. The last word is the token
   buttons (§34), and names each by title in its `handsd started` notification.
   `hands approve <job>` / `hands deny <job>`, or `approve <job> <secret>` on
   `cmd_topic`, decide a held job all the same. `pause`, `resume`,
-  `status` and `go` take the secret only, never a nonce.
+  `status`, `progress` and `go` take the secret only, never a nonce. With
+  `ntfy_token` set each button also carries the bearer, so a token-protected
+  server accepts the press (§38; "Self-hosted ntfy over Tailscale").
 - **Nothing is answered except `status`, an accepted `go`, a written kit, and a
   `reply` or an `answer` whose secret was right.** A wrong secret or nonce, a command
   hands does not know, or a job that is not held is logged in handsd's journal
@@ -833,7 +894,13 @@ install it the way its header says, as `handswho@<project>`. `handswho` pushes t
 `who_topic` when what is running, held or waiting changes (a session's state
 must hold for two scans first; your own
 sessions never trigger a push), and whenever `status`, `who`, `check` or `?` is
-published to `who_cmd_topic`. Those words take no secret, because they execute
+published to `who_cmd_topic`. A change is compared with every relative-time
+rendering blanked (each age such as `4s`, `5m`, `2h00`, and the header's
+`HH:MM`), so a picture that differs only in its times is not published; the
+picture that is published still shows them (§38). No two publishes fall
+within `[notify] who_min_interval_s` (default 60 seconds) — counting a publish
+the broker refused — except one a command asked for; a change inside it is
+published by the first scan past it, every 20 seconds. Those words take no secret, because they execute
 nothing: the only answer is the same picture. The picture does carry the first
 line of each running job's prompt and of the commands under each session, so
 keep `who_topic` as private as `ntfy_topic`. Without `who_topic`, `handswho`
@@ -847,6 +914,15 @@ architect's replies, the who picture, a kit. DESIGN §33's alternative is an ntf
 server of your own, in a container on the laptop, whose topics require a token,
 reached by the phone through the Tailscale tunnel. Once hands and the phone use
 only that server, free text about a project stops going to a public broker.
+
+#### The default for role mode
+
+Under `[series] architect = "role"` hands publishes for hours with no human in
+the loop: the architect's replies, the builder's answers, held kits, the who
+picture. The self-hosted server below is the documented default for role mode
+(§38); ntfy.sh stays fine for a first phone-mode trial. `hands doctor`'s
+`broker` row (§4 above) warns, and does not fail, on a public `ntfy_url`, and
+names the public broker's daily cap and this section.
 
 What hands does (tested against stand-in servers, see the end of this section):
 `[notify] ntfy_token` is sent as `Authorization: Bearer <token>` on every publish
@@ -867,12 +943,26 @@ names the character and its position, and a host is written in its `xn--` form. 
 failed `config` row) read the config the same way. `hands doctor` says `ntfy
 token on` or `ntfy token off`.
 
-The server setup below is a sketch of ntfy's and Tailscale's own documented
-commands. It was written from their documentation, not run for this repository;
-check each step against the version you install.
+Every `http` action hands publishes, a held job's Approve and Deny, carries
+`headers.Authorization=Bearer <token>` in ntfy's short action form, beside
+`method=POST` and `body=…`, when `ntfy_token` is set (§38, H-037); without a
+token the actions carry no header. The token is the one the phone already
+subscribes with, so a subscriber of `ntfy_topic` learns nothing new from it. A
+token holding `,` or `;`, which the short form cannot quote, does not load.
+`hands doctor`'s `phone` row says `buttons: bearer on`, or `buttons: no token; a
+token-protected server refuses them`.
+
+The steps below follow ntfy's and Tailscale's own documentation. They were
+corrected from the first real setup, on the laptop on 2026-10-14 (DESIGN §37,
+§38); check each step against the version you install.
 
 **1. The server, in a container.** A config with access control, the
-`binwiloo/ntfy` image, and a port on the laptop's loopback only:
+`binwiederhier/ntfy` image, and a port on the laptop's loopback only. Set
+`base-url` before the first start: it is the address the phone uses, and ntfy
+builds attachment URLs from it, so it must be exactly the `ntfy_url` you give
+hands (a kit's URL then has `ntfy_url`'s origin and is fetched with the
+bearer). With no HTTPS certificate on the tailnet, use the second form of
+step 3 and write its `http://` address here instead.
 
     mkdir -p ~/ntfy/etc ~/ntfy/cache
     cat > ~/ntfy/etc/server.yml <<'YML'
@@ -886,39 +976,55 @@ check each step against the version you install.
     YML
     docker run -d --name ntfy --restart unless-stopped \
       -v ~/ntfy/etc:/etc/ntfy -v ~/ntfy/cache:/var/cache/ntfy \
-      -p 127.0.0.1:2586:80 binwiloo/ntfy serve
+      -p 127.0.0.1:2586:80 binwiederhier/ntfy serve
 
 `podman run` takes the same arguments. `auth-default-access: "deny-all"` is what
 makes every topic require a user or a token. `attachment-cache-dir` is what lets
-the server take a kit at all. `base-url` is the address the phone uses, and ntfy
-builds attachment URLs from it, so set it to exactly the `ntfy_url` you give
-hands: a kit's URL then has `ntfy_url`'s origin and is fetched with the bearer.
+the server take a kit at all.
 
-**2. A user, its access, and a token.** One user for hands and the phone:
+**2. A user, its access, and a token.** One user for hands and the phone, with
+access to every topic hands uses, the who topics included:
 
     docker exec -it ntfy ntfy user add hands          # asks for a password
     docker exec ntfy ntfy access hands 'hands-*' read-write
+    docker exec ntfy ntfy access hands 'who-*' read-write
+    docker exec ntfy ntfy access hands 'whocmd-*' read-write
     docker exec ntfy ntfy token add hands             # prints tk_…
 
-`ntfy access` with `hands-*` covers every topic whose name starts with `hands-`,
-which the fresh names in step 5 do. Grant each topic by name instead if you
-prefer. The printed `tk_…` is the token.
+`hands-*` covers `ntfy_topic` and `cmd_topic` (`hands-<project>-…`,
+`hands-<project>-cmd-…`), but not the who topics: step 5 and `hands project
+add` name those `who-<project>-…` and `whocmd-<project>-…`, so without the two
+further grants `handswho`'s publishes and its command topic are refused. Grant
+each topic by name instead if you prefer. The printed `tk_…` is the token.
 
 **3. Through the Tailscale tunnel.** The phone joins the same tailnet (the
 Tailscale app, signed in to your account). Then either:
 
 - `tailscale serve` on the laptop, which puts `https://<laptop>.<tailnet>.ts.net`
-  in front of `http://127.0.0.1:2586` for tailnet devices only (HTTPS
-  certificates must be enabled for the tailnet). Its arguments, and how it keeps
+  in front of `http://127.0.0.1:2586` for tailnet devices only. This needs
+  HTTPS certificates enabled for the tailnet. Its arguments, and how it keeps
   running after the terminal closes, differ between releases: see
   `tailscale serve --help`. Or
-- publish the container's port on the laptop's tailnet address instead of
-  loopback (`-p 100.x.y.z:2586:80`, from `tailscale ip -4`), with `base-url` and
-  `ntfy_url` set to `http://100.x.y.z:2586`. Traffic inside the tailnet is
-  encrypted by the tunnel, but the container can only bind that address after
-  `tailscaled` is up.
+- with no certificate domain, the container on the tailnet address, below.
 
 Do not use Tailscale Funnel: it publishes the server to the internet.
+
+#### A tailnet without a certificate domain
+
+A tailnet with HTTPS certificates off has no `<laptop>.<tailnet>.ts.net`
+certificate for `tailscale serve` to present. Bind the container to the
+laptop's tailnet address instead of loopback and use plain http over
+Tailscale; traffic inside the tailnet is encrypted by the tunnel:
+
+    tailscale ip -4                                   # 100.x.y.z
+    docker run -d --name ntfy --restart unless-stopped \
+      -v ~/ntfy/etc:/etc/ntfy -v ~/ntfy/cache:/var/cache/ntfy \
+      -p 100.x.y.z:2586:80 binwiederhier/ntfy serve
+
+with `base-url: "http://100.x.y.z:2586"` in `server.yml` and the same
+`ntfy_url` in step 4. The container can bind that address only after
+`tailscaled` is up. In the ntfy app, the WebSockets connection option is fine
+with no proxy in front of the server (DESIGN §38, from the 2026-10-14 setup).
 
 **4. Tell hands.** In `~/.hands/<project>.toml`:
 
@@ -931,10 +1037,21 @@ job's Approve and Deny buttons carry `ntfy_url` and `cmd_topic`, and the phone
 presses them. Keep the config file private (`chmod 600`). It already holds
 `cmd_secret`.
 
+#### A config written before `[notify]`
+
+A config written before §24 carries `ntfy_topic` (and perhaps `ntfy_url`)
+under `[server]`. It loads as it is. Once step 4 or step 5 adds the same key
+under `[notify]`, the config does not load, and the refusal names the key:
+`ntfy_topic is set in both [server] and [notify]; set it once, in [notify]`.
+Move the line: delete it from `[server]` and keep the `[notify]` one. handsd,
+`handswho`, every `hands` command and doctor's `config` row refuse the same
+file the same way.
+
 **5. Move the topics off the public broker.** Every topic hands uses:
 `ntfy_topic`, `cmd_topic`, `who_topic` and `who_cmd_topic`, whichever you set.
 Make each name fresh, because an old name may already be known to whoever read
-it on ntfy.sh:
+it on ntfy.sh (`hands project add` generates the same four shapes for a new
+project):
 
     python3 -c 'import secrets; print("hands-<project>-" + secrets.token_urlsafe(16))'      # ntfy_topic
     python3 -c 'import secrets; print("hands-<project>-cmd-" + secrets.token_urlsafe(16))'  # cmd_topic
@@ -944,12 +1061,13 @@ it on ntfy.sh:
 One line per topic you set, with your project's name for `<project>` (DESIGN
 §36: two projects on one phone are then told apart by the topic too). Then:
 
-1. Put the new names in `[notify]` beside `ntfy_url` and `ntfy_token`. Keep
+1. Put the new names in `[notify]` beside `ntfy_url` and `ntfy_token`, and
+   move any `ntfy_topic` left under `[server]` (above). Keep
    `cmd_secret` if only you have seen it; if it was ever typed on a topic
    someone else could read, make a new one too.
 2. Restart: `systemctl --user restart handsd@<project>`, and
    `handswho@<project>` if you run it. `hands doctor` should show
-   `ntfy token on`.
+   `ntfy token on` and `buttons: bearer on`.
 3. `hands notify --test "self-hosted"` should print `ntfy 200` and your
    server's URL. A `401` or `403` means the token or its access in step 2 is
    wrong.
@@ -963,19 +1081,23 @@ One line per topic you set, with your project's name for `<project>` (DESIGN
 From then on handsd, `handswho` and the phone talk only to your server. A
 command typed in the app publishes as the user the app signed in with.
 
-**Not proven here.** No ntfy server, container or Tailscale tunnel was run for
-this section. The tests stand in a server that answers 401 to any request
-without the bearer (`tests/test_ntfy_token.py`): publish, `hands notify --test`,
-handsd's command channel, `handswho`'s push and subscription, and a kit fetched
-from a local HTTP server. Three things were not checked:
+#### What has run on a real server, and what has not
 
-- whether the ntfy app signs in with an access token or only with a password;
-- whether a real ntfy asks for authorization on an attachment download;
-- whether the app adds its sign-in to a button's HTTP request.
-
-hands does not put the token in a button. If Approve or Deny does nothing on
-this server and handsd's journal shows no command, decide with a typed
+Since the 2026-10-14 setup, hands has used a self-hosted server of this shape on
+the laptop (DESIGN §37, §38): handsd's and `handswho`'s publishes, the phone's
+subscriptions, commands typed in the app, and kit attachments. The Approve and
+Deny buttons failed there with 403, because their actions carried no token
+(H-037). Since mission 22 U1 the actions carry the bearer, which
+`tests/test_ntfy_token.py` reads in the published `Actions` header; no real
+phone has pressed an authenticated button yet, and whether the app sends an
+action's headers is not proven by any test here. Until one has, a button that
+does nothing (handsd's journal shows no command) is answered by a typed
 `approve <job> <secret>` from the app, or `hands approve <job>` at the laptop.
+
+The tests stand in a server that answers 401 to any request without the bearer
+(`tests/test_ntfy_token.py`): publish, `hands notify --test`, handsd's command
+channel, `handswho`'s push and subscription, the buttons' header, and a kit
+fetched from a local HTTP server. No test runs ntfy, a container or Tailscale.
 
 ## 5. The driver session (§14 step 2)
 
@@ -986,7 +1108,7 @@ this server and handsd's journal shows no command, decide with a typed
     mkdir -p .claude/hooks
     cp ~/git/hands/driver/settings.json .claude/settings.json
     cp ~/git/hands/driver/hooks/bash_guard.py .claude/hooks/
-    python3 .claude/hooks/bash_guard.py --selftest
+    python3 -I .claude/hooks/bash_guard.py --selftest
     git clone <repo-url> repo
     git -C repo remote set-url --push origin no_push
     claude          # then /rc to enable remote control
@@ -1063,14 +1185,16 @@ The same architect, headless: a fourth role handsd starts for **one
 consultation** on a review outcome, with no memory of earlier ones — the branch
 carries all of it. It reads the review and `meta/ROADMAP.md`, writes the next
 kit, checks it, files it with `hands kit file`, and replies with one verdict
-line. `architect/README.md` is the full recipe; in short:
+line. A project in role mode publishes to a self-hosted ntfy by default ("Self-hosted
+ntfy over Tailscale", "The default for role mode"). `architect/README.md` is the
+full recipe; in short:
 
     mkdir -p ~/hands-architect/<project>/kits && cd ~/hands-architect/<project>   # a kit is kits/<name>/<repository paths>, filed with hands kit file kits/<name>
     cp ~/git/hands/architect/CLAUDE.md ./CLAUDE.md        # fill the Parameters block
     mkdir -p .claude/hooks
     cp ~/git/hands/architect/settings.json .claude/settings.json
     cp ~/git/hands/driver/hooks/bash_guard.py .claude/hooks/bash_guard.py
-    HANDS_ROLE=architect HANDS_KITS=$PWD/kits python3 .claude/hooks/bash_guard.py --selftest
+    HANDS_ROLE=architect HANDS_KITS=$PWD/kits python3 -I .claude/hooks/bash_guard.py --selftest
     git clone <repo url> repo && git -C repo remote set-url --push origin no_push
     claude          # once, interactively: accept the trust dialog, then /exit
 
@@ -1132,7 +1256,7 @@ lines the driver row prints plus the kits realpath. It fails on a
 permission bypass (`permission_flags`, or the driver row's settings rules, above,
 over both settings files), on settings whose `Bash` hook or whose
 `Write|Edit|MultiEdit` hook is not the guard (the write hook must be exactly
-`python3 <path to .claude/hooks/bash_guard.py> --write` under exactly that
+`python3 -I <path to .claude/hooks/bash_guard.py> --write` under exactly that
 matcher, all three tools must be judged, every hook under `PreToolUse` must be a
 command hook, and both matchers must run the same guard file), on a guard whose
 `--selftest` is not
@@ -1522,18 +1646,17 @@ of this terminal. The driver does not: it arms nothing, and your message
   is the command that proves the transport, and the notification check `hands
   doctor` prints is the one that proves an event you did not ask for arrives.
   Run them once at an install and record the answer.
-- **The phone channel has never read a real ntfy stream.** Its tests feed a
-  fake `/json` stream and record the buttons' `Actions` header; no command has
-  been sent from a real phone, and no button has been pressed on one. No kit has
-  been fetched from a real ntfy attachment: the tests serve the attachment from a
-  local HTTP server, so the curl line above and the ntfy app's attach are
-  unproven. No `go` has been sent from a real phone, so the closed loop above
-  has never run end to end. `hands who` matches sessions through
-  `~/.claude/sessions/<pid>.json` (§27, H-020), a file read only as the tests
-  write it. Nor has
-  `handswho` pushed a picture to, or read a command from, a real topic.
-- **No self-hosted ntfy has been run.** `[notify] ntfy_token` is only proven
-  against stand-in servers that refuse a request without the bearer. The
-  container, the Tailscale tunnel, the phone app's sign-in with a token, and the
-  buttons on a server whose topics require one are unproven ("Self-hosted ntfy
-  over Tailscale").
+- **No test reads a real ntfy stream.** The phone channel's tests feed a
+  fake `/json` stream, record the buttons' `Actions` header, and serve a kit
+  attachment from a local HTTP server. What has run against a real server is
+  the human's own use since 2026-10-14 (DESIGN §37, §38: typed commands, a
+  `go` after each daemon restart, kit attachments, buttons refused with 403
+  before mission 22), recorded in the next bullet and not by a test. `hands
+  who` matches sessions through `~/.claude/sessions/<pid>.json` (§27, H-020),
+  a file read only as the tests write it.
+- **The self-hosted ntfy is proven by use, not by a test.** A server of the
+  documented shape has carried publishes, subscriptions, typed commands and
+  kit attachments on the laptop since 2026-10-14 (DESIGN §37, §38); the tests
+  run only stand-in servers that refuse a request without the bearer. No real
+  phone has pressed an Approve or Deny button carrying the bearer ("Self-hosted
+  ntfy over Tailscale", "What has run on a real server, and what has not").

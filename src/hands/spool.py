@@ -42,6 +42,7 @@ __all__ = [
     "INITIAL_STATES",
     "JOB_FIELDS",
     "KIT_CHECK_PASSED",
+    "ORPHAN_DAEMON_STOP",
     "ANSWER_ORIGIN",
     "REPLY_ORIGIN",
     "STATES",
@@ -110,6 +111,8 @@ TERMINAL_STATES = frozenset(state for state, out in TRANSITIONS.items() if not o
 INITIAL_STATES = frozenset({"held", "queued"})
 
 CONTEXTS = frozenset({"clear", "keep"})  # §2
+#: §38 (H-047): the `orphan_reason` of a job the daemon's own stop ended.
+ORPHAN_DAEMON_STOP = "daemon_stop"
 #: §6: the three clients that can ask for work, plus `limit` — the origin of a
 #: job hands files for itself when a rate limit resets (H-004).
 #: §26 adds `phone`: the job a `go <secret>` on `cmd_topic` files (H-018 gap 1);
@@ -268,6 +271,15 @@ class Job:
     #: checked against the spool. Null for every job hands did not file from a kit;
     #: no client can set it (`Api.send` takes no such parameter).
     kit_id: str | None = None
+    #: §38 (H-047): why a job is `orphaned` — `daemon_stop` when the daemon's own
+    #: stop ended it (`ORPHAN_DAEMON_STOP`). Null for an orphan the start reconciled
+    #: (its process was gone), for every other state, and for a record from before §38.
+    orphan_reason: str | None = None
+    #: §38: whether this orphan has been fed to the engine as `<role>.orphaned`.
+    #: False from the moment it is recorded orphaned until a daemon start feeds it;
+    #: then True, so no later start feeds it again. Null for every other job and for
+    #: an orphan recorded before §38, which no start feeds.
+    orphan_fed: bool | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {name: getattr(self, name) for name in JOB_FIELDS}
@@ -638,6 +650,22 @@ class Spool:
             out.append(self.load_job(path.stem))
         return out
 
+    def orphans_owed(self) -> list[Job]:
+        """§38: every `orphaned` job not yet fed to the engine, oldest id first."""
+        return [
+            job for job in self.list_jobs() if job.state == "orphaned" and job.orphan_fed is False
+        ]
+
+    def mark_orphan_fed(self, job_id: str) -> Job:
+        """§38: record that this orphan has been fed to the engine, so no later start
+        feeds it again. Written before the engine decides it: at most once."""
+        record = self.load_job(job_id)
+        if record.state != "orphaned":
+            raise SpoolError(f"job {job_id} is {record.state}, not orphaned")
+        record.orphan_fed = True
+        self.save_job(record)
+        return record
+
     def transition(self, job: Job | str, state: str, **updates: Any) -> Job:
         """Move a job along an edge of §6, refusing anything else.
 
@@ -668,6 +696,8 @@ class Spool:
             record.started = now_iso()
         if state in TERMINAL_STATES and record.ended is None:
             record.ended = now_iso()
+        if state == "orphaned" and record.orphan_fed is None:
+            record.orphan_fed = False  # §38: owed to the engine until a start feeds it
         self.save_job(record)
         if isinstance(job, Job):
             for f in fields(Job):

@@ -96,6 +96,12 @@ A `go` job or a kit's apply (`origin: kit`), like a `cli` send, un-pauses a
 stopped pipeline when it starts, not when it is filed or held (DESIGN §27). A stopped pipeline still has its playbook, so `go` is accepted
 while it is paused.
 
+Once a series runs, `progress <secret>` on the same topic (DESIGN §38) says
+where it is without starting anything: the builder's running job and its age
+(or its last ended job and verdict), the branch and last three commits of the
+builder's cwd, and the line of `meta/CHECKPOINT.md` naming the unit in
+progress (docs/INTEGRATION.md, the command channel).
+
 ### The series' architect (DESIGN §31)
 
 `architect = "phone" | "role"` (default `phone`) says which architect this
@@ -318,8 +324,11 @@ The rule takes no `prompt` and no `run`, and `context`, when given, is `clear`:
 every consultation is a fresh session with no memory of the last. Which events
 a role may be consulted on is checked when the file is parsed: the driver on any
 event but its own ends (a consult on `driver.done` or `driver.failed` is
-refused), and the architect on `aux.done` only — the review outcome §31 names,
-because its prompt is written out of a review.
+refused), and the architect on `aux.done` — the review outcome §31 names — and
+on `builder.done` with a verdict regex that names `blocked` (DESIGN §38), because
+its prompt is written out of a review or out of a builder's blocked reply; an
+architect consult on `builder.done` with no verdict, or one that does not name
+`blocked`, is refused.
 
 ### The driver's consultation (DESIGN §27)
 
@@ -440,6 +449,26 @@ instead, and the consultation goes ahead:
     VERDICT: next kit <name>
     VERDICT: series complete
     VERDICT: escalate <reason>
+
+A blocked mission consults the architect too (DESIGN §38). Under `[series]
+architect = "role"` a rule on the builder's blocked verdict asks the role instead
+of stopping for the human:
+
+    [[rule]]                  # the builder's blocked verdict → the architect
+    on = "builder.done"
+    verdict = '^VERDICT: mission (?P<n>\d+) blocked'
+    then = "consult"
+    role = "architect"
+
+The prompt for a builder's end is the review's prompt with one part replaced: in
+place of the review's markers it carries the builder's verdict line and its full
+reply, verbatim between `----- BEGIN REPLY -----` and `----- END REPLY -----`,
+headed "The builder's blocked verdict and its reply". The roadmap's milestone,
+the escalation conditions, the instruction and the three verdicts are as above,
+and the consultation counts against the same budget, `max_architect_consults`.
+`hands kit check` accepts the rule. `templates/PLAYBOOK-missions.toml` carries it
+in its role-mode variant (inside the `# >>> architect` markers, with a comment),
+ahead of the blocked stop; the phone-mode variant, as shipped, keeps the stop.
 
 The engine reads that verdict itself; no rule matches it, because `architect.*`
 is not an event. `VERDICT: next kit <name>` waits for the specific apply the
@@ -570,6 +599,12 @@ resumes used per role against `max_resumes`, driver consultations used against
 last rule that fired. The
 last rule is cleared when a playbook with a different sha256 is loaded: rule 3
 of the file that fired is not rule 3 of the new one.
+
+`auto-runs` counts only the runs a `send` rule with `run =` started: a kickoff
+the engine sends, a `go` from the phone, a resume and a human's `hands send` are
+not counted, so `auto-runs 0/3 used` says nothing about how far a mission has
+got. `progress <secret>` on the phone (DESIGN §38) says that: the builder's job,
+the branch and its last commits, and the checkpoint's unit in progress.
 
 ---
 

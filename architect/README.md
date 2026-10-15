@@ -7,7 +7,7 @@ One directory per project, outside any repository:
     mkdir -p .claude/hooks
     cp ~/git/hands/architect/settings.json .claude/settings.json
     cp ~/git/hands/driver/hooks/bash_guard.py .claude/hooks/bash_guard.py
-    HANDS_ROLE=architect HANDS_KITS=$PWD/kits python3 .claude/hooks/bash_guard.py --selftest
+    HANDS_ROLE=architect HANDS_KITS=$PWD/kits python3 -I .claude/hooks/bash_guard.py --selftest
     git clone <repo url> repo && git -C repo remote set-url --push origin no_push
     claude          # once, interactively: accept the trust dialog, then /exit
 

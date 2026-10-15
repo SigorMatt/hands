@@ -151,7 +151,10 @@ rule stops. So: specific verdict rules first, then a catch-all `stop` per
 `notify`.
 
 `[series]` holds seven keys, every one optional; any other key is refused,
-naming it (docs/PLAYBOOK.md "The series and its kickoff" is the reference):
+naming it (docs/PLAYBOOK.md "The series and its kickoff" is the reference).
+The list below is every key `hands.playbook` accepts, each with the default
+its loader gives a playbook that leaves the key out; a test holds the two
+together (HF-004):
 
 - `name` (no default): the series' name, free text. In role mode it is what
   the architect's budget counts for; renaming it is refused unless `[limits]`
@@ -400,6 +403,28 @@ otherwise. `--json` prints the same report as one object.
 4. First kit: the playbook, the brief or plan, the review protocol;
    `hands kit check` green; treat the first series as a shakeout.
 
+The handbook and the templates you read are the installed hands' own:
+`hands handbook` prints this file's path and `hands handbook --templates`
+the templates directory, and every role job carries their directory as
+`$HANDS_DOCS` (`$HANDS_DOCS/docs/ARCHITECT-HANDBOOK.md`,
+`$HANDS_DOCS/templates/`). A copy in a project's clone is not the hands
+that runs the project and may be older (HF-002).
+
+**The laptop check of a role-mode plan kit (HF-005).** A kit whose playbook
+sets `[series] architect = "role"` is judged against the project's hands
+config, which a chat sandbox does not have, so its playbook check fails
+there (DESIGN §33). Before that kit is applied, the human runs, at the
+laptop, `hands kit check <kit> --repo <clone>` — the kit as it will be
+sent, against the project's clone — and sends it only when every check
+passes.
+
+**The first plan kit's apply is silent.** Under `[series] autonomous` the
+engine's own `builder.done` rule approves the apply of a kit the role filed
+(`decided_by: playbook`), the first plan kit included, so no Approve or
+Deny reaches the phone for it: the first thing the phone sees is the
+kickoff the engine sends after the apply. Approving such a playbook is
+approving that apply too.
+
 ### Running as the architect role (DESIGN §31)
 
 One more step turns the phone architect — you, in this Project — into a role
@@ -475,3 +500,119 @@ under `kits/<name>/`. What is not proven is a real role session filing a kit tha
 a builder then applies; the tests drive the command and handsd with a fake
 `claude`. A role-mode series is still an experiment: check what the apply prompt
 says a kit would add before letting it run unattended.
+
+## 13. The onboarding shape
+
+Three chats touch a project, and each writes one kind of thing (DESIGN §38):
+
+- **The human's Project chat writes the plan kit.** It runs under
+  `docs/ARCHITECT-INSTRUCTION.md` with the Parameters and the Purpose block
+  filled, and emits the first kit: the playbook, the brief or plan, the review
+  protocol and the roadmap (§12). At the laptop, `hands project add <name>
+  --repo <url>` has already written the config, the topics, the secret and the
+  role directories (docs/INTEGRATION.md).
+- **From the switch point the role writes every kit.** The switch point is the
+  apply of a playbook with `[series] architect = "role"` (§12, "Running as the
+  architect role"). After it the Project chat writes no kit; it answers the
+  human, and a ruling it gives goes into an owner file (§14).
+- **The hands architect audits kits only for hands-shaped content**: verdict
+  lines, kickoff lines, playbook rules, the paths a prompt names, the shapes of
+  §3 and §6, and `hands kit check`'s six checks. It does not judge the
+  project's design, code or domain; those belong to the project's own chat.
+
+## 14. The ruling round
+
+A ruling is a question only the human (the owner) can answer. End to end:
+
+1. **The stop.** The builder replies `VERDICT: question <one line>`, and the
+   playbook's rule on it stops (`templates/PLAYBOOK-missions.toml`: "The
+   builder has a question"). The phone gets the stop; the job's `result` holds
+   the question in full.
+2. **The owner file.** The human takes the question to the Project chat, which
+   answers with `templates/DECISIONS-owner.md` filled in as
+   `meta/decisions/<date>-owner.md`: `O-<n>` numbers continued from the last
+   owner file on the branch, the precedence header (the file wins over DESIGN
+   and every earlier decision), a "Findings closed:" line, each ruling as
+   Asked and Decided, and last "For the builder", the exact steps, which is the
+   only section the builder is told to read.
+3. **The send.** The human answers the builder's last session with a `keep`
+   send naming the file and telling the builder to carry out its "For the
+   builder" steps: from the phone, `answer <secret> <text>` with the file
+   attached in a `.zip` (fetched to `kit_dir`, never unzipped; the delivered
+   text ends with its path), or at the laptop `hands send --role builder
+   --context keep "<text>"`. The builder commits the file as `plan: decisions
+   <date> (owner)`, the one commit the review protocol reads for what it says
+   it does and does not review as a unit.
+4. **The §8 hold, answered by typing.** A laptop or driver send whose text
+   matches a gate pattern (`Apply ~/Downloads/`, `decisions-`, `playbook-`, …)
+   is held for a human. Answer it by typing `approve <job> <secret>` on
+   `cmd_topic`, or `hands approve <job>` at the laptop. The phone's `answer` is
+   never held: its secret is the approval.
+5. **The resume.** The brief template's recovery rule: a `keep` send after
+   `VERDICT: question` is the answer. The builder carries it out, continues the
+   mission from `meta/CHECKPOINT.md`, and ends the reply with one of the brief's
+   `VERDICT:` lines, always, even when a file had to be committed first; that
+   line fires the playbook's rules as any builder end does. In role mode the
+   architect's next consultation lists the answer and the owner file under
+   "Decided by the human since your last consultation".
+
+## 15. The separation rule
+
+Another project appears in hands' files (DESIGN, findings, docs, templates,
+tests, kits written for hands) only as evidence: name, commit, date, review
+number, finding id. Never its content: no code, design text, domain terms,
+fixtures or prompts copied from it. A rule that a project's experience
+motivates is written in hands' own terms and cites the project as evidence,
+as §17 does: "discotrade mission 13 U4 and its ruling O-21, 2026-10-15".
+
+## 16. Re-firing a consultation after a stop
+
+The architect role is started by a `consult` rule only. A direct send to it,
+`hands send --role architect`, is refused by design (H-032), and the phone's
+`reply` is a conversation, not a consultation: no verdict is read from it and
+it files no kit (§12). To re-fire a consultation after a stop, have the aux
+role recite a review-shaped reply:
+
+    hands send --role aux --context clear --prompt-file ./refire.txt
+
+where the prompt asks the aux to reply with the last review's `VERDICT: review
+mission N blockers=<k> should-fix=<m>` line and its `## Blockers` and
+`## Should-fix` sections, verbatim, and nothing else. Its `aux.done` meets the
+playbook's consult rule as a review's would, a `cli` send un-pauses a stopped
+pipeline when it starts, and the consultation counts against `[limits]
+max_architect_consults`. A blocked mission needs no recital when the playbook
+carries the role-mode rule on the builder's blocked verdict (docs/PLAYBOOK.md,
+"The architect's consultation").
+
+## 17. Human-supplied content
+
+Attack-shaped test content (hostile corpora for a sandbox, exploit-shaped
+fixtures and the like) is authored by no agent in the chain: a builder's
+sub-agents, a project's architect chat and the hands architect chat were each
+stopped on it by a safety classifier (discotrade mission 13 U4 and its ruling
+O-21, 2026-10-15). A design that needs such a suite names the human-supplied
+unit up front, or is reshaped so that no agent has to author the content.
+
+The unit's shape is in `templates/BUILDER-N-PROMPT.md`: it names the files,
+their repository paths and the commit message; the human places them under
+`~/Downloads/<name>/`; the builder copies and commits them by path without
+opening them; and the review checks that commit by `git show --stat` alone.
+
+## 18. Reading hands: `send`, `jobs`, `pipeline`, `progress`
+
+- **`hands send` takes the prompt as a plain argument**, after the flags:
+  `hands send --role builder --context keep "<text>"`. There is no `--prompt`
+  flag; prose with quotes goes through `--prompt-file <path>` or `--stdin`.
+- **`hands status`** prints one line per configured role: running a job, or
+  idle, and `queued N/M`. It says nothing about how far the work has got.
+- **`hands jobs` lists newest first**, 20 by default (`-n`), filtered by
+  `--role`, `--origin`, `--grep` (the prompt) and `--since`.
+- **`hands pipeline`'s `auto-runs` counts only the runs a `send` rule with
+  `run =` started** (DESIGN §10). The engine's kickoff, a phone `go`, a resume
+  and a human's send are not counted, so `auto-runs 0/3 used` does not mean
+  nothing has run.
+- **`progress <secret>`** on `cmd_topic` is the phone's answer to "how far":
+  the builder's running job and its age (or the last ended job and its
+  verdict), the working tree's branch and `git log --oneline -3`, and the
+  first line of `meta/CHECKPOINT.md` naming a unit in progress, or "no
+  checkpoint". It is read-only and starts no job (DESIGN §38).

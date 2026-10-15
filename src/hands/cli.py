@@ -27,6 +27,7 @@ from typing import Any, TextIO
 from hands import __version__, doctor
 from hands import kit as kit_mod
 from hands import notify as notify_mod
+from hands import project as project_mod
 from hands import who as who_mod
 from hands.api import MAX_TAIL_ENTRIES, TAIL_WINDOW_BYTES
 from hands.api import TIMEOUT as TIMEOUT_CODE
@@ -34,6 +35,7 @@ from hands.config import (
     Config,
     ConfigError,
     config_path,
+    docs_root,
     hands_dir,
     list_projects,
     load_config,
@@ -351,6 +353,43 @@ def build_parser() -> argparse.ArgumentParser:
         f"move the flat spool ({', '.join(FLAT_ITEMS)} directly under ~/.hands) to "
         "~/.hands/hands/ and record the move in its inbox (§29); refused while a daemon "
         "answers, or when ~/.hands/hands exists",
+    )
+    # §38 (HF-002): answered by the client with no daemon and no config, like
+    # `kit check`: where this hands' own handbook and templates are.
+    handbook = command(
+        "handbook",
+        "print the path of the installed hands' docs/ARCHITECT-HANDBOOK.md (§38); "
+        "the directory is what every role job carries as $HANDS_DOCS",
+    )
+    handbook.add_argument(
+        "--templates",
+        action="store_true",
+        help="print the installed templates directory instead",
+    )
+    # §38 "Onboarding": answered by the client with no daemon and no config, like
+    # `kit check`: it writes the config, so there is none to read yet.
+    project = command(
+        "project",
+        "project add: write a project's config, secret, driver and architect "
+        "directories and fetch-only clones, enable handsd@<name>, run doctor (§38)",
+    )
+    project_sub = project.add_subparsers(dest="project_command", metavar="add", required=True)
+    project_add = project_sub.add_parser(
+        "add",
+        parents=[common],
+        help="set up a new project on this laptop (§38)",
+        description="write ~/.hands/<name>.toml from the installed config template (four "
+        "generated topics, a command secret also kept in ~/.hands/<name>.cmd_secret, both "
+        "mode 600), ~/hands-driver/<name>/ and ~/hands-architect/<name>/ with the shipped "
+        "settings, guard and CLAUDE.md and a fetch-only clone of the url (push URL "
+        "no_push), enable handsd@<name> with systemctl --user, run doctor, and print the "
+        "filled Project instruction; refused for an existing project or a non-empty "
+        "directory, before anything is written",
+    )
+    project_add.add_argument("name", help="the project name (~/.hands/<name>.toml)")
+    project_add.add_argument("--repo", required=True, metavar="URL", help="the repository url")
+    project_add.add_argument(
+        "--dry-run", action="store_true", help="print every path and command; write nothing"
     )
     check = command("doctor", "check the install end to end (§4, §14)")
     check.add_argument(
@@ -762,6 +801,10 @@ def main(
             )
         if command == "migrate-spool":
             return _migrate_spool(out=out, err=err, as_json=as_json)
+        if command == "handbook":
+            return _handbook(args.templates, out=out, err=err, as_json=as_json)
+        if command == "project":
+            return project_mod.add(args.name, args.repo, dry_run=args.dry_run, out=out, err=err)
         if command == "send":
             args.prompt = _prompt_of(args, sys.stdin if stdin is None else stdin)
         project: str | None = None
@@ -866,6 +909,20 @@ def main(
         return 1
     print(json.dumps(result, sort_keys=True) if as_json else _render(command, result), file=out)
     return exit_code(command, result)
+
+
+def _handbook(templates: bool, *, out: TextIO, err: TextIO, as_json: bool) -> int:
+    """§38 (HF-002): the installed handbook's path, or with `--templates` the
+    templates directory — one line, or `{"path": …}` with --json. 1 when this
+    hands carries neither (a broken install)."""
+    root = docs_root()
+    if root is None:
+        print("hands: this install carries no docs/ARCHITECT-HANDBOOK.md and templates/ "
+              "(§38); reinstall hands", file=err)
+        return 1
+    path = root / ("templates" if templates else "docs/ARCHITECT-HANDBOOK.md")
+    print(json.dumps({"path": str(path)}) if as_json else str(path), file=out)
+    return 0
 
 
 def _project_named(args: argparse.Namespace) -> bool:

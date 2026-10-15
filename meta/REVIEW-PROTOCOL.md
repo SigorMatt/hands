@@ -49,15 +49,30 @@ say so in the section below and go on.
 
 Dispatch ONE sub-agent per unit commit (skip `meta:` bookkeeping commits
 and merge commits), one at a time, never concurrently: the next starts when
-the last has reported. Each sub-agent, in a `git worktree` at that commit:
+the last has reported, because each runs `./scripts/check` and one run at a
+time fits inside the 20-minute cap. Two kinds of commit are not units:
+
+- A `plan: decisions <date> (owner)` commit is read for what it says it does
+  and is not reviewed as a unit: no sub-agent, no revert, no run of the gate.
+- A human-supplied commit (`fixtures:`, from a "human-supplied unit" of the
+  brief) is checked by `git show --stat` alone: you compare the files and
+  paths it lists with the ones the unit names, open none of them, and run
+  no sub-agent for it.
+
+Each sub-agent, in a `git worktree` at that commit:
 
 1. Names the unit and the DESIGN sections it claims to implement.
 2. Confirms test-first: the commit adds or changes tests that exercise the
    claimed behaviour, and the tests fail when the product change is
-   reverted: in the worktree at the commit, `git checkout <sha>~1 -- <the
-   non-test files the body lists>`, run the commit's new tests and expect
-   red, then `git checkout <sha> -- <the same files>`. A commit that changes only tests
-   must name in its body each wrong change that would make them red; the
+   reverted: in the worktree at the commit, for each non-test file the body
+   lists, `git checkout <sha>~1 -- <file>` when the file exists at
+   `<sha>~1`, else `rm` it; then run the commit's new tests and expect red;
+   then `git checkout <sha> -- <the same files>`. A commit body names each
+   file it adds as added; `git cat-file -e <sha>~1:<file>` says whether a
+   file exists at the parent, and one checkout of several files at the
+   parent reverts none of them when one is missing there. A commit that
+   changes only tests must name in its body each wrong change that would
+   make them red; the
    sub-agent makes each one in the worktree, without committing, runs the
    relevant tests, expects red, and restores. A tests-only commit whose body
    names none is a blocker.
@@ -85,6 +100,11 @@ verbatim, each with one of: confirmed → carried as blocker k or should-fix
 m; dismissed → the reason; without a PR, or with no bot review after ten
 minutes, one line saying so), `## Notes`, `## Per-commit verdicts` (the
 ≤12-line reports, verbatim).
+
+`## Notes` carries the schedule: one line per sub-agent with its start and
+end time; the sub-agents run one at a time so that one `./scripts/check`
+runs at a time inside the 20-minute cap. A review whose Notes lack the
+schedule is itself a should-fix for the next review.
 
 Before you commit it, bring the tree to an up-to-date `main`: `git
 checkout main && git pull --ff-only`. You may commit that one file only, to

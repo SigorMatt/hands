@@ -56,8 +56,7 @@ import subprocess
 import tomllib
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 from hands.config import ARCHITECT_ROLE, CONSULT_ROLES, Config
@@ -248,12 +247,20 @@ REVIEW_SECTIONS: tuple[str, ...] = ("Blockers", "Should-fix")
 #: §27, §31: the events each consulted role may be consulted on, refused at load and
 #: never when the rule fires. The driver's is every event but its own — §27 leaves
 #: "which events consult" to the playbook and only the driver's own ends would have
-#: it consult itself. The architect's is the review outcome §31 names, and one only:
-#: its prompt is written out of a review.
+#: it consult itself. The architect's is the review outcome §31 names, and — §38,
+#: H-048 — a builder's blocked verdict: its prompt is written out of a review or out
+#: of that reply.
 CONSULT_EVENTS: dict[str, tuple[str, ...]] = {
     DRIVER: tuple(event for event in EVENTS if not event.startswith(f"{DRIVER}.")),
-    ARCHITECT: ("aux.done",),
+    ARCHITECT: ("aux.done", "builder.done"),
 }
+#: §38: the builder's end the architect is consulted on, and the word its rule's
+#: verdict regex must name — the prompt calls the reply a blocked verdict.
+BUILDER_DONE = "builder.done"
+BLOCKED = "blocked"
+#: §38: the heading of the consult prompt's section that carries a builder's blocked
+#: verdict line and its full reply, in place of the review's.
+BLOCKED_HEADING = "The builder's blocked verdict and its reply"
 #: §31: the reply the engine's own `builder.done` rule matches. It is the verdict
 #: line the apply prompt asks for (`hands.kit.APPLY_VERDICT`), anchored.
 KIT_APPLIED = r"^VERDICT: kit applied"
@@ -745,47 +752,70 @@ def _committed_text(path: Path, cwd: Path) -> str:
         raise PlaybookError(f"the committed copy is not valid UTF-8: {exc}") from exc
 
 
-def _owner_decisions(cwd: Path, since: str | None) -> list[str]:
-    """§36: each `meta/decisions/*-owner.md` a commit touched since `since` (an
-    ISO-8601 job time; None is every commit), oldest first, as `[<path>, committed]`
-    and its committed text — or one line of why the files could not be listed."""
-    command = ["git", "log", "--format=", "--name-only", "--no-renames"]
-    if since is not None:
-        try:
-            moment = datetime.fromisoformat(since.replace("Z", "+00:00")).astimezone(UTC)
-        except ValueError:
-            moment = None
-        if moment is not None:
-            command.append(f"--since={moment.strftime('%Y-%m-%d %H:%M:%S')} +0000")
-    command += ["--", f"{DECISIONS_DIR.as_posix()}/"]
+def _git(cwd: Path, *args: str) -> str:
+    """`git <args>` in `cwd` (git's environment cleared as for the playbook, §26):
+    its stdout, or a `PlaybookError` carrying git's first line of why not."""
     env = {name: value for name, value in os.environ.items() if name not in GIT_ENV_CLEARED}
     try:
         proc = subprocess.run(
-            command, cwd=cwd, env=env, stdin=subprocess.DEVNULL, capture_output=True,
-            timeout=GIT_SHOW_TIMEOUT_S, check=False,
+            ["git", "-c", "core.quotepath=off", *args], cwd=cwd, env=env,
+            stdin=subprocess.DEVNULL, capture_output=True, timeout=GIT_SHOW_TIMEOUT_S,
+            check=False,
         )
     except (OSError, subprocess.SubprocessError) as exc:
-        return [f"[hands: the files under {DECISIONS_DIR}/ could not be listed: {exc}]"]
+        raise PlaybookError(str(exc)) from exc
     if proc.returncode != 0:
         lines = proc.stderr.decode("utf-8", errors="replace").strip().splitlines()
-        said = lines[0] if lines else f"exit {proc.returncode}"
-        return [f"[hands: the files under {DECISIONS_DIR}/ could not be listed: {said}]"]
+        raise PlaybookError(lines[0] if lines else f"exit {proc.returncode}")
+    return proc.stdout.decode("utf-8", errors="replace")
+
+
+def _git_head(cwd: Path) -> str | None:
+    """§38: the sha of HEAD in `cwd`, or None when git cannot name one."""
+    try:
+        head = _git(cwd, "rev-parse", "--verify", "-q", "HEAD^{commit}").strip()
+    except PlaybookError:
+        return None
+    return head or None
+
+
+def _owner_decisions(cwd: Path, since: str | None) -> list[str]:
+    """§36: each `meta/decisions/*-owner.md` under `cwd` a commit touched since
+    `since` — §38: the commits of `git log <since>..HEAD`; None is every commit —
+    oldest first, as `[<path>, committed]` and its text at HEAD, or one line of why
+    the files could not be listed.
+
+    §38: the owner files are the ones `git ls-files --full-name` lists at
+    `meta/decisions/*-owner.md` below `cwd`, so their paths are relative to the
+    repository root, as `git log --name-only` writes them, wherever below the root
+    `cwd` is; the path shown is that root-relative one. A file no longer tracked is
+    not listed.
+    """
+    pattern = f":(glob){DECISIONS_DIR.as_posix()}/*{OWNER_SUFFIX}"
+    revisions = [f"{since}..HEAD"] if since is not None else []
+    try:
+        owned = {
+            name
+            for name in _git(cwd, "ls-files", "-z", "--full-name", "--", pattern).split("\0")
+            if len(PurePosixPath(name).name) > len(OWNER_SUFFIX)
+        }
+        log = _git(
+            cwd, "log", "--format=", "--name-only", "--no-renames", *revisions,
+            "--", f"{DECISIONS_DIR.as_posix()}/",
+        )
+    except PlaybookError as exc:
+        return [f"[hands: the files under {DECISIONS_DIR}/ could not be listed: {exc}]"]
     names: list[str] = []
-    for line in reversed(proc.stdout.decode("utf-8", errors="replace").splitlines()):
-        path = Path(line.strip())
-        if (
-            path.parent == DECISIONS_DIR
-            and path.name.endswith(OWNER_SUFFIX)
-            and len(path.name) > len(OWNER_SUFFIX)
-            and str(path) not in names
-        ):
-            names.append(str(path))
+    for line in reversed(log.splitlines()):
+        name = line.strip()
+        if name in owned and name not in names:
+            names.append(name)
     blocks = []
     for name in names:
         try:
-            text = _committed_text(cwd / name, cwd)
+            text = _git(cwd, "-c", "core.autocrlf=false", "show", f"HEAD:{name}")
         except PlaybookError as exc:
-            text = f"[hands: {exc}]"
+            text = f"[hands: no committed copy (`git show HEAD:{name}` in {cwd}: {exc})]"
         blocks.append(f"[{name}, committed]\n{text}")
     return blocks
 
@@ -1105,6 +1135,16 @@ def _rule(index: int, table: dict[str, Any], path: Path, *, auto_runs: tuple[int
             raise PlaybookError(
                 f'{where}: a consult with role = "{ARCHITECT}" is on the review outcome '
                 f"§31 names ({', '.join(CONSULT_EVENTS[ARCHITECT])}), got {on}"
+            )
+        if role == ARCHITECT and on == BUILDER_DONE and (
+            verdict is None or BLOCKED not in verdict.pattern
+        ):
+            # §38: the architect is consulted on a builder's *blocked* verdict, and
+            # its prompt says so; a rule that could fire on another end would hand it
+            # a finished or applied reply under that heading.
+            raise PlaybookError(
+                f'{where}: a consult with role = "{ARCHITECT}" on {BUILDER_DONE} is on the '
+                f"builder's {BLOCKED} verdict (§38): its verdict regex must name {BLOCKED!r}"
             )
         if context is not None and context != "clear":
             raise PlaybookError(
@@ -2250,10 +2290,14 @@ class PlaybookEngine:
                     {**where, "consults": used, "max_consults": budget, "consulted": role},
                 )
                 return
+            # §38: the HEAD of the builder's cwd now, which the consult.sent event
+            # records, so the next consultation's "since" is `git log <sha>..HEAD`.
+            recorded: dict[str, Any] = {"head": _git_head(self.config.role("builder").cwd)}
             prompt = consult_prompt(
                 event, job, role=role, brief=self.architect_brief(book, used + 1)
             )
         else:
+            recorded = {}
             used, budget = self.consults_used(book), book.max_consults
             if used >= budget:
                 await self.stop(
@@ -2290,6 +2334,7 @@ class PlaybookEngine:
                 "rule": rule.index,
                 "consults": used + 1,
                 "max_consults": budget,
+                **recorded,
             },
         )
         self._fired(rule, event, job, fired_job=started.id)
@@ -2342,21 +2387,28 @@ class PlaybookEngine:
 
         The last consultation is the newest architect job that is neither a phone
         `reply` nor a §6 resume, and "since" is the jobs after it in the spool's order
-        and the commits from the second it was created on (the boundary second
-        included: the inclusive direction tells the role too much rather than too
-        little). With no consultation before, everything counts — the same safe
-        direction. The jobs come first, oldest first, then the files, oldest commit
-        first, each as committed at HEAD.
+        and — §38 — the commits of `git log <sha>..HEAD`, `<sha>` being the HEAD of
+        the builder's cwd its `consult.sent` event recorded. With no consultation
+        before, or one whose event recorded no sha (a consultation from before §38,
+        or a cwd with no commit then), every commit counts: the inclusive direction
+        tells the role too much rather than too little. The jobs come first, oldest
+        first, then the files, oldest commit first, each as committed at HEAD.
         """
         jobs = self.spool.list_jobs()
-        start, since = 0, None
+        start, last = 0, None
         for index, record in enumerate(jobs):
             if (
                 record.role == ARCHITECT
                 and record.resumed_from is None
                 and not is_architect_reply(record)
             ):
-                start, since = index + 1, record.created
+                start, last = index + 1, record.id
+        since = None
+        if last is not None:
+            for sent in self.spool.events():
+                if sent.kind == "consult.sent" and sent.payload.get("job") == last:
+                    head = sent.payload.get("head")
+                    since = head if isinstance(head, str) and head else None
         blocks: list[str] = []
         for record in jobs[start:]:
             if is_builder_answer(record):
@@ -3057,7 +3109,8 @@ def _driver_prompt(event: str, job: Job) -> str:
 
 def _architect_prompt(event: str, job: Job, brief: ArchitectBrief | None) -> str:
     """§31: the event, the review's verdict line and its Blockers and Should-fix
-    sections verbatim, the roadmap's next unmet milestone (§32) with the roadmap's
+    sections verbatim — §38: for a builder's end, its blocked verdict line and full
+    reply instead — the roadmap's next unmet milestone (§32) with the roadmap's
     path, and the instruction.
 
     The escalation conditions of `[series]` are here too: §31 has the architect
@@ -3074,11 +3127,7 @@ def _architect_prompt(event: str, job: Job, brief: ArchitectBrief | None) -> str
         "\n"
         f"{record}"
         "\n"
-        f"The review's verdict line and its {_and_sections()} sections, verbatim between "
-        "the markers:\n"
-        "----- BEGIN REVIEW -----\n"
-        f"{review_sections(job.result, job.verdict)}\n"
-        "----- END REVIEW -----\n"
+        f"{_architect_subject(event, job)}"
         "\n"
         f"{DECIDED_HEADING} — every `answer` from the phone, every `hands send --role "
         f"builder --context keep`, and every {DECISIONS_DIR}/*{OWNER_SUFFIX} committed "
@@ -3110,6 +3159,31 @@ def _architect_prompt(event: str, job: Job, brief: ArchitectBrief | None) -> str
         "Your reply's first line is exactly one of:\n"
         "\n"
         + "".join(f"    {line}\n" for line in ARCHITECT_VERDICTS)
+    )
+
+
+def _architect_subject(event: str, job: Job) -> str:
+    """What the architect is consulted about, between its markers: the review's
+    verdict line and sections (§31), or — §38 — a builder's blocked verdict line and
+    its full reply, verbatim."""
+    if event == BUILDER_DONE:
+        verdict = job.verdict if job.verdict else "(the reply has no VERDICT: line)"
+        result = job.result if job.result is not None else ""
+        return (
+            f"{BLOCKED_HEADING} — the verdict line, then the builder's full reply, "
+            "verbatim between the markers:\n"
+            "----- BEGIN REPLY -----\n"
+            f"{verdict}\n"
+            "\n"
+            f"{result}\n"
+            "----- END REPLY -----\n"
+        )
+    return (
+        f"The review's verdict line and its {_and_sections()} sections, verbatim between "
+        "the markers:\n"
+        "----- BEGIN REVIEW -----\n"
+        f"{review_sections(job.result, job.verdict)}\n"
+        "----- END REVIEW -----\n"
     )
 
 

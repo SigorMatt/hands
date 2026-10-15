@@ -28,6 +28,7 @@ __all__ = [
     "CONSULT_ROLE_ENV",
     "DEFAULT_GATE_PATTERNS",
     "DEFAULT_ROLE_ENV",
+    "DOCS_ENV",
     "DRIVER_ROLE",
     "GUARDED_ROLES",
     "KITS_ENV",
@@ -47,6 +48,7 @@ __all__ = [
     "ServerConfig",
     "WhoConfig",
     "config_path",
+    "docs_root",
     "driver_clone",
     "hands_dir",
     "list_projects",
@@ -93,6 +95,8 @@ DEFAULT_KIT_DIR = "~/Downloads"  # §26: where a kit sent from the phone lands
 DEFAULT_KIT_MAX_MB = 20  # §26: the largest kit fetched, in MiB
 #: §29: how long after a job ends `hands who` still excludes its transcript.
 DEFAULT_WHO_GRACE_S = 60.0
+#: §38 (H-046): handswho never publishes twice within this many seconds unless asked.
+DEFAULT_WHO_MIN_INTERVAL_S = 60.0
 
 #: §2's "10-minute idle ceiling": how long `claude -p` stays open for a background
 #: task before it terminates the process and exits 0 (H-014).
@@ -126,6 +130,20 @@ KITS_ENV = "HANDS_KITS"
 #: §36 (H-043): the project, in every role job's environment (the runner sets it
 #: from the config's project name, never from handsd's environment).
 PROJECT_ENV = "HANDS_PROJECT"
+#: §38 (HF-002): the directory of the handbook and templates of the hands that runs
+#: the job, in every role job's environment (the runner sets it from `docs_root`,
+#: never from handsd's environment or the env table).
+DOCS_ENV = "HANDS_DOCS"
+#: §38: where `docs_root` looks — the copy a wheel carries (`pyproject.toml`
+#: force-includes `docs/` and `templates/` under `hands/shipped/`), then the
+#: repository's own root beside the source tree `uv sync` installs from. Each root
+#: holds `docs/ARCHITECT-HANDBOOK.md` and `templates/`, the repository's layout.
+DOCS_ROOTS: tuple[Path, ...] = (
+    Path(__file__).resolve().parent / "shipped",
+    Path(__file__).resolve().parents[2],
+)
+HANDBOOK_PATH = Path("docs") / "ARCHITECT-HANDBOOK.md"
+TEMPLATES_PATH = Path("templates")
 DRIVER_ROLE = "driver"
 ARCHITECT_ROLE = "architect"
 #: §27, §31: the roles handsd starts headless, each with its own guard mode and
@@ -185,6 +203,9 @@ class NotifyConfig:
     #: as `Authorization: Bearer` on every publish and every subscription. Kept out
     #: of `repr` like the secret, and never printed by a refusal.
     ntfy_token: str | None = field(default=None, repr=False)
+    #: §38 (H-046): `handswho`'s floor between two publishes; a request on
+    #: `who_cmd_topic` is answered inside it.
+    who_min_interval_s: float = DEFAULT_WHO_MIN_INTERVAL_S
 
     @property
     def channel(self) -> bool:
@@ -438,6 +459,16 @@ class Config:
             raise KeyError(f"role {name!r} is not configured in {self.path}") from None
 
 
+def docs_root() -> Path | None:
+    """§38 (HF-002): the directory holding the installed hands' handbook
+    (`docs/ARCHITECT-HANDBOOK.md`) and `templates/` — the first of `DOCS_ROOTS`
+    that has both — or None when this hands carries neither (a broken install)."""
+    for root in DOCS_ROOTS:
+        if (root / HANDBOOK_PATH).is_file() and (root / TEMPLATES_PATH).is_dir():
+            return root
+    return None
+
+
 def hands_dir(*, home: Path | None = None) -> Path:
     """`~/.hands/`: every project's config and every project's spool (§13, §29)."""
     return Path("~/.hands").expanduser() if home is None else Path(home) / ".hands"
@@ -557,6 +588,7 @@ def parse_config(data: dict[str, Any], *, project: str, path: Path) -> Config:
             "who_topic",
             "who_cmd_topic",
             "ntfy_token",
+            "who_min_interval_s",
         ),
         "[notify]",
         path,
@@ -609,6 +641,9 @@ def parse_config(data: dict[str, Any], *, project: str, path: Path) -> Config:
             blank=_omit("the who view then takes no commands", "topic"),
         ),
         ntfy_token=_ntfy_token(notify_t, path),
+        who_min_interval_s=_number(
+            notify_t, "who_min_interval_s", DEFAULT_WHO_MIN_INTERVAL_S, "[notify]", path
+        ),
     )
     _check_channel(notify, path)
     _check_token_url(notify, url_set, path)
@@ -890,6 +925,12 @@ def _ntfy_token(notify_t: dict[str, Any], path: Path) -> str | None:
             f"{where} must be one word of visible ASCII, with no blank, newline or other "
             "character inside: it is sent as `Authorization: Bearer <token>` (§33); "
             "the value is not printed"
+        )
+    if token is not None and ("," in token or ";" in token):
+        raise ConfigError(
+            f"{where} must contain no comma and no semicolon: the Approve/Deny buttons "
+            "carry it as `headers.Authorization=Bearer <token>` in ntfy's short action "
+            "form, which cannot quote either (§38); the value is not printed"
         )
     return token
 

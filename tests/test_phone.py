@@ -33,7 +33,7 @@ from hands import phone as phone_mod
 from hands.config import ConfigError, load_config
 from hands.daemon import Daemon
 from hands.notify import PAIR_SPACING_S, http_post, http_stream
-from hands.phone import ARCHITECT_TITLE, GO_TITLE, KIT_TITLE, REPLY_TITLE
+from hands.phone import ARCHITECT_TITLE, GO_TITLE, KIT_TITLE, PROGRESS_TITLE, REPLY_TITLE
 from harness import (
     CONSULT_HEAD,
     PROJECT,
@@ -1117,6 +1117,135 @@ def test_go_after_a_stop_un_pauses_when_its_job_starts_and_the_done_fires_a_rule
         assert (await ok("pipeline"))["paused"] is False
 
     phone_drive(body)
+
+
+# ------------------------------------------------------------ progress (§38)
+
+#: The checkpoint line `progress` must quote: the first one naming a unit in progress.
+UNIT_LINE = "Unit in progress: U5 progress <secret> (§38; §26)."
+
+
+def repository_with_history(workdir: Path, branch: str = "mission-x") -> list[str]:
+    """Four commits in the builder's cwd, the last three on `branch`; their subjects,
+    newest first."""
+    import subprocess
+
+    commit_file(workdir, "one.txt", "1\n")
+    subprocess.run(["git", "-C", str(workdir), "checkout", "-q", "-b", branch], check=True)
+    for name in ("two.txt", "three.txt", "four.txt"):
+        commit_file(workdir, name, f"{name}\n")
+    return ["test: four.txt", "test: three.txt", "test: two.txt", "test: one.txt"]
+
+
+def progress_answers(daemon: Daemon) -> list[dict[str, Any]]:
+    return titled(daemon, PROGRESS_TITLE)
+
+
+def test_progress_names_the_running_job_the_branch_three_commits_and_the_checkpoint(
+    project: str, workdir: Path
+) -> None:
+    subjects = repository_with_history(workdir)
+    (workdir / "meta").mkdir()
+    (workdir / "meta" / "CHECKPOINT.md").write_text(  # the working tree's, uncommitted
+        f"# CHECKPOINT\n\nDone: U4 abc1234 — the consult.\n\n{UNIT_LINE}\nIntent: more\n"
+        "Unit in progress: a second line that is not the first\n",
+        encoding="utf-8",
+    )
+
+    async def body(daemon: Daemon, fake: FakeNtfy) -> None:
+        busy = await ok("send", "--role", "builder", "--context", "clear", "FAKE:block")
+        assert (await running_job())["id"] == busy["id"]
+        await say(daemon, fake, f"progress {SECRET}")
+        await daemon.notifier.drain()
+        (answer,) = progress_answers(daemon)
+        assert answer["url"] == f"{NTFY}/{EVENTS_TOPIC}"  # answered on ntfy_topic
+        assert answer.get("actions") is None
+        lines = answer["message"].splitlines()
+        assert re.fullmatch(rf"builder: running {busy['id']}, for \d+s", lines[0]), lines
+        assert lines[1] == "branch: mission-x"
+        logged = lines[2:5]
+        assert [line.split(" ", 1)[1] for line in logged] == subjects[:3]
+        assert all(re.fullmatch(r"[0-9a-f]{7,} test: \S+", line) for line in logged)
+        assert lines[5:] == [f"checkpoint: {UNIT_LINE}"]
+        # Read-only: no job was filed, and the running one is untouched.
+        assert [row["id"] for row in (await ok("jobs"))["jobs"]] == [busy["id"]]
+        assert (await ok("show", busy["id"]))["state"] == "running"
+        await ok("cancel", busy["id"])
+
+    phone_drive(body)
+
+
+def test_progress_for_an_idle_builder_names_the_last_ended_job_and_its_verdict(
+    project: str, workdir: Path
+) -> None:
+    repository_with_history(workdir, branch="main-line")
+    (workdir / "meta").mkdir()
+    (workdir / "meta" / "CHECKPOINT.md").write_text(
+        "# CHECKPOINT\n\nDone: U4 abc1234.\nUnits in progress: none named here\n",
+        encoding="utf-8",
+    )
+
+    async def body(daemon: Daemon, fake: FakeNtfy) -> None:
+        first = await ok("send", "--role", "builder", "--context", "clear", "FAKE:result early")
+        assert (await ok("wait", first["id"]))["state"] == "done"
+        last = await ok(
+            "send", "--role", "builder", "--context", "clear", "FAKE:result VERDICT: unit done"
+        )
+        assert (await ok("wait", last["id"]))["state"] == "done"
+        other = await ok("send", "--role", "aux", "--context", "clear", "FAKE:result ok")
+        assert (await ok("wait", other["id"]))["state"] == "done"  # not the builder's
+        await say(daemon, fake, f"progress {SECRET}")
+        await daemon.notifier.drain()
+        (answer,) = progress_answers(daemon)
+        lines = answer["message"].splitlines()
+        assert lines[0] == f"builder: idle; last ended {last['id']} done, VERDICT: unit done"
+        assert lines[1] == "branch: main-line"
+        assert len(lines) == 6 and lines[5] == "no checkpoint"
+        assert len((await ok("jobs"))["jobs"]) == 3
+
+    phone_drive(body)
+
+
+def test_progress_outside_a_repository_with_no_job_answers_plain_lines(
+    project: str, workdir: Path
+) -> None:
+    """A builder cwd that is not a git repository (and no CHECKPOINT.md) is a plain
+    line each, not a crash and not silence."""
+
+    async def body(daemon: Daemon, fake: FakeNtfy) -> None:
+        await say(daemon, fake, f"progress {SECRET}")
+        await daemon.notifier.drain()
+        (answer,) = progress_answers(daemon)
+        assert answer["message"].splitlines() == [
+            "builder: idle; no job has ended",
+            "git: no branch or log (not a repository, or no commit yet)",
+            "no checkpoint",
+        ]
+        assert (await ok("jobs"))["jobs"] == []
+
+    phone_drive(body)
+
+
+def test_progress_with_a_wrong_or_missing_secret_or_a_nonce_is_refused(
+    project: str, workdir: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level(logging.DEBUG)
+    repository_with_history(workdir)
+
+    async def body(daemon: Daemon, fake: FakeNtfy) -> None:
+        job = await held()
+        nonce = await nonce_for(daemon, job["id"])
+        for text in ("progress", "progress not-the-secret", f"progress {nonce}",
+                     f"progress now {SECRET}"):
+            await say(daemon, fake, text)
+        await daemon.notifier.drain()
+        assert progress_answers(daemon) == []
+        assert [row["id"] for row in (await ok("jobs"))["jobs"]] == [job["id"]]
+
+    phone_drive(body)
+    assert "phone: command ignored (progress: bad secret)" in strip_paths(caplog.text)
+    assert "phone: command ignored (progress takes only the secret)" in strip_paths(caplog.text)
+    assert SECRET not in strip_paths(caplog.text)
 
 
 # ------------------------------------------------------------ reply (§33)

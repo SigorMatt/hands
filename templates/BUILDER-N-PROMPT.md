@@ -88,7 +88,10 @@ dirty: finish that unit under the sub-agent rules if it can pass
 `./scripts/check`; otherwise `git stash push -m "wip <unit> <date>"`,
 record in the checkpoint where it stopped and that a stash exists, and
 leave the tree clean. Then continue from that unit. Push before taking any
-new unit.
+new unit. A `keep` send that arrives after you replied `VERDICT: question`
+is the answer: carry it out, continue the mission from the checkpoint, and
+end that reply with one of the mission's `VERDICT:` lines, always, even when
+the answer came with a file to commit first.
 
 ## Units, in order
 
@@ -101,6 +104,18 @@ delivers, in one paragraph. Name the files it touches.> Gate: <tests that
 prove it; a command whose output is the evidence>.
 
 **U2 …**
+
+<A human-supplied unit, when the mission needs content no agent may author
+(attack-shaped test content: hostile corpora, exploit-shaped fixtures). Keep
+this shape or delete it:>
+
+**U<k> <name> (human-supplied unit).** The human places the files under
+`~/Downloads/<name>/`. This unit names the files, their repository paths and
+the commit message: `<file>` → `<repository path>`, one line each; commit
+message `fixtures: <one line>`. The builder copies them to those paths and
+commits them by path without opening them. The review checks this commit by
+`git show --stat` alone. Gate: `git show --stat` lists exactly the
+named paths.
 
 **U-last Final report.** `meta/FINAL-REPORT-N.md` (drafted under
 `meta/drafts/`, moved in by this commit): what changed (sha per unit),

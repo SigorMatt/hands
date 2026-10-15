@@ -25,6 +25,7 @@ import os
 import re
 import shlex
 import shutil
+import subprocess
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -1269,6 +1270,37 @@ class Api:
         )
         return doctor_report(self.config.project, self.config.path, found, live=live)
 
+    # ------------------------------------------------- the phone's progress (§38)
+
+    async def progress_report(self) -> str:
+        """§38: the text of the phone's `progress <secret>` answer. Read-only.
+
+        Not a command of §4 (`COMMANDS` is §4's table and `method()` does not
+        answer this): it is the phone channel's tenth command, and lives here
+        beside `status` because it reads the same daemon state. Three parts, one
+        or more lines each: the builder's running job and its age, or the last
+        ended builder job and its verdict; the branch and `git log --oneline -3`
+        of the builder's cwd; and the first line of the working tree's
+        `meta/CHECKPOINT.md` that names a unit in progress, or "no checkpoint".
+        The git calls and the file read run in a thread, so the queue keeps moving.
+        """
+        cwd = self.config.role("builder").cwd
+        lines = [self._builder_line()]
+        lines.extend(await asyncio.to_thread(_progress_git, Path(cwd)))
+        lines.append(await asyncio.to_thread(_checkpoint_line, Path(cwd)))
+        return "\n".join(lines)
+
+    def _builder_line(self) -> str:
+        running_id = self.daemon.running_job_id("builder")
+        if running_id is not None:
+            record = self._job(running_id)
+            return f"builder: running {record.id}, for {_age(record.started)}"
+        for record in reversed(self.spool.list_jobs()):
+            if record.role == "builder" and record.state in TERMINAL_STATES:
+                verdict = record.verdict or "no verdict"
+                return f"builder: idle; last ended {record.id} {record.state}, {verdict}"
+        return "builder: idle; no job has ended"
+
     # -------------------------------------------------------------- internals
 
     def _job(self, job_id: str) -> Job:
@@ -1277,6 +1309,75 @@ class Api:
         except SpoolError as exc:
             raise ApiError(str(exc)) from exc
 
+
+
+#: §38: the `progress` answer's git calls; a git that hangs is a plain line, not a stall.
+PROGRESS_GIT_TIMEOUT_S = 10.0
+#: §38: "the first line of `meta/CHECKPOINT.md` that names a unit in progress".
+PROGRESS_CHECKPOINT = Path("meta") / "CHECKPOINT.md"
+_UNIT_IN_PROGRESS_RE = re.compile(r"\bunit in progress\b", re.IGNORECASE)
+#: The longest checkpoint line the answer quotes; a longer one is cut with "…".
+_CHECKPOINT_LINE_CHARS = 200
+_NO_GIT = "git: no branch or log (not a repository, or no commit yet)"
+
+
+def _age(started: str | None) -> str:
+    """How long ago an ISO `started` stamp was: `42s`, `17m` or `3h05m`."""
+    if not started:
+        return "an unknown time"
+    try:
+        then = datetime.fromisoformat(started.replace("Z", "+00:00"))
+    except ValueError:
+        return "an unknown time"
+    seconds = max(0, int((datetime.now(UTC) - then).total_seconds()))
+    if seconds < 60:
+        return f"{seconds}s"
+    if seconds < 3600:
+        return f"{seconds // 60}m"
+    return f"{seconds // 3600}h{seconds % 3600 // 60:02d}m"
+
+
+def _progress_git(cwd: Path) -> list[str]:
+    """§38: `branch: <name>` and `git log --oneline -3` of `cwd`, or one plain line.
+
+    A cwd that is not a repository, a repository with no commit, a git that is
+    missing or one that does not answer in time all give the same one line.
+    """
+
+    def git(*args: str) -> str | None:
+        try:
+            done = subprocess.run(
+                ["git", "-C", str(cwd), *args],
+                capture_output=True,
+                text=True,
+                errors="replace",
+                timeout=PROGRESS_GIT_TIMEOUT_S,
+                check=False,
+            )
+        except (OSError, subprocess.SubprocessError):
+            return None
+        return done.stdout if done.returncode == 0 else None
+
+    branch = git("rev-parse", "--abbrev-ref", "HEAD")
+    log = git("log", "--oneline", "-3") if branch is not None else None
+    if branch is None or log is None:
+        return [_NO_GIT]
+    return [f"branch: {branch.strip()}", *log.splitlines()]
+
+
+def _checkpoint_line(cwd: Path) -> str:
+    """§38: `checkpoint: <the first line naming a unit in progress>`, or "no checkpoint"."""
+    try:
+        text = (cwd / PROGRESS_CHECKPOINT).read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return "no checkpoint"
+    for line in text.splitlines():
+        if _UNIT_IN_PROGRESS_RE.search(line):
+            line = line.strip()
+            if len(line) > _CHECKPOINT_LINE_CHARS:
+                line = line[: _CHECKPOINT_LINE_CHARS - 1] + "…"
+            return f"checkpoint: {line}"
+    return "no checkpoint"
 
 
 def _since_cutoff(since: str | None) -> str | None:

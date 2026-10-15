@@ -3176,3 +3176,71 @@ def test_a_builder_row_prints_the_project_its_jobs_see(
     _code, found = checks()
     detail = found["role builder"]["detail"]
     assert "HANDS_PROJECT=demo" in strip_paths(detail), detail
+
+
+# ----------------------------------------- §38 (H-046): the public broker's cap
+
+
+def with_ntfy_url(path: Path, url: str | None) -> None:
+    text = path.read_text()
+    if url is not None:
+        topic = 'ntfy_topic = "hands-test"'
+        text = text.replace(topic, f'{topic}\nntfy_url = "{url}"')
+    path.write_text(text)
+
+
+@pytest.mark.parametrize(
+    "url", [None, "https://ntfy.sh", "https://NTFY.sh:443/x", "https://ntfy.example.com"]
+)
+def test_doctor_warns_on_a_public_ntfy_url_naming_the_cap_and_the_self_hosted_section(
+    tmp_home: Path, tmp_path: Path, fake_mode: None, url: str | None
+) -> None:
+    with_ntfy_url(write_config(tmp_home, tmp_path), url)
+    code, found = checks()
+    assert code == 0
+    row = found["broker"]
+    assert row["status"] == "warn"
+    for said in ("public broker", "daily cap", "Self-hosted ntfy over Tailscale",
+                 "who_min_interval_s"):  # fmt: skip
+        assert said in strip_paths(row["detail"])
+    code, out, _err = run()
+    assert strip_paths(out).strip().endswith("doctor: green")
+
+
+@pytest.mark.parametrize(
+    ("url", "kind"),
+    [
+        ("http://100.64.0.1:2586", "tailnet"),
+        ("http://100.127.255.254", "tailnet"),
+        ("https://x.tailnet.ts.net", "tailnet"),
+        ("http://192.168.1.5:8080", "private"),
+        ("http://10.0.0.2", "private"),
+        ("http://172.16.4.4", "private"),
+        ("http://127.0.0.1:2586", "private"),
+        ("http://localhost:2586", "private"),
+        ("http://169.254.1.1", "private"),
+        ("http://[fd7a:115c:a1e0::1]:2586", "private"),
+    ],
+)
+def test_doctor_does_not_warn_on_a_private_or_tailnet_ntfy_url(
+    tmp_home: Path, tmp_path: Path, fake_mode: None, url: str, kind: str
+) -> None:
+    with_ntfy_url(write_config(tmp_home, tmp_path), url)
+    code, found = checks()
+    assert code == 0
+    row = found["broker"]
+    assert row["status"] == "ok", row
+    assert kind in strip_paths(row["detail"])
+    assert "daily cap" not in strip_paths(row["detail"])
+
+
+@pytest.mark.parametrize(
+    "url",
+    ["http://100.128.0.1", "http://8.8.8.8", "https://ts.net.example.com", "http://172.32.0.1"],
+)
+def test_an_address_just_outside_the_private_and_tailnet_ranges_is_public(
+    tmp_home: Path, tmp_path: Path, fake_mode: None, url: str
+) -> None:
+    with_ntfy_url(write_config(tmp_home, tmp_path), url)
+    _code, found = checks()
+    assert found["broker"]["status"] == "warn"

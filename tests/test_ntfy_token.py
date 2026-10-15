@@ -31,10 +31,10 @@ from hands import who
 from hands.cli import main
 from hands.config import ConfigError, is_public_ntfy_url, load_config
 from hands.daemon import Daemon
-from hands.notify import Notifier, http_post, http_stream
+from hands.notify import Notifier, actions_header, http_post, http_stream
 from hands.phone import KIT_TITLE, STATUS_TITLE
 from hands.spool import Spool
-from harness import PROJECT, TIMEOUT, as_published, config_body, poll, write_project
+from harness import PROJECT, TIMEOUT, as_published, config_body, ok, poll, write_project
 
 NTFY = "https://ntfy.tailnet.example"
 TOKEN = "tk_U6selfhostedBearer0123456789ab"
@@ -726,4 +726,128 @@ def test_doctor_shows_the_token_on_or_off_and_never_its_value(
     assert other not in strip_paths(detail)
     assert said in strip_paths(text)
     assert rows["notifications"]["status"] == "ok"
+    assert_no_token(text, text_err, raw, raw_err)
+
+
+# ------------------------------------------- §38: the buttons carry the token
+
+
+def held_actions(project: str) -> tuple[list[httpx.Request], list[str]]:
+    """Hold one job on a daemon whose publishes go through the real `http_post` to
+    a deny-all ntfy; answer every request ntfy saw and what the spool holds."""
+    ntfy = DenyAll()
+
+    async def stream(url: str, **kwargs: Any) -> AsyncIterator[str]:
+        yield json.dumps({"event": "open"})
+        await asyncio.sleep(3600)
+
+    async def scenario() -> None:
+        daemon = Daemon(load_config(project))
+        daemon.notifier.post = partial(http_post, transport=ntfy.transport)
+        assert daemon.phone is not None
+        daemon.phone.stream = stream
+        daemon.phone.sleep = parked
+        await daemon.start()
+        try:
+            await asyncio.wait_for(
+                ok(
+                    "send",
+                    "--role",
+                    "aux",
+                    "--context",
+                    "clear",
+                    "--gate",
+                    "phone test",
+                    "FAKE:result ok",
+                ),
+                TIMEOUT,
+            )
+
+            async def published() -> bool:
+                await daemon.notifier.drain()
+                return any("Actions" in request.headers for request in ntfy.requests)
+
+            await asyncio.wait_for(poll(published, "the held notification"), TIMEOUT)
+        finally:
+            await daemon.stop()
+
+    asyncio.run(scenario())
+    config = load_config(project)
+    stored = [p.read_text() for p in config.spool_root.rglob("*") if p.is_file()]
+    return ntfy.requests, stored
+
+
+@pytest.mark.parametrize("token", [TOKEN, None], ids=["token", "no_token"])
+def test_a_held_jobs_buttons_carry_the_bearer_with_a_token_and_nothing_without(
+    tmp_home: Path, workdir: Path, token: str | None, caplog: pytest.LogCaptureFixture
+) -> None:
+    """§38: "every action hands publishes carries `headers.Authorization=Bearer
+    <token>` in ntfy's short action form ... without a token the actions are as
+    before". The `Actions` header is read off the wire, split into its actions."""
+    caplog.set_level(logging.DEBUG)
+    requests, stored = held_actions(write(tmp_home, workdir, token=token))
+    (held,) = [request for request in requests if "Actions" in request.headers]
+    actions = [action.strip() for action in held.headers["Actions"].split(";")]
+    assert len(actions) == 2
+    assert [action.split(", ")[1] for action in actions] == ["Approve", "Deny"]
+    for action in actions:
+        fields = [field.strip() for field in action.split(",")]
+        assert fields[0] == "http"
+        assert fields[3] == "method=POST"
+        assert any(field.startswith("body=") for field in fields)
+        if token is not None:
+            assert f"headers.Authorization={BEARER}" in fields, action
+        else:
+            assert not any(field.startswith("headers.") for field in fields), action
+            assert "Authorization" not in strip_paths(action)
+    assert_no_token(caplog.text, *stored)
+
+
+def test_actions_header_puts_the_bearer_on_every_action_only_when_given_a_token() -> None:
+    actions = [
+        {"label": "Approve", "url": f"{NTFY}/{CMD_TOPIC}", "body": "approve j1 n1"},
+        {"label": "Deny", "url": f"{NTFY}/{CMD_TOPIC}", "body": "deny j1 n1"},
+    ]
+    with_token = actions_header(actions, TOKEN).split("; ")
+    assert len(with_token) == 2
+    assert all(f", headers.Authorization={BEARER}," in action for action in with_token)
+    assert "headers." not in strip_paths(actions_header(actions))
+    assert "headers." not in strip_paths(actions_header(actions, None))
+
+
+@pytest.mark.parametrize(
+    "value",
+    ['"Zq9secret,inner"', '"Zq9secret;inner"', '"Zq9,se;cret"'],
+    ids=["comma", "semicolon", "both"],
+)
+def test_a_token_the_short_action_form_cannot_carry_is_refused_at_load(
+    tmp_home: Path, workdir: Path, value: str
+) -> None:
+    """§38: the short form cannot quote, so a comma or semicolon in the token would
+    split the action; the refusal names the key and never prints the value."""
+    extra = notify_table(token=None) + f"ntfy_token = {value}\n"
+    write_project(tmp_home, config_body(tmp_home, workdir, extra=extra))
+    with pytest.raises(ConfigError) as exc:
+        load_config(PROJECT)
+    assert "[notify] ntfy_token" in strip_paths(str(exc.value))
+    assert "comma" in strip_paths(str(exc.value))
+    assert "semicolon" in strip_paths(str(exc.value))
+    assert "Zq9" not in strip_paths(str(exc.value))
+
+
+@pytest.mark.parametrize("token", [TOKEN, None], ids=["on", "off"])
+def test_doctor_phone_row_says_whether_the_buttons_carry_the_bearer(
+    tmp_home: Path, workdir: Path, token: str | None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("HANDS_DOCTOR_FAKE", "1")
+    project = write(tmp_home, workdir, token=token)
+    _, text, text_err = run_cli(project, "doctor")
+    _, raw, raw_err = run_cli(project, "--json", "doctor")
+    rows = {check["name"]: check for check in json.loads(raw)["checks"]}
+    detail = rows["phone"]["detail"]
+    on = "buttons: bearer on"
+    off = "buttons: no token; a token-protected server refuses them"
+    assert (on if token else off) in strip_paths(detail)
+    assert (off if token else on) not in strip_paths(detail)
+    assert (on if token else off) in strip_paths(text)
     assert_no_token(text, text_err, raw, raw_err)

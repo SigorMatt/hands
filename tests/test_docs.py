@@ -40,7 +40,7 @@ EXAMPLE = ROOT / "tests" / "fixtures" / "playbook_example.toml"
 #: Words that follow `hands ` in a command without naming a command of §4.
 NOT_COMMANDS = {"--help", "--version", "--project", "--json", "--socket", "<command>"}
 #: Commands of §4 the CLI answers itself, with no daemon method (`kit check`, §26).
-CLIENT_COMMANDS = {"kit", "migrate-spool"}  # §29: migrate-spool needs no daemon
+CLIENT_COMMANDS = {"kit", "migrate-spool", "handbook", "project"}  # §29, §38: no daemon
 #: `hands <command>`, where `hands` is the program and not the tail of a path
 #: (`git clone …/hands repo`) — hence the lookbehind.
 COMMAND_RE = re.compile(r"(?<![\w/.~-])hands (?:--\w+ [\w<>-]+ )?([a-z-]+|--[a-z-]+)")
@@ -612,13 +612,32 @@ def test_answer_is_documented_in_the_command_channel_and_the_phone_module() -> N
     channel = integration.split("### The command channel: approve from the phone", 1)[1]
     channel = flattened(channel.split("\n### ", 1)[0])
     assert "answer <secret> <text>" in channel
-    assert "takes nine commands" in channel
+    assert "takes ten commands" in channel
     for said in ("`origin: phone`", f"titled `{BUILDER_TITLE}`", f"`{ANSWER_TITLE}`",
                  '--context keep "<text>"', "never held by the gate patterns",
                  "`answer.sent`", "no resumable session", "sha256",
                  "Decided by the human since your last consultation"):
         assert flattened(said) in channel, f"the command channel does not say {said!r}"
     assert "answer <secret> <text>" in (phone.__doc__ or "")
+
+
+def test_progress_is_documented_in_the_command_channel_the_playbook_doc_and_the_module() -> None:
+    """§38: `progress <secret>`, the tenth command, is in the command channel's list
+    with what it answers, in docs/PLAYBOOK.md, and in the phone module's list."""
+    from hands import phone
+    from hands.phone import PROGRESS_TITLE
+
+    integration = (ROOT / "docs" / "INTEGRATION.md").read_text(encoding="utf-8")
+    channel = integration.split("### The command channel: approve from the phone", 1)[1]
+    channel = flattened(channel.split("\n### ", 1)[0])
+    assert "progress <secret>" in channel
+    for said in (f"titled `{PROGRESS_TITLE}`", "rev-parse --abbrev-ref HEAD",
+                 "log --oneline -3", "meta/CHECKPOINT.md", "no checkpoint", "starts no job"):
+        assert flattened(said) in channel, f"the command channel does not say {said!r}"
+    playbook_doc = flattened((ROOT / "docs" / "PLAYBOOK.md").read_text(encoding="utf-8"))
+    assert "`progress <secret>`" in playbook_doc
+    assert "progress <secret>" in (phone.__doc__ or "")
+    assert "accepts ten" in flattened(phone.__doc__ or "")
 
 
 def test_the_readme_names_kit_check_go_and_the_kit_transport() -> None:
@@ -1583,12 +1602,48 @@ def test_each_template_loads_with_its_architect_block_uncommented(path: Path) ->
     assert book.gate_failures == 2 and book.escalate_on == ESCALATE_ON
     assert book.max_architect_consults == DEFAULT_MAX_ARCHITECT_CONSULTS
     consults = [rule for rule in book.rules if rule.then == "consult"]
-    assert len(consults) == 1, consults
-    assert consults[0].on == "aux.done" and consults[0].role == "architect"
+    reviews = [rule for rule in consults if rule.on == "aux.done"]
+    assert len(reviews) == 1, consults
+    assert all(rule.role == "architect" for rule in consults)
     # §10: the first matching rule fires, so the consult must stand before the
     # template's own `aux.done` stops or it would never run.
     outcomes = [rule.index for rule in book.rules if rule.on == "aux.done"]
-    assert outcomes and min(outcomes) == consults[0].index
+    assert outcomes and min(outcomes) == reviews[0].index
+    # §38: the missions template alone also consults on a builder's blocked verdict.
+    expected = 1 if path.name == "PLAYBOOK-missions.toml" else 0
+    assert len(consults) - len(reviews) == expected, consults
+
+
+def test_the_missions_templates_role_mode_consults_the_architect_on_blocked() -> None:
+    """§38 (H-048): uncommented, the missions template consults the architect on
+    `builder.done` with a verdict naming `blocked`, ahead of the blocked stop, and a
+    comment says so; shipped (phone mode), the stop is the first blocked rule."""
+    from hands.playbook import parse_playbook
+
+    path = ROOT / "templates" / "PLAYBOOK-missions.toml"
+    shipped = path.read_text(encoding="utf-8")
+    text, _blocks = uncommented(shipped)
+    book = parse_playbook(text, path=path)
+    reply = "VERDICT: mission 3 blocked U2"
+    first = next(
+        rule for rule in book.rules
+        if rule.on == "builder.done" and rule.verdict and rule.verdict.search(reply)
+    )
+    assert first.then == "consult" and first.role == "architect"
+    assert first.verdict is not None and "blocked" in first.verdict.pattern
+    stops = [rule for rule in book.rules if rule.on == "builder.done" and rule.then == "stop"
+             and rule.verdict and rule.verdict.search(reply)]
+    assert stops and stops[0].index > first.index
+    phone = parse_playbook(shipped, path=path)
+    first = next(
+        rule for rule in phone.rules
+        if rule.on == "builder.done" and rule.verdict and rule.verdict.search(reply)
+    )
+    assert first.then == "stop"
+    comment = flattened(shipped.split("then = \"stop\"\nmessage = \"Mission {n} blocked", 1)[0]
+                        .rsplit("[[rule]]\non = \"builder.done\"\nverdict = '^VERDICT: kit", 1)[1])
+    for said in ("blocked", "architect", "§38"):
+        assert said in comment, f"the template's blocked rule has no comment saying {said!r}"
 
 
 # ------------------------------------- the architect role in the docs (§31, U6)
@@ -1687,7 +1742,7 @@ def test_the_integration_doc_names_the_series_keys_and_the_verdicts_from_code() 
     assert f"max_architect_consults` (default {DEFAULT_MAX_ARCHITECT_CONSULTS})" in section
     for verdict in ARCHITECT_VERDICTS:
         assert f"`{verdict}`" in section, f"the architect section does not name {verdict!r}"
-    assert CONSULT_EVENTS["architect"] == ("aux.done",)
+    assert CONSULT_EVENTS["architect"] == ("aux.done", "builder.done")
     assert "`aux.done`" in section
     assert "claude --resume" in section
 
@@ -1840,7 +1895,7 @@ def test_the_playbook_doc_no_longer_calls_consult_driver_only() -> None:
     from hands.playbook import ARCHITECT_VERDICTS, CONSULT_EVENTS, DEFAULT_MAX_ARCHITECT_CONSULTS
 
     section = playbook_doc('## Consult (`then = "consult"`, DESIGN §27, §31)')
-    assert CONSULT_EVENTS["architect"] == ("aux.done",)
+    assert CONSULT_EVENTS["architect"] == ("aux.done", "builder.done")
     for said in (
         '`role = "architect"`',
         "`aux.done`",
@@ -1852,6 +1907,22 @@ def test_the_playbook_doc_no_longer_calls_consult_driver_only() -> None:
     for verdict in ARCHITECT_VERDICTS:
         assert f"`{verdict}`" in section, f"the consult section does not name {verdict!r}"
     assert "A consult asks the driver role instead of stopping." not in section
+
+
+def test_the_playbook_doc_says_a_blocked_mission_consults_the_architect() -> None:
+    """§38 (H-048): the consult section names the builder's blocked verdict as the
+    architect's second event, the prompt's heading for it, the shared budget, and
+    that the missions template carries the rule in its role-mode variant."""
+    section = playbook_doc('## Consult (`then = "consult"`, DESIGN §27, §31)')
+    for said in (
+        "`builder.done`",
+        "The builder's blocked verdict and its reply",
+        "the same budget",
+        "`templates/PLAYBOOK-missions.toml`",
+        "§38",
+    ):
+        assert said in section, f"the consult section does not say {said!r}"
+    assert "the architect on `aux.done` only" not in section
 
 
 def test_the_playbook_doc_says_architect_events_cannot_be_matched() -> None:
@@ -2177,3 +2248,130 @@ def test_the_playbook_doc_review_base_sentence_is_not_garbled() -> None:
         "the review prompt that `templates/PLAYBOOK-missions.toml` and this repository's "
         "`PLAYBOOK.toml` ship says"
     ) in text
+
+
+# ------------------------------------------------- mission 22 U11 (DESIGN §38)
+
+INTEGRATION_DOC = ROOT / "docs" / "INTEGRATION.md"
+SELF_HOSTED = "### Self-hosted ntfy over Tailscale (§33)"
+#: The four documents U11 owns; the guard's hook is spelled `python3 -I` in each.
+U11_DOCS = (
+    ROOT / "README.md",
+    INTEGRATION_DOC,
+    ROOT / "docs" / "PLAYBOOK.md",
+    ROOT / "docs" / "ARCHITECT-HANDBOOK.md",
+)
+
+
+def _self_hosted() -> str:
+    text = INTEGRATION_DOC.read_text(encoding="utf-8")
+    return text.split(SELF_HOSTED, 1)[1].split("\n## ", 1)[0]
+
+
+def test_the_self_hosted_section_names_the_ntfy_image_binwiederhier() -> None:
+    """§38: the image is `binwiederhier/ntfy`; the misspelling the 2026-10-14 setup
+    tripped on is gone from every doc."""
+    section = _self_hosted()
+    assert "binwiederhier/ntfy serve" in section
+    assert "`binwiederhier/ntfy` image" in flattened(section)
+    for doc in U11_DOCS:
+        assert "binwiloo" not in doc.read_text(encoding="utf-8"), doc.name
+
+
+@pytest.mark.parametrize("doc", U11_DOCS, ids=lambda p: p.name)
+def test_the_guard_hook_is_spelled_python3_dash_i_everywhere(doc: Path) -> None:
+    """Review 21 should-fix 3: doctor accepts only `python3 -I <guard>`, so no doc
+    shows the guard run as `python3 <path>` or says "exactly `python3` and a path"."""
+    text = doc.read_text(encoding="utf-8")
+    assert "python3 <" not in text
+    assert "exactly `python3` and a path" not in flattened(text)
+    for line in text.splitlines():
+        if "bash_guard.py" in line and re.search(r"\bpython3\b", line):
+            assert "python3 -I" in line, f"{doc.name}: {line.strip()}"
+
+
+def test_the_integration_doc_says_the_guard_hooks_exact_commands_with_dash_i() -> None:
+    text = flattened(INTEGRATION_DOC.read_text(encoding="utf-8"))
+    assert "exactly `python3 -I` and a path ending in `.claude/hooks/bash_guard.py`" in text
+    assert "`python3 -I <path to .claude/hooks/bash_guard.py> --write`" in text
+
+
+def test_the_self_hosted_section_carries_the_new_subsections() -> None:
+    """§38's corrections from the 2026-10-14 setup, each under its own heading."""
+    section = _self_hosted()
+    for heading in (
+        "#### The default for role mode",
+        "#### A tailnet without a certificate domain",
+        "#### A config written before `[notify]`",
+        "#### What has run on a real server, and what has not",
+    ):
+        assert f"\n{heading}\n" in section, heading
+
+
+def test_the_self_hosted_section_states_each_setup_correction() -> None:
+    section = flattened(_self_hosted())
+    for said in (
+        "Set `base-url` before the first start",
+        "plain http over Tailscale",
+        "-p 100.x.y.z:2586:80",
+        "ntfy access hands 'who-*' read-write",
+        "ntfy access hands 'whocmd-*' read-write",
+        "WebSockets",
+        "no proxy in front",
+        "the documented default for role mode",
+        "headers.Authorization=Bearer <token>",
+        "buttons: bearer on",
+    ):
+        assert said in section, f"the self-hosted section does not say {said!r}"
+    # The bearer is in the buttons since mission 22 U1 (H-037): the old denial is gone.
+    assert "hands does not put the token in a button" not in section
+
+
+def test_the_server_ntfy_topic_migration_reads_as_the_loader_behaves(tmp_path: Path) -> None:
+    """§38: a pre-`[notify]` config keeps `ntfy_topic` under `[server]`; it loads as
+    it is, and refuses once a `[notify] ntfy_topic` is added beside it, naming the
+    key, until the `[server]` line is moved."""
+    from hands.config import ConfigError
+
+    section = flattened(_self_hosted().split("#### A config written before `[notify]`", 1)[1])
+    assert "set in both [server] and [notify]" in section
+    roles = {"builder": {"cwd": str(tmp_path)}}
+    path = tmp_path / "demo.toml"
+    old = parse_config({"server": {"ntfy_topic": "hands-demo-old"}, "roles": roles},
+                       project="demo", path=path)
+    assert old.notify.ntfy_topic == "hands-demo-old"
+    with pytest.raises(ConfigError, match=r"ntfy_topic is set in both \[server\] and \[notify\]"):
+        parse_config({"server": {"ntfy_topic": "hands-demo-old"},
+                      "notify": {"ntfy_topic": "hands-demo-new"}, "roles": roles},
+                     project="demo", path=path)
+    moved = parse_config({"notify": {"ntfy_topic": "hands-demo-new"}, "roles": roles},
+                         project="demo", path=path)
+    assert moved.notify.ntfy_topic == "hands-demo-new"
+
+
+def test_the_access_rule_covers_every_topic_project_add_generates() -> None:
+    """§38: the documented access grants cover the who topics too. Each prefix
+    `hands project add` generates is matched by one of the section's grants."""
+    from fnmatch import fnmatchcase
+
+    from hands.project import generated_topics
+
+    grants = re.findall(r"ntfy access hands '([^']+)' read-write", _self_hosted())
+    for key, topic in generated_topics("demo").items():
+        assert any(fnmatchcase(topic, grant) for grant in grants), (key, topic, grants)
+
+
+def test_the_playbook_doc_says_what_auto_runs_counts() -> None:
+    """§38: `auto-runs` counts the runs a `send` rule with `run =` started, nothing
+    else (playbook.py appends to `auto_runs_used` only there)."""
+    counters = flattened(
+        (ROOT / "docs" / "PLAYBOOK.md").read_text(encoding="utf-8")
+        .split("## Counters", 1)[1].split("\n---", 1)[0]
+    )
+    assert "counts only the runs a `send` rule with `run =` started" in counters
+
+
+def test_the_readme_points_at_progress_project_add_and_handbook() -> None:
+    readme = flattened((ROOT / "README.md").read_text(encoding="utf-8"))
+    for said in ("`progress <secret>`", "`hands project add", "`hands handbook`"):
+        assert said in readme, f"README.md does not mention {said}"

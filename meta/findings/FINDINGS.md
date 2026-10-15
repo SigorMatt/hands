@@ -1917,7 +1917,13 @@ buttons carry, or (c) the buttons are dropped when `ntfy_token` is set and the
 notification says to type the command. A real ntfy server and phone app should
 settle whether the app signs action requests before choosing.
 
-Status: open
+Status: resolved-by-code (mission 22 U1 — `notify.actions_header` puts
+`headers.Authorization=Bearer <token>` on every `http` action when `[notify]
+ntfy_token` is set and nothing without; `config._ntfy_token` refuses a token with
+a comma or semicolon; doctor's `phone` row says "buttons: bearer on" | "buttons:
+no token; a token-protected server refuses them"; tests in
+`tests/test_ntfy_token.py`, §38 section. Whether the phone app sends the action's
+headers is not proven by any test here.)
 
 ---
 
@@ -2157,7 +2163,13 @@ Direction. §37: `handswho` publishes on a real state change only, compared
 without the relative-time text, with a floor on the interval; doctor WARNS
 on a public `ntfy_url` that the cap exists and names the self-hosted path.
 
-Status: open (scheduled for mission 22)
+Status: resolved-by-code (mission 22 U2 — `hands.who.WhoPusher.scan` publishes
+only when the fingerprint and the picture with its times blanked
+(`hands.who.blank_times`) both changed, at most once per `[notify]
+who_min_interval_s` (default 60, `hands.config`) counting a refused attempt,
+a request at once; doctor's `broker` row (`hands.doctor._broker_check`) WARNS on
+a public `ntfy_url`; tests in tests/test_who.py (§38 block), tests/test_doctor.py
+(§38 block) and tests/test_config.py)
 
 ## H-047 — a `handsd` restart kills the running builder job and nothing resumes it
 
@@ -2173,7 +2185,12 @@ phone.
 Direction. §37: the daemon re-queues the kickoff for a builder job its own
 stop killed, bounded as `resume` is.
 
-Status: open (scheduled for mission 22)
+Status: resolved-by-code (mission 22 U3 — a daemon stop records its running jobs
+`orphaned` with `orphan_reason: daemon_stop` (runner `cancel(daemon_stop=True)`,
+`_final_state`); every new orphan carries `orphan_fed: false` until a start feeds it
+once as `<role>.orphaned` after the workers are up (`Daemon._feed_orphans`,
+`Spool.orphans_owed`/`mark_orphan_fed`), and the start notification names the resumed
+job; tests in tests/test_daemon_stop.py)
 
 ## H-048 — under `autonomous` a builder's `blocked` verdict stops for the human
 
@@ -2190,4 +2207,180 @@ Direction. §37: the playbook may consult the architect on `builder.done`
 with a `blocked` verdict, the consult prompt carrying the builder's reply in
 place of a review, counted against the same consultation budget.
 
-Status: open (scheduled for mission 22)
+Status: resolved-by-code (mission 22 U4 — `hands.playbook.CONSULT_EVENTS`
+gives the architect `builder.done`, refused at load unless the rule's verdict
+regex names `blocked`; `_architect_subject` writes the builder's verdict line
+and full reply under "The builder's blocked verdict and its reply" in place of
+the review markers; `templates/PLAYBOOK-missions.toml` carries the rule in its
+role-mode block. Tests: tests/test_playbook.py `test_a_role_mode_blocked_*`,
+`test_a_blocked_consultation_counts_*`, `test_a_phone_mode_template_stops_*`;
+tests/test_kit.py `test_the_role_mode_missions_templates_pass_six_of_six_*`;
+tests/test_docs.py `test_the_missions_templates_role_mode_*`)
+
+## H-049 — the protocol's revert step fails for a file the commit adds
+
+Severity: medium · Component: templates/REVIEW-PROTOCOL.md,
+meta/REVIEW-PROTOCOL.md; DESIGN §37 "The protocol's revert step", §38
+Filed by: mission 22 orchestrator, U0 (2026-10-15).
+Evidence: REVIEW-21 should-fix 2 (the U4 sub-agent, in a scratch repo).
+
+Symptom. `git checkout <sha>~1 -- <files>` exits 1 with `pathspec … did
+not match` when a listed file does not exist at the parent, and then
+reverts none of the listed files. A sub-agent that misses the error runs
+the new tests against unreverted code; a red run caused by the missing
+file can hide a weak test.
+
+Direction. §38: for each non-test file the body lists, `git checkout
+<sha>~1 -- <file>` when the file exists at `<sha>~1`, else `rm` it; run
+the commit's new tests and expect red; then `git checkout <sha> --
+<files>`. A commit body names added files as added. Mission 22 U7.
+
+Status: resolved-by-doc (mission 22 U7 — templates/ and
+meta/REVIEW-PROTOCOL.md step 2: for each listed non-test file, checkout at
+<sha>~1 when it exists there, else rm; a commit body names added files as
+added)
+
+## H-050 — review 21 ran its sub-agents concurrently against the protocol's one-at-a-time rule
+
+Severity: low · Component: templates/REVIEW-PROTOCOL.md,
+meta/REVIEW-PROTOCOL.md; DESIGN §38 "The reviewer's schedule is written
+down"
+Filed by: mission 22 orchestrator, U0 (2026-10-15).
+Evidence: REVIEW-21 Notes ("the five sub-agents ran concurrently");
+discotrade HF-008.
+
+Symptom. The protocol says one per-commit sub-agent at a time; REVIEW-21
+ran five at once and nothing in the review records the schedule, so the
+breach is visible only because the review mentions it.
+
+Direction. §38: the protocol's Notes section requires one line per
+sub-agent with its start and end time and states the rule's reason (one
+`./scripts/check` at a time inside the 20-minute cap); a review whose
+Notes lack the schedule is a should-fix for the next review. Mission 22 U7.
+
+Status: resolved-by-doc (mission 22 U7 — templates/ and
+meta/REVIEW-PROTOCOL.md: Notes carry one line per sub-agent with start and
+end time; the reason, one ./scripts/check at a time inside the 20-minute
+cap; a review lacking the schedule is a should-fix for the next)
+
+## HF-002, HF-004, HF-005 — the onboarding findings, resolved
+
+Severity: medium · Component: `pyproject.toml`, `src/hands/cli.py`,
+`src/hands/config.py`, `src/hands/runner.py`, `architect/CLAUDE.md`,
+`docs/ARCHITECT-INSTRUCTION.md`, `docs/ARCHITECT-HANDBOOK.md` §6 and §12;
+DESIGN §38 "Onboarding"
+Filed by: mission 22 U9 (2026-10-15), recording another project's findings.
+Evidence: discotrade HF-002, HF-004, HF-005 (cited by DESIGN §36 and §38,
+meta/BACKLOG.md "Mission 20" item 8).
+
+Status: resolved (mission 22 U9 — HF-002: the wheel force-includes `docs/`
+and `templates/` under `hands/shipped/`; `hands handbook` prints the
+installed handbook's path and `--templates` the templates directory; every
+role job carries `HANDS_DOCS`; both architect instructions read from it.
+HF-004: handbook §6 lists every `playbook.SERIES_KEYS` key with the
+loader's default. HF-005: handbook §12 names `hands kit check <kit> --repo
+<clone>` at the laptop before a role-mode plan kit's apply, and the first
+plan kit's silent apply. Tests: tests/test_handbook.py)
+
+## H-051 — the architect role cannot learn the value of `HANDS_DOCS`
+
+Severity: medium · Component: `architect/settings.json`,
+`driver/hooks/bash_guard.py` (architect table), the architect's consult
+prompt; DESIGN §38 "Onboarding", §31, §32
+Filed by: mission 22 U9 (2026-10-15).
+Evidence: the guard run on three commands with `HANDS_ROLE=architect`
+during U9: `echo $HANDS_DOCS` is refused (a `$`, §30), `hands handbook` is
+refused (not in the architect's `hands` subcommands, §31), and `cat
+<handbook path>` is refused (reads confined to the clone, the spool and
+`HANDS_KITS`, §32).
+
+Symptom. §38 has every role job carry `HANDS_DOCS` and the architect read
+the handbook and templates from it; U9 does both. But the Read tool, the
+one route the guard does not judge (`architect/settings.json` allows
+`Read`), takes a literal path, and nothing the role can run tells it the
+variable's value. A real role session following `architect/CLAUDE.md`
+rule 2 has no proven way to resolve `$HANDS_DOCS`.
+
+Direction (for the architect to decide; U9 did not improvise one): the
+consult prompt names the handbook's and templates' paths; or the
+architect's table and settings allow `hands handbook [--templates]`; or
+the guard's read roots gain `HANDS_DOCS` and the instruction says `cat`.
+
+Status: open
+
+## H-052 — `project add` writes the architect role's `CLAUDE.md` from the role variant
+
+Severity: low · Component: `src/hands/project.py`; DESIGN §38 "Onboarding",
+§31
+Filed by: mission 22 U10 (2026-10-15).
+Evidence: §38 says `hands project add` "writes the architect's `CLAUDE.md`
+from `docs/ARCHITECT-INSTRUCTION.md` with the Parameters filled". That file
+is the phone Project's instruction: it tells the reader to install hands in
+a sandbox and to deliver files for download, and it has no `KITS`, no `hands
+kit file` and none of the role's verdicts (`VERDICT: next kit <name>`,
+`series complete`, `escalate`) that the role-mode playbook's consult rules
+match. §31 names `architect/CLAUDE.md` "the instruction's role variant", and
+docs/INTEGRATION.md's by-hand recipe and `architect/README.md` copy that file
+into `~/hands-architect/<project>/`.
+
+Reading taken by U10 (not a design change): the role directory's `CLAUDE.md`
+is `architect/CLAUDE.md` (the role variant of the instruction), its
+Parameters filled; `docs/ARCHITECT-INSTRUCTION.md`, filled the same way, is
+what the command prints last for pasting into the Project. Both now ship in
+the wheel under `hands/shipped/`. If the design meant the phone instruction
+literally, the role would answer consultations in a vocabulary no consult
+rule matches.
+
+Status: open (for the architect: confirm the reading in the next DESIGN
+revision, or rule otherwise)
+
+## H-053 — §38 says `status` hides the architect row; the code shows it
+
+Severity: low · Component: `src/hands/daemon.py` (`Daemon.status`),
+`src/hands/cli.py` (`_status_block`), `src/hands/phone.py`
+(`status_summary`); DESIGN §38 "The handbook's new sections"
+Filed by: mission 22 U11 (2026-10-15).
+Evidence: a config with `[roles.builder]` and `[roles.architect]`, loaded
+with `load_config` and rendered by `_status_block(Daemon(config).status())`
+during U11, prints an `architect idle; queued 0/1 <cwd>` line beside the
+builder's. `Daemon.status` iterates `config.roles`, which holds every
+configured role, and the phone's `status_summary` iterates the same dict.
+
+Symptom. §38 asks the handbook to say "`status` hides the architect row".
+Neither `hands status` nor the phone's `status` hides it. U11 documented
+neither reading: the handbook's §18 says what the code does (one line per
+configured role, running or idle, `queued N/M`) and makes no claim about the
+architect row.
+
+Direction (for the architect): either the design meant another view (for
+instance an architect that is not configured, or `hands who`'s phone
+picture), and the sentence is corrected in the next DESIGN revision; or
+`status` should leave the architect out, which is a code change with its
+own test.
+
+Status: open
+
+## H-054 — §38 says a `[server] ntfy_topic` config refuses to load; the loader still reads it
+
+Severity: low · Component: `src/hands/config.py` (`[server]`/`[notify]`
+keys), docs/INTEGRATION.md; DESIGN §38 "The handbook's new sections"
+Filed by: mission 22 orchestrator, U12 (2026-10-15), from the U11
+sub-agent's report.
+Evidence: src/hands/config.py reads `ntfy_topic` and `ntfy_url` from
+`[notify]`, falls back to `[server]` ("still read for configs written
+before it"), and raises `ConfigError` only when the same key is set in
+both tables.
+
+Symptom. §38 asks INTEGRATION to say that a config written before
+`[notify]` existed "carries `ntfy_topic` under `[server]` and refuses to
+load until it is moved". The loader loads such a config; it refuses only a
+key set in both tables (for instance after a `[notify]` section was added
+with the same key). U11 documented what the code does, not the design's
+sentence.
+
+Direction (for the architect): either correct §38's sentence in the next
+DESIGN revision (the refusal is for a key set twice), or make the
+`[server]` spelling a load error with a migration message, which is a code
+change with its own test.
+
+Status: open

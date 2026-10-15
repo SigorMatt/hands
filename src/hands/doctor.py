@@ -40,6 +40,7 @@ from __future__ import annotations
 import getpass
 import hashlib
 import importlib.machinery
+import ipaddress
 import json
 import os
 import re
@@ -51,6 +52,7 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 import hands.monitor
 import hands.runner
@@ -224,6 +226,7 @@ def run_checks(
     found += [_driver_check(config), _architect_check(config)]
     found += [_roots_check(config), _ops_check(config), _isolation_check(config)]
     found += [_playbook_check(config), _notifications_check(config), _phone_check(config)]
+    found += [_broker_check(config)]
     found += [_go_check(config), _kit_check(config), _who_check(config)]
     found += [_topics_check(config)]
     found += [_daemon_check(config, socket_path, daemon)]
@@ -286,6 +289,67 @@ def _notifications_check(config: Config) -> Check:
         "notifications on: handsd publishes stop, job.held, an exhausted max_resumes "
         "and daemon start/crash to ntfy_topic (§11); `hands notify --test` proves "
         f"the transport\n{token}",
+    )
+
+
+#: §38: the networks a self-hosted ntfy is reached on — private, and the tailnet.
+PRIVATE_NETS = tuple(
+    ipaddress.ip_network(net)
+    for net in (
+        "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16",  # RFC 1918
+        "127.0.0.0/8", "::1/128",  # loopback
+        "169.254.0.0/16", "fe80::/10",  # link-local
+        "fc00::/7",  # unique local (Tailscale's own IPv6 range is inside it)
+    )
+)  # fmt: skip
+TAILNET_NET = ipaddress.ip_network("100.64.0.0/10")  # CGNAT: Tailscale's addresses
+TAILNET_SUFFIX = ".ts.net"
+SELF_HOSTED_SECTION = 'docs/INTEGRATION.md "Self-hosted ntfy over Tailscale"'
+
+
+def broker_kind(url: str) -> tuple[str | None, str]:
+    """§38: ("private" | "tailnet" | None, host) for `ntfy_url`. None is a public
+    broker: a host that is neither a private address nor a tailnet name."""
+    try:
+        host = (urlsplit(url if "//" in url else f"//{url}").hostname or "").rstrip(".")
+    except ValueError:
+        return None, url
+    if host == "localhost":
+        return "private", host
+    if host.endswith(TAILNET_SUFFIX):
+        return "tailnet", host
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        return None, host
+    if address.version == 4 and address in TAILNET_NET:
+        return "tailnet", host
+    if any(address.version == net.version and address in net for net in PRIVATE_NETS):
+        return "private", host
+    return None, host
+
+
+def _broker_check(config: Config) -> Check:
+    """§38 (H-046): WARN on a public `ntfy_url`, never a failure. A public broker
+    caps what one address may publish a day; a private or tailnet host is not
+    warned about. Only the host is printed."""
+    url = config.notify.ntfy_url
+    kind, host = broker_kind(url)
+    if kind is not None:
+        return Check(
+            "broker",
+            OK,
+            f"ntfy_url host {host} is a {kind} address or name: a self-hosted server, "
+            "no public broker's cap (§33, §38)",
+        )
+    return Check(
+        "broker",
+        WARN,
+        f"ntfy_url host {host} is a public broker (neither a private address nor a "
+        "tailnet name): its free tier has a daily cap on the messages one address may "
+        "publish, and once it is spent the broker answers 429 to handsd's stops and "
+        "holds too; handswho publishes on change only, at most once per [notify] "
+        f"who_min_interval_s\nthe self-hosted path: {SELF_HOSTED_SECTION} (§33, §38)",
     )
 
 
@@ -390,7 +454,13 @@ def _phone_check(config: Config) -> Check:
         "deny, pause, resume and status; a typed command ends with cmd_secret, and a "
         "held job's notification carries Approve/Deny buttons with a single-use nonce; "
         "`reply <secret> <text>` resumes the architect's last session when "
-        "[roles.architect] is configured (§33)"
+        "[roles.architect] is configured (§33)\n"
+        + (
+            "buttons: bearer on"
+            if notify.ntfy_token
+            else "buttons: no token; a token-protected server refuses them"
+        )
+        + " (§38)"
     )
     if not notify.ntfy_topic:
         return Check(

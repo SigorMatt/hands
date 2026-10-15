@@ -34,6 +34,13 @@ to `[notify] who_topic` when the fingerprint changes and whenever `status`, `who
 set: nothing is executed, and the answer is the same status picture, so §24
 names no secret for this topic and none is asked for.
 
+§38 (H-046): a change is a change of the fingerprint *and* of the picture with
+every relative-time rendering blanked (`blank_times`), so a picture whose only
+difference is an age or the clock is not published; and no two publishes —
+attempts, whatever the broker answered — fall within `[notify]
+who_min_interval_s`, except a request's. A change inside that floor is published
+by the first scan past it. The published picture keeps its times.
+
 Every input is injectable (`Sources`, `WhoPusher`): the process table, the
 transcript reader, the daemon state, the clock and the ntfy transport.
 Ported from the claudewho prototype (2026-09-12).
@@ -59,7 +66,13 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, TextIO
 
 from hands import notify as notify_mod
-from hands.config import DEFAULT_WHO_GRACE_S, ConfigError, load_config, resolve_project
+from hands.config import (
+    DEFAULT_WHO_GRACE_S,
+    DEFAULT_WHO_MIN_INTERVAL_S,
+    ConfigError,
+    load_config,
+    resolve_project,
+)
 from hands.phone import BACKOFF_S, SEEN_IDS
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -75,6 +88,7 @@ __all__ = [
     "Transcripts",
     "WhoError",
     "WhoPusher",
+    "blank_times",
     "build_summary",
     "main",
     "print_once",
@@ -93,7 +107,12 @@ PUSH_TITLE = "hands who"
 REQUESTED_TITLE = "hands who (requested)"
 DEFAULT_INTERVAL_S = 20.0
 #: A change seen sooner than this after the last push waits for the next scan past it.
-DEFAULT_MIN_GAP_S = 60.0
+DEFAULT_MIN_GAP_S = DEFAULT_WHO_MIN_INTERVAL_S
+#: §38: what `age()` renders (4s, 5m, 2h00, 3d), standing alone.
+AGE_RE = re.compile(r"(?<![\w.:])\d+(?:s|m|d|h\d\d)(?![\w.:])")
+#: §38: the header's HH:MM, at the start of the picture.
+CLOCK_RE = re.compile(r"\A\d\d:\d\d")
+BLANK = "_"
 #: A transcript older than the session's age plus this is not that session's.
 TRANSCRIPT_SLACK_S = 3600.0
 SHELLS = {"bash", "sh", "zsh", "dash"}
@@ -488,6 +507,12 @@ def short(s: str, n: int) -> str:
     return s if len(s) <= n else s[: n - 1] + "…"
 
 
+def blank_times(text: str) -> str:
+    """§38: `text` with every relative-time rendering — each `age()` and the header's
+    HH:MM — replaced by `BLANK`, for comparing two pictures; never published."""
+    return AGE_RE.sub(BLANK, CLOCK_RE.sub(BLANK, text))
+
+
 def age(s: float) -> str:
     s = int(s)
     if s < 90:
@@ -877,6 +902,9 @@ class WhoPusher:
         self.min_gap = min_gap
         self.debounce = Debounce()
         self.fp: str | None = None
+        #: §38: the last published picture, its times blanked.
+        self.shown: str | None = None
+        #: §38: when the last publish was attempted, answered or not.
         self.last_push: float | None = None
         self.started_at: int | None = None
         self.last_id: str | None = None
@@ -884,17 +912,23 @@ class WhoPusher:
         self._lock = asyncio.Lock()
 
     async def scan(self, *, requested: bool = False) -> bool:
-        """One scan; publish when the fingerprint changed (past the gap) or on request."""
+        """One scan; publish on request, or when both the fingerprint and the picture
+        without its times changed and the floor has passed (§24, §38)."""
         async with self._lock:
             text, items = await asyncio.to_thread(build_summary, self.sources)
             fp = self.debounce.fingerprint(items)
+            shown = blank_times(text)
             now = self.clock()
             gap_ok = self.last_push is None or now - self.last_push >= self.min_gap
-            if not requested and (fp == self.fp or not gap_ok):
+            changed = fp != self.fp and shown != self.shown
+            if not requested and not (changed and gap_ok):
                 return False
+            # §38 (H-046): the attempt starts the floor, so a broker that refuses
+            # (429) is not asked again on every scan.
+            self.last_push = now
             if not await self._publish(REQUESTED_TITLE if requested else PUSH_TITLE, text):
                 return False
-            self.fp, self.last_push = fp, now
+            self.fp, self.shown = fp, shown
             return True
 
     async def _publish(self, title: str, text: str) -> bool:
@@ -1008,6 +1042,7 @@ def watch(config: Config, socket_path: Path) -> int:
         cmd_topic=notify.who_cmd_topic,
         ntfy_url=notify.ntfy_url,
         token=notify.ntfy_token,
+        min_gap=notify.who_min_interval_s,
     )
     try:
         asyncio.run(pusher.run())

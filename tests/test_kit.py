@@ -1021,25 +1021,57 @@ PROTOCOL_36_SENTENCES = {
 }
 
 
-#: §37 "The protocol's revert step" (review 20 should-fix 6): what every
-#: sub-agent of review 20 did, in the protocol's words.
+#: §38 (review 21 should-fix 2; H-049, H-050): the four sentences both protocol
+#: files carry, flattened. The revert step supersedes §37's single
+#: `git checkout <sha>~1 -- <files>`, which fails for a file the commit adds.
+PROTOCOL_38_SENTENCES = {
+    "the-revert-step-per-file": (
+        "in the worktree at the commit, for each non-test file the body lists,"
+        " `git checkout <sha>~1 -- <file>` when the file exists at `<sha>~1`, else"
+        " `rm` it; then run the commit's new tests and expect red; then"
+        " `git checkout <sha> -- <the same files>`. A commit body names each file"
+        " it adds as added"
+    ),
+    "the-schedule-in-the-notes": (
+        "one line per sub-agent with its start and end time; the sub-agents run one"
+        " at a time so that one `./scripts/check` runs at a time inside the"
+        " 20-minute cap. A review whose Notes lack the schedule is itself a"
+        " should-fix for the next review"
+    ),
+    "the-owner-decisions-commit-is-not-a-unit": (
+        "A `plan: decisions <date> (owner)` commit is read for what it says it does"
+        " and is not reviewed as a unit"
+    ),
+    "a-human-supplied-commit-by-show-stat-alone": (
+        'A human-supplied commit (`fixtures:`, from a "human-supplied unit" of the'
+        " brief) is checked by `git show --stat` alone"
+    ),
+}
+
+#: §37's wording, superseded by §38: it must be gone from both files.
 PROTOCOL_37_REVERT_STEP = (
     "in the worktree at the commit, `git checkout <sha>~1 -- <the non-test files"
-    " the body lists>`, run the commit's new tests and expect red, then"
-    " `git checkout <sha> -- <the same files>`"
+    " the body lists>`, run the commit's new tests and expect red"
 )
 
 
+@pytest.mark.parametrize("key", sorted(PROTOCOL_38_SENTENCES))
 @pytest.mark.parametrize("name", ["templates", "meta"])
-def test_the_protocol_reverts_by_checkout_and_never_says_stash(name: str) -> None:
-    """§37: both protocol files carry the checkout revert step; "stash" is gone
-    from each (the files differ only in the project's names, tests/test_docs.py)."""
+def test_the_protocol_reverts_by_checkout_and_never_says_stash(name: str, key: str) -> None:
+    """§38: both protocol files carry the per-file revert step (checkout at the
+    parent when the file exists there, else rm), the Notes schedule and its
+    reason, the owner-decisions exception and the human-supplied check; §37's
+    one-command wording and "stash" are gone from each (the files differ only in
+    the project's names, tests/test_docs.py)."""
     path = Path(__file__).resolve().parents[1] / name / "REVIEW-PROTOCOL.md"
     text = " ".join(path.read_text(encoding="utf-8").split())
-    lacks = f"{name}/REVIEW-PROTOCOL.md lacks the revert step"
-    assert PROTOCOL_37_REVERT_STEP in strip_paths(text), lacks
+    said = PROTOCOL_38_SENTENCES[key]
+    assert said in strip_paths(text), f"{name}/REVIEW-PROTOCOL.md does not say {said!r}"
+    keeps = f"{name}/REVIEW-PROTOCOL.md keeps §37's step"
+    assert PROTOCOL_37_REVERT_STEP not in strip_paths(text), keeps
     for word in ("stash", "Stash", "STASH"):
         assert word not in strip_paths(text), f"{name}/REVIEW-PROTOCOL.md still says {word}"
+
 
 @pytest.mark.parametrize("key", sorted(PROTOCOL_36_SENTENCES))
 def test_the_protocol_template_carries_section_36s_sentence(key: str) -> None:
@@ -1094,6 +1126,47 @@ def test_the_filled_missions_templates_pass_six_of_six_against_a_clone_of_this_r
     assert code == 0, out + err
     for name in CHECK_NAMES:
         assert line(out, name).startswith(f"PASS {name}: "), out
+
+
+def test_the_role_mode_missions_templates_pass_six_of_six_with_the_blocked_consult(
+    tmp_home: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """§38 (H-048): a kit from the filled missions templates with the architect
+    blocks uncommented — the role-mode variant, whose `builder.done` blocked verdict
+    consults the architect — checked against a clone of this repository and a config
+    with `[roles.architect]`, passes every check."""
+    monkeypatch.delenv("HANDS_PROJECT", raising=False)
+    _config(tmp_home, tmp_path, architect=True)
+    clone = tmp_path / "clone"
+    subprocess.run(
+        ["git", "clone", "--quiet", str(ROOT), str(clone)], check=True, capture_output=True
+    )
+    # "Uncomment" as a human does (and test_docs' `uncommented`): strip one `# `
+    # from each line between the `# >>> architect` markers, drop the markers.
+    lines, inside = [], False
+    for text in template("PLAYBOOK-missions.toml").splitlines():
+        if text.strip() in ("# >>> architect", "# <<< architect"):
+            inside = text.strip() == "# >>> architect"
+            continue
+        lines.append(text[2:] if inside and text.startswith("# ") else text)
+    book = "\n".join(lines) + "\n"
+    parsed = parse_playbook(book, path=TEMPLATES / "PLAYBOOK-missions.toml")
+    assert [rule for rule in parsed.rules if rule.then == "consult" and rule.on == "builder.done"
+            and rule.verdict is not None
+            and rule.verdict.search("VERDICT: mission 11 blocked <unit>")]
+    kit = write_tree(
+        tmp_path / "k",
+        {
+            "meta/BUILDER-11-PROMPT.md": template("BUILDER-N-PROMPT.md"),
+            "PLAYBOOK.toml": book,
+            "meta/REVIEW-PROTOCOL.md": template("REVIEW-PROTOCOL.md"),
+        },
+    )
+    code, out, err = run_check(kit, clone)
+    assert code == 0, out + err
+    for name in CHECK_NAMES:
+        assert line(out, name).startswith(f"PASS {name}: "), out
+    assert len(CHECK_NAMES) == 6
 
 
 def test_the_handbook_section_11_names_every_check_and_the_apply_literal() -> None:
@@ -2408,3 +2481,148 @@ def test_a_kit_playbook_in_phone_mode_does_not_look_for_a_config(
     code, out, _ = run_check(kit, repo)
     assert code == 0, out
     assert "[roles.architect]" not in strip_paths(line(out, "playbook"))
+
+
+# --------------------------- §38: the owner file, the brief's shapes, the Purpose
+
+OWNER_TEMPLATE = TEMPLATES / "DECISIONS-owner.md"
+#: The two instruction templates §38 names: the Project chat's and the role's.
+INSTRUCTIONS = {
+    "docs/ARCHITECT-INSTRUCTION.md": ROOT / "docs" / "ARCHITECT-INSTRUCTION.md",
+    "architect/CLAUDE.md": ROOT / "architect" / "CLAUDE.md",
+}
+#: The Purpose block's three lines, as the templates ship them (§38 "Onboarding").
+PURPOSE_LINES = (
+    "FOR     = <what the project is for, one line>",
+    "NOT     = <what the project is not, one line>",
+    "DECIDES = <who decides, one line>",
+)
+
+
+def flat(text: str) -> str:
+    return " ".join(text.split())
+
+
+def test_the_owner_decisions_template_has_its_sections() -> None:
+    """§38 "The owner-decisions round, as a template": `O-n` numbering continued
+    from the last owner file, a precedence header (this file wins over DESIGN and
+    earlier decisions), a "Findings closed:" line, and "For the builder" last, the
+    only section the builder is told to read."""
+    text = OWNER_TEMPLATE.read_text(encoding="utf-8")
+    said = flat(text)
+    for needed in (
+        "O-<n>",
+        "continued from the last owner file on the branch",
+        "wins over `DESIGN.md` and over every earlier decisions file",
+        "Findings closed:",
+        "meta/decisions/<date>-owner.md",
+        "`plan: decisions <date> (owner)`",
+        "the only section the builder reads",
+    ):
+        assert needed in strip_paths(said), f"the owner template does not say {needed!r}"
+    headings = [row for row in text.splitlines() if row.startswith("## ")]
+    assert headings and headings[-1] == "## For the builder", headings
+    # The precedence header comes before the first decision.
+    assert said.index("wins over `DESIGN.md`") < said.index("## O-<n>")
+    assert any(row.startswith("Findings closed:") for row in text.splitlines())
+
+
+def _brief_section(heading: str) -> str:
+    text = (TEMPLATES / "BUILDER-N-PROMPT.md").read_text(encoding="utf-8")
+    return flat(text.split(f"\n## {heading}\n", 1)[1].split("\n## ", 1)[0])
+
+
+def test_the_brief_templates_recovery_takes_a_keep_after_a_question_as_the_answer() -> None:
+    """§38: a `keep` send after `VERDICT: question` is the answer, carried out, the
+    mission continued from the checkpoint, a `VERDICT:` line always, even when a
+    file had to be committed first — in §R, where a resumed builder reads it."""
+    section = _brief_section("§R Recovery brief")
+    for needed in (
+        "A `keep` send that arrives after you replied `VERDICT: question` is the answer",
+        "carry it out",
+        "continue the mission from the checkpoint",
+        "end that reply with one of the mission's `VERDICT:` lines, always, even when "
+        "the answer came with a file to commit first",
+    ):
+        assert needed in strip_paths(section), f"§R does not say {needed!r}"
+
+
+def test_the_brief_templates_units_carry_the_human_supplied_unit_shape() -> None:
+    """§38 "Human-supplied content": the unit names the files, their paths and the
+    commit message; the human places them under `~/Downloads/<name>/`; the builder
+    copies and commits them by path without opening them."""
+    section = _brief_section("Units, in order")
+    for needed in (
+        "human-supplied unit",
+        "`~/Downloads/<name>/`",
+        "the files, their repository paths and the commit message",
+        "copies them to those paths and commits them by path without opening them",
+        "`git show --stat`",
+    ):
+        assert needed in strip_paths(section), f"the Units section does not say {needed!r}"
+
+
+def _instruction(path: Path) -> list[str]:
+    """The instruction's lines: below the `---` divider for the Project chat's
+    (the block that is pasted), below the title for the role's."""
+    text = path.read_text(encoding="utf-8")
+    if "\n---\n" in text:
+        text = text.split("\n---\n", 1)[1]
+    else:
+        text = text.split("\n", 1)[1]
+    return text.splitlines()
+
+
+@pytest.mark.parametrize("name", INSTRUCTIONS)
+def test_each_instruction_template_opens_with_the_purpose_block(name: str) -> None:
+    """§38 "Onboarding": the Purpose block is a standard slot of three lines the
+    human fills (what the project is for, what it is not, who decides), kept
+    verbatim at the top of the instruction."""
+    rows = [row for row in _instruction(INSTRUCTIONS[name]) if row.strip()]
+    assert rows[0].startswith("Purpose"), (name, rows[0])
+    assert [row.strip() for row in rows[1:4]] == list(PURPOSE_LINES), (name, rows[1:4])
+    raw = INSTRUCTIONS[name].read_text(encoding="utf-8")
+    assert "kept verbatim" in strip_paths(flat(raw)), name
+    # Once each: the slot is not repeated further down for the human to miss.
+    assert [raw.count(purpose) for purpose in PURPOSE_LINES] == [1, 1, 1], name
+
+
+@pytest.mark.parametrize("name", INSTRUCTIONS)
+def test_each_instruction_template_answers_rulings_with_the_owner_file(name: str) -> None:
+    """§38: both instruction templates carry the paragraph that tells a project's
+    architect to answer rulings with the owner-decisions file."""
+    text = flat(INSTRUCTIONS[name].read_text(encoding="utf-8"))
+    for needed in (
+        "ruling",
+        "`templates/DECISIONS-owner.md`",
+        "`meta/decisions/<date>-owner.md`",
+        "`plan: decisions <date> (owner)`",
+        "\"For the builder\"",
+    ):
+        assert needed in strip_paths(text), f"{name} does not say {needed!r}"
+
+
+def test_the_filled_templates_with_an_owner_file_pass_six_of_six(tmp_path: Path) -> None:
+    """§38's gate for U8: a kit built from the templates with placeholders filled —
+    the brief with its new §R and Units text, the playbook, the protocol, and an owner
+    file from `templates/DECISIONS-owner.md` — checked against a clone of this
+    repository, passes every one of the six checks."""
+    clone = tmp_path / "clone"
+    subprocess.run(
+        ["git", "clone", "--quiet", str(ROOT), str(clone)], check=True, capture_output=True
+    )
+    owner = template("DECISIONS-owner.md").replace("<date>", "2026-10-15").replace("<n>", "1")
+    kit = write_tree(
+        tmp_path / "k",
+        {
+            "meta/BUILDER-11-PROMPT.md": template("BUILDER-N-PROMPT.md"),
+            "PLAYBOOK.toml": template("PLAYBOOK-missions.toml"),
+            "meta/REVIEW-PROTOCOL.md": template("REVIEW-PROTOCOL.md"),
+            "meta/decisions/2026-10-15-owner.md": owner,
+        },
+    )
+    code, out, err = run_check(kit, clone)
+    assert code == 0, out + err
+    assert len(CHECK_NAMES) == 6
+    for name in CHECK_NAMES:
+        assert line(out, name).startswith(f"PASS {name}: "), out
