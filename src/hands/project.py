@@ -8,6 +8,8 @@ and the filled Project instruction printed last with its verification question.
 
 A client command: no daemon, no existing config. Every refusal is made before
 anything is written; `--dry-run` prints every path and command and writes nothing.
+A clone that fails (§39) removes everything the command created, prints the list,
+and runs no systemctl, so the same command can be run again.
 """
 
 from __future__ import annotations
@@ -15,6 +17,7 @@ from __future__ import annotations
 import os
 import re
 import secrets
+import shutil
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -152,8 +155,48 @@ def _refusals(plan: Plan) -> None:
             raise ProjectError(f"{base} is not empty; nothing written")
 
 
-def _write_private(path: Path, text: str) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
+class CloneFailed(Exception):
+    """A role's clone (or its push-URL step) failed; what was created is removed."""
+
+
+class Created:
+    """Every path `add` creates, in creation order, directories included: a path
+    that existed before the command is never recorded, so never removed."""
+
+    def __init__(self) -> None:
+        self.paths: list[Path] = []
+
+    def note(self, path: Path) -> None:
+        """Record `path` and each missing ancestor, outermost first; call before
+        creating it."""
+        missing = []
+        for candidate in (path, *path.parents):
+            if candidate.exists() or candidate.is_symlink():
+                break
+            missing.append(candidate)
+        self.paths.extend(reversed(missing))
+
+    def mkdir(self, path: Path) -> None:
+        self.note(path)
+        path.mkdir(parents=True, exist_ok=True)
+
+    def remove(self) -> list[Path]:
+        """Remove every recorded path, newest first; return those that were there."""
+        removed = []
+        for path in reversed(self.paths):
+            if path.is_dir() and not path.is_symlink():
+                shutil.rmtree(path)
+            elif path.exists() or path.is_symlink():
+                path.unlink()
+            else:
+                continue
+            removed.append(path)
+        return list(reversed(removed))
+
+
+def _write_private(path: Path, text: str, created: Created) -> None:
+    created.mkdir(path.parent)
+    created.note(path)
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     with os.fdopen(fd, "w", encoding="utf-8") as handle:
         handle.write(text)
@@ -183,7 +226,8 @@ def add(
     home: Path | None = None,
 ) -> int:
     """Exit 0 when everything was written and every command succeeded; 1 on a
-    refusal (nothing written) or a failed git/systemctl step. Doctor's own exit
+    refusal (nothing written), a failed clone (everything the command created removed,
+    no systemctl run) or a failed systemctl step. Doctor's own exit
     status is printed and does not decide this one: the project is written by then,
     and doctor's failures (no builder clone yet, say) are the human's next steps."""
     try:
@@ -203,7 +247,18 @@ def add(
     if dry_run:
         _dry_run(plan, out)
         return 0
-    ok = _write(plan, params, out)
+    created = Created()
+    try:
+        _write(plan, params, out, created)
+    except CloneFailed:
+        print(f"the clone of {plan.repo} failed; removed:", file=out)
+        for path in created.remove():
+            print(f"  {path}", file=out)
+        print("no unit was enabled; nothing of project "
+              f"{name!r} is left. Fix the url (or its access) and run `hands project add "
+              f"{name} --repo <url>` again", file=out)
+        return 1
+    ok = True
     for argv in plan.systemctl():
         ok = _run(argv, out) and ok
     print(f"left for you: `systemctl --user enable --now handswho@{name}` (the who view, "
@@ -242,7 +297,7 @@ def _dry_run(plan: Plan, out: TextIO) -> None:
     for role in ("driver", "architect"):
         for target, source in plan.role_files(role).items():
             print(f"  {target}  (from {source})", file=out)
-        print(f"  {plan.role_dir(role) / 'repo'}  (git clone {plan.repo}; push URL "
+        print(f"  {plan.role_dir(role) / 'repo'}  (git clone -- {plan.repo}; push URL "
               f"{NO_PUSH})", file=out)
     print(f"  {plan.role_dir('architect') / 'kits'}", file=out)
     print("and run:", file=out)
@@ -252,39 +307,43 @@ def _dry_run(plan: Plan, out: TextIO) -> None:
     print("nothing written", file=out)
 
 
-def _write(plan: Plan, params: dict[str, str], out: TextIO) -> bool:
+def _write(plan: Plan, params: dict[str, str], out: TextIO, created: Created) -> None:
+    """Write the project, recording every path in `created`. Raises CloneFailed at
+    the first role whose clone or push-URL step fails, before any systemctl."""
     topics = generated_topics(plan.name)
     secret = secrets.token_urlsafe(32)
     text = (plan.shipped / "templates" / "config.toml").read_text()
     for key, value in {**topics, "cmd_secret": secret, "project": plan.name}.items():
         text = text.replace(f"<{key}>", value)
-    _write_private(plan.secret, secret + "\n")
-    _write_private(plan.config, text)
+    _write_private(plan.secret, secret + "\n", created)
+    _write_private(plan.config, text, created)
     print(f"wrote {plan.config} (mode 600) and {plan.secret} (mode 600)", file=out)
-    plan.env.parent.mkdir(parents=True, exist_ok=True)
+    created.mkdir(plan.env.parent)
+    created.note(plan.env)
     plan.env.touch(exist_ok=True)
     if not plan.unit.exists():
-        plan.unit.parent.mkdir(parents=True, exist_ok=True)
+        created.mkdir(plan.unit.parent)
+        created.note(plan.unit)
         plan.unit.write_bytes((plan.shipped / "systemd" / "handsd@.service").read_bytes())
         plan.unit.chmod(0o644)
         print(f"wrote {plan.unit}", file=out)
-    ok = True
     for role in ("driver", "architect"):
         base = plan.role_dir(role)
         for target, source in plan.role_files(role).items():
-            target.parent.mkdir(parents=True, exist_ok=True)
+            created.mkdir(target.parent)
             data = source.read_text()
             if target.name == "CLAUDE.md":
                 data = fill_parameters(data, params)
+            created.note(target)
             target.write_text(data)
         if role == "architect":
-            (base / "kits").mkdir(exist_ok=True)
+            created.mkdir(base / "kits")
         print(f"wrote {base} (settings, guard, CLAUDE.md)", file=out)
         clone = base / "repo"
-        ok = (
-            _run(["git", "clone", "-q", plan.repo, str(clone)], out)
+        created.note(clone)
+        if not (
+            _run(["git", "clone", "-q", "--", plan.repo, str(clone)], out)
             and _run(["git", "-C", str(clone), "remote", "set-url", "--push", "origin", NO_PUSH],
                      out)
-            and ok
-        )
-    return ok
+        ):
+            raise CloneFailed(role)

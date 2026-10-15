@@ -289,3 +289,122 @@ def test_the_architect_claude_md_is_the_filled_role_variant(
     expected = fill_parameters((root / "architect" / "CLAUDE.md").read_text(), params)
     assert _paths(tmp_home, "demo")["architect_claude"].read_text() == expected
     assert out.index("== Project instruction") > out.index("== hands doctor ==")
+
+
+# ------------------------------------------- mission 23 U8 (DESIGN §39, REVIEW-22 sf 11)
+
+
+@pytest.fixture
+def fake_git(tmp_path: Path, fake_systemctl: Path) -> Path:
+    """A `git` ahead of the real one on PATH (fake_systemctl's fakebin) that logs its
+    argv one call per line and then runs the real git, except that a `clone` whose
+    argv names `hands-architect` exits 128 when `fail-architect` exists beside the
+    log. Returns the log."""
+    real = shutil.which("git")
+    assert real is not None
+    log = tmp_path / "git.log"
+    script = fake_systemctl.parent / "fakebin" / "git"
+    script.write_text(
+        "#!/bin/sh\n"
+        f'echo "$*" >> {log}\n'
+        f'if [ "$1" = clone ] && [ -e {tmp_path / "fail-architect"} ]; then\n'
+        '  case "$*" in *hands-architect*) echo "fatal: refused" >&2; exit 128;; esac\n'
+        "fi\n"
+        f'exec {real} "$@"\n'
+    )
+    script.chmod(0o755)
+    return log
+
+
+def _removed(out: str) -> list[str]:
+    """The paths a failed add prints under its `removed:` line, one per line."""
+    tail = out.split("removed:", 1)[1]
+    return [ln.strip() for ln in tail.splitlines() if ln.startswith("  ")]
+
+
+def test_a_failed_clone_leaves_nothing_and_a_rerun_creates_the_project(
+    tmp_home: Path, fake_systemctl: Path, bare_repo: Path, tmp_path: Path
+) -> None:
+    """§39: a clone that fails removes everything the command created — config,
+    secret, env file, unit, both role directories with kits/ — enables nothing,
+    prints what it removed, and the same command then succeeds."""
+    before = _tree(tmp_home)
+    missing = tmp_path / "no-such.git"
+    code, out, err = _run(["project", "add", "demo", "--repo", str(missing)])
+    assert code == 1, out
+    assert _tree(tmp_home) == before
+    assert not fake_systemctl.exists(), "a failed clone enables no unit"
+    removed = _removed(out)
+    paths = _paths(tmp_home, "demo")
+    for key in ("config", "secret", "env", "unit"):
+        assert str(paths[key]) in removed, (key, removed)
+    assert str(tmp_home / "hands-driver") in removed, removed
+    assert "== hands doctor ==" not in strip_paths(out)
+    assert "== Project instruction" not in strip_paths(out)
+
+    code, out, err = _run(["project", "add", "demo", "--repo", str(bare_repo)])
+    assert code == 0, err + out
+    assert (paths["driver_repo"] / ".git").is_dir()
+    assert (paths["architect_repo"] / ".git").is_dir()
+    assert load_config("demo").roles["driver"].cwd == tmp_home / "hands-driver" / "demo"
+
+
+def test_a_failed_second_clone_removes_the_first_and_both_role_directories(
+    tmp_home: Path, fake_git: Path, bare_repo: Path, tmp_path: Path
+) -> None:
+    """The driver's clone succeeds and the architect's fails: the driver's clone,
+    both role directories and the architect's kits/ go too."""
+    (tmp_path / "fail-architect").touch()
+    before = _tree(tmp_home)
+    code, out, _ = _run(["project", "add", "demo", "--repo", str(bare_repo)])
+    assert code == 1, out
+    assert _tree(tmp_home) == before
+    removed = _removed(out)
+    assert str(tmp_home / "hands-driver") in removed, removed
+    assert str(tmp_home / "hands-architect") in removed, removed
+    assert not (tmp_path / "systemctl.log").exists()
+
+    (tmp_path / "fail-architect").unlink()
+    code, out, err = _run(["project", "add", "demo", "--repo", str(bare_repo)])
+    assert code == 0, err + out
+
+
+def test_a_failed_clone_keeps_what_was_there_before(
+    tmp_home: Path, fake_systemctl: Path, tmp_path: Path
+) -> None:
+    """Only what the command created is removed: a unit file another project
+    installed, an existing env file and an empty role directory the human made stay,
+    byte for byte."""
+    unit = tmp_home / ".config" / "systemd" / "user" / "handsd@.service"
+    unit.parent.mkdir(parents=True)
+    unit.write_text("# another project's unit\n")
+    env = tmp_home / ".config" / "hands" / "demo.env"
+    env.parent.mkdir(parents=True)
+    env.write_text("KEY=1\n")
+    (tmp_home / "hands-driver" / "demo").mkdir(parents=True)
+    before = _tree(tmp_home)
+    code, out, _ = _run(["project", "add", "demo", "--repo", str(tmp_path / "none.git")])
+    assert code == 1, out
+    assert _tree(tmp_home) == before
+    assert unit.read_text() == "# another project's unit\n"
+    assert env.read_text() == "KEY=1\n"
+    removed = _removed(out)
+    assert set(removed).isdisjoint({str(unit), str(env), str(tmp_home / "hands-driver" / "demo")})
+    assert str(tmp_home / "hands-driver" / "demo" / "CLAUDE.md") in removed
+
+
+def test_the_clone_puts_double_dash_before_the_url(
+    tmp_home: Path, fake_git: Path, bare_repo: Path
+) -> None:
+    """§39 (REVIEW-22 should-fix 11): `git clone -- <url>`, so a url that begins with
+    `-` is never read as an option."""
+    code, out, err = _run(["project", "add", "demo", "--repo", str(bare_repo)])
+    assert code == 0, err + out
+    # The bare_repo fixture's own `clone --bare` may run through the fake too.
+    clones = [
+        ln.split() for ln in fake_git.read_text().splitlines()
+        if ln.startswith("clone") and "--bare" not in ln.split()
+    ]
+    assert len(clones) == 2, clones
+    for argv in clones:
+        assert "--" in argv and argv.index("--") == argv.index(str(bare_repo)) - 1, argv

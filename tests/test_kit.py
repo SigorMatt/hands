@@ -2751,6 +2751,34 @@ def test_each_instruction_template_answers_rulings_with_the_owner_file(name: str
         assert needed in strip_paths(text), f"{name} does not say {needed!r}"
 
 
+def _role_rule(number: int) -> str:
+    """Rule `number` of architect/CLAUDE.md's `## Rules`, flattened to one line."""
+    text = INSTRUCTIONS["architect/CLAUDE.md"].read_text(encoding="utf-8")
+    rules = text.split("\n## Rules\n", 1)[1]
+    found = re.search(rf"^{number}\. (.*?)(?=^\d+\. |\Z)", rules, re.M | re.S)
+    assert found, f"architect/CLAUDE.md has no rule {number}"
+    return flat(found.group(1)).strip()
+
+
+def test_the_role_escalates_a_ruling_with_a_drafted_owner_file() -> None:
+    """§39 (REVIEW-22 should-fix 9): rule 13 and rule 8 agree. A ruling the role
+    cannot make is `VERDICT: escalate ruling: <what>` with a drafted owner file under
+    `kits/<name>/meta/decisions/`, which the human adopts or rewrites; rule 8 lists
+    the ruling among its conditions."""
+    eight, thirteen = _role_rule(8), _role_rule(13)
+    assert eight.startswith("Escalate, with `VERDICT: escalate <reason>`"), eight
+    assert "ruling" in strip_paths(eight) and "rule 13" in strip_paths(eight), eight
+    for said in (
+        "`VERDICT: escalate ruling: <what>`",
+        "`kits/<name>/meta/decisions/<date>-owner.md`",
+        "adopts or rewrites",
+        "rule 8",
+    ):
+        assert said in strip_paths(thirteen), f"rule 13 does not say {said!r}: {thirteen}"
+    assert "escalate under rule 8" not in strip_paths(thirteen)
+    assert "the draft of the file in your reply's body" not in strip_paths(thirteen)
+
+
 def test_the_filled_templates_with_an_owner_file_pass_six_of_six(tmp_path: Path) -> None:
     """§38's gate for U8: a kit built from the templates with placeholders filled —
     the brief with its new §R and Units text, the playbook, the protocol, and an owner
