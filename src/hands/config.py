@@ -891,6 +891,12 @@ def _ntfy_token(notify_t: dict[str, Any], path: Path) -> str | None:
             "character inside: it is sent as `Authorization: Bearer <token>` (§33); "
             "the value is not printed"
         )
+    if token is not None and ("," in token or ";" in token):
+        raise ConfigError(
+            f"{where} must contain no comma and no semicolon: the Approve/Deny buttons "
+            "carry it as `headers.Authorization=Bearer <token>` in ntfy's short action "
+            "form, which cannot quote either (§38); the value is not printed"
+        )
     return token
 
 

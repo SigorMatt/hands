@@ -390,7 +390,13 @@ def _phone_check(config: Config) -> Check:
         "deny, pause, resume and status; a typed command ends with cmd_secret, and a "
         "held job's notification carries Approve/Deny buttons with a single-use nonce; "
         "`reply <secret> <text>` resumes the architect's last session when "
-        "[roles.architect] is configured (§33)"
+        "[roles.architect] is configured (§33)\n"
+        + (
+            "buttons: bearer on"
+            if notify.ntfy_token
+            else "buttons: no token; a token-protected server refuses them"
+        )
+        + " (§38)"
     )
     if not notify.ntfy_topic:
         return Check(

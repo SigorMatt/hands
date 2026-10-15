@@ -1917,7 +1917,13 @@ buttons carry, or (c) the buttons are dropped when `ntfy_token` is set and the
 notification says to type the command. A real ntfy server and phone app should
 settle whether the app signs action requests before choosing.
 
-Status: in progress (mission 22, U1)
+Status: resolved-by-code (mission 22 U1 — `notify.actions_header` puts
+`headers.Authorization=Bearer <token>` on every `http` action when `[notify]
+ntfy_token` is set and nothing without; `config._ntfy_token` refuses a token with
+a comma or semicolon; doctor's `phone` row says "buttons: bearer on" | "buttons:
+no token; a token-protected server refuses them"; tests in
+`tests/test_ntfy_token.py`, §38 section. Whether the phone app sends the action's
+headers is not proven by any test here.)
 
 ---
 
