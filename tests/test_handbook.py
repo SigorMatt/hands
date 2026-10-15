@@ -189,3 +189,65 @@ def test_each_architect_instruction_reads_the_handbook_from_hands_docs(path: Pat
     assert "`$HANDS_DOCS/templates/`" in strip_paths(text)
     assert "`docs/ARCHITECT-HANDBOOK.md` from the clone" not in strip_paths(text)
     assert "clone https://github.com/SigorMatt/hands" not in strip_paths(text)
+
+
+# ------------------------------------------------- mission 22 U11 (DESIGN §38)
+
+NEW_SECTIONS = (
+    "## 13. The onboarding shape",
+    "## 14. The ruling round",
+    "## 15. The separation rule",
+    "## 16. Re-firing a consultation after a stop",
+    "## 17. Human-supplied content",
+    "## 18. Reading hands: `send`, `jobs`, `pipeline`, `progress`",
+)
+
+
+def _section(heading: str) -> str:
+    text = HANDBOOK.read_text(encoding="utf-8")
+    body = text.split(f"\n{heading}\n", 1)[1].split("\n## ", 1)[0]
+    return re.sub(r"\s+", " ", body)
+
+
+def test_the_handbook_carries_section_38s_new_sections_in_order() -> None:
+    text = HANDBOOK.read_text(encoding="utf-8")
+    places = [text.find(f"\n{heading}\n") for heading in NEW_SECTIONS]
+    assert all(place > 0 for place in places), dict(zip(NEW_SECTIONS, places, strict=True))
+    assert places == sorted(places)
+
+
+@pytest.mark.parametrize(
+    ("heading", "said"),
+    [
+        (NEW_SECTIONS[0], "From the switch point the role writes every kit"),
+        (NEW_SECTIONS[0], "hands-shaped content"),
+        (NEW_SECTIONS[1], "`templates/DECISIONS-owner.md`"),
+        (NEW_SECTIONS[1], "`approve <job> <secret>`"),
+        (NEW_SECTIONS[1], "`plan: decisions <date> (owner)`"),
+        (NEW_SECTIONS[2], "name, commit, date, review number, finding id"),
+        (NEW_SECTIONS[3], "refused by design"),
+        (NEW_SECTIONS[3], "hands send --role aux --context clear"),
+        (NEW_SECTIONS[4], "`~/Downloads/<name>/`"),
+        (NEW_SECTIONS[4], "`git show --stat`"),
+        (NEW_SECTIONS[5], "newest first"),
+        (NEW_SECTIONS[5], "a plain argument"),
+        (NEW_SECTIONS[5], "`progress <secret>`"),
+        (NEW_SECTIONS[5], "counts only the runs a `send` rule with `run =` started"),
+    ],
+)
+def test_each_new_handbook_section_says_its_rule(heading: str, said: str) -> None:
+    assert said in strip_paths(_section(heading)), (heading, said)
+
+
+def test_the_handbooks_reading_claims_are_the_codes(tmp_home: Path) -> None:
+    """§18's claims checked against the code: `hands send` takes the prompt as a
+    positional argument, and `jobs` lists newest first (`Api.jobs` reverses the
+    spool's oldest-first listing)."""
+    from hands.api import Api
+    from hands.cli import build_parser
+
+    args = build_parser().parse_args(
+        ["send", "--role", "builder", "--context", "keep", "the answer, verbatim"]
+    )
+    assert args.prompt == "the answer, verbatim"
+    assert "newest first" in strip_paths(Api.jobs.__doc__ or "")

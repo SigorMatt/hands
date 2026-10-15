@@ -98,6 +98,12 @@ checks a kit against a repository (paths, playbook, brief, verdict regexes,
 wording) and, only when every check passes, prints the apply prompt. The
 architect runs it before emitting a kit (`docs/ARCHITECT-HANDBOOK.md` §11).
 
+`hands project add <name> --repo <url> [--dry-run]` sets a new project up on
+this laptop (config, topics, secret, role directories, `handsd@<name>`), and
+`hands handbook` prints the path of the installed `docs/ARCHITECT-HANDBOOK.md`
+(`--templates`: the templates directory); `docs/INTEGRATION.md` says what each
+writes.
+
 Three commands are worth knowing before the rest:
 
     hands send --role builder --context clear "Execute WORKPLAN.md run 2"
@@ -126,8 +132,10 @@ Off unless configured in `[notify]`; `docs/INTEGRATION.md` has the setup.
 - **Self-hosted ntfy**: `ntfy_url` names your own server and `ntfy_token` its
   access token, sent as a bearer on every publish and subscription; a token
   with `ntfy_url` unset or on ntfy.sh does not load; `hands
-  doctor` shows the token on or off. `docs/INTEGRATION.md` sketches ntfy in a
-  container reached through Tailscale; none of that has been run here.
+  doctor` shows the token on or off, and a held job's buttons carry the same
+  bearer. `docs/INTEGRATION.md` sets ntfy up in a container reached through
+  Tailscale, the documented default for role mode, and says what of it has run
+  on a real server.
 - **The command channel**: with `cmd_topic` and `cmd_secret` set, handsd takes
   `approve`, `deny`, `pause`, `resume` and `status` from your phone, and a held
   job's notification carries Approve/Deny buttons. A decision taken that way is
@@ -147,6 +155,10 @@ Off unless configured in `[notify]`; `docs/INTEGRATION.md` has the setup.
   architect role's last session (`--context keep`, `origin: phone`) and
   publishes the architect's answer titled `architect`; refused while a
   consultation runs or before the architect has a session.
+- **`progress <secret>`** on `cmd_topic` publishes what `status` does not say:
+  the builder's job and its age, the branch and its last three commits, and the
+  checkpoint's unit in progress. **`answer <secret> <text>`** sends the text to
+  the builder's last session as a `keep` send.
 - **The who view**: `hands who` prints one screen of this daemon's jobs and
   every other `claude` session on the machine; `handswho` pushes it to
   `who_topic` when it changes.

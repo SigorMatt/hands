@@ -2333,3 +2333,29 @@ rule matches.
 
 Status: open (for the architect: confirm the reading in the next DESIGN
 revision, or rule otherwise)
+
+## H-053 — §38 says `status` hides the architect row; the code shows it
+
+Severity: low · Component: `src/hands/daemon.py` (`Daemon.status`),
+`src/hands/cli.py` (`_status_block`), `src/hands/phone.py`
+(`status_summary`); DESIGN §38 "The handbook's new sections"
+Filed by: mission 22 U11 (2026-10-15).
+Evidence: a config with `[roles.builder]` and `[roles.architect]`, loaded
+with `load_config` and rendered by `_status_block(Daemon(config).status())`
+during U11, prints an `architect idle; queued 0/1 <cwd>` line beside the
+builder's. `Daemon.status` iterates `config.roles`, which holds every
+configured role, and the phone's `status_summary` iterates the same dict.
+
+Symptom. §38 asks the handbook to say "`status` hides the architect row".
+Neither `hands status` nor the phone's `status` hides it. U11 documented
+neither reading: the handbook's §18 says what the code does (one line per
+configured role, running or idle, `queued N/M`) and makes no claim about the
+architect row.
+
+Direction (for the architect): either the design meant another view (for
+instance an architect that is not configured, or `hands who`'s phone
+picture), and the sentence is corrected in the next DESIGN revision; or
+`status` should leave the architect out, which is a code change with its
+own test.
+
+Status: open

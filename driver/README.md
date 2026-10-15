@@ -5,7 +5,7 @@ One driver directory per project, outside any repository:
     mkdir -p ~/hands-driver/hands && cd ~/hands-driver/hands
     cp ~/git/hands/driver/CLAUDE.md ./CLAUDE.md
     mkdir -p .claude/hooks && cp ~/git/hands/driver/settings.json .claude/settings.json
-    cp ~/git/hands/driver/hooks/bash_guard.py .claude/hooks/ && python3 .claude/hooks/bash_guard.py --selftest
+    cp ~/git/hands/driver/hooks/bash_guard.py .claude/hooks/ && python3 -I .claude/hooks/bash_guard.py --selftest
     git clone https://github.com/SigorMatt/hands repo
     git -C repo remote set-url --push origin no_push
 

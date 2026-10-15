@@ -2248,3 +2248,130 @@ def test_the_playbook_doc_review_base_sentence_is_not_garbled() -> None:
         "the review prompt that `templates/PLAYBOOK-missions.toml` and this repository's "
         "`PLAYBOOK.toml` ship says"
     ) in text
+
+
+# ------------------------------------------------- mission 22 U11 (DESIGN §38)
+
+INTEGRATION_DOC = ROOT / "docs" / "INTEGRATION.md"
+SELF_HOSTED = "### Self-hosted ntfy over Tailscale (§33)"
+#: The four documents U11 owns; the guard's hook is spelled `python3 -I` in each.
+U11_DOCS = (
+    ROOT / "README.md",
+    INTEGRATION_DOC,
+    ROOT / "docs" / "PLAYBOOK.md",
+    ROOT / "docs" / "ARCHITECT-HANDBOOK.md",
+)
+
+
+def _self_hosted() -> str:
+    text = INTEGRATION_DOC.read_text(encoding="utf-8")
+    return text.split(SELF_HOSTED, 1)[1].split("\n## ", 1)[0]
+
+
+def test_the_self_hosted_section_names_the_ntfy_image_binwiederhier() -> None:
+    """§38: the image is `binwiederhier/ntfy`; the misspelling the 2026-10-14 setup
+    tripped on is gone from every doc."""
+    section = _self_hosted()
+    assert "binwiederhier/ntfy serve" in section
+    assert "`binwiederhier/ntfy` image" in flattened(section)
+    for doc in U11_DOCS:
+        assert "binwiloo" not in doc.read_text(encoding="utf-8"), doc.name
+
+
+@pytest.mark.parametrize("doc", U11_DOCS, ids=lambda p: p.name)
+def test_the_guard_hook_is_spelled_python3_dash_i_everywhere(doc: Path) -> None:
+    """Review 21 should-fix 3: doctor accepts only `python3 -I <guard>`, so no doc
+    shows the guard run as `python3 <path>` or says "exactly `python3` and a path"."""
+    text = doc.read_text(encoding="utf-8")
+    assert "python3 <" not in text
+    assert "exactly `python3` and a path" not in flattened(text)
+    for line in text.splitlines():
+        if "bash_guard.py" in line and re.search(r"\bpython3\b", line):
+            assert "python3 -I" in line, f"{doc.name}: {line.strip()}"
+
+
+def test_the_integration_doc_says_the_guard_hooks_exact_commands_with_dash_i() -> None:
+    text = flattened(INTEGRATION_DOC.read_text(encoding="utf-8"))
+    assert "exactly `python3 -I` and a path ending in `.claude/hooks/bash_guard.py`" in text
+    assert "`python3 -I <path to .claude/hooks/bash_guard.py> --write`" in text
+
+
+def test_the_self_hosted_section_carries_the_new_subsections() -> None:
+    """§38's corrections from the 2026-10-14 setup, each under its own heading."""
+    section = _self_hosted()
+    for heading in (
+        "#### The default for role mode",
+        "#### A tailnet without a certificate domain",
+        "#### A config written before `[notify]`",
+        "#### What has run on a real server, and what has not",
+    ):
+        assert f"\n{heading}\n" in section, heading
+
+
+def test_the_self_hosted_section_states_each_setup_correction() -> None:
+    section = flattened(_self_hosted())
+    for said in (
+        "Set `base-url` before the first start",
+        "plain http over Tailscale",
+        "-p 100.x.y.z:2586:80",
+        "ntfy access hands 'who-*' read-write",
+        "ntfy access hands 'whocmd-*' read-write",
+        "WebSockets",
+        "no proxy in front",
+        "the documented default for role mode",
+        "headers.Authorization=Bearer <token>",
+        "buttons: bearer on",
+    ):
+        assert said in section, f"the self-hosted section does not say {said!r}"
+    # The bearer is in the buttons since mission 22 U1 (H-037): the old denial is gone.
+    assert "hands does not put the token in a button" not in section
+
+
+def test_the_server_ntfy_topic_migration_reads_as_the_loader_behaves(tmp_path: Path) -> None:
+    """§38: a pre-`[notify]` config keeps `ntfy_topic` under `[server]`; it loads as
+    it is, and refuses once a `[notify] ntfy_topic` is added beside it, naming the
+    key, until the `[server]` line is moved."""
+    from hands.config import ConfigError
+
+    section = flattened(_self_hosted().split("#### A config written before `[notify]`", 1)[1])
+    assert "set in both [server] and [notify]" in section
+    roles = {"builder": {"cwd": str(tmp_path)}}
+    path = tmp_path / "demo.toml"
+    old = parse_config({"server": {"ntfy_topic": "hands-demo-old"}, "roles": roles},
+                       project="demo", path=path)
+    assert old.notify.ntfy_topic == "hands-demo-old"
+    with pytest.raises(ConfigError, match=r"ntfy_topic is set in both \[server\] and \[notify\]"):
+        parse_config({"server": {"ntfy_topic": "hands-demo-old"},
+                      "notify": {"ntfy_topic": "hands-demo-new"}, "roles": roles},
+                     project="demo", path=path)
+    moved = parse_config({"notify": {"ntfy_topic": "hands-demo-new"}, "roles": roles},
+                         project="demo", path=path)
+    assert moved.notify.ntfy_topic == "hands-demo-new"
+
+
+def test_the_access_rule_covers_every_topic_project_add_generates() -> None:
+    """§38: the documented access grants cover the who topics too. Each prefix
+    `hands project add` generates is matched by one of the section's grants."""
+    from fnmatch import fnmatchcase
+
+    from hands.project import generated_topics
+
+    grants = re.findall(r"ntfy access hands '([^']+)' read-write", _self_hosted())
+    for key, topic in generated_topics("demo").items():
+        assert any(fnmatchcase(topic, grant) for grant in grants), (key, topic, grants)
+
+
+def test_the_playbook_doc_says_what_auto_runs_counts() -> None:
+    """§38: `auto-runs` counts the runs a `send` rule with `run =` started, nothing
+    else (playbook.py appends to `auto_runs_used` only there)."""
+    counters = flattened(
+        (ROOT / "docs" / "PLAYBOOK.md").read_text(encoding="utf-8")
+        .split("## Counters", 1)[1].split("\n---", 1)[0]
+    )
+    assert "counts only the runs a `send` rule with `run =` started" in counters
+
+
+def test_the_readme_points_at_progress_project_add_and_handbook() -> None:
+    readme = flattened((ROOT / "README.md").read_text(encoding="utf-8"))
+    for said in ("`progress <secret>`", "`hands project add", "`hands handbook`"):
+        assert said in readme, f"README.md does not mention {said}"

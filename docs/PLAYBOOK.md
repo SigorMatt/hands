@@ -600,6 +600,12 @@ last rule that fired. The
 last rule is cleared when a playbook with a different sha256 is loaded: rule 3
 of the file that fired is not rule 3 of the new one.
 
+`auto-runs` counts only the runs a `send` rule with `run =` started: a kickoff
+the engine sends, a `go` from the phone, a resume and a human's `hands send` are
+not counted, so `auto-runs 0/3 used` says nothing about how far a mission has
+got. `progress <secret>` on the phone (DESIGN §38) says that: the builder's job,
+the branch and its last commits, and the checkpoint's unit in progress.
+
 ---
 
 ## The example (DESIGN §10, verbatim)
