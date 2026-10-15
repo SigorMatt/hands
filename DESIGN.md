@@ -1,4 +1,4 @@
-# hands — DESIGN v3.21
+# hands — DESIGN v3.22
 
 Machinery that replaces the human relay between the planning brain and the two
 Claude Code roles (builder, aux) on the Ubuntu laptop, and that keeps a series
@@ -2025,3 +2025,154 @@ proven (publish, subscribe, typed commands, attachments, buttons after this
 mission) stated as such. Review 21 should-fix 1 is a sentence in
 FINAL-REPORT-21; mission 22's report says which test is red without the
 spool half (the unit test in `test_spool`) and claims nothing wider.
+
+## 39. Changes from v3.21 (mission 22 review; the roadmap reordered; the hosted review read mechanically)
+
+Mission 22 closed M4d: its review merged PR #3 itself (REVIEW-22 `reviewed:
+baa0b6e`, `blockers=0 should-fix=12`), the buttons carry the token, a daemon
+stop no longer strands the builder, a blocked mission consults the role,
+`hands project add` exists, and the handbook ships inside the install. The
+day it was installed produced the rest of this section: twelve should-fix
+items, four findings the builder left open (H-051..H-054), a review lost to
+a daemon restart, two phone-command failures that cost an hour each, and a
+method for reading the hosted review that the human brought from another
+repository. Mission 23 builds it all, and the roadmap below it changes
+order.
+
+**Roadmap (decided 2026-10-15).** M8, other coding agents as backends, moves
+ahead of M6 and M7: an integration should meet a backend that was shaken
+down on a series whose failures cost nothing, and a different model as the
+cold reviewer removes the shared-blind-spot problem before spanweave. Mission
+24 is M8a: a laptop probe as a gate (the first unit, run by the orchestrator
+with read-and-wait commands: a headless one-shot run of the second backend,
+its event stream parsed, a session resumed, its sandbox and approval
+behaviour recorded, its transcript read the way the monitor reads Claude
+Code's), then the design of the backend seam from what the probe found —
+`[roles.<role>] backend = "claude" | "codex"`, the runner and the monitor
+behind it, a guard story per backend (Codex has sandbox modes and approval
+policies, not tool hooks; the driver and architect roles stay on Claude
+until a review finds no hole in the Codex guard, as role mode was gated),
+doctor rows per backend, a per-role `model` setting, the VERDICT contract
+unchanged; and an optional "polish round" a playbook may switch on: on
+`aux.done` with `blockers=0` and should-fix items, one bounded builder job
+on the same branch fixes what the review marked fixable, a re-review of the
+delta follows, then the merge — off by default, the reviewer never writing
+code. A probe that fails on resume or transcripts makes the design say so
+and evaluate ACP instead. Mission 25 (and a closer if needed) is M8b, the
+seam and both implementations. M5b is discotrade's second series on the
+Codex backend — no new pet project: the run/review loop on a repository with
+history is the harder shakedown, and `project add` and a first plan kit are
+backend-agnostic and proven — started at a series switch point (a new
+playbook with `backend` per role, approved by the human; never a mid-series
+swap), builder on Codex and reviewer on Claude first, the architect role on
+Claude. Then M6, M7, with the backend chosen per role per project.
+
+**Rulings on H-051..H-054.** H-051: the architect's consult prompt names the
+installed handbook's and templates' absolute paths (handsd knows them: the
+same values it exports as `HANDS_DOCS`), the guard's read roots gain
+`HANDS_DOCS` so `cat` works there, the architect's `hands` subcommands gain
+`handbook`, and `architect/CLAUDE.md` tells the role to Read the paths the
+prompt names; `hands handbook`'s help text names the directory as it is
+(`$HANDS_DOCS/docs/…`); HF-002 is then resolved in full. H-052: the reading
+mission 22's U10 took is the design — the role directory's `CLAUDE.md` is
+`architect/CLAUDE.md` with the Parameters filled, and the phone instruction
+is what the command prints for pasting. H-053: §38's sentence was wrong;
+`status` prints one line per configured role, the architect's included, and
+the handbook says so (the observation behind it was a `head -6` cutting the
+list). H-054: §38's sentence was wrong; the loader reads `[server]` as the
+fallback for a config written before `[notify]` and refuses only a key set
+in both tables, and docs/INTEGRATION.md says that and tells the migration to
+move the key.
+
+**Review 22's should-fix items.** The who watcher pins its blanked-picture
+comparison with a test whose fingerprint changes while the blanked picture
+does not and the reverse, and stores the fingerprint whenever the blanked
+picture equals the last published one, so a human session alone never
+publishes (§24). A `reply` or `answer` a daemon stop orphans is published to
+the phone as its end, and a builder `answer` is re-sent as a `keep`, never
+as a clear. The start notification names a daemon stop only for jobs whose
+`orphan_reason` says so; a crash orphan is named as found. The load-time
+check of an architect consult rule on `builder.done` judges the compiled
+regex against sample verdict lines (`VERDICT: mission 1 blocked U2` must
+match, `VERDICT: mission 1 finished` must not) and the design records the
+refusal here. `progress` reads `meta/CHECKPOINT.md` at the repository root
+(`git rev-parse --show-toplevel` of the builder's cwd) and README lists all
+ten phone commands. The two owner-file fallbacks are inclusive again: a file
+committed since the consultation but no longer tracked is listed with a
+note, and an unknown recorded sha lists every owner file with a note rather
+than none. The protocol's revert step handles a file the commit deletes:
+`git rm -q` a listed file absent at `<sha>` before the restore, and `git
+status --short` must be empty after it (H-055). `architect/CLAUDE.md` rule
+13 and rule 8 agree: a ruling the role cannot make is an escalation with the
+reason `ruling: <what>` and a drafted owner file under
+`kits/<name>/meta/decisions/`, which the human adopts or rewrites. `hands
+project add` clones with `git clone -- <url>`, and a failed clone removes
+everything the command created (config, secret, unit, both role directories,
+`kits/`, the enabled unit) and says so, so a re-run is possible. The
+`no_background.py` hook runs as `python3 -I` in `.claude/settings.json`, in
+docs/INTEGRATION.md's copy line and in its self-test (H-056), under the same
+rule as the guard.
+
+**A killed review is resumed (H-057).** A daemon restart on 2026-10-15 killed
+a running review an hour in, and nothing resumed it, because `aux.orphaned`
+is not an event and no rule covers it. `aux.orphaned` joins the events, the
+daemon's own stop records an aux job orphaned as it does a builder's (§38),
+both playbook templates and this repository's playbook carry `aux.orphaned →
+resume` (the review's prompt re-sent to a fresh context, bounded by
+`max_resumes`), and the handbook's install section says a restart kills every
+running job, not only the builder's.
+
+**Phone refusals are answered; job ids are lenient (H-058, H-059).** A
+command carrying the right secret that handsd refuses — "no such job", "the
+builder has a job held", "no resumable session" — is published on
+`ntfy_topic` titled `<command>` with the reason; only a command with a
+wrong or missing secret stays silent. A job id in `approve`, `deny`,
+`answer`, `reply` and `cancel` is matched case-insensitively with `O` read as
+`0` and `l` or `I` as `1`, and a unique prefix of four or more characters is
+accepted; the hold notification prints the id on a line of its own.
+
+**The consult journal line after an escalation (H-060).** §27 appends a line
+to the builder's `meta/journal.md` for every consultation, and the builder's
+next commit carries it; after an escalation no builder commit follows, and
+the next ruling send meets a dirty tree. The resume path tells the builder
+to commit a dirty `meta/journal.md` first (`journal: <consultation>`), and
+the handbook's ruling round says the same for a human who sends the ruling.
+
+**The hosted review, read mechanically (review 22 and PR #3; the method in
+docs/QODO-EXTRACTION.md).** The bot posts three things: a summary comment
+with no findings, a "Code Review" comment that is the canonical numbered
+list with header counts, and a `COMMENTED` review with one inline comment
+per finding. After a push it edits the Code Review comment in place —
+findings struck through, counts reset, permalinks moved — posts nothing new,
+and leaves the inline comments as they were. So the protocol's reading is
+now a command, `hands hosted-review <pr>`: it fetches the issue comments,
+the reviews and the review comments of the pull request, every page,
+filtered to the bot's login, archives each body byte for byte with its raw
+JSON under `meta/reviews/hosted/PR-<n>/<k>/` (committed with the review
+file), diffs a later fetch against the previous one by comment id (changed
+bodies with their `updated_at`, ids added or vanished), takes the verdict
+from the Code Review comment only, lists the header categories as found
+(PR #3 carried "Cross-repo conflicts", a category the protocol never named),
+and reports "no bot comment yet" as a state to wait on, never as clean. The
+reviewer runs it as a fresh-context sub-agent, and every finding keeps its
+disposition line. Tests use a fake `gh`.
+
+**The hosted review's findings are fixed in the pull request they belong
+to.** The brief template's last unit opens the pull request, waits for the
+bot (ten minutes, the protocol's cap), runs `hands hosted-review`, fixes the
+findings that are within the design, pushes, and records a disposition per
+finding in the final report's `## Hosted review` table: fixed in `<sha>`,
+dismissed with a reason, or a finding filed. The cold review then audits
+those dispositions against the archive and the edited comment and reviews
+the final state of the branch; a finding that needs a design decision is
+filed, never fixed in silence. The cold review's own should-fix items stay
+with the next mission by default; the polish round of M8a is the switch for
+projects that want them closed before the merge.
+
+**Documentation.** docs/INTEGRATION.md: a restart kills every running job
+of the project and what resumes what; the driver kit has one hook and the
+architect kit two; a clean-review stop pauses the pipeline and the next
+apply with `go` un-pauses it; the `[server]` fallback. The handbook: the
+items above, and `docs/QODO-EXTRACTION.md` cited where the protocol reads
+the bot. The instruction paste for every Project follows mission 22's
+install and is not repeated here.

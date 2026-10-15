@@ -127,9 +127,15 @@ then an install (`uv tool install --force`) and a driver-kit refresh.
   exception, the brief template's recovery rule for a `keep` answer, the
   handbook's onboarding shape, ruling round, separation rule and consultation
   re-firing, HF-004, HF-005 and the first plan kit's silent apply in the
-  docs. Gate: mission 22 merged by its own review; `hands project add
-  --dry-run` and the authenticated buttons exercised on the laptop.
-  INSTRUCTION PASTE DUE after mission 22 for every Project.
+  docs — DONE 2026-10-15 (review 22: blockers=0, should-fix=12; the review
+  merged PR #3: f11cfb1; installed 2026-10-15 20:23; both Projects' instructions
+  re-pasted). M4d CLOSED. Mission 23 (DESIGN §39): review 22's twelve
+  should-fix items, H-051..H-054 ruled, a killed review resumed (H-057),
+  phone refusals published and lenient job ids (H-058, H-059), the consult
+  journal line on resume (H-060), `hands hosted-review <pr>` and the
+  hosted review's findings fixed inside the pull request, the docs. Gate:
+  mission 23 merged by its own review with a `## Hosted review` disposition
+  table in FINAL-REPORT-23 and an archive under meta/reviews/hosted/.
 - **M5 Pet projects from scratch (discotrade)** — decided 2026-09-17: before
   any integration, hands drives a new project from an empty repository in
   role mode, as the shakedown of the whole loop. discotrade
@@ -142,6 +148,29 @@ then an install (`uv tool install --force`) and a driver-kit refresh.
   §33 behind Tailscale (the public broker's daily cap was hit that day).
   Gate: the series reaches its roadmap's last milestone or its consult
   budget, with every stop that needed a human answered from the phone.
+  Status 2026-10-15: mission 13 (the last planned) finished; its review
+  re-fired after a daemon restart killed it; 17 of 30 consultations used;
+  three owner rulings (D-004; D-008/D-009; O-19..O-22 — a gate reshaped
+  because no agent may author attack-shaped test content).
+- **M8 Other coding agents as backends** — MOVED AHEAD OF M6/M7 (decided
+  2026-10-15, DESIGN §39): an integration should meet a backend shaken down
+  on a series whose failures cost nothing, and a different model as the
+  cold reviewer removes the shared-blind-spot problem. Mission 24 = M8a: a
+  laptop probe as a gate (headless one-shot run, event stream, session
+  resume, sandbox and approval behaviour, a transcript the monitor can read;
+  Codex CLI first), then the design of the backend seam (`[roles.<role>]
+  backend`, runner and monitor behind it, a guard story per backend — the
+  driver and architect roles stay on Claude until a review finds no hole —
+  doctor rows per backend, a per-role `model`, the optional polish round;
+  ACP evaluated if the probe fails on resume or transcripts). Mission 25
+  (+ closer) = M8b: the seam and both implementations. Gate: one hands
+  mission built by a builder on the second backend and reviewed clean.
+- **M5b discotrade's second series on the Codex backend** — decided
+  2026-10-15: no new pet project; discotrade-v2 starts at a series switch
+  point (a new playbook with `backend` per role, approved by the human),
+  builder on Codex and reviewer on Claude first, the architect role on
+  Claude; if v1 ends before M8b is installed, the project waits. Gate: as
+  M5, on the second backend.
 - **M6 spanweave integration** — INSTRUCTION PASTE DUE: the spanweave
   Project gets its own copy, parameters filled in.
   spanweave integration — hands drives spanweave's *development*
@@ -184,11 +213,12 @@ then an install (`uv tool install --force`) and a driver-kit refresh.
   `meta/` paths and the mission form (`meta/BUILDER-N-PROMPT.md`, checkpoint-driven kickoff, no
   `resume_line`), which is the form hands has been exercised on. PR per
   mission, auto-merge on a clean review.
-- **M8 Other coding agents as backends** — decided 2026-09-17: a role may
-  run on a different agent CLI; Codex CLI first; evaluate ACP as the
-  common protocol. Requirements: headless one-shot invocation with a
-  resumable session, a transcript hands can read, a permission mode the
-  guard can enforce, and the VERDICT contract unchanged.
+- **(M8 moved above M6 on 2026-10-15; its original line, decided
+  2026-09-17:** a role may run on a different agent CLI; Codex CLI first;
+  evaluate ACP as the common protocol. Requirements: headless one-shot
+  invocation with a resumable session, a transcript hands can read, a
+  permission mode the guard can enforce, and the VERDICT contract
+  unchanged.)
 - **(removed 2026-09-15):** the optional remote MCP face (DESIGN §9) is
   dropped from the roadmap; the phone loop and the architect role cover
   what it was for. DESIGN §9 stays as history.

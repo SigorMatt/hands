@@ -46,7 +46,48 @@ item names the mission it is scheduled for; unscheduled items say so.
 5. Review 20's note on U5: an apply that leaves no playbook stops.
 6. Files H-046, H-047, H-048 for mission 22.
 
-## Mission 22 (scheduled 2026-10-15, kit issued) — the operational findings and the onboarding half. Spec: DESIGN v3.21 §38. Items 1–8 below plus: H-037 the buttons carry the token (FIRST; live on the self-hosted server since 2026-10-14, 403 on every button); review 21 should-fix 1–3 (H-049 the revert step for added files, H-050 the reviewer's schedule, the `-I` hook text in INTEGRATION); the human-supplied unit shape in the brief template and the protocol.
+## Mission 23 (scheduled 2026-10-15, kit issued) — review 22, the four findings, the hosted review read mechanically. Spec: DESIGN v3.22 §39.
+
+1. Review 22 should-fix 1–12, each closed by a named unit (who tests and the
+   stale fingerprint; orphaned reply/answer published; the start notice's
+   reason; the blocked-regex check on samples; `progress` at the repo root
+   and README's ten commands; inclusive owner-file fallbacks; the revert step
+   for deleted files, H-055; the role's rulings as `escalate ruling:`;
+   HF-002 in full with H-051; `project add` after a failed clone;
+   `no_background.py` with `-I`, H-056).
+2. H-051..H-054 ruled in §39: the consult prompt names the handbook and
+   templates paths, the guard reads `HANDS_DOCS`, `hands handbook` allowed;
+   U10's reading of `project add` confirmed; §38's two wrong sentences
+   corrected (`status` shows every role; `[server]` is the fallback).
+3. H-057 `aux.orphaned` event, the stop records it, `aux.orphaned → resume`
+   in both templates and this playbook.
+4. H-058 refusals of a secret-authenticated phone command are published;
+   H-059 lenient job ids (`O`→`0`, `l`/`I`→`1`, case, unique prefix).
+5. H-060 the resume path tells the builder to commit a dirty journal first.
+6. `hands hosted-review <pr>` (docs/QODO-EXTRACTION.md): fetch, archive,
+   diff by id, verdict from the Code Review comment, categories as found,
+   "no bot comment yet" is a wait; the protocol runs it as a fresh-context
+   sub-agent; the brief template's last unit fixes the bot's findings inside
+   the PR with a disposition table in the final report.
+7. Docs: restart kills every job; one hook vs two; stop pauses, apply+go
+   un-pauses; the `[server]` fallback; QODO-EXTRACTION cited.
+
+## Mission 24 (M8a, scheduled 2026-10-15) — the backend probe and design. Spec: DESIGN §40 (written after the probe).
+
+1. U0 gate: the probe on the laptop's Codex CLI (version recorded in the
+   plan): headless one-shot run, parseable event stream, session resume,
+   sandbox/approval behaviour, transcript readable as the monitor reads
+   Claude Code's; blocked at U0 if resume or transcripts fail → ACP evaluated.
+2. DESIGN §40: `[roles.<role>] backend = "claude" | "codex"`, the runner and
+   monitor behind the seam, the guard story per backend (driver/architect on
+   Claude until reviewed), doctor rows per backend, per-role (and per-review-
+   sub-agent) `model`, the optional polish round (`aux.done` blockers=0
+   should-fix>0 → one bounded builder round → re-review of the delta → merge;
+   off by default).
+
+## Mission 25 (M8b) — the seam and both implementations; builder and aux may run on Codex. Then M5b (discotrade-v2 on Codex), M6, M7.
+
+## Mission 22 — DONE 2026-10-15 (review 22: blockers=0, should-fix=12; PR #3 merged by the review, f11cfb1; installed 20:23; M4d closed). Spec: DESIGN v3.21 §38. Items 1–8 below plus: H-037 the buttons carry the token (FIRST; live on the self-hosted server since 2026-10-14, 403 on every button); review 21 should-fix 1–3 (H-049 the revert step for added files, H-050 the reviewer's schedule, the `-I` hook text in INTEGRATION); the human-supplied unit shape in the brief template and the protocol.
 
 1. H-046: `handswho` publishes on a real state change only, compared
    without the relative-time text, with a floor on the interval; doctor
