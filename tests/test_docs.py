@@ -40,7 +40,7 @@ EXAMPLE = ROOT / "tests" / "fixtures" / "playbook_example.toml"
 #: Words that follow `hands ` in a command without naming a command of §4.
 NOT_COMMANDS = {"--help", "--version", "--project", "--json", "--socket", "<command>"}
 #: Commands of §4 the CLI answers itself, with no daemon method (`kit check`, §26).
-CLIENT_COMMANDS = {"kit", "migrate-spool"}  # §29: migrate-spool needs no daemon
+CLIENT_COMMANDS = {"kit", "migrate-spool", "handbook"}  # §29, §38: no daemon
 #: `hands <command>`, where `hands` is the program and not the tail of a path
 #: (`git clone …/hands repo`) — hence the lookbehind.
 COMMAND_RE = re.compile(r"(?<![\w/.~-])hands (?:--\w+ [\w<>-]+ )?([a-z-]+|--[a-z-]+)")

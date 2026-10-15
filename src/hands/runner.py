@@ -20,7 +20,8 @@ All six flags were checked against the installed binary (claude 2.1.268,
 The process runs in handsd's environment plus the role's `spawn_env` (§23):
 `CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS=0` unless `[roles.<r>] env` sets it; and
 `HANDS_JOB=<job id>`, which the post-exit sweep reads as corroboration only (§29);
-and `HANDS_PROJECT=<the config's project>` (§36, H-043).
+and `HANDS_PROJECT=<the config's project>` (§36, H-043); and `HANDS_DOCS=<the
+installed hands' handbook and templates directory>` (§38, HF-002).
 
 Before an architect or driver job, the role's clone (`driver_clone`) is advanced
 to `origin/<[roles.<r>] branch>`, detached (§36, H-042; `advance_clone`). A clone
@@ -74,11 +75,13 @@ from hands.config import (
     ARCHITECT_ROLE,
     CLONE_ENV,
     CONSULT_ROLE_ENV,
+    DOCS_ENV,
     DRIVER_ROLE,
     KITS_ENV,
     PROJECT_ENV,
     Config,
     RoleConfig,
+    docs_root,
     driver_clone,
 )
 from hands.limits import is_limit_notice, parse_reset_at, to_iso
@@ -1088,8 +1091,15 @@ def job_env(job: Job, role: RoleConfig, project: str) -> dict[str, str]:
     and a `mkdir -p` under it is how the architect makes it.
     §36 (H-043): every job carries `HANDS_PROJECT`, the config's project name,
     over handsd's environment and the role's env table alike.
+    §38 (HF-002): every job carries `HANDS_DOCS`, the directory of the handbook and
+    templates of the hands that runs it (`docs_root`), the same way; it is absent
+    only when this hands carries neither.
     """
     env = {**os.environ, **role.spawn_env, JOB_ENV: job.id, PROJECT_ENV: project}
+    env.pop(DOCS_ENV, None)
+    docs = docs_root()
+    if docs is not None:
+        env[DOCS_ENV] = str(docs)
     if job.role in (DRIVER_ROLE, ARCHITECT_ROLE):
         env.pop(CONSULT_ROLE_ENV, None)
         head = consult_head(job.prompt)

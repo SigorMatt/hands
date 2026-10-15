@@ -28,6 +28,7 @@ __all__ = [
     "CONSULT_ROLE_ENV",
     "DEFAULT_GATE_PATTERNS",
     "DEFAULT_ROLE_ENV",
+    "DOCS_ENV",
     "DRIVER_ROLE",
     "GUARDED_ROLES",
     "KITS_ENV",
@@ -47,6 +48,7 @@ __all__ = [
     "ServerConfig",
     "WhoConfig",
     "config_path",
+    "docs_root",
     "driver_clone",
     "hands_dir",
     "list_projects",
@@ -128,6 +130,20 @@ KITS_ENV = "HANDS_KITS"
 #: §36 (H-043): the project, in every role job's environment (the runner sets it
 #: from the config's project name, never from handsd's environment).
 PROJECT_ENV = "HANDS_PROJECT"
+#: §38 (HF-002): the directory of the handbook and templates of the hands that runs
+#: the job, in every role job's environment (the runner sets it from `docs_root`,
+#: never from handsd's environment or the env table).
+DOCS_ENV = "HANDS_DOCS"
+#: §38: where `docs_root` looks — the copy a wheel carries (`pyproject.toml`
+#: force-includes `docs/` and `templates/` under `hands/shipped/`), then the
+#: repository's own root beside the source tree `uv sync` installs from. Each root
+#: holds `docs/ARCHITECT-HANDBOOK.md` and `templates/`, the repository's layout.
+DOCS_ROOTS: tuple[Path, ...] = (
+    Path(__file__).resolve().parent / "shipped",
+    Path(__file__).resolve().parents[2],
+)
+HANDBOOK_PATH = Path("docs") / "ARCHITECT-HANDBOOK.md"
+TEMPLATES_PATH = Path("templates")
 DRIVER_ROLE = "driver"
 ARCHITECT_ROLE = "architect"
 #: §27, §31: the roles handsd starts headless, each with its own guard mode and
@@ -441,6 +457,16 @@ class Config:
             return self.roles[name]
         except KeyError:
             raise KeyError(f"role {name!r} is not configured in {self.path}") from None
+
+
+def docs_root() -> Path | None:
+    """§38 (HF-002): the directory holding the installed hands' handbook
+    (`docs/ARCHITECT-HANDBOOK.md`) and `templates/` — the first of `DOCS_ROOTS`
+    that has both — or None when this hands carries neither (a broken install)."""
+    for root in DOCS_ROOTS:
+        if (root / HANDBOOK_PATH).is_file() and (root / TEMPLATES_PATH).is_dir():
+            return root
+    return None
 
 
 def hands_dir(*, home: Path | None = None) -> Path:

@@ -25,6 +25,10 @@ packages = ["src/hands"]
 # repository ships; an installed wheel carries that file for it (`hands/shipped/`).
 [tool.hatch.build.targets.wheel.force-include]
 "driver/hooks/bash_guard.py" = "hands/shipped/bash_guard.py"
+# DESIGN §38 (HF-002): `hands handbook` and the role's `HANDS_DOCS` name the handbook and
+# templates of the installed hands, so the wheel carries them, in the repository's layout.
+"docs" = "hands/shipped/docs"
+"templates" = "hands/shipped/templates"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

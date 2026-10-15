@@ -151,7 +151,10 @@ rule stops. So: specific verdict rules first, then a catch-all `stop` per
 `notify`.
 
 `[series]` holds seven keys, every one optional; any other key is refused,
-naming it (docs/PLAYBOOK.md "The series and its kickoff" is the reference):
+naming it (docs/PLAYBOOK.md "The series and its kickoff" is the reference).
+The list below is every key `hands.playbook` accepts, each with the default
+its loader gives a playbook that leaves the key out; a test holds the two
+together (HF-004):
 
 - `name` (no default): the series' name, free text. In role mode it is what
   the architect's budget counts for; renaming it is refused unless `[limits]`
@@ -399,6 +402,28 @@ otherwise. `--json` prints the same report as one object.
    the parameters filled in.
 4. First kit: the playbook, the brief or plan, the review protocol;
    `hands kit check` green; treat the first series as a shakeout.
+
+The handbook and the templates you read are the installed hands' own:
+`hands handbook` prints this file's path and `hands handbook --templates`
+the templates directory, and every role job carries their directory as
+`$HANDS_DOCS` (`$HANDS_DOCS/docs/ARCHITECT-HANDBOOK.md`,
+`$HANDS_DOCS/templates/`). A copy in a project's clone is not the hands
+that runs the project and may be older (HF-002).
+
+**The laptop check of a role-mode plan kit (HF-005).** A kit whose playbook
+sets `[series] architect = "role"` is judged against the project's hands
+config, which a chat sandbox does not have, so its playbook check fails
+there (DESIGN §33). Before that kit is applied, the human runs, at the
+laptop, `hands kit check <kit> --repo <clone>` — the kit as it will be
+sent, against the project's clone — and sends it only when every check
+passes.
+
+**The first plan kit's apply is silent.** Under `[series] autonomous` the
+engine's own `builder.done` rule approves the apply of a kit the role filed
+(`decided_by: playbook`), the first plan kit included, so no Approve or
+Deny reaches the phone for it: the first thing the phone sees is the
+kickoff the engine sends after the apply. Approving such a playbook is
+approving that apply too.
 
 ### Running as the architect role (DESIGN §31)
 

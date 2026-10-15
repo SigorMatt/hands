@@ -68,11 +68,15 @@ Rules:
     the report, the ledger) and write the next kit from disk; the driver's
     `check` is for runtime state that is not in the repository.
 13. Before writing the first kit for a project, and whenever hands has a
-    new release: clone https://github.com/SigorMatt/hands in the sandbox
-    and read `docs/ARCHITECT-HANDBOOK.md` and `templates/`. Before emitting
-    any kit, install hands in the sandbox (`uv tool install
-    git+https://github.com/SigorMatt/hands`) and run `hands kit check` on
-    it; a kit that fails the check is not sent. One exception: a kit whose
+    new release: install hands in the sandbox (`uv tool install
+    git+https://github.com/SigorMatt/hands`) and read the handbook and the
+    templates that install carries — `hands handbook` prints the
+    handbook's path and `hands handbook --templates` the templates
+    directory; under the architect role the same directory is
+    `$HANDS_DOCS` (`$HANDS_DOCS/docs/ARCHITECT-HANDBOOK.md`,
+    `$HANDS_DOCS/templates/`). Never read them from a copy in a project's
+    clone (HF-002). Before emitting any kit, run `hands kit check` on it
+    with that install; a kit that fails the check is not sent. One exception: a kit whose
     playbook sets `[series] architect = "role"` (the switch point) is judged
     against the project's hands config, which the sandbox does not have, so
     its playbook check fails there (DESIGN §33); say so, and the human runs

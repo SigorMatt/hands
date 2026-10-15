@@ -2262,3 +2262,48 @@ Status: resolved-by-doc (mission 22 U7 — templates/ and
 meta/REVIEW-PROTOCOL.md: Notes carry one line per sub-agent with start and
 end time; the reason, one ./scripts/check at a time inside the 20-minute
 cap; a review lacking the schedule is a should-fix for the next)
+
+## HF-002, HF-004, HF-005 — the onboarding findings, resolved
+
+Severity: medium · Component: `pyproject.toml`, `src/hands/cli.py`,
+`src/hands/config.py`, `src/hands/runner.py`, `architect/CLAUDE.md`,
+`docs/ARCHITECT-INSTRUCTION.md`, `docs/ARCHITECT-HANDBOOK.md` §6 and §12;
+DESIGN §38 "Onboarding"
+Filed by: mission 22 U9 (2026-10-15), recording another project's findings.
+Evidence: discotrade HF-002, HF-004, HF-005 (cited by DESIGN §36 and §38,
+meta/BACKLOG.md "Mission 20" item 8).
+
+Status: resolved (mission 22 U9 — HF-002: the wheel force-includes `docs/`
+and `templates/` under `hands/shipped/`; `hands handbook` prints the
+installed handbook's path and `--templates` the templates directory; every
+role job carries `HANDS_DOCS`; both architect instructions read from it.
+HF-004: handbook §6 lists every `playbook.SERIES_KEYS` key with the
+loader's default. HF-005: handbook §12 names `hands kit check <kit> --repo
+<clone>` at the laptop before a role-mode plan kit's apply, and the first
+plan kit's silent apply. Tests: tests/test_handbook.py)
+
+## H-051 — the architect role cannot learn the value of `HANDS_DOCS`
+
+Severity: medium · Component: `architect/settings.json`,
+`driver/hooks/bash_guard.py` (architect table), the architect's consult
+prompt; DESIGN §38 "Onboarding", §31, §32
+Filed by: mission 22 U9 (2026-10-15).
+Evidence: the guard run on three commands with `HANDS_ROLE=architect`
+during U9: `echo $HANDS_DOCS` is refused (a `$`, §30), `hands handbook` is
+refused (not in the architect's `hands` subcommands, §31), and `cat
+<handbook path>` is refused (reads confined to the clone, the spool and
+`HANDS_KITS`, §32).
+
+Symptom. §38 has every role job carry `HANDS_DOCS` and the architect read
+the handbook and templates from it; U9 does both. But the Read tool, the
+one route the guard does not judge (`architect/settings.json` allows
+`Read`), takes a literal path, and nothing the role can run tells it the
+variable's value. A real role session following `architect/CLAUDE.md`
+rule 2 has no proven way to resolve `$HANDS_DOCS`.
+
+Direction (for the architect to decide; U9 did not improvise one): the
+consult prompt names the handbook's and templates' paths; or the
+architect's table and settings allow `hands handbook [--templates]`; or
+the guard's read roots gain `HANDS_DOCS` and the instruction says `cat`.
+
+Status: open

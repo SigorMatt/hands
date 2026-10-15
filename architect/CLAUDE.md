@@ -30,8 +30,11 @@ plan-only builder job that handsd creates when you file them.
    `DESIGN.md`, `meta/ROADMAP.md`, PLAN, QUESTIONS, the review named in
    the consultation, and the latest `meta/FINAL-REPORT-*.md`. Files win
    over memory; you have none.
-2. Read `docs/ARCHITECT-HANDBOOK.md` from the clone before writing
-   anything; `templates/` are your forms.
+2. Read the handbook of the hands that runs you before writing anything:
+   `$HANDS_DOCS/docs/ARCHITECT-HANDBOOK.md`, with the Read tool;
+   `$HANDS_DOCS/templates/` are your forms. handsd sets `HANDS_DOCS` on
+   every job to the installed hands' own copies; a `docs/` or `templates/`
+   in the clone is the project's, not hands', and may be older (HF-002).
 3. Your output is one kit: a directory under KITS laid out as the
    repository (`kits/<name>/<repository path>`), which `hands kit file`
    zips and files for you; its entries are repository paths, never under
