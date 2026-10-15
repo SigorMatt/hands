@@ -2184,6 +2184,29 @@ def test_the_handbook_section_9_is_the_pull_request_flow_of_section_35() -> None
     assert "auto-merge on a clean review" not in handbook
 
 
+def test_the_handbook_section_9_reads_the_hosted_review_by_command() -> None:
+    """§39 "The hosted review, read mechanically" and "The hosted review's findings
+    are fixed in the pull request they belong to": §9 says the builder's last unit
+    reads and fixes the bot's findings and records a disposition each, and the
+    reviewer reads it by command in a fresh context and audits the dispositions."""
+    section = handbook_section(9)
+    for said in (
+        "`hands hosted-review <pr>`",
+        "docs/QODO-EXTRACTION.md",
+        "up to ten minutes",
+        "fixes the findings that are within the design",
+        "never fixed in silence",
+        "`fixed in <sha>` | `dismissed: <reason>` | `finding H-nnn filed`",
+        "fresh-context sub-agent",
+        "`meta/reviews/hosted/PR-<n>/<k>/`",
+        "committed with the review file",
+        "from the Code Review comment only",
+        '"no bot comment yet", is the wait, never a clean review',
+        "audits the builder's dispositions against the archive",
+    ):
+        assert said in section, f"handbook §9 does not say {said!r}"
+
+
 def test_the_integration_doc_names_the_gh_prerequisite_and_doctors_gh_row() -> None:
     """§35 `hands doctor`: `gh` installed, `gh auth login` for the user handsd runs
     as, a `repo`-scoped token; doctor's `gh` row as OK and as WARN (the remedy is

@@ -37,13 +37,41 @@ under review.
 
 ## The hosted review (with a PR)
 
-Before writing, read the hosted reviewer's comments on the PR:
-`gh api repos/SigorMatt/hands/issues/<pr>/comments`, `gh api
+Before writing, read the hosted reviewer mechanically (DESIGN §39; the
+method is docs/QODO-EXTRACTION.md's, and `hands hosted-review <pr>` is that
+method as a command). Dispatch ONE fresh-context sub-agent for it, before
+the per-commit sub-agents and like them one at a time, so the reading is
+anchored neither in the builder's work nor in yours. It runs `hands
+hosted-review <pr>` in a `git worktree` at `origin/<branch>`, where the
+builder's own fetch is committed. The command fetches, through `gh`, every
+page, filtered to the bot's login, `gh api
+repos/SigorMatt/hands/issues/<pr>/comments`, `gh api
 repos/SigorMatt/hands/pulls/<pr>/comments` and `gh api
-repos/SigorMatt/hands/pulls/<pr>/reviews`. When none from the bot is there
-yet, wait for it, up to ten minutes in one-minute foreground steps (read
-again after each; never a background task); after ten minutes with none,
-say so in the section below and go on.
+repos/SigorMatt/hands/pulls/<pr>/reviews`; archives each body byte for byte
+with its JSON under `meta/reviews/hosted/PR-<pr>/<k>/` (`<k>` one more than
+the highest there); diffs the fetch against the previous `<k>` by comment
+id; prints the header categories as found and every numbered finding
+verbatim with its anchor; and takes the verdict from the Code Review
+comment only — never from the inline comments, which a re-review leaves as
+they were, and never from "nothing new by id", which is what an in-place
+edit looks like.
+
+Exit 3, "no bot comment yet", is the wait, never a clean review (so is "no
+Code Review comment yet"): the sub-agent waits for the bot up to ten
+minutes in one-minute foreground steps, running the command again after
+each (never a background task); after ten minutes with none, say so in the
+section below and go on.
+
+The sub-agent then audits the builder's dispositions, the `## Hosted review`
+table of `meta/FINAL-REPORT-N.md`, against the archive (the builder's fetch
+and this one, and the diff between them) and the edited Code Review comment:
+each finding has one row — fixed in `<sha>`, dismissed with a reason, or a
+finding H-nnn filed. It reports a finding with no row, a fix whose commit
+does not touch the finding's anchor or that the comment still shows open, a
+dismissal with no reason, a filed finding absent from
+`meta/findings/FINDINGS.md`, and a finding that needed a design decision and
+was fixed in silence. It reports in ≤12 lines plus every finding verbatim,
+and names the `<k>` it wrote.
 
 ## The per-commit sub-agents
 
@@ -67,10 +95,15 @@ Each sub-agent, in a `git worktree` at that commit:
    reverted: in the worktree at the commit, for each non-test file the body
    lists, `git checkout <sha>~1 -- <file>` when the file exists at
    `<sha>~1`, else `rm` it; then run the commit's new tests and expect red;
-   then `git checkout <sha> -- <the same files>`. A commit body names each
-   file it adds as added; `git cat-file -e <sha>~1:<file>` says whether a
-   file exists at the parent, and one checkout of several files at the
-   parent reverts none of them when one is missing there. A commit that
+   then restore: `git rm -q -f -- <file>` for each listed file absent at
+   `<sha>` (a file the commit deletes), then `git checkout <sha> -- <the
+   other files>`; `git status --short` must be empty after it. A commit
+   body names each file it adds as added and each file it deletes as
+   deleted; `git cat-file -e <rev>:<file>` says whether a file exists at a
+   revision, and one checkout of several files reverts or restores none of
+   them when one is missing at that revision. A sub-agent whose `git status
+   --short` is not empty after the restore stops, reports what it lists,
+   and goes no further at that commit. A commit that
    changes only tests must name in its body each wrong change that would
    make them red; the
    sub-agent makes each one in the worktree, without committing, runs the
@@ -95,11 +128,13 @@ the title is `reviewed: <sha>`, the tip you reviewed (the PR's
 none` when the brief's branch has no pull request). Then exactly these
 sections: `## Blockers` (numbered; a blocker is a failed gate, a missing
 test, a design violation, or a claim the disk contradicts), `## Should-fix`
-(numbered), `## Hosted review` (with a PR: every finding of the bot,
-verbatim, each with one of: confirmed → carried as blocker k or should-fix
-m; dismissed → the reason; without a PR, or with no bot review after ten
+(numbered), `## Hosted review` (with a PR: the archive's `<k>`, the
+verdict the command took from the Code Review comment, every finding of the
+bot, verbatim, each with one of: confirmed → carried as blocker k or
+should-fix m; dismissed → the reason; and the sub-agent's audit of the
+builder's disposition of it; without a PR, or with no bot review after ten
 minutes, one line saying so), `## Notes`, `## Per-commit verdicts` (the
-≤12-line reports, verbatim).
+≤12-line reports, verbatim, the hosted-review sub-agent's among them).
 
 `## Notes` carries the schedule: one line per sub-agent with its start and
 end time; the sub-agents run one at a time so that one `./scripts/check`
@@ -107,9 +142,12 @@ runs at a time inside the 20-minute cap. A review whose Notes lack the
 schedule is itself a should-fix for the next review.
 
 Before you commit it, bring the tree to an up-to-date `main`: `git
-checkout main && git pull --ff-only`. You may commit that one file only, to
-`main`, as `review: mission N`, and push it, before any merge: the review
-is on `main` whatever happens to the branch. Touch nothing else.
+checkout main && git pull --ff-only`, and copy the directory the
+hosted-review sub-agent wrote, `meta/reviews/hosted/PR-<pr>/<k>/`, from its
+worktree to the same path. You may commit that file and the hosted-review
+archive directory only, to `main`, as `review: mission N`, and push them,
+before any merge: the review and the bot's words as they were are on `main`
+whatever happens to the branch. Touch nothing else.
 
 ## The merge (with a PR)
 

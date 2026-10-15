@@ -1028,9 +1028,7 @@ PROTOCOL_38_SENTENCES = {
     "the-revert-step-per-file": (
         "in the worktree at the commit, for each non-test file the body lists,"
         " `git checkout <sha>~1 -- <file>` when the file exists at `<sha>~1`, else"
-        " `rm` it; then run the commit's new tests and expect red; then"
-        " `git checkout <sha> -- <the same files>`. A commit body names each file"
-        " it adds as added"
+        " `rm` it; then run the commit's new tests and expect red; then restore"
     ),
     "the-schedule-in-the-notes": (
         "one line per sub-agent with its start and end time; the sub-agents run one"
@@ -1047,6 +1045,157 @@ PROTOCOL_38_SENTENCES = {
         " brief) is checked by `git show --stat` alone"
     ),
 }
+
+#: §39 (review 22 should-fix 8; H-055; "The hosted review, read mechanically";
+#: docs/QODO-EXTRACTION.md): the sentences both protocol files carry, flattened.
+PROTOCOL_39_SENTENCES = {
+    "the-restore-git-rms-a-file-absent-at-sha": (
+        "`git rm -q -f -- <file>` for each listed file absent at `<sha>` (a file"
+        " the commit deletes), then `git checkout <sha> -- <the other files>`"
+    ),
+    "the-tree-is-clean-after-the-restore": "`git status --short` must be empty after it",
+    "an-unclean-tree-stops-the-sub-agent": (
+        "A sub-agent whose `git status --short` is not empty after the restore stops"
+    ),
+    "a-body-names-deleted-files": (
+        "A commit body names each file it adds as added and each file it deletes as"
+        " deleted"
+    ),
+    "the-hosted-review-is-a-command": "`hands hosted-review <pr>`",
+    "run-by-a-fresh-context-sub-agent": "ONE fresh-context sub-agent",
+    "in-a-worktree-at-the-branch": "in a `git worktree` at `origin/<branch>`",
+    "the-method-is-cited": "docs/QODO-EXTRACTION.md",
+    "the-archive-path": "`meta/reviews/hosted/PR-<pr>/<k>/`",
+    "the-verdict-from-the-code-review-comment-only": (
+        "takes the verdict from the Code Review comment only"
+    ),
+    "no-bot-comment-yet-is-the-wait": (
+        'Exit 3, "no bot comment yet", is the wait, never a clean review'
+    ),
+    "the-dispositions-audited-against-the-archive": (
+        "audits the builder's dispositions, the `## Hosted review` table of"
+        " `meta/FINAL-REPORT-N.md`, against the archive"
+    ),
+    "a-silent-design-fix-is-reported": (
+        "a finding that needed a design decision and was fixed in silence"
+    ),
+    "the-archive-committed-with-the-review-file": (
+        "You may commit that file and the hosted-review archive directory only"
+    ),
+}
+
+#: §38's restore and §35's one-file commit, superseded by §39.
+PROTOCOL_39_SUPERSEDED = (
+    "then `git checkout <sha> -- <the same files>`",
+    "You may commit that one file only",
+)
+
+
+@pytest.mark.parametrize("key", sorted(PROTOCOL_39_SENTENCES))
+@pytest.mark.parametrize("name", ["templates", "meta"])
+def test_the_protocol_restores_per_file_and_reads_the_hosted_review_by_command(
+    name: str, key: str
+) -> None:
+    """§39: both protocol files carry the restore that `git rm`s a file the commit
+    deletes and requires a clean `git status`, and the hosted-review step run as
+    `hands hosted-review <pr>` by a fresh-context sub-agent; the superseded
+    wording and "stash" are gone from each."""
+    path = Path(__file__).resolve().parents[1] / name / "REVIEW-PROTOCOL.md"
+    text = " ".join(path.read_text(encoding="utf-8").split())
+    said = PROTOCOL_39_SENTENCES[key]
+    assert said in strip_paths(text), f"{name}/REVIEW-PROTOCOL.md does not say {said!r}"
+    for old in PROTOCOL_39_SUPERSEDED:
+        assert old not in strip_paths(text), f"{name}/REVIEW-PROTOCOL.md still says {old!r}"
+    for word in ("stash", "Stash", "STASH"):
+        assert word not in strip_paths(text), f"{name}/REVIEW-PROTOCOL.md says {word}"
+
+
+def _git(cwd: Path, *args: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True)
+
+
+def test_the_protocols_revert_and_restore_leave_a_clean_tree_for_add_edit_delete(
+    tmp_path: Path,
+) -> None:
+    """H-055: the protocol's commands, run on a local repository whose commit adds,
+    edits and deletes a file, revert all three and restore to an empty `git status
+    --short`; the old one-checkout restore fails on the deleted file, and a plain
+    `git rm -q` refuses the file the revert staged, which is why the step says `-f`."""
+    repo = tmp_path / "r"
+    repo.mkdir()
+    for args in (("init", "-q"), ("config", "user.email", "t@t"), ("config", "user.name", "t")):
+        assert _git(repo, *args).returncode == 0
+    (repo / "edited.py").write_text("old\n")
+    (repo / "deleted.py").write_text("gone\n")
+    assert _git(repo, "add", ".").returncode == 0
+    assert _git(repo, "commit", "-qm", "one").returncode == 0
+    (repo / "edited.py").write_text("new\n")
+    (repo / "added.py").write_text("added\n")
+    assert _git(repo, "rm", "-q", "deleted.py").returncode == 0
+    assert _git(repo, "add", "edited.py", "added.py").returncode == 0
+    assert _git(repo, "commit", "-qm", "two").returncode == 0
+    sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    listed = ["edited.py", "added.py", "deleted.py"]
+
+    def exists(rev: str, name: str) -> bool:
+        return _git(repo, "cat-file", "-e", f"{rev}:{name}").returncode == 0
+
+    def revert() -> None:
+        for name in listed:
+            if exists(f"{sha}~1", name):
+                assert _git(repo, "checkout", f"{sha}~1", "--", name).returncode == 0
+            else:
+                (repo / name).unlink()
+        assert (repo / "edited.py").read_text() == "old\n"
+        assert (repo / "deleted.py").exists() and not (repo / "added.py").exists()
+
+    revert()
+    # §38's restore: one checkout of the same files at <sha> restores none of them.
+    assert _git(repo, "checkout", sha, "--", *listed).returncode != 0
+    assert _git(repo, "status", "--short").stdout != ""
+    # A plain `git rm -q` refuses the file the revert staged.
+    assert _git(repo, "rm", "-q", "--", "deleted.py").returncode != 0
+
+    # §39's restore, as the protocol words it.
+    absent = [name for name in listed if not exists(sha, name)]
+    assert absent == ["deleted.py"]
+    for name in absent:
+        assert _git(repo, "rm", "-q", "-f", "--", name).returncode == 0
+    others = [name for name in listed if name not in absent]
+    assert _git(repo, "checkout", sha, "--", *others).returncode == 0
+    assert _git(repo, "status", "--short").stdout == ""
+
+
+#: §39 "The hosted review's findings are fixed in the pull request they belong
+#: to": what the brief template's last unit says, flattened, in this order.
+BRIEF_39_SENTENCES = (
+    "opens the pull request (see Branch)",
+    "waits up to ten minutes for the bot",
+    "`hands hosted-review <pr>`",
+    "docs/QODO-EXTRACTION.md",
+    "fixes each finding that is within the design",
+    "a finding that needs a design decision is filed in `meta/findings/FINDINGS.md`,"
+    " never fixed in silence",
+    "pushes",
+    "the `## Hosted review` table",
+    "`fixed in <sha>` | `dismissed: <reason>` | `finding H-nnn filed`",
+    "returns the tree to `main`",
+)
+
+
+def test_the_brief_templates_last_unit_reads_and_fixes_the_hosted_review() -> None:
+    text = " ".join((TEMPLATES / "BUILDER-N-PROMPT.md").read_text(encoding="utf-8").split())
+    last = text.split("**U-last Final report.**", 1)[1].split("## Acceptance", 1)[0]
+    at = -1
+    for said in BRIEF_39_SENTENCES:
+        assert said in strip_paths(last[at + 1:]), (
+            f"the brief's last unit does not say {said!r} in order"
+        )
+        at = last.index(said, at + 1)
+    assert "no bot comment yet" in strip_paths(last)
+    assert "never a clean review" in strip_paths(last)
+    assert "`hands hosted-review <pr>`" in strip_paths(text.split("## Execution model", 1)[1])
+
 
 #: §37's wording, superseded by §38: it must be gone from both files.
 PROTOCOL_37_REVERT_STEP = (
