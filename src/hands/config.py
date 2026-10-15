@@ -93,6 +93,8 @@ DEFAULT_KIT_DIR = "~/Downloads"  # §26: where a kit sent from the phone lands
 DEFAULT_KIT_MAX_MB = 20  # §26: the largest kit fetched, in MiB
 #: §29: how long after a job ends `hands who` still excludes its transcript.
 DEFAULT_WHO_GRACE_S = 60.0
+#: §38 (H-046): handswho never publishes twice within this many seconds unless asked.
+DEFAULT_WHO_MIN_INTERVAL_S = 60.0
 
 #: §2's "10-minute idle ceiling": how long `claude -p` stays open for a background
 #: task before it terminates the process and exits 0 (H-014).
@@ -185,6 +187,9 @@ class NotifyConfig:
     #: as `Authorization: Bearer` on every publish and every subscription. Kept out
     #: of `repr` like the secret, and never printed by a refusal.
     ntfy_token: str | None = field(default=None, repr=False)
+    #: §38 (H-046): `handswho`'s floor between two publishes; a request on
+    #: `who_cmd_topic` is answered inside it.
+    who_min_interval_s: float = DEFAULT_WHO_MIN_INTERVAL_S
 
     @property
     def channel(self) -> bool:
@@ -557,6 +562,7 @@ def parse_config(data: dict[str, Any], *, project: str, path: Path) -> Config:
             "who_topic",
             "who_cmd_topic",
             "ntfy_token",
+            "who_min_interval_s",
         ),
         "[notify]",
         path,
@@ -609,6 +615,9 @@ def parse_config(data: dict[str, Any], *, project: str, path: Path) -> Config:
             blank=_omit("the who view then takes no commands", "topic"),
         ),
         ntfy_token=_ntfy_token(notify_t, path),
+        who_min_interval_s=_number(
+            notify_t, "who_min_interval_s", DEFAULT_WHO_MIN_INTERVAL_S, "[notify]", path
+        ),
     )
     _check_channel(notify, path)
     _check_token_url(notify, url_set, path)

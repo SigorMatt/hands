@@ -154,6 +154,8 @@ cwd` is optional.
     # cmd_secret = "<one long random word>"
     # who_topic = "who-<project>-<random>"
     # who_cmd_topic = "whocmd-<project>-<random>"
+    # who_min_interval_s = 60                   # default: handswho's floor between
+    #                                           # two publishes (§38)
 
     [roles.builder]
     cwd = "~/git/<project>"              # required; the only required key
@@ -401,7 +403,14 @@ It checks, all for free: the config, the `claude` binary and its `--version`,
 each role's `cwd` (and whether it is a git repository), the allowed roots, the
 ops script's flags, which per-job isolation is in force, the playbook, whether
 notifications, the command channel, `go`, the kit transport and the who view
-are on, and whether handsd is answering. A daemon
+are on, whether `ntfy_url` is a public broker, and whether handsd is answering.
+The `broker` row (§38) is a **warning** when `ntfy_url` is unset (so
+`https://ntfy.sh`) or names a host that is neither a private address (RFC 1918,
+loopback, link-local, IPv6 unique-local, `localhost`) nor a tailnet name (an
+address in `100.64.0.0/10`, or a name ending `.ts.net`): it names the public
+broker's daily cap on what one address may publish and the "Self-hosted ntfy
+over Tailscale" section below. A private or tailnet host is `ok`. Doctor
+judges the url's text only; it does not resolve the name or reach the server. A daemon
 that is not running is a **warning**, not a failure — this step comes before
 you have to have started one. Exit code 1 means a check failed.
 
@@ -833,7 +842,13 @@ install it the way its header says, as `handswho@<project>`. `handswho` pushes t
 `who_topic` when what is running, held or waiting changes (a session's state
 must hold for two scans first; your own
 sessions never trigger a push), and whenever `status`, `who`, `check` or `?` is
-published to `who_cmd_topic`. Those words take no secret, because they execute
+published to `who_cmd_topic`. A change is compared with every relative-time
+rendering blanked (each age such as `4s`, `5m`, `2h00`, and the header's
+`HH:MM`), so a picture that differs only in its times is not published; the
+picture that is published still shows them (§38). No two publishes fall
+within `[notify] who_min_interval_s` (default 60 seconds) — counting a publish
+the broker refused — except one a command asked for; a change inside it is
+published by the first scan past it, every 20 seconds. Those words take no secret, because they execute
 nothing: the only answer is the same picture. The picture does carry the first
 line of each running job's prompt and of the commands under each session, so
 keep `who_topic` as private as `ntfy_topic`. Without `who_topic`, `handswho`

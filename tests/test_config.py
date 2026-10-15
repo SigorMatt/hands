@@ -1254,3 +1254,20 @@ permission_flags = "{flags}"
         load_config("demo")
     assert "[roles.architect]" in strip_paths(str(caught.value))
     assert "permission_flags must be empty" in strip_paths(str(caught.value))
+
+
+def test_who_min_interval_s_defaults_to_60_and_is_read_from_notify(write_config) -> None:
+    """§38: `[notify] who_min_interval_s`, handswho's floor between publishes."""
+    write_config("[roles.builder]\ncwd = '~/g'\n")
+    assert load_config("demo").notify.who_min_interval_s == 60
+    write_config("[roles.builder]\ncwd = '~/g'\n[notify]\nwho_min_interval_s = 90\n")
+    assert load_config("demo").notify.who_min_interval_s == 90
+
+
+@pytest.mark.parametrize("value", ["-1", "'60'", "true", "nan"])
+def test_a_who_min_interval_s_that_is_not_a_number_does_not_load(
+    write_config, value: str
+) -> None:
+    write_config(f"[roles.builder]\ncwd = '~/g'\n[notify]\nwho_min_interval_s = {value}\n")
+    with pytest.raises(ConfigError, match=r"\[notify\] who_min_interval_s"):
+        load_config("demo")

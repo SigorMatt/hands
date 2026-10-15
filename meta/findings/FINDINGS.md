@@ -2163,7 +2163,13 @@ Direction. §37: `handswho` publishes on a real state change only, compared
 without the relative-time text, with a floor on the interval; doctor WARNS
 on a public `ntfy_url` that the cap exists and names the self-hosted path.
 
-Status: in progress (mission 22, U2)
+Status: resolved-by-code (mission 22 U2 — `hands.who.WhoPusher.scan` publishes
+only when the fingerprint and the picture with its times blanked
+(`hands.who.blank_times`) both changed, at most once per `[notify]
+who_min_interval_s` (default 60, `hands.config`) counting a refused attempt,
+a request at once; doctor's `broker` row (`hands.doctor._broker_check`) WARNS on
+a public `ntfy_url`; tests in tests/test_who.py (§38 block), tests/test_doctor.py
+(§38 block) and tests/test_config.py)
 
 ## H-047 — a `handsd` restart kills the running builder job and nothing resumes it
 

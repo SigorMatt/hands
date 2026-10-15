@@ -1047,6 +1047,218 @@ def test_run_pushes_the_first_picture_then_scans_on_its_interval() -> None:
     assert len(post.sent) == 1
 
 
+# ------------------------------- §38 (H-046): on change only, with a floor
+
+
+def aged(by: float) -> dict[int, dict[str, Any]]:
+    """`picture_table()` with every process `by` seconds older."""
+    return {pid: {**p, "age_s": p["age_s"] + by} for pid, p in picture_table().items()}
+
+
+class Clock:
+    def __init__(self, now: float = 3600.0 * 9 + 60 * 5) -> None:
+        self.now = now
+
+    def __call__(self) -> float:
+        return self.now
+
+
+def ticking(box: Box, post: Recorder, clock: Clock, **kwargs: Any) -> who.WhoPusher:
+    """A pusher whose picture ages with `clock`: the process ages, the driver's
+    idle time and the header's HH:MM all move as the clock does."""
+    start = clock.now
+
+    def table() -> dict[int, dict[str, Any]]:
+        return aged(clock.now - start)
+
+    def transcripts(_pid: int, cwd: str, _limit: float, _exclude: Any) -> Any:
+        seen = TRANSCRIPTS.get(cwd)
+        if seen is None:
+            return "session", None
+        return "session", {**seen, "idle_s": seen["idle_s"] + clock.now - start}
+
+    src = replace(sources(daemon=box), procs=table, transcripts=transcripts, clock=clock)
+    return who.WhoPusher(
+        src, topic=WHO_TOPIC, cmd_topic=WHO_CMD_TOPIC, ntfy_url=NTFY, post=post,
+        clock=clock, **kwargs,
+    )  # fmt: skip
+
+
+def test_blanking_the_times_makes_two_pictures_that_differ_only_in_time_equal(
+    utc: None,
+) -> None:
+    """§38: every relative-time rendering (`age()`'s 4s, 5m, 2h00, 3d and the
+    header's HH:MM) is blanked before the comparison; nothing else is."""
+    early = who.build_summary(sources())[0]
+    clock = Clock(3600.0 * 9 + 60 * 5 + 100)
+    late_src = replace(sources(table=lambda: aged(100)), clock=clock)
+    late = who.build_summary(late_src)[0]
+    assert early != late
+    assert who.blank_times(early) == who.blank_times(late)
+    queued = picture_daemon()
+    queued["roles"]["aux"]["queued"] = ["j2", "j4"]
+    changed = who.build_summary(sources(daemon=lambda: queued))[0]
+    assert who.blank_times(early) != who.blank_times(changed)
+    assert who.blank_times("12:40 · 2 claude processes\n\nx (session, 3d) — 2h01 · 90s idle") == (
+        "_ · 2 claude processes\n\nx (session, _) — _ · _ idle"
+    )
+
+
+def test_two_scans_differing_only_in_the_relative_time_publish_once(utc: None) -> None:
+    """§38: the scans move every age and the clock; with no floor at all, only the
+    first picture is published, and it carries the times."""
+    box, post, clock = Box(), Recorder(), Clock()
+    p = ticking(box, post, clock, min_gap=0.0)
+
+    async def scenario() -> None:
+        assert await p.scan() is True
+        for _ in range(5):
+            clock.now += 100
+            assert await p.scan() is False
+
+    asyncio.run(scenario())
+    assert len(post.sent) == 1
+    assert strip_paths(post.sent[0]["message"]).startswith("09:05 · 4 claude processes")
+    assert "python -m pytest (process, 4s)" in strip_paths(post.sent[0]["message"])
+    assert "waiting for you · 30s idle" in strip_paths(post.sent[0]["message"])
+
+
+def test_a_real_change_publishes_with_the_times_of_its_own_scan(utc: None) -> None:
+    box, post, clock = Box(), Recorder(), Clock()
+    p = ticking(box, post, clock, min_gap=60.0)
+
+    async def scenario() -> None:
+        assert await p.scan() is True
+        clock.now += 100
+        box.state["roles"]["aux"]["queued"] = ["j2", "j4"]
+        assert await p.scan() is True
+
+    asyncio.run(scenario())
+    assert len(post.sent) == 2
+    assert "role aux — 2 jobs queued" in strip_paths(post.sent[1]["message"])
+    assert strip_paths(post.sent[1]["message"]).startswith("09:06 · 4 claude processes")
+    assert "python -m pytest (process, 1m)" in strip_paths(post.sent[1]["message"])
+
+
+def test_two_real_changes_10_s_apart_publish_once_and_the_second_after_the_floor(
+    utc: None,
+) -> None:
+    """§38: never twice within `who_min_interval_s`; the second change is deferred,
+    not dropped — the first scan past the floor publishes it."""
+    box, post, clock = Box(), Recorder(), Clock()
+    p = ticking(box, post, clock, min_gap=60.0)
+
+    async def scenario() -> None:
+        assert await p.scan() is True  # the first picture, at t=0
+        clock.now += 100
+        box.state["roles"]["aux"]["queued"] = ["j2", "j4"]
+        assert await p.scan() is True  # change one, at t=100
+        clock.now += 10
+        box.state["inbox"] = []
+        assert await p.scan() is False  # change two, at t=110: inside the floor
+        clock.now += 20
+        assert await p.scan() is False  # t=130: still inside
+        clock.now += 20
+        assert await p.scan() is False  # t=150: still inside
+        clock.now += 10
+        assert await p.scan() is True  # t=160: the floor has passed
+        clock.now += 100
+        assert await p.scan() is False  # nothing new since
+
+    asyncio.run(scenario())
+    assert len(post.sent) == 3
+    assert "unread from handsd" in strip_paths(post.sent[1]["message"])
+    assert "unread from handsd" not in strip_paths(post.sent[2]["message"])
+
+
+def test_a_request_publishes_at_once_inside_the_floor(utc: None) -> None:
+    box, post, clock = Box(), Recorder(), Clock()
+    p = ticking(box, post, clock, min_gap=60.0)
+
+    async def scenario() -> None:
+        assert await p.scan() is True
+        clock.now += 5
+        assert await p.command("status") is True
+        clock.now += 5
+        assert await p.command("?") is True
+
+    asyncio.run(scenario())
+    assert [item["title"] for item in post.sent] == [
+        who.PUSH_TITLE, who.REQUESTED_TITLE, who.REQUESTED_TITLE,
+    ]  # fmt: skip
+
+
+def test_a_refused_publish_is_not_retried_inside_the_floor(utc: None) -> None:
+    """§38 (H-046): a broker answering 429 is not asked again every scan; the
+    attempt starts the floor, and the picture is published past it."""
+    box, clock = Box(), Clock()
+    answers = [200, 429, 429, 200]
+    sent: list[dict[str, Any]] = []
+
+    async def post(url: str, **kwargs: Any) -> int:
+        sent.append({"url": url, **kwargs})
+        return answers[len(sent) - 1]
+
+    p = ticking(box, post, clock, min_gap=60.0)  # type: ignore[arg-type]
+
+    async def scenario() -> None:
+        assert await p.scan() is True
+        clock.now += 100
+        box.state["inbox"] = []
+        assert await p.scan() is False  # 429
+        for _ in range(2):
+            clock.now += 20
+            assert await p.scan() is False  # inside the floor: not attempted
+        clock.now += 20
+        assert await p.scan() is False  # t=160, past the floor: 429 again
+        clock.now += 60
+        assert await p.scan() is True
+
+    asyncio.run(scenario())
+    assert len(sent) == 4
+
+
+def test_your_own_session_changing_publishes_nothing(utc: None) -> None:
+    """§24 still holds under §38: your session's text changes, nothing is published."""
+    box, post = Box(), Recorder()
+    seen = dict(TRANSCRIPTS)
+    src = replace(
+        sources(daemon=box),
+        transcripts=lambda _pid, cwd, _limit, _exclude: ("session", seen.get(cwd)),
+    )
+    p = who.WhoPusher(src, topic=WHO_TOPIC, cmd_topic=None, ntfy_url=NTFY, post=post,
+                      clock=lambda: 1000.0, min_gap=0.0)  # fmt: skip
+
+    async def scenario() -> None:
+        assert await p.scan() is True
+        seen[REPO] = {"waiting": False, "last_prompt": "x", "idle_s": 1.0}
+        assert await p.scan() is False
+        assert await p.scan() is False
+
+    asyncio.run(scenario())
+    assert len(post.sent) == 1
+
+
+def test_handswho_takes_the_floor_from_the_config(
+    tmp_home: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    seen: list[float] = []
+
+    async def run(self: who.WhoPusher) -> None:
+        seen.append(self.min_gap)
+
+    monkeypatch.setattr(who.WhoPusher, "run", run)
+    for extra, floor in (("", 60.0), ("who_min_interval_s = 300\n", 300.0)):
+        body = config_body(
+            tmp_home, tmp_path, extra=f'[notify]\nwho_topic = "{WHO_TOPIC}"\n{extra}'
+        )
+        write_project(tmp_home, body)
+        config = hands_config.load_config(PROJECT)
+        assert config.notify.who_min_interval_s == floor
+        assert who.watch(config, tmp_home / "sock") == 0
+    assert seen == [60.0, 300.0]
+
+
 # -------------------------------------------------------------------- the CLIs
 
 
