@@ -3064,6 +3064,36 @@ def test_a_cli_send_to_the_builder_tells_it_to_commit_a_dirty_journal_first(
     phone_drive(body)
 
 
+def test_the_journal_reminder_runs_off_the_event_loop(project: str, workdir: Path) -> None:
+    """PR #4 hosted review, "A send to the builder can stall the daemon on git":
+    `journal_reminder` (a `git status` and an inbox read) runs in a worker thread for
+    an `answer` and for a cli send to the builder, and its sentence still leads."""
+    journal(workdir, dirty=True)
+
+    async def body(daemon: Daemon, fake: FakeNtfy) -> None:
+        loop_thread = threading.get_ident()
+        threads: list[int] = []
+        real = daemon.playbook.journal_reminder
+
+        def recorded() -> str | None:
+            threads.append(threading.get_ident())
+            return real()
+
+        daemon.playbook.journal_reminder = recorded  # type: ignore[method-assign]
+        asked = await builder_asked(daemon)
+        daemon.spool.append_event("consult.done", {"job": CONSULTATION})
+        await say(daemon, fake, f"answer {SECRET} {ANSWER_TEXT}")
+        (row,) = [r for r in (await ok("jobs"))["jobs"] if r["id"] != asked["id"]]
+        assert_reminded((await ok("wait", row["id"]))["prompt"], ANSWER_TEXT)
+        text = "FAKE:result VERDICT: mission 23 finished"
+        sent = await ok("send", "--role", "builder", "--context", "keep", text)
+        assert_reminded((await ok("wait", sent["id"]))["prompt"], text)
+        assert len(threads) >= 2, threads  # builder_asked's own send is a cli send too
+        assert all(thread != loop_thread for thread in threads), (loop_thread, threads)
+
+    phone_drive(body)
+
+
 def test_answer_is_refused_when_the_builder_has_no_resumable_session(
     project: str, caplog: pytest.LogCaptureFixture
 ) -> None:
@@ -3296,6 +3326,34 @@ def test_a_refused_approve_with_the_secret_publishes_its_reason(project: str) ->
                 if item["title"] == as_published("approve")] == [f"{NTFY}/{EVENTS_TOPIC}"] * 2
 
     phone_drive(body)
+
+
+def test_a_refused_command_never_publishes_or_logs_the_secret_typed_as_its_job_id(
+    project: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    """PR #4 hosted review, "A refused phone command can expose its secret": the
+    secret typed as the job id (alone, inside a longer id, or in other case) is
+    authenticated by the final token, refused as "no such job", and neither the
+    published reason nor the log carries it."""
+    caplog.set_level(logging.DEBUG)
+
+    async def body(daemon: Daemon, fake: FakeNtfy) -> None:
+        await say(daemon, fake, f"approve {SECRET} {SECRET}")
+        await say(daemon, fake, f"deny x{SECRET}y because {SECRET}")
+        await say(daemon, fake, f"approve {SECRET.lower()} {SECRET}")
+        await daemon.notifier.drain()
+        approve = refusals(daemon, "approve")
+        deny = refusals(daemon, "deny")
+        assert len(approve) == 2 and len(deny) == 1, (approve, deny)
+        for message in approve + deny:
+            assert "no such job" in strip_paths(message), message
+            assert SECRET.lower() not in strip_paths(message.lower()), message
+        for item in daemon.notifier.post.sent:
+            assert SECRET.lower() not in strip_paths(json.dumps(item, default=str).lower()), item
+
+    phone_drive(body)
+    assert "no such job" in strip_paths(caplog.text)
+    assert SECRET.lower() not in strip_paths(caplog.text.lower())
 
 
 def test_a_refused_command_with_a_wrong_or_missing_secret_stays_silent(project: str) -> None:

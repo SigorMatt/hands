@@ -124,8 +124,10 @@ what tests prove, NOT PROVEN (mandatory), the `## Review items` table for
 the previous review's blockers and should-fix. On a pull-request mission it
 then opens the pull request (see Branch) and waits up to ten minutes for the
 bot, the hosted reviewer, in one-minute foreground steps: `hands
-hosted-review <pr>` exits 3 with "no bot comment yet" until the bot has
-posted, which is the wait, never a clean review. The command's reading is
+hosted-review <pr>` exits 3 with "no bot comment yet", writing nothing,
+until the bot has posted its Code Review comment, which is the wait, never
+a clean review; exit 4 means the findings could not be parsed against the
+header counts, so read the archived comment itself. The command's reading is
 docs/QODO-EXTRACTION.md's method; it archives the bot's words under
 `meta/reviews/hosted/PR-<pr>/<k>/` and takes the verdict from the Code
 Review comment only. The unit then fixes each finding that is within the

@@ -113,8 +113,9 @@ A `git` without `-C` runs in the role's cwd and is judged by the table alone.
 Reads are confined (§32, review 15 should-fix 7). In role and architect mode
 every path a row reads must be under the clone (`HANDS_CLONE`) or the spool's
 own directory, `~/.hands/<project>/` — and, in architect mode only, under
-`HANDS_KITS` and `HANDS_DOCS` (§39, H-051: the installed hands' handbook and
-templates) — decided as `git -C` is: `os.path.realpath` containment, a
+`HANDS_KITS` and `docs/` and `templates/` under `HANDS_DOCS` (§39, H-051: the
+installed hands' handbook and templates; not the rest of `HANDS_DOCS`, which in
+a source-tree install is the hands repository) — decided as `git -C` is: `os.path.realpath` containment, a
 relative path joined to the hook's working directory (for `git`, to its `-C`
 value), and a leading unquoted `~` expanded as bash expands it. The paths are:
 every file word of `cat`, `head`, `tail`, `wc`; `ls`'s words, or `.` when it
@@ -274,7 +275,8 @@ ROLE_ENV = "HANDS_ROLE"
 CONSULT_ROLE_ENV = "HANDS_CONSULT_ROLE"
 CLONE_ENV = "HANDS_CLONE"  # §29: role mode's `git -C` must name this path
 KITS_ENV = "HANDS_KITS"  # §31: architect mode's writes must land under this path
-DOCS_ENV = "HANDS_DOCS"  # §39 (H-051): architect mode also reads under this path
+DOCS_ENV = "HANDS_DOCS"  # §39 (H-051): architect mode also reads these under it:
+DOCS_SUBDIRS = ("docs", "templates")  # the handbook and the templates, nothing else
 DRIVER_ROLE = "driver"
 ARCHITECT_ROLE = "architect"  # §31: the third mode value
 #: The two modes handsd starts: both pin `git -C` to the role's clone.
@@ -643,7 +645,9 @@ class Reads:
     """§32 (review 15 should-fix 7): the roots a role's reads are confined to.
 
     The clone (`HANDS_CLONE`), the spool (`spool_dir`) and, in architect mode
-    only, `HANDS_KITS` and `HANDS_DOCS` (§39, H-051). A root that is unset or
+    only, `HANDS_KITS` and `docs/` and `templates/` under `HANDS_DOCS` (§39,
+    H-051) — not `HANDS_DOCS` itself, which in a source-tree install is the hands
+    repository root (PR #4 hosted review, finding 7). A root that is unset or
     empty confines nothing, so with none of them every path read is refused.
     Only the role modes build one.
     """
@@ -651,7 +655,8 @@ class Reads:
     def __init__(self, role, clone, spool, kits, docs=None):
         self.role, self.clone, self.spool, self.kits = role, clone, spool, kits
         self.docs = docs
-        roots = [clone, spool] + ([kits, docs] if role == ARCHITECT_ROLE else [])
+        shipped = [os.path.join(docs, sub) for sub in DOCS_SUBDIRS] if docs else []
+        roots = [clone, spool] + ([kits, *shipped] if role == ARCHITECT_ROLE else [])
         self.roots = [root for root in roots if root]
 
     def problem(self, word: str, mask: str, name: str, cmd: str, base=None):
@@ -663,7 +668,8 @@ class Reads:
             path = os.path.join(base, path)
         if any(under(path, root) for root in self.roots):
             return None
-        kits = (f", {KITS_ENV}={self.kits!r}, {DOCS_ENV}={self.docs!r}"
+        kits = (f", {KITS_ENV}={self.kits!r}, {DOCS_ENV}={self.docs!r} (docs/ and "
+                f"templates/ under it)"
                 if self.role == ARCHITECT_ROLE else "")
         also = (" (and the architect's kits directory and hands' docs)"
                 if self.role == ARCHITECT_ROLE else "")

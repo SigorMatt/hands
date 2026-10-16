@@ -402,7 +402,10 @@ def build_parser() -> argparse.ArgumentParser:
         "archive each body byte for byte with its JSON under meta/reviews/hosted/PR-<n>/<k>/ "
         "at the repository root, print the Code Review comment's categories, findings and "
         "verdict and the diff against the previous <k>; exit "
-        f"{hosted_mod.EXIT_NOT_YET} with nothing written when the bot has not commented yet",
+        f"{hosted_mod.EXIT_NOT_YET} with nothing written when the bot has not commented yet "
+        "or its Code Review comment is not there yet (a state to wait on); exit "
+        f"{hosted_mod.EXIT_UNPARSED} when the header counts findings and none parsed is open "
+        "(the findings could not be parsed against the header counts: no verdict)",
     )
     hosted.add_argument("pr", type=int, help="the pull request number")
     hosted.add_argument(

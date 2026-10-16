@@ -57,10 +57,12 @@ they were, and never from "nothing new by id", which is what an in-place
 edit looks like.
 
 Exit 3, "no bot comment yet", is the wait, never a clean review (so is "no
-Code Review comment yet"): the sub-agent waits for the bot up to ten
-minutes in one-minute foreground steps, running the command again after
-each (never a background task); after ten minutes with none, say so in the
-section below and go on.
+Code Review comment yet"; neither writes anything): the sub-agent waits for
+the bot up to ten minutes in one-minute foreground steps, running the
+command again after each (never a background task); after ten minutes with
+none, say so in the section below and go on. Exit 4 is no verdict either:
+the header counts findings and none parsed as open, so the sub-agent reads
+the archived Code Review comment itself.
 
 The sub-agent then audits the builder's dispositions, the `## Hosted review`
 table of `meta/FINAL-REPORT-N.md`, against the archive (the builder's fetch

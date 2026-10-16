@@ -439,7 +439,10 @@ class PhoneChannel:
     async def _refuse(self, command: str, why: str) -> None:
         """§39 (H-058): a command whose token was the secret (or a nonce), refused:
         logged, and published on `ntfy_topic` titled `<command>` with the reason.
-        `why` is hands' own text; it never carries the token."""
+        `why` is hands' own text, but it can quote what was typed (a job id that
+        was no job): the secret is cut out of it, in any case, before it is logged
+        or published (PR #4 hosted review, finding 1)."""
+        why = self._redact(why)
         self._ignore(f"{command}: {why}")
         await self.daemon.notifier.answer(command, f"{command} refused: {why}")
 
@@ -706,6 +709,13 @@ class PhoneChannel:
     def _is_secret(self, token: str) -> bool:
         secret = self.notify.cmd_secret
         return secret is not None and hmac.compare_digest(token.encode(), secret.encode())
+
+    def _redact(self, text: str) -> str:
+        """`text` with every occurrence of the command secret, in any case, replaced."""
+        secret = self.notify.cmd_secret
+        if not secret:
+            return text
+        return re.sub(re.escape(secret), "<secret>", text, flags=re.IGNORECASE)
 
     def _is_nonce(self, job_id: str, token: str) -> bool:
         nonce = self.nonces.get(job_id)

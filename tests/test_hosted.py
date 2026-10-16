@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import io
 import json
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -150,6 +151,9 @@ def test_every_finding_resolved_says_none_is_open(
     data = json.loads(page.read_text(encoding="utf-8"))
     for title in ("The report hides its verdict", "The sibling repository expects the old name"):
         data[0]["body"] = data[0]["body"].replace(f"  {title} ", f"  <s>{title}</s> ✓ Resolved ")
+    # the bot resets the header counts as it strikes findings (docs/QODO-EXTRACTION.md)
+    for label in ("Rule violations", "Cross-repo conflicts"):
+        data[0]["body"] = data[0]["body"].replace(f"{label} (1)", f"{label} (0)")
     page.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
     serve(monkeypatch, pages)
     code, out, err = run("3")
@@ -209,20 +213,174 @@ def test_a_category_never_seen_before_is_printed(
 
 
 def test_bot_flag_changes_the_login_filtered_to(
-    repo: Path, monkeypatch: pytest.MonkeyPatch
+    repo: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    serve(monkeypatch, FIXTURES / "first")
+    pages = tmp_path / "pages"
+    shutil.copytree(FIXTURES / "first", pages)
+    page = pages / "issues-3-comments.page-1.json"
+    data = json.loads(page.read_text(encoding="utf-8"))
+    (human,) = [obj for obj in data if obj["id"] == 7001]
+    human["body"] = "<h3>Code Review by some-human</h3>\r\n" + human["body"]
+    page.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+    serve(monkeypatch, pages)
     code, out, err = run("3", "--bot", "some-human")
-    assert code == 3, err  # bodies archived, but no verdict to read yet
+    assert code == 0, err
     archive = repo / "meta" / "reviews" / "hosted" / "PR-3" / "1"
     assert sorted(path.name for path in archive.glob("*.md")) == [
         "issue-comment-7001.md", "review-5002.md"
     ]
     # CRLF and all: the bytes the API gave
     assert (archive / "issue-comment-7001.md").read_bytes() == (
-        b"Thanks, looking.\r\nTrailing CRLF kept.\r\n"
+        b"<h3>Code Review by some-human</h3>\r\nThanks, looking.\r\nTrailing CRLF kept.\r\n"
     )
-    assert "no Code Review comment" in strip_paths(out)
+    assert "code review comment: issue-comment 7001" in strip_paths(out)
+
+
+def test_a_bot_comment_without_the_code_review_comment_exits_3_and_writes_nothing(
+    repo: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """PR #4 hosted review, "Each wait-loop retry writes another archive": the bot
+    has posted its summary but not yet its Code Review comment — a state to wait on,
+    so nothing is written, however often the wait loop runs the command."""
+    pages = tmp_path / "pages"
+    shutil.copytree(FIXTURES / "first", pages)
+    page = pages / "issues-3-comments.page-2.json"
+    data = [obj for obj in json.loads(page.read_text(encoding="utf-8")) if obj["id"] != 6002]
+    page.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+    serve(monkeypatch, pages)
+    for _ in range(3):
+        code, out, err = run("3")
+        assert code == 3, (out, err)
+        assert "the Code Review comment is not there yet" in strip_paths(out)
+        assert "nothing written" in strip_paths(out)
+        assert not (repo / "meta").exists()
+    # the same with --bot naming a login that has comments but no Code Review one
+    serve(monkeypatch, FIXTURES / "first")
+    code, out, err = run("3", "--bot", "some-human")
+    assert code == 3, (out, err)
+    assert not (repo / "meta").exists()
+
+
+def test_a_failed_archive_leaves_no_fetch_behind(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """PR #4 hosted review, "A failed archive leaves a false review fetch": a write
+    that fails after the first body is written leaves no `<k>` and no partial
+    directory, and the next run numbers and diffs as if it never happened."""
+    serve(monkeypatch, FIXTURES / "first")
+    real = Path.write_text
+
+    def failing(self: Path, *args: object, **kwargs: object) -> int:
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(Path, "write_text", failing)
+    code, out, err = run("3")
+    assert code == 1, (out, err)
+    assert "No space left on device" in strip_paths(err)
+    base = repo / "meta" / "reviews" / "hosted" / "PR-3"
+    assert not base.exists() or list(base.iterdir()) == []
+    monkeypatch.setattr(Path, "write_text", real)
+    code, out, err = run("3")
+    assert code == 0, err
+    assert sorted(path.name for path in base.iterdir()) == ["1"]
+    assert "diff against" not in strip_paths(out)
+
+
+def test_a_title_with_the_word_resolved_stays_open(
+    repo: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """PR #4 hosted review, "A finding titled with 'Resolved' counts as fixed":
+    resolved is struck through or the bot's `✓ Resolved` mark, never the word."""
+    pages = tmp_path / "pages"
+    shutil.copytree(FIXTURES / "first", pages)
+    page = pages / "issues-3-comments.page-2.json"
+    text = page.read_text(encoding="utf-8")
+    assert text.count("The report hides its verdict") == 1
+    page.write_text(text.replace("The report hides its verdict",
+                                 "Resolved paths escape the root"), encoding="utf-8")
+    serve(monkeypatch, pages)
+    code, out, err = run("3")
+    assert code == 0, err
+    assert "verdict: 3 of 3 findings open in the Code Review comment" in strip_paths(out)
+    assert "      resolved\n" not in strip_paths(out)
+    assert "2.  Resolved paths escape the root" in strip_paths(out.split("verdict:")[1])
+
+
+def _renumber(body: str, numbers: str) -> str:
+    """`body` with the numbered `<summary>` of each finding in `numbers` wrapped in
+    `<b>` — a markup change the finding parser does not read."""
+    return re.sub(rf"<summary>(\s*)([{numbers}])\.", r"<summary>\1<b>\2</b>.", body)
+
+
+def test_header_counts_with_no_parsed_finding_is_no_clean_review(
+    repo: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """PR #4 hosted review, "A misparsed Code Review reads as a clean review": the
+    header counts three findings, none parses — no clean verdict, exit 4."""
+    pages = tmp_path / "pages"
+    shutil.copytree(FIXTURES / "first", pages)
+    page = pages / "issues-3-comments.page-2.json"
+    data = json.loads(page.read_text(encoding="utf-8"))
+    data[0]["body"] = _renumber(data[0]["body"], "123")
+    page.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+    serve(monkeypatch, pages)
+    code, out, err = run("3")
+    assert code == 4, (out, err)
+    assert "no finding open" not in strip_paths(out)
+    assert ("verdict: the findings could not be parsed against the header counts "
+            "(the header counts 3, 0 parsed, 0 open)") in strip_paths(out)
+
+
+def test_a_parsed_count_short_of_the_header_is_said(
+    repo: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    pages = tmp_path / "pages"
+    shutil.copytree(FIXTURES / "first", pages)
+    page = pages / "issues-3-comments.page-2.json"
+    data = json.loads(page.read_text(encoding="utf-8"))
+    data[0]["body"] = _renumber(data[0]["body"], "3")
+    page.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+    serve(monkeypatch, pages)
+    code, out, err = run("3")
+    assert code == 0, err
+    assert ("header counts 3 findings, but 2 parsed (2 open): read the Code Review "
+            "comment itself") in strip_paths(out)
+    assert "verdict: 2 of 2 findings open in the Code Review comment" in strip_paths(out)
+
+
+def test_the_header_and_the_parse_agreeing_says_nothing_more(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    serve(monkeypatch, FIXTURES / "edited")  # header reset to 2, three numbered, 2 open
+    code, out, err = run("3")
+    assert code == 0, err
+    assert "but" not in strip_paths(out.split("findings:")[0])
+    assert "header counts" not in strip_paths(out)
+
+
+def test_an_inline_comment_matches_its_finding_whatever_the_case(
+    repo: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """PR #4: the inline copies of findings 8 and 9 differed from their titles only in
+    case (and an HTML-escaped quote) and were printed as matching no finding."""
+    pages = tmp_path / "pages"
+    shutil.copytree(FIXTURES / "first", pages)
+    review = pages / "issues-3-comments.page-2.json"
+    text = review.read_text(encoding="utf-8")
+    review.write_text(text.replace("A failed load leaves the widget half-built",
+                                   "A failed load leaves the &#x27;Widget&#x27; half-built"),
+                      encoding="utf-8")
+    inline = pages / "pulls-3-comments.page-1.json"
+    text = inline.read_text(encoding="utf-8")
+    inline.write_text(text.replace("A failed load leaves the widget half-built",
+                                   "A failed load leaves the 'widget' half-built"),
+                      encoding="utf-8")
+    serve(monkeypatch, pages)
+    code, out, err = run("3")
+    assert code == 0, err
+    assert "      inline: review-comment 4002 at src/widget/loader.py:46\n" in strip_paths(out)
+    assert "no finding of that title: review-comment 4002" not in strip_paths(out)
+    assert "inline comment with no finding of that title" not in strip_paths(out)
 
 
 def test_a_failed_fetch_writes_nothing_and_exits_1(
@@ -234,3 +392,13 @@ def test_a_failed_fetch_writes_nothing_and_exits_1(
     assert code == 1
     assert "HTTP 502" in strip_paths(err)
     assert not (repo / "meta").exists()
+
+
+def test_the_help_names_both_exit_statuses(capsys: pytest.CaptureFixture[str]) -> None:
+    with pytest.raises(SystemExit):
+        hands_main(["hosted-review", "--help"])
+    text = " ".join(capsys.readouterr().out.split())
+    assert "exit 3 with nothing written" in strip_paths(text)
+    assert "Code Review comment is not there yet" in strip_paths(text)
+    assert ("exit 4 when the header counts findings and none parsed is open (the findings "
+            "could not be parsed against the header counts: no verdict)") in strip_paths(text)

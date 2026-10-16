@@ -2554,7 +2554,8 @@ def test_the_integration_doc_states_the_server_fallback_as_the_loader_does(
 
 def test_the_integration_doc_gives_the_architect_handbook_and_reads_under_hands_docs() -> None:
     """§39 (H-051): the architect's `hands` subcommands gain `handbook`, and the
-    architect reads under `HANDS_DOCS` — what the guard allows."""
+    architect reads under `docs/` and `templates/` in `HANDS_DOCS`, not the rest of
+    it — what the guard allows (PR #4 hosted review, finding 7)."""
     spec = importlib.util.spec_from_file_location(
         "bash_guard_u9", ROOT / "driver" / "hooks" / "bash_guard.py"
     )
@@ -2564,7 +2565,12 @@ def test_the_integration_doc_gives_the_architect_handbook_and_reads_under_hands_
     assert "handbook" in guard.ARCHITECT_HANDS_SUBCOMMANDS
     text = _integration()
     assert "`hands show|jobs|inbox|pipeline|status|handbook|kit check|kit file`" in text
-    assert "the architect, under `HANDS_KITS` or `HANDS_DOCS`" in text
+    assert guard.DOCS_SUBDIRS == ("docs", "templates")
+    flat = " ".join(text.split())
+    assert ("the architect, under `HANDS_KITS` or under `docs/` and `templates/` in "
+            "`HANDS_DOCS`") in flat
+    assert "nothing else in `HANDS_DOCS`" in flat
+    assert "the architect, under `HANDS_KITS` or `HANDS_DOCS`" not in flat
 
 
 def test_the_handbook_says_status_prints_the_architect_row(tmp_home: Path) -> None:

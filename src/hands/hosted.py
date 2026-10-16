@@ -8,16 +8,21 @@ Review comment in place and posts nothing new, so the reading is:
 
 1. fetch the issue comments, the reviews and the review comments, every page
    (an explicit `page=` loop up to the first empty page), through `gh api`;
-2. keep the bot's (`--bot`, default `qodo-code-review[bot]`); with none, say
-   "no bot comment yet", write nothing and exit 3 — a state to wait on, never
-   a clean review;
+2. keep the bot's (`--bot`, default `qodo-code-review[bot]`); with none, or
+   with no Code Review comment among them yet, say so, write nothing and exit
+   3 — a state to wait on, never a clean review (PR #4 hosted review, finding
+   10: a wait loop's retries must not pile up archives);
 3. archive each body byte for byte (`<kind>-<id>.md`) with the comment's JSON
    (`<kind>-<id>.json`) under `meta/reviews/hosted/PR-<n>/<k>/` at the
-   repository root, `k` one more than the highest already there;
+   repository root, `k` one more than the highest already there — written into
+   a hidden sibling directory and renamed to `<k>` only once complete, so a
+   failed write leaves no `<k>` (finding 6);
 4. print the Code Review comment's header categories as found, every numbered
    finding verbatim with its file:line anchor, the summary comment's id, the
    diff against the previous `k` by comment id, and the verdict — taken from
-   the Code Review comment only, never from the inline comments.
+   the Code Review comment only, never from the inline comments. A header that
+   counts findings while none parsed is open is no clean review: exit 4
+   (finding 8); a parse whose open count differs from the header's is said.
 
 Speaks a transport only through `gh`, as `hands doctor`'s `gh` row does.
 """
@@ -25,9 +30,13 @@ Speaks a transport only through `gh`, as `hands doctor`'s `gh` row does.
 from __future__ import annotations
 
 import difflib
+import html
 import json
+import os
 import re
+import shutil
 import subprocess
+import tempfile
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -36,6 +45,8 @@ from typing import Any, TextIO
 DEFAULT_BOT = "qodo-code-review[bot]"
 #: §39: "no bot comment yet" (and no Code Review comment yet) is a state to wait on.
 EXIT_NOT_YET = 3
+#: The header counts findings, yet none parsed is open: no verdict can be read.
+EXIT_UNPARSED = 4
 PER_PAGE = 100
 #: A loop that never meets an empty page is a broken `gh`, not a long review.
 MAX_PAGES = 100
@@ -54,7 +65,10 @@ _FINDING = re.compile(r"<summary>[ \t]*(\d+)\.[ \t]+([^\n]*?)[ \t]*</summary>")
 _DESCRIPTION = re.compile(r"<summary>Description</summary>.*?<pre>(.*?)</pre>", re.DOTALL)
 _ANCHOR = re.compile(r"\[([^\[\]\s()]+?)\\?\[R?(\d+)(?:-R?(\d+))?\\?\]\]\(")
 _INLINE_TITLE = re.compile(r"^[ \t]*(\d+)\\?\.[ \t]+(.+)$", re.MULTILINE)
-_STRUCK = re.compile(r"<s>|<del>|<strike>|~~|Resolved")
+#: Struck through, or the bot's `✓ Resolved` mark — never the bare word, which an
+#: open finding's title can carry (PR #4 hosted review, finding 9).
+_STRUCK = re.compile(r"<s>|<del>|<strike>|~~|✓\s*Resolved")
+_COUNT = re.compile(r"\((\d+)\)\s*$")
 
 
 class HostedError(Exception):
@@ -76,12 +90,19 @@ class Finding:
     def plain(self) -> str:
         return _plain(self.title)
 
+    @property
+    def key(self) -> str:
+        """What pairs the finding with its inline comment: the plain title, case
+        folded (on PR #4 two inline titles differed from theirs only in case)."""
+        return self.plain.casefold()
+
 
 def _plain(title: str) -> str:
     """A title without markup, code spans or the resolved mark: what pairs a
     finding across fetches and with its inline comment."""
     text = re.sub(r"<code>.*?</code>", "", title)
-    text = re.sub(r"<[^>]+>", "", text).replace("✓ Resolved", "").replace("~~", "")
+    text = re.sub(r"<[^>]+>", "", text).replace("~~", "")
+    text = re.sub(r"✓\s*Resolved", "", html.unescape(text))
     return " ".join(text.replace("\\", "").split())
 
 
@@ -154,14 +175,26 @@ def _body(obj: dict[str, Any]) -> str:
 
 
 def archive(base: Path, k: int, comments: list[tuple[str, dict[str, Any]]]) -> Path:
+    """Write the fetch into a hidden sibling of `<k>` (`_numbered` skips it) and
+    rename it to `<k>` once every file is written; on any failure remove it, so
+    the next run numbers and diffs as if this one never happened."""
     target = base / str(k)
-    target.mkdir(parents=True, exist_ok=False)
-    for kind, obj in comments:
-        name = f"{kind}-{obj['id']}"
-        (target / f"{name}.md").write_bytes(_body(obj).encode("utf-8"))
-        (target / f"{name}.json").write_text(
-            json.dumps(obj, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
-        )
+    base.mkdir(parents=True, exist_ok=True)
+    if target.exists():
+        raise HostedError(f"{target} already exists")
+    partial = Path(tempfile.mkdtemp(prefix=f".{k}.partial-", dir=base))
+    try:
+        for kind, obj in comments:
+            name = f"{kind}-{obj['id']}"
+            (partial / f"{name}.md").write_bytes(_body(obj).encode("utf-8"))
+            (partial / f"{name}.json").write_text(
+                json.dumps(obj, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
+            )
+        os.chmod(partial, 0o755)  # mkdtemp's 0700, as a plain mkdir would leave it
+        os.rename(partial, target)
+    except BaseException:
+        shutil.rmtree(partial, ignore_errors=True)
+        raise
     return target
 
 
@@ -199,6 +232,13 @@ def categories(body: str) -> list[str]:
     return [label.strip() for label in _CATEGORY.findall(header)]
 
 
+def header_total(body: str) -> int | None:
+    """The header counts added up (`Bugs (7)` + …), or None with no header label."""
+    labels = categories(body)
+    counts = [int(hit.group(1)) for label in labels if (hit := _COUNT.search(label))]
+    return sum(counts) if counts else None
+
+
 def findings(body: str) -> list[Finding]:
     matches = list(_FINDING.finditer(body))
     found = []
@@ -221,7 +261,8 @@ def findings(body: str) -> list[Finding]:
 
 
 def _inline(obj: dict[str, Any]) -> tuple[str | None, str]:
-    """An inline comment's finding title (plain) and its file:line."""
+    """An inline comment's finding title (plain) and its file:line; matched to a
+    finding by `Finding.key`, case folded."""
     match = _INLINE_TITLE.search(_body(obj))
     line = obj.get("line") or obj.get("original_line")
     where = f"{obj.get('path')}:{line}" if line else str(obj.get("path"))
@@ -321,6 +362,17 @@ def run(pr: int, bot: str = DEFAULT_BOT, *, out: TextIO, err: TextIO,
             print(f"PR #{pr}: no bot comment yet from {bot}; nothing written. Wait and run "
                   "again: this is not a clean review (§39)", file=out)
             return EXIT_NOT_YET
+        if _code_review(comments) is None:
+            print(f"PR #{pr}: {bot} has commented, but the Code Review comment is not there "
+                  "yet; nothing written. Wait and run again: this is not a clean review "
+                  "(§39)", file=out)
+            return EXIT_NOT_YET
+        review = _code_review(comments)
+        if review is None:
+            print(f"PR #{pr}: {bot} has commented, but the Code Review comment is not there "
+                  "yet; nothing written. Wait and run again: this is not a clean review "
+                  "(§39)", file=out)
+            return EXIT_NOT_YET
         root = repo_root(where)
         base = root / "meta" / "reviews" / "hosted" / f"PR-{pr}"
         existing = _numbered(base)
@@ -340,44 +392,48 @@ def run(pr: int, bot: str = DEFAULT_BOT, *, out: TextIO, err: TextIO,
     if not summaries:
         print("summary comment: none from the bot", file=out)
 
-    review = _code_review(comments)
-    current: list[Finding] = []
-    if review is not None:
-        body = _body(review)
-        print(f"code review comment: issue-comment {review['id']} "
-              f"updated_at {review.get('updated_at')}", file=out)
-        print("categories:", file=out)
-        for label in categories(body) or ["(none in the header)"]:
-            print(f"  {label}", file=out)
-        current = findings(body)
-        inline: dict[str, list[str]] = {}
-        unmatched: list[str] = []
-        titles = {f.plain for f in current}
-        for kind, obj in comments:
-            if kind != "review-comment":
-                continue
-            plain, at = _inline(obj)
-            line = f"review-comment {obj['id']} at {at}"
-            if plain in titles:
-                inline.setdefault(plain, []).append(line)
-            else:
-                unmatched.append(f"{line}: {plain or '(no numbered title)'}")
-        print("findings:", file=out)
-        for finding in current:
-            _print_finding(finding, out, inline.get(finding.plain, ()))
-        if not current:
-            print("  (none numbered)", file=out)
-        for line in unmatched:
-            print(f"inline comment with no finding of that title: {line}", file=out)
+    body = _body(review)
+    print(f"code review comment: issue-comment {review['id']} "
+          f"updated_at {review.get('updated_at')}", file=out)
+    print("categories:", file=out)
+    for label in categories(body) or ["(none in the header)"]:
+        print(f"  {label}", file=out)
+    current = findings(body)
+    inline: dict[str, list[str]] = {}
+    unmatched: list[str] = []
+    titles = {f.key for f in current}
+    for kind, obj in comments:
+        if kind != "review-comment":
+            continue
+        plain, at = _inline(obj)
+        line = f"review-comment {obj['id']} at {at}"
+        if plain is not None and plain.casefold() in titles:
+            inline.setdefault(plain.casefold(), []).append(line)
+        else:
+            unmatched.append(f"{line}: {plain or '(no numbered title)'}")
+    print("findings:", file=out)
+    for finding in current:
+        _print_finding(finding, out, inline.get(finding.key, ()))
+    if not current:
+        print("  (none numbered)", file=out)
+    for line in unmatched:
+        print(f"inline comment with no finding of that title: {line}", file=out)
 
     if existing:
         _diff(existing[-1], _load(base / str(existing[-1])), comments, out)
 
-    if review is None:
-        print("verdict: no Code Review comment from the bot yet — no verdict; the "
-              "inline comments are not one (§39)", file=out)
-        return EXIT_NOT_YET
     open_ = [f for f in current if not f.resolved]
+    total = header_total(body)
+    if total is not None and total > 0 and not open_:
+        # PR #4 hosted review, finding 8: a markup change the parser does not read
+        # must not turn a review with open findings into a pass.
+        print(f"verdict: the findings could not be parsed against the header counts "
+              f"(the header counts {total}, {len(current)} parsed, 0 open) — no verdict, "
+              "and not a clean review: read the Code Review comment itself", file=out)
+        return EXIT_UNPARSED
+    if total is not None and total != len(open_):
+        print(f"header counts {total} findings, but {len(current)} parsed "
+              f"({len(open_)} open): read the Code Review comment itself", file=out)
     if open_:
         print(f"verdict: {len(open_)} of {len(current)} findings open in the Code Review "
               "comment", file=out)

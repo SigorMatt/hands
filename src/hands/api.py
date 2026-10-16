@@ -255,7 +255,14 @@ class Api:
         phone`: §37, only the daemon's own phone channel sets it (`answer_builder`,
         `reply_architect`, `go_builder`), so a raw send cannot be published as the
         builder's answer or listed to the architect as a human decision.
+
+        A cli send to the builder reads §39's journal reminder (H-060) first, in a
+        worker thread, before any check: nothing is awaited between `_send`'s checks
+        and its enqueue.
         """
+        reminder = (
+            await self._journal_reminder() if origin == "cli" and role == "builder" else None
+        )
         if origin == ARCHITECT_ORIGIN:
             raise ApiError(
                 f"origin {ARCHITECT_ORIGIN!r} is handsd's own: it marks the apply handsd files "
@@ -277,7 +284,7 @@ class Api:
             gate=gate,
             origin=origin,
             playbook_sha256=playbook_sha256,
-            remind_journal=origin == "cli",
+            journal_reminder=reminder,
         )
 
     async def _send(
@@ -294,7 +301,7 @@ class Api:
         reply: bool = False,
         ungated: bool = False,
         attached: list[dict[str, Any]] | None = None,
-        remind_journal: bool = False,
+        journal_reminder: str | None = None,
     ) -> dict[str, Any]:
         if role not in self.config.roles:
             known = ", ".join(sorted(self.config.roles))
@@ -337,13 +344,12 @@ class Api:
         # written, so a path outside the roots refuses the whole send.
         written = self._write_files(file or []) + list(attached or [])
 
-        if remind_journal and role == "builder":
+        if journal_reminder is not None and role == "builder":
             # §39 (H-060): the resume path — an `answer`, a cli send to the builder —
             # tells the builder to commit a dirty `meta/journal.md` first. Put
             # before the prompt after §8's gate has judged the sender's own text.
-            reminder = self.daemon.playbook.journal_reminder()
-            if reminder is not None:
-                prompt = f"{reminder}\n\n{prompt}"
+            # The caller read it off the event loop (`_journal_reminder`).
+            prompt = f"{journal_reminder}\n\n{prompt}"
 
         job = self.daemon.enqueue(
             role=role,
@@ -478,9 +484,11 @@ class Api:
         `attachment_sentence(path)`, and the path, sha256 and bytes go to the record's
         `files_written` (the record keeps the sha256). `answer.sent` files `text`, the
         attachment's name and its hash. Refusals are `answer_refusal`'s, decided with
-        nothing awaited before the enqueue. Not a command of §4 and in neither
+        nothing awaited between them and the enqueue (the journal reminder is read
+        in a thread before them). Not a command of §4 and in neither
         `COMMANDS` nor `KIT_METHODS`, so the phone channel is its only caller.
         """
+        reminder = await self._journal_reminder()
         why = self.answer_refusal(text)
         if why is not None:
             raise ApiError(why)
@@ -496,12 +504,21 @@ class Api:
             origin=ANSWER_ORIGIN,
             ungated=True,
             attached=attached,
-            remind_journal=True,
+            journal_reminder=reminder,
         )
         self.spool.append_event(
             "answer.sent", {"job": job["id"], "text": text, "attachment": filed}
         )
         return job
+
+    async def _journal_reminder(self) -> str | None:
+        """§39 (H-060): `PlaybookEngine.journal_reminder` — a `git status` in the
+        builder's cwd and a read of the inbox — in a worker thread, as
+        `progress_report` runs its git calls, so a slow or locked repository does
+        not stall the queue, the socket and the phone channel (PR #4 hosted review,
+        finding 11). Awaited before a send's checks, never between them and the
+        enqueue."""
+        return await asyncio.to_thread(self.daemon.playbook.journal_reminder)
 
     async def file_apply(self, plan: Apply, origin: str, kit_id: str) -> dict[str, Any]:
         """§27, §31, §32: a kit's held apply, filed by handsd itself.

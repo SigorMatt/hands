@@ -1206,9 +1206,10 @@ role modes reads are confined to the clone and the spool: every path that
 `-C` value) and `hands` (`--prompt-file`, `--socket`, `--repo`, a kit) read must
 resolve by realpath under `HANDS_CLONE`, under the spool `~/.hands/<project>/`
 (the project `$HANDS_PROJECT` names, else the only `~/.hands/*.toml`) or, for
-the architect, under `HANDS_KITS` or `HANDS_DOCS` (the installed hands' handbook
-and templates, so `cat $HANDS_DOCS/docs/ARCHITECT-HANDBOOK.md` runs; §39,
-H-051); with none of them named every path read is
+the architect, under `HANDS_KITS` or under `docs/` and `templates/` in
+`HANDS_DOCS` (the installed hands' handbook and templates, so `cat
+$HANDS_DOCS/docs/ARCHITECT-HANDBOOK.md` runs; nothing else in `HANDS_DOCS`,
+which in a source-tree install is the hands repository; §39, H-051); with none of them named every path read is
 refused, a read of stdin through a pipe is allowed, and a role's `jq` filter may
 not name `env`. The human's session reads anywhere. Text that needs a refused
 character travels as a file, with `hands send --prompt-file`.

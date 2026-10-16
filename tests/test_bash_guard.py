@@ -3219,6 +3219,20 @@ def test_the_architect_reads_under_hands_docs_and_nowhere_else() -> None:
     assert reason is not None and CONFINED in reason, reason
 
 
+def test_the_architect_reads_only_docs_and_templates_under_hands_docs() -> None:
+    """PR #4 hosted review, "Architects can read unrelated hands files": in a
+    source-tree install `HANDS_DOCS` is the repository root, so the roots are
+    `$HANDS_DOCS/docs` and `$HANDS_DOCS/templates`, not the whole directory."""
+    with_docs = {**ARCHITECT, "spool": SPOOL, "docs": DOCS}
+    for cmd in (f"cat {DOCS}/pyproject.toml", f"cat {DOCS}/src/x.py", f"ls {DOCS}",
+                f"cat {DOCS}/README.md", f"cat {DOCS}/docsx/a.md", f"cat {DOCS}/templates2/a",
+                f"grep -r -e secret {DOCS}", f"cat {DOCS}/docs/../src/x.py"):
+        reason = guard.check(cmd, **with_docs)
+        assert reason is not None and CONFINED in reason, (cmd, reason)
+    for cmd in (f"ls {DOCS}/docs", f"cat {DOCS}/templates/PLAYBOOK.toml"):
+        assert guard.check(cmd, **with_docs) is None, cmd
+
+
 def test_the_architect_runs_hands_handbook_and_the_driver_role_does_not() -> None:
     for cmd in ("hands handbook", "hands handbook --templates", "hands --json handbook"):
         assert guard.check(cmd, **ARCHITECT) is None, cmd
@@ -3238,6 +3252,8 @@ def test_the_shipped_file_reads_hands_docs_from_the_environment(tmp_path: Path) 
         ("hands handbook", 0),
         ("hands handbook --templates", 0),
         (f"cat {tmp_path}/elsewhere/x.md", 2),
+        (f"cat {docs}/pyproject.toml", 2),
+        (f"cat {docs}/src/x.py", 2),
         ("cat /etc/hostname", 2),
     ]
     for cmd, expected in cases:
