@@ -1,4 +1,4 @@
-# hands — DESIGN v3.22
+# hands — DESIGN v3.23
 
 Machinery that replaces the human relay between the planning brain and the two
 Claude Code roles (builder, aux) on the Ubuntu laptop, and that keeps a series
@@ -2176,3 +2176,249 @@ apply with `go` un-pauses it; the `[server]` fallback. The handbook: the
 items above, and `docs/QODO-EXTRACTION.md` cited where the protocol reads
 the bot. The instruction paste for every Project follows mission 22's
 install and is not repeated here.
+
+## 40. Changes from v3.22 (mission 23 review; M8a: the harness probe and the seam's shape; credential profiles; operations)
+
+Mission 23 merged PR #4 by its own review (REVIEW-23 `reviewed: 94ab38c`,
+`blockers=0 should-fix=9`; the hosted review's eleven findings each carried
+a disposition the review audited and upheld) and was installed on
+2026-10-16 13:45. The restart that installed it was the first real proof of
+§38's H-047: the builder it orphaned on another project was re-sent from its
+checkpoint by that project's `builder.orphaned → resume` rule. The same day
+produced the rest of this section: a roadmap decision taken in chat on
+2026-10-15 and 2026-10-16, the harnesses installed on the laptop for the M8a
+probe, the shape of credential profiles, the operations the human must be
+able to perform without an agent, two readings of other orchestrators
+(docs/RELATED.md), and the findings of the day. Mission 24 builds the
+decided parts and runs the probe; the seam's final choice is §41, written
+from the probe's record.
+
+**Roadmap (decided 2026-10-16).** After M8a (mission 24) come M8b (mission
+25, a closer if needed), then **M9 "a machine is replaceable"** (mission
+26), then M5b, M6, M7. M9 is new: the machinery that lets a hands machine be
+rebuilt — planned or after a disaster — from an export, a secrets checklist
+and the branches, proven by a rehearsal on a purpose-built Ubuntu VM. The
+notification server stays on the laptop and is addressed by its MagicDNS
+name rather than the tailnet address, so a replacement machine with the same
+hostname inherits the phone's subscriptions (an M9 unit; the config edit may
+be made by hand earlier).
+
+**The harness probe (mission 24 U1) and its record.** The three candidate
+harnesses were installed on the laptop on 2026-10-16: `@openai/codex`
+0.163.0 (`codex-cli 0.163.0`), `opencode-ai` 1.19.2 and `@deepseek-ai/dsh`
+0.2.0-rc.2, under Node v22.23.3 installed with nvm 0.40.8 because dsh
+requires `node ^22.19 || >=24` and the laptop ran v18. Two consequences
+bind the probe and the seam: the three binaries live under
+`~/.nvm/versions/node/v22.23.3/bin`, which is not on the PATH of a job
+handsd spawns (systemd reads no shell profile), so a harness profile carries
+its PATH prefix and the probe's commands carry it explicitly; and dsh's own
+documentation says its requests carry a `dsh_session_log` wire extension
+that may expose the session's working directory, prompts, tool arguments
+and results to the endpoint unless the composition disables it, and names
+`DSH_TELEMETRY_DISABLED`, so a dsh profile disables both before any hands
+role runs on it. The probe is one unit, run by a sub-agent of the builder in
+a scratch git repository under `/tmp`, never in a project's tree, with the
+same small task on every harness: create one file, reply with a first line
+`VERDICT: probe ok`. For each harness it records, in `docs/HARNESS-PROBE.md`
+(a dated record, not a design): the exact one-shot headless command and its
+exit status; the event stream it printed (its first and last five lines,
+the shape of a tool call and of the final message); the resume command and
+whether a second turn saw the first; where the session store is and what a
+session file holds; what happened to a shell command that writes outside
+the working directory and to one hands' guard table refuses (`curl`), under
+the harness's most restrictive sandbox or permission setting that still
+lets the task run — whether it was refused by the harness, asked about
+(and how a headless run answers), or ran; whether the first line of the
+final message was `VERDICT: probe ok` verbatim; the harness's documented
+output when a usage limit is reached (from its docs and source, not
+provoked); its telemetry and session-upload switches; whether it speaks
+ACP (a built-in `acp` mode or a separately installed adapter, with the
+package and version); and the sign-in state as a provider name only. A
+harness that is not signed in is recorded as `unavailable: not signed in`
+for every row and is not a failure of the unit; Codex must be signed in
+before the kickoff, because it is the first backend. The sub-agent never
+prints a key, a token or a sign-in file; a row that would need one says
+`[redacted]`. The record decides §41: which seam (a per-harness headless
+runner behind one interface, or hands as an ACP client receiving the
+permission requests), and in which order the roles move (reviewer first,
+then driver, then builder, the architect last and only after a review finds
+no hole in that harness's guard, as role mode was gated).
+
+**The seam, as far as it is decided.** The seam is at the harness, never at
+the model: `[roles.<role>] harness = "claude" | "codex" | "opencode" |
+"dsh"` names what runs the role, and an opaque per-role harness profile —
+a directory, a PATH prefix, environment variables — says how; hands never
+interprets a model name, and a model served locally later is a change in
+the harness's configuration, not in hands. Four requirements hold for every
+harness: a headless one-shot invocation with a session that can be resumed;
+an event stream or transcript the monitor can read (its stall and
+task-killed detection); a permission mode the guard can enforce; and the
+VERDICT contract unchanged. Two seams are candidates. A per-harness runner
+puts each harness's one-shot command, transcript reader and guard mechanism
+(a Claude Code hook today; a Codex sandbox and approval policy; an OpenCode
+plugin; a dsh policy plugin) behind one interface in `runner.py` and
+`monitor.py`. hands as an ACP client creates the session, prompts, reads
+one semantic update stream for every harness, and receives the permission
+requests, so the guard runs inside hands with one table for every harness
+and no per-harness hook. The prior is ACP, provided the probe shows that
+each harness routes shell commands through permission requests under its
+sandbox mode rather than running some silently; the risk either way is
+adapter maturity and version drift, met by pinning versions in the profile.
+Already harness-blind and untouched by the choice: kits, VERDICT, the
+playbook, the phone, the pull-request flow, the hosted review. Claude-shaped
+today and to be made neutral in M8b: the Bash guard, the monitor's
+transcript reader, and the brief and review-protocol templates' references
+to the Task tool and to `git worktree`. Two readings of other orchestrators
+are recorded in docs/RELATED.md: Gas Town's provider presets and its ACP
+proxy are the checklist the probe verifies, and its four integration tiers
+name the level a harness must reach to host a hands role (their third);
+Conductor's vocabulary ("a durable pause", "pinned to its definition
+version", "bounded adaptive execution") and its failure matrix are borrowed
+for docs/OPERATIONS.md. Nothing of either is imported.
+
+**Credential profiles (decided 2026-10-16; implemented in M8b).** A profile
+is a harness sign-in as a directory plus environment: for Claude Code a
+`CLAUDE_CONFIG_DIR` holding one login, for Codex a `CODEX_HOME`, for dsh a
+`DSH_HOME`. hands holds the path, never a secret; the human signs each
+profile in once. Configuration: `[profiles.<name>] harness = …, home = …`
+and `[roles.<role>] profiles = [<ordered names>]`. The semantics, in the
+human's words, are "restart with another subscription if the current runs
+out and they stop mid-something", never "never stop": when a job ends on a
+usage limit the monitor classifies the end as `quota` (with the reset time
+when the harness prints one), the daemon marks that profile exhausted until
+then, and the job is re-sent from its checkpoint on the first non-exhausted
+profile of the role's list — the `orphaned → resume` path, a fresh context,
+§R recovery — because a different configuration directory has a different
+session store and `--resume <session>` cannot follow. A builder loses
+nothing it had committed; a review loses its partial sub-agent work, since
+the protocol writes only at the end, which is why the reviewer sits on the
+deepest pool. A role whose every profile is exhausted stops, and the stop
+names the earliest reset. A profile whose reset has passed is eligible
+again, and because the rule picks the first eligible profile in the list
+and not the next one, a reset first profile wins its workers back. Pools are
+for continuity, not parallelism: the job model's serialisation is
+unchanged. A limit is per account, not per role, so the order protects the
+architect: with three subscriptions A, B and C the architect and the driver
+are pinned to A, the builder and the aux list B, C and then A — or B and C
+only, in which case the pipeline waits for a reset rather than ever touching
+A. The evidence that three accounts may be held is Anthropic support's
+emailed reply to the human (before 2026-10-16): multiple Claude accounts
+with Max plans are allowed, up to three verified with one phone number and
+the same payment card, and chats and projects do not transfer between them.
+Metered usage — extra usage on a plan, or an API key — is not in the plan:
+the point of the pool is to use the subscriptions to the full. The
+mechanism stays kind-neutral (a profile is a directory), but no API-key
+profile is planned and no spend field exists. Doctor shows one row per
+profile (signed in or not, exhausted until when); `status` and the start
+notification name the profile a job runs on. Two things are stated rather
+than assumed: the exact text a harness prints at its limit is observable
+only at a real limit, so the probe records the documented formats, the
+first real stop on the laptop is the fixture (the human captures it with
+`scripts/capture-quota-stop.sh`, docs/OPERATIONS.md), and an end the classifier
+does not recognise stays `failed`; and until `runner.transcript_path_for`
+honours `CLAUDE_CONFIG_DIR` (mission 24 U3, H-063) a role on a second
+configuration directory would blind the monitor, which is why no manual
+rotation is attempted on an older build.
+
+**Operations the human performs without an agent (mission 24 U8;
+docs/OPERATIONS.md).** The machinery must be operable from a terminal when
+the phone is away and from a plain shell when every subscription is out.
+Every phone command has a laptop form; two were phone-only and gain
+commands in mission 24 U2: `hands go` sends the playbook's `[series]
+kickoff` line to the builder as a `clear` send with `origin: cli`, refused
+while a builder job is running, queued or held, exactly as the phone's `go`;
+`hands kit apply <zip>` checks the kit as `hands kit check` does, copies it
+into `[files] kit_dir` and files the apply prompt as a held builder job
+(`origin: kit`), which `hands approve` releases — the phone's kit path
+without the phone. docs/OPERATIONS.md is the human's runbook, written for
+every project on the machine: the inventory of what a hands machine holds
+(the install, each project's configuration and spool, the user units, the
+role directories, the builder's clones, the notification server, the kit
+directory, the harness sign-ins) with each spool file classified as
+regenerable, must-carry or safe to drop and the series' state of record
+named (the branch); a table of secrets by kind — what it is, where it
+lives, how it is obtained again, whether it can be regenerated — with no
+values, ever; and the runbooks: a usage-limit stop (today: wait for the
+reset, then `go`; after M8b: sign in each profile once, the daemon
+rotates), operating without the phone, a planned migration, a disaster,
+and a release install. M9 turns the migration runbook into commands
+(`hands export`, `hands import`, `hands upgrade`, `hands project refresh`)
+and updates the document; mission 24 writes the version that is true of the
+machinery it ships with.
+
+**Rulings on review 23's should-fix items 1 and 2.** Should-fix 1: §39's
+sentence listed `answer` and `reply` among the commands whose job id is
+matched leniently; they carry no job id (`answer <secret> <text>`), so the
+lenient matching applies to `approve`, `deny` and `cancel`, and a refused
+`reply` or `answer` is published under the title hands gives every
+published line of that command — the code's behaviour is the design (H-064
+records the departure as decided here). Should-fix 2: the architect's read
+roots are `$HANDS_DOCS/docs` and `$HANDS_DOCS/templates`, narrower than
+§39's "read roots gain `HANDS_DOCS`", because in a source-tree install the
+docs root is the repository and the role would read unrelated hands files;
+the narrower roots are the design (H-065), and H-051's Status line is
+corrected to say so.
+
+**H-061, the playbook that lacks `aux.orphaned`.** `hands kit check` and the
+engine's load warn, and do not refuse, on a playbook that has a rule on
+`aux.done` and none on `aux.orphaned` (and likewise `builder.done` without
+`builder.orphaned`): a project whose playbook predates §39 keeps running,
+and its owner learns at the next kit check that a killed review would stop
+its pipeline. hands never edits another project's playbook; that project
+adds the rule at its next switch point.
+
+**The monitor's `task_killed`, de-duplicated (H-062).** On 2026-10-16 the
+monitor raised `monitor.task_killed` twice within a second for a builder
+the daemon's own stop had orphaned, and three times within 120 ms for one
+review job whose single sub-agent ended and which went on to finish; each
+raise fired the playbook's rule and published a line. The monitor raises
+`task_killed` once per killed task, keyed by the task's id in the
+transcript, and never for a job the daemon is stopping (the stop's record
+is `orphaned`, which the next start hands to the playbook).
+
+**The transcript path follows the configuration directory (H-063).**
+`runner.transcript_path_for` wrote `~/.claude/projects/<dashed cwd>/` by
+name; a role whose `env` sets `CLAUDE_CONFIG_DIR` keeps its transcripts
+under that directory's `projects/`, so the monitor read nothing. The path
+is computed from the job's environment: `$CLAUDE_CONFIG_DIR/projects/…`
+when the variable is set for the role, `~/.claude/projects/…` otherwise,
+and the runner records the path it will read in the job record before the
+first scan. This is the prerequisite of every profile and of the manual
+rotation by configuration directory.
+
+**Four findings carried from another project's reviews (HF-009..HF-012 in
+its ledger; H-066..H-069 here; evidence only).** A sub-agent may decline to
+author what a unit asks — on 2026-10-14 a safety classifier stopped two
+sub-agents and a phone architect on texts a plan assumed any agent would
+write — and no escalation condition anticipated it (H-066): the brief
+template's sub-agent rules say that a sub-agent that cannot or will not
+produce what the unit asks reports `refused: <one line>` and stops; the
+orchestrator marks the unit `[b] refused` and continues with units that do
+not depend on it; the mission's verdict is `blocked <unit>`; under
+`autonomous` the blocked verdict consults the architect role (§38), whose
+escalation conditions gain "a unit no agent will author", answered with
+`VERDICT: escalate ruling: human-supplied content` and the human-supplied
+unit shape of §38. Reviews leave git worktrees registered under the
+project's clone after an aborted session (H-067): the protocol's reviewer
+starts with `git worktree prune` and removes stale review worktrees it
+finds under `/tmp` from earlier reviews, ends by removing its own, and
+`hands doctor` warns on a worktree registered under a role's clone whose
+path is missing. The protocol's skip list named `meta:` and merge commits
+only, while `plan:`, `journal:` and `report:` commits occur on every
+mission (H-068): the list is `plan:` (read for what it says, as §38 says of
+an owner file), `meta:`, `journal:` and `report:` (read for forbidden edits
+only, never reviewed as a unit), `review:` and merge commits. And a
+reviewer's sub-agent may run the gate twice, or in the background, or
+return before a run finished (H-069): the protocol's sub-agent rules say
+"run `./scripts/check` once, in the foreground, and report only when every
+command has finished", which this repository's reviews already observe.
+
+**Documentation.** docs/OPERATIONS.md is new (above). docs/INTEGRATION.md:
+the `[roles.<role>].env` table's PATH note for harnesses installed under
+nvm; `hands go` and `hands kit apply`; the transcript path under
+`CLAUDE_CONFIG_DIR`; a pointer to docs/OPERATIONS.md. The handbook: the
+refusal path and the `refused:` line (§17 gains it), the skip list, the
+kit-check warning on a playbook without `aux.orphaned`, `hands go` and
+`hands kit apply` in §18, docs/RELATED.md and docs/OPERATIONS.md cited.
+docs/RELATED.md and docs/HARNESS-PROBE.md are new. The instruction paste is
+not due: docs/ARCHITECT-INSTRUCTION.md does not change in this mission.

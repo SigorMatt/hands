@@ -46,7 +46,7 @@ item names the mission it is scheduled for; unscheduled items say so.
 5. Review 20's note on U5: an apply that leaves no playbook stops.
 6. Files H-046, H-047, H-048 for mission 22.
 
-## Mission 23 (scheduled 2026-10-15, kit issued) — review 22, the four findings, the hosted review read mechanically. Spec: DESIGN v3.22 §39.
+## Mission 23 — DONE 2026-10-16 (review 23: blockers=0, should-fix=9; PR #4 merged by the review, 2f81700; installed 13:45). Spec: DESIGN v3.22 §39.
 
 1. Review 22 should-fix 1–12, each closed by a named unit (who tests and the
    stale fingerprint; orphaned reply/answer published; the start notice's
@@ -72,20 +72,34 @@ item names the mission it is scheduled for; unscheduled items say so.
 7. Docs: restart kills every job; one hook vs two; stop pauses, apply+go
    un-pauses; the `[server]` fallback; QODO-EXTRACTION cited.
 
-## Mission 24 (M8a, scheduled 2026-10-15) — the backend probe and design. Spec: DESIGN §40 (written after the probe).
+## Mission 24 (M8a, scheduled 2026-10-16, kit issued) — the harness probe and the seam's shape, the day's findings, operations. Spec: DESIGN v3.23 §40.
 
-1. U0 gate: the probe on the laptop's Codex CLI (version recorded in the
-   plan): headless one-shot run, parseable event stream, session resume,
-   sandbox/approval behaviour, transcript readable as the monitor reads
-   Claude Code's; blocked at U0 if resume or transcripts fail → ACP evaluated.
-2. DESIGN §40: `[roles.<role>] backend = "claude" | "codex"`, the runner and
-   monitor behind the seam, the guard story per backend (driver/architect on
-   Claude until reviewed), doctor rows per backend, per-role (and per-review-
-   sub-agent) `model`, the optional polish round (`aux.done` blockers=0
-   should-fix>0 → one bounded builder round → re-review of the delta → merge;
-   off by default).
+1. U1 the probe on the laptop's three harnesses (Codex CLI 0.163.0, OpenCode
+   1.19.2, dsh 0.2.0-rc.2; Node 22 by nvm, PATH prefix on every command),
+   recorded in docs/HARNESS-PROBE.md: one-shot, event stream, resume,
+   session store, sandbox and approval on an outside write and on `curl`,
+   VERDICT honoured, documented limit output, telemetry switches, ACP;
+   a harness not signed in is `unavailable`, Codex must be.
+2. U2 `hands go` and `hands kit apply <zip>` (the phone's two commands at
+   the laptop). U3 `task_killed` once per task and never on a daemon stop
+   (H-062); the transcript path under `CLAUDE_CONFIG_DIR` (H-063).
+3. U4, U5 review 23 should-fix 3–9; items 1 and 2 decided in §40 (H-064,
+   H-065). U6 the kit-check and load WARN on a playbook with `aux.done` and
+   no `aux.orphaned` (H-061). U7 the templates: `refused:` and `[b] refused`,
+   the architect's "a unit no agent will author" escalation, worktree
+   cleanup, the skip list, the gate once in the foreground (H-066..H-069).
+4. U8 docs/OPERATIONS.md (inventory, the secrets table — kinds and sources,
+   never values — and five runbooks), scripts/capture-quota-stop.sh, the
+   doctor row for dangling worktrees. U9 docs. U10 the PR and its hosted
+   review.
+5. Source for the probe brief: docs/RELATED.md, Gas Town — its provider
+   presets (`internal/config/agents.go` at `649b832`) and `opencode acp`
+   proxy are the checklist; its four integration tiers name the level a
+   harness must reach (their Tier 3). Cited, never imported.
 
-## Mission 25 (M8b) — the seam and both implementations; builder and aux may run on Codex. Then M5b (discotrade-v2 on Codex), M6, M7.
+## Mission 25 (M8b) — DESIGN §41 from docs/HARNESS-PROBE.md: the seam (per-harness runner or hands as ACP client), the implementations the probe approved, credential profiles (`[profiles.<n>]`, `[roles.<r>] profiles`, the `quota` end with the reset time, resume from the checkpoint on the first non-exhausted profile, doctor rows, the profile named in `status` and the start notification; the quota fixture from the laptop's first real stop), the polish round, the harness-neutral guard and transcript reader, the templates' harness-neutral wording. Builder and aux may run on the second harness; driver and architect stay on Claude until a review finds no hole. Then a closer if needed.
+
+## Mission 26 (M9, "a machine is replaceable") — `hands export` / `hands import`, `hands upgrade [--accept-builder]`, `hands project refresh <p>`, the spool inventory, ntfy by MagicDNS name, docs/OPERATIONS.md updated; gate: the VM rehearsal. Then M5b (discotrade-v2 on the second harness), M6, M7.
 
 ## Mission 22 — DONE 2026-10-15 (review 22: blockers=0, should-fix=12; PR #3 merged by the review, f11cfb1; installed 20:23; M4d closed). Spec: DESIGN v3.21 §38. Items 1–8 below plus: H-037 the buttons carry the token (FIRST; live on the self-hosted server since 2026-10-14, 403 on every button); review 21 should-fix 1–3 (H-049 the revert step for added files, H-050 the reviewer's schedule, the `-I` hook text in INTEGRATION); the human-supplied unit shape in the brief template and the protocol.
 

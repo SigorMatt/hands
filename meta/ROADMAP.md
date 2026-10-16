@@ -135,7 +135,10 @@ then an install (`uv tool install --force`) and a driver-kit refresh.
   journal line on resume (H-060), `hands hosted-review <pr>` and the
   hosted review's findings fixed inside the pull request, the docs. Gate:
   mission 23 merged by its own review with a `## Hosted review` disposition
-  table in FINAL-REPORT-23 and an archive under meta/reviews/hosted/.
+  table in FINAL-REPORT-23 and an archive under meta/reviews/hosted/ — DONE
+  2026-10-16 (review 23: blockers=0, should-fix=9; PR #4 merged by the
+  review: 2f81700; installed 2026-10-16 13:45, the restart proving H-047's
+  resume on another project's builder). GATE MET.
 - **M5 Pet projects from scratch (discotrade)** — decided 2026-09-17: before
   any integration, hands drives a new project from an empty repository in
   role mode, as the shakedown of the whole loop. discotrade
@@ -148,10 +151,11 @@ then an install (`uv tool install --force`) and a driver-kit refresh.
   §33 behind Tailscale (the public broker's daily cap was hit that day).
   Gate: the series reaches its roadmap's last milestone or its consult
   budget, with every stop that needed a human answered from the phone.
-  Status 2026-10-15: mission 13 (the last planned) finished; its review
-  re-fired after a daemon restart killed it; 17 of 30 consultations used;
-  three owner rulings (D-004; D-008/D-009; O-19..O-22 — a gate reshaped
-  because no agent may author attack-shaped test content).
+  Status 2026-10-16: missions 13–15 finished and reviewed, mission 16
+  running from the role's kit; 19 of 30 consultations used; three owner
+  rulings (D-004; D-008/D-009; O-19..O-22 — a gate reshaped because no
+  agent may author attack-shaped test content); four of its hands findings
+  (HF-009..HF-012) carried into mission 24 as H-066..H-069.
 - **M8 Other coding agents as backends** — MOVED AHEAD OF M6/M7 (decided
   2026-10-15, DESIGN §39): an integration should meet a backend shaken down
   on a series whose failures cost nothing, and a different model as the
@@ -162,15 +166,42 @@ then an install (`uv tool install --force`) and a driver-kit refresh.
   backend`, runner and monitor behind it, a guard story per backend — the
   driver and architect roles stay on Claude until a review finds no hole —
   doctor rows per backend, a per-role `model`, the optional polish round;
-  ACP evaluated if the probe fails on resume or transcripts). Mission 25
-  (+ closer) = M8b: the seam and both implementations. Gate: one hands
-  mission built by a builder on the second backend and reviewed clean.
+  ACP evaluated if the probe fails on resume or transcripts). Mission 24 (DESIGN v3.23 §40, kit issued
+  2026-10-16): the probe on the three harnesses installed that day (Codex
+  CLI 0.163.0, OpenCode 1.19.2, dsh 0.2.0-rc.2 under Node 22 by nvm),
+  recorded in docs/HARNESS-PROBE.md; the seam as far as it is decided
+  (harness-level, two candidate seams, ACP the prior); credential profiles
+  designed (up to three Max subscriptions, workers B→C→A, the architect and
+  driver pinned to A, a quota stop is a resume on the next profile; no
+  metered usage); `hands go` and `hands kit apply`; `task_killed`
+  de-duplicated (H-062); the transcript path under `CLAUDE_CONFIG_DIR`
+  (H-063); review 23's should-fix; the kit-check warning for H-061; the
+  templates' refusal path, worktree cleanup, skip list and gate rule
+  (H-066..H-069); docs/OPERATIONS.md and docs/RELATED.md. Mission 25
+  (+ closer) = M8b (DESIGN §41, written from the probe record): the seam,
+  the implementations the probe approved, the credential profiles with the
+  `quota` classification and resume on the next profile, doctor rows per
+  harness and per profile, the polish round. Gate: one hands mission built
+  by a builder on the second backend and reviewed clean, and one quota
+  stop resumed on the next profile.
+- **M9 A machine is replaceable** — decided 2026-10-16 (DESIGN §40), mission
+  26, before M5b: `hands export` (everything but secrets, env tables
+  redacted by name, a printed secrets checklist) and `hands import` (through
+  the `project add` path, Purpose and Parameters intact, no daemon until
+  `hands doctor` is green); `hands upgrade [--accept-builder]` (the release
+  install routine as a command) and `hands project refresh <project>` (the
+  role-kit refresh keeping Purpose and Parameters); the spool inventory
+  settled in docs/OPERATIONS.md; the notification server addressed by its
+  MagicDNS name. Gate: a rehearsal on a purpose-built Ubuntu VM — both
+  projects from an export plus the secrets checklist, proven by one kickoff
+  and one phone approve.
 - **M5b discotrade's second series on the Codex backend** — decided
   2026-10-15: no new pet project; discotrade-v2 starts at a series switch
   point (a new playbook with `backend` per role, approved by the human),
   builder on Codex and reviewer on Claude first, the architect role on
-  Claude; if v1 ends before M8b is installed, the project waits. Gate: as
-  M5, on the second backend.
+  Claude; after M9 (decided 2026-10-16); if v1 ends before then, the
+  project waits. Its new playbook gains `aux.orphaned → resume` and the
+  blocked→consult rule. Gate: as M5, on the second backend.
 - **M6 spanweave integration** — INSTRUCTION PASTE DUE: the spanweave
   Project gets its own copy, parameters filled in.
   spanweave integration — hands drives spanweave's *development*

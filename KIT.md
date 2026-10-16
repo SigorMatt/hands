@@ -1,1 +1,1 @@
-plan: mission 23 kit (DESIGN v3.22)
+plan: mission 24 kit (DESIGN v3.23)
