@@ -20,6 +20,15 @@ the two commands `hands doctor` runs, `gh --version` and `gh auth status
 
 Every logged-in shape prints a `Token:` line carrying FAKE_TOKEN, so a test can
 prove doctor never repeats it.
+
+`gh api <path>` (DESIGN §39, `hands hosted-review`) serves recorded pages from
+the directory `FAKE_GH_API_DIR` names: `repos/{owner}/{repo}/issues/3/comments
+?per_page=100&page=2` is the file `issues-3-comments.page-2.json`, printed byte
+for byte; a page with no file is `[]`, as GitHub answers past the last page. A
+path not under `repos/{owner}/{repo}/` exits 1 as gh does on a 404. Every `api`
+call is appended, one line each, to `FAKE_GH_API_LOG` when it is set, so a test
+can prove which pages were asked for. `FAKE_GH_MODE=apifail` makes every
+`api` call fail, exit 1, on the second page.
 """
 
 import os
@@ -88,8 +97,38 @@ def status(mode: str) -> int:
     return 0
 
 
+API_PREFIX = "repos/{owner}/{repo}/"
+
+
+def api(argv: list[str]) -> int:
+    log = os.environ.get("FAKE_GH_API_LOG")
+    if log:
+        with open(log, "a", encoding="utf-8") as handle:
+            handle.write(" ".join(argv) + "\n")
+    paths = [arg for arg in argv[1:] if not arg.startswith("-")]
+    if len(paths) != 1 or not paths[0].startswith(API_PREFIX):
+        print(f"fake gh: unsupported api call {argv!r}", file=sys.stderr)
+        return 1
+    path, _, query = paths[0][len(API_PREFIX):].partition("?")
+    params = dict(part.partition("=")[::2] for part in query.split("&") if part)
+    if os.environ.get("FAKE_GH_MODE") == "apifail" and params.get("page") == "2":
+        print("gh: HTTP 502: Bad Gateway", file=sys.stderr)
+        return 1
+    name = f"{path.replace('/', '-')}.page-{params.get('page', '1')}.json"
+    directory = os.environ.get("FAKE_GH_API_DIR")
+    page = os.path.join(directory, name) if directory else None
+    if page and os.path.isfile(page):
+        with open(page, "rb") as handle:
+            sys.stdout.buffer.write(handle.read())
+    else:
+        sys.stdout.write("[]\n")
+    return 0
+
+
 def main(argv: list[str]) -> int:
     mode = os.environ.get("FAKE_GH_MODE", "ok")
+    if argv[:1] == ["api"]:
+        return api(argv)
     if argv == ["--version"]:
         if mode == "noversion":
             print("fake gh: broken install", file=sys.stderr)

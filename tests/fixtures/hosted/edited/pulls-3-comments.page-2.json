@@ -1,0 +1,19 @@
+[
+ {
+  "id": 4004,
+  "user": {
+   "login": "qodo-code-review[bot]",
+   "id": 1,
+   "type": "Bot"
+  },
+  "body": "<img src=\"https://img.shields.io/badge/Medium-634FD1?style=flat-square\" height=\"20px\" alt=\"Remediation recommended\">\n\n4\\. A new finding after the push <code>🐞 Bug</code>\n\n<pre>\nNew.\n</pre>\n\n[Dismiss ↗](https://app.qodo.ai/findings/f4?action=dismiss&origin=git) | [View ↗](https://app.qodo.ai/findings/f4)",
+  "path": "src/widget/new.py",
+  "line": 9,
+  "start_line": 7,
+  "commit_id": "baa0b6eadb0678e8440170938277fbc46d184dfa",
+  "pull_request_review_id": 5001,
+  "created_at": "2026-10-15T15:09:48Z",
+  "updated_at": "2026-10-15T16:52:30Z",
+  "html_url": "https://github.com/o/r/pull/3#discussion_r4004"
+ }
+]

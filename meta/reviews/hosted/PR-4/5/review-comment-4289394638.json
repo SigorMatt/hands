@@ -1,0 +1,69 @@
+{
+  "url": "https://api.github.com/repos/SigorMatt/hands/pulls/comments/4289394638",
+  "pull_request_review_id": 5541251475,
+  "id": 4289394638,
+  "node_id": "PRRC_kwDOUVwTn87_qvfO",
+  "diff_hunk": "@@ -0,0 +1,389 @@\n+\"\"\"`hands hosted-review <pr>`: the hosted review, read mechanically (DESIGN §39, §35).\n+\n+The method is docs/QODO-EXTRACTION.md's. The bot posts three things on a pull\n+request: a summary issue comment with no findings, a \"Code Review\" issue comment\n+that is the canonical numbered list under header counts, and a `COMMENTED`\n+review with one inline comment per finding. After a push it edits the Code\n+Review comment in place and posts nothing new, so the reading is:\n+\n+1. fetch the issue comments, the reviews and the review comments, every page\n+   (an explicit `page=` loop up to the first empty page), through `gh api`;\n+2. keep the bot's (`--bot`, default `qodo-code-review[bot]`); with none, say\n+   \"no bot comment yet\", write nothing and exit 3 — a state to wait on, never\n+   a clean review;\n+3. archive each body byte for byte (`<kind>-<id>.md`) with the comment's JSON\n+   (`<kind>-<id>.json`) under `meta/reviews/hosted/PR-<n>/<k>/` at the\n+   repository root, `k` one more than the highest already there;\n+4. print the Code Review comment's header categories as found, every numbered\n+   finding verbatim with its file:line anchor, the summary comment's id, the\n+   diff against the previous `k` by comment id, and the verdict — taken from\n+   the Code Review comment only, never from the inline comments.\n+\n+Speaks a transport only through `gh`, as `hands doctor`'s `gh` row does.\n+\"\"\"\n+\n+from __future__ import annotations\n+\n+import difflib\n+import json\n+import re\n+import subprocess\n+from collections.abc import Sequence\n+from dataclasses import dataclass\n+from pathlib import Path\n+from typing import Any, TextIO\n+\n+DEFAULT_BOT = \"qodo-code-review[bot]\"\n+#: §39: \"no bot comment yet\" (and no Code Review comment yet) is a state to wait on.\n+EXIT_NOT_YET = 3\n+PER_PAGE = 100\n+#: A loop that never meets an empty page is a broken `gh`, not a long review.\n+MAX_PAGES = 100\n+GH_TIMEOUT_S = 120\n+\n+#: (endpoint under `repos/{owner}/{repo}/`, the kind that names its files)\n+SOURCES: tuple[tuple[str, str], ...] = (\n+    (\"issues/{n}/comments\", \"issue-comment\"),\n+    (\"pulls/{n}/reviews\", \"review\"),\n+    (\"pulls/{n}/comments\", \"review-comment\"),\n+)\n+\n+_HEADING = re.compile(r\"<h\\d>([^<]*)</h\\d>\")\n+_CATEGORY = re.compile(r\"<code>\\s*([^<]*?\\(\\d+\\))\\s*</code>\")\n+_FINDING = re.compile(r\"<summary>[ \\t]*(\\d+)\\.[ \\t]+([^\\n]*?)[ \\t]*</summary>\")\n+_DESCRIPTION = re.compile(r\"<summary>Description</summary>.*?<pre>(.*?)</pre>\", re.DOTALL)\n+_ANCHOR = re.compile(r\"\\[([^\\[\\]\\s()]+?)\\\\?\\[R?(\\d+)(?:-R?(\\d+))?\\\\?\\]\\]\\(\")\n+_INLINE_TITLE = re.compile(r\"^[ \\t]*(\\d+)\\\\?\\.[ \\t]+(.+)$\", re.MULTILINE)\n+_STRUCK = re.compile(r\"<s>|<del>|<strike>|~~|Resolved\")\n+\n+\n+class HostedError(Exception):\n+    \"\"\"A fetch or the archive failed; nothing was written.\"\"\"\n+\n+\n+@dataclass\n+class Finding:\n+    number: str\n+    title: str  # the summary line's text, verbatim\n+    anchor: str | None\n+    description: list[str]\n+\n+    @property\n+    def resolved(self) -> bool:\n+        return bool(_STRUCK.search(self.title))\n+\n+    @property\n+    def plain(self) -> str:\n+        return _plain(self.title)\n+\n+\n+def _plain(title: str) -> str:\n+    \"\"\"A title without markup, code spans or the resolved mark: what pairs a\n+    finding across fetches and with its inline comment.\"\"\"\n+    text = re.sub(r\"<code>.*?</code>\", \"\", title)\n+    text = re.sub(r\"<[^>]+>\", \"\", text).replace(\"✓ Resolved\", \"\").replace(\"~~\", \"\")\n+    return \" \".join(text.replace(\"\\\\\", \"\").split())\n+\n+\n+# ------------------------------------------------------------------ fetching\n+\n+\n+def _gh_page(endpoint: str, page: int, cwd: Path) -> list[dict[str, Any]]:\n+    path = f\"repos/{{owner}}/{{repo}}/{endpoint}?per_page={PER_PAGE}&page={page}\"\n+    try:\n+        done = subprocess.run(\n+            [\"gh\", \"api\", path], cwd=cwd, capture_output=True, text=True,\n+            encoding=\"utf-8\", timeout=GH_TIMEOUT_S,\n+        )\n+    except (OSError, subprocess.TimeoutExpired) as exc:\n+        raise HostedError(f\"gh api {path}: {exc}\") from exc\n+    if done.returncode != 0:\n+        raise HostedError(f\"gh api {path} exited {done.returncode}: {done.stderr.strip()}\")\n+    try:\n+        data = json.loads(done.stdout)\n+    except json.JSONDecodeError as exc:\n+        raise HostedError(f\"gh api {path}: not JSON ({exc})\") from exc\n+    if not isinstance(data, list):\n+        raise HostedError(f\"gh api {path}: expected a list, got {type(data).__name__}\")\n+    return data\n+\n+\n+def fetch(pr: int, bot: str, cwd: Path) -> list[tuple[str, dict[str, Any]]]:\n+    \"\"\"Every comment of the three sources whose author is `bot`, as (kind, object),\n+    in the order the API gave them, every page read.\"\"\"\n+    found: list[tuple[str, dict[str, Any]]] = []\n+    for template, kind in SOURCES:\n+        endpoint = template.format(n=pr)\n+        for page in range(1, MAX_PAGES + 1):\n+            objects = _gh_page(endpoint, page, cwd)\n+            if not objects:\n+                break\n+            for obj in objects:\n+                user = obj.get(\"user\") or {}\n+                if isinstance(user, dict) and user.get(\"login\") == bot:\n+                    found.append((kind, obj))\n+        else:\n+            raise HostedError(f\"{endpoint}: still not empty after {MAX_PAGES} pages\")\n+    return found\n+\n+\n+# ------------------------------------------------------------------- archive\n+\n+\n+def repo_root(cwd: Path) -> Path:\n+    try:\n+        done = subprocess.run(\n+            [\"git\", \"-C\", str(cwd), \"rev-parse\", \"--show-toplevel\"],\n+            capture_output=True, text=True, timeout=30,\n+        )\n+    except (OSError, subprocess.TimeoutExpired) as exc:\n+        raise HostedError(f\"git rev-parse --show-toplevel: {exc}\") from exc\n+    if done.returncode != 0:\n+        raise HostedError(f\"not inside a git repository: {done.stderr.strip()}\")\n+    return Path(done.stdout.strip())\n+\n+\n+def _numbered(base: Path) -> list[int]:\n+    if not base.is_dir():\n+        return []\n+    return sorted(int(p.name) for p in base.iterdir() if p.is_dir() and p.name.isdigit())\n+\n+\n+def _body(obj: dict[str, Any]) -> str:\n+    return obj.get(\"body\") or \"\"\n+\n+\n+def archive(base: Path, k: int, comments: list[tuple[str, dict[str, Any]]]) -> Path:\n+    target = base / str(k)\n+    target.mkdir(parents=True, exist_ok=False)\n+    for kind, obj in comments:\n+        name = f\"{kind}-{obj['id']}\"\n+        (target / f\"{name}.md\").write_bytes(_body(obj).encode(\"utf-8\"))",
+  "path": "src/hands/hosted.py",
+  "commit_id": "d50af2a99203bf98a3b4a628daf4227b1466e8c4",
+  "original_commit_id": "d50af2a99203bf98a3b4a628daf4227b1466e8c4",
+  "user": {
+    "login": "qodo-code-review[bot]",
+    "id": 151058649,
+    "node_id": "BOT_kgDOCQD42Q",
+    "avatar_url": "https://avatars.githubusercontent.com/in/484649?v=4",
+    "gravatar_id": "",
+    "url": "https://api.github.com/users/qodo-code-review%5Bbot%5D",
+    "html_url": "https://github.com/apps/qodo-code-review",
+    "followers_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/followers",
+    "following_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/following{/other_user}",
+    "gists_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/gists{/gist_id}",
+    "starred_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/starred{/owner}{/repo}",
+    "subscriptions_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/subscriptions",
+    "organizations_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/orgs",
+    "repos_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/repos",
+    "events_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/events{/privacy}",
+    "received_events_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/received_events",
+    "type": "Bot",
+    "user_view_type": "public",
+    "site_admin": false
+  },
+  "body": "<img src=\"https://img.shields.io/badge/Medium-634FD1?style=flat-square\" height=\"20px\" alt=\"Remediation recommended\">\n\n3\\. The review command alters the repository <code>📘 Rule violation</code> <code>⛨ Security</code>\n\n<pre>\n<b><i>archive</i></b> creates directories and writes hosted comments and JSON files directly under the\nrepository. Running <b><i>hands hosted-review</i></b> therefore performs filesystem writes and invokes <b><i>gh api</i></b>,\nrather than remaining limited to <b><i>hands</i></b> commands and read-only repository inspection.\n</pre>\n\n\n<details>\n<summary><strong>Agent Prompt</strong></summary>\n\n```\n## Issue description\nThe hosted review command writes archived review data into the repository and invokes an external `gh` command, conflicting with the read-only driver restriction.\n\n## Fix Focus Areas\n- src/hands/hosted.py[91-108]\n- src/hands/hosted.py[156-165]\n\n## Recommended Fix\nKeep the driver-side review operation read-only and route archival through an explicitly authorized non-driver component, or revise the command boundary so repository writes cannot occur in the driver implementation. Preserve explicit failure handling for the external API call and ensure any archival destination is separately authorized.\n```\n\n<code>ⓘ Copy this prompt and use it to remediate the issue with your preferred AI generation tools</code>\n</details>\n\n[Dismiss ↗](https://app.qodo.ai/findings/f6046d9a-cd11-440f-9c85-96198e0a9e2d?action=dismiss&origin=git) | [View ↗](https://app.qodo.ai/findings/f6046d9a-cd11-440f-9c85-96198e0a9e2d)",
+  "created_at": "2026-10-15T23:44:39Z",
+  "updated_at": "2026-10-15T23:44:39Z",
+  "html_url": "https://github.com/SigorMatt/hands/pull/4#discussion_r4289394638",
+  "pull_request_url": "https://api.github.com/repos/SigorMatt/hands/pulls/4",
+  "_links": {
+    "self": {
+      "href": "https://api.github.com/repos/SigorMatt/hands/pulls/comments/4289394638"
+    },
+    "html": {
+      "href": "https://github.com/SigorMatt/hands/pull/4#discussion_r4289394638"
+    },
+    "pull_request": {
+      "href": "https://api.github.com/repos/SigorMatt/hands/pulls/4"
+    }
+  },
+  "reactions": {
+    "url": "https://api.github.com/repos/SigorMatt/hands/pulls/comments/4289394638/reactions",
+    "total_count": 0,
+    "+1": 0,
+    "-1": 0,
+    "laugh": 0,
+    "hooray": 0,
+    "confused": 0,
+    "heart": 0,
+    "rocket": 0,
+    "eyes": 0
+  },
+  "start_line": 156,
+  "original_start_line": 156,
+  "start_side": "RIGHT",
+  "line": 161,
+  "original_line": 161,
+  "side": "RIGHT",
+  "author_association": "NONE",
+  "original_position": 161,
+  "position": 161,
+  "subject_type": "line"
+}

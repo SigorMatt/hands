@@ -20,6 +20,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import binascii
+import contextlib
 import hashlib
 import os
 import re
@@ -55,6 +56,7 @@ from hands.spool import (
     TERMINAL_STATES,
     Event,
     Job,
+    Spool,
     SpoolError,
     is_architect_reply,
     kit_apply_problem,
@@ -78,6 +80,7 @@ __all__ = [
     "Timeout",
     "attachment_sentence",
     "job_summary",
+    "match_job_id",
     "tail_entries",
 ]
 
@@ -157,6 +160,47 @@ def job_summary(job: Job) -> dict[str, Any]:
     return out
 
 
+#: §39 (H-059): the shortest prefix of a job id `match_job_id` accepts.
+MIN_ID_PREFIX = 4
+#: §39 (H-059): what a human reads one character as: `O` as `0`, `l` and `I` as `1`
+#: (after lower-casing, so `i`, `l` and `o`).
+_ID_LOOKALIKES = str.maketrans({"o": "0", "l": "1", "i": "1"})
+
+
+def _id_key(text: str) -> str:
+    return text.lower().translate(_ID_LOOKALIKES)
+
+
+def match_job_id(spool: Spool, typed: str) -> str:
+    """§39 (H-059): the id of the one job `typed` names, or `ApiError` saying why not.
+
+    An exact id wins. Otherwise both sides are compared case-insensitively with `O`
+    read as `0` and `l` or `I` as `1` — a whole id, else a prefix of `MIN_ID_PREFIX`
+    or more characters. Two or more jobs matching is refused with the candidates.
+    Used by `approve`, `deny` and `cancel` (laptop and phone alike); the phone's
+    `answer` and `reply` carry no job id."""
+    with contextlib.suppress(SpoolError):
+        return spool.load_job(typed).id
+    key = _id_key(typed.strip())
+    ids = sorted(
+        path.stem for path in spool.jobs_dir.glob("*.json") if not path.name.startswith(".")
+    )
+    whole = [job_id for job_id in ids if _id_key(job_id) == key]
+    if len(whole) == 1:
+        return whole[0]
+    if not whole and len(key) >= MIN_ID_PREFIX:
+        whole = [job_id for job_id in ids if _id_key(job_id).startswith(key)]
+        if len(whole) == 1:
+            return whole[0]
+    if whole:
+        raise ApiError(f"job id {typed!r} is ambiguous: it matches {', '.join(whole)}")
+    short = (
+        f" (a prefix needs {MIN_ID_PREFIX} or more characters)"
+        if 0 < len(key) < MIN_ID_PREFIX else ""
+    )
+    raise ApiError(f"no such job {typed!r}{short}")
+
+
 class Api:
     """Every command of §4, bound to one running daemon."""
 
@@ -211,7 +255,14 @@ class Api:
         phone`: §37, only the daemon's own phone channel sets it (`answer_builder`,
         `reply_architect`, `go_builder`), so a raw send cannot be published as the
         builder's answer or listed to the architect as a human decision.
+
+        A cli send to the builder reads §39's journal reminder (H-060) first, in a
+        worker thread, before any check: nothing is awaited between `_send`'s checks
+        and its enqueue.
         """
+        reminder = (
+            await self._journal_reminder() if origin == "cli" and role == "builder" else None
+        )
         if origin == ARCHITECT_ORIGIN:
             raise ApiError(
                 f"origin {ARCHITECT_ORIGIN!r} is handsd's own: it marks the apply handsd files "
@@ -233,6 +284,7 @@ class Api:
             gate=gate,
             origin=origin,
             playbook_sha256=playbook_sha256,
+            journal_reminder=reminder,
         )
 
     async def _send(
@@ -249,6 +301,7 @@ class Api:
         reply: bool = False,
         ungated: bool = False,
         attached: list[dict[str, Any]] | None = None,
+        journal_reminder: str | None = None,
     ) -> dict[str, Any]:
         if role not in self.config.roles:
             known = ", ".join(sorted(self.config.roles))
@@ -290,6 +343,13 @@ class Api:
         # its sha256 (§1 invariant 2). Every path is confined before any byte is
         # written, so a path outside the roots refuses the whole send.
         written = self._write_files(file or []) + list(attached or [])
+
+        if journal_reminder is not None and role == "builder":
+            # §39 (H-060): the resume path — an `answer`, a cli send to the builder —
+            # tells the builder to commit a dirty `meta/journal.md` first. Put
+            # before the prompt after §8's gate has judged the sender's own text.
+            # The caller read it off the event loop (`_journal_reminder`).
+            prompt = f"{journal_reminder}\n\n{prompt}"
 
         job = self.daemon.enqueue(
             role=role,
@@ -424,9 +484,11 @@ class Api:
         `attachment_sentence(path)`, and the path, sha256 and bytes go to the record's
         `files_written` (the record keeps the sha256). `answer.sent` files `text`, the
         attachment's name and its hash. Refusals are `answer_refusal`'s, decided with
-        nothing awaited before the enqueue. Not a command of §4 and in neither
+        nothing awaited between them and the enqueue (the journal reminder is read
+        in a thread before them). Not a command of §4 and in neither
         `COMMANDS` nor `KIT_METHODS`, so the phone channel is its only caller.
         """
+        reminder = await self._journal_reminder()
         why = self.answer_refusal(text)
         if why is not None:
             raise ApiError(why)
@@ -442,11 +504,21 @@ class Api:
             origin=ANSWER_ORIGIN,
             ungated=True,
             attached=attached,
+            journal_reminder=reminder,
         )
         self.spool.append_event(
             "answer.sent", {"job": job["id"], "text": text, "attachment": filed}
         )
         return job
+
+    async def _journal_reminder(self) -> str | None:
+        """§39 (H-060): `PlaybookEngine.journal_reminder` — a `git status` in the
+        builder's cwd and a read of the inbox — in a worker thread, as
+        `progress_report` runs its git calls, so a slow or locked repository does
+        not stall the queue, the socket and the phone channel (PR #4 hosted review,
+        finding 11). Awaited before a send's checks, never between them and the
+        enqueue."""
+        return await asyncio.to_thread(self.daemon.playbook.journal_reminder)
 
     async def file_apply(self, plan: Apply, origin: str, kit_id: str) -> dict[str, Any]:
         """§27, §31, §32: a kit's held apply, filed by handsd itself.
@@ -878,7 +950,7 @@ class Api:
         decision and the record comes back in the state it is still in, with the
         pending gate on it.
         """
-        record = self._job(job)
+        record = self._job(match_job_id(self.spool, job))  # §39: a lenient id
         if self.config.role(record.role).cancel_gated:
             return (await self._request_cancel(record, reason)).to_dict()
         return (await self.daemon.cancel(record, reason=reason)).to_dict()
@@ -1000,6 +1072,7 @@ class Api:
         `hands.gates`.
         """
         decided_by = gates.decider_for(human_confirmed=human_confirmed)
+        job = match_job_id(self.spool, job)  # §39 (H-059): a lenient id
         return await self._decide_as(job, decision, decided_by, reason=reason, quote=quote)
 
     async def decide_from_phone(
@@ -1280,8 +1353,9 @@ class Api:
         beside `status` because it reads the same daemon state. Three parts, one
         or more lines each: the builder's running job and its age, or the last
         ended builder job and its verdict; the branch and `git log --oneline -3`
-        of the builder's cwd; and the first line of the working tree's
-        `meta/CHECKPOINT.md` that names a unit in progress, or "no checkpoint".
+        of the builder's cwd; and the first line of `meta/CHECKPOINT.md` at the
+        repository root (`git rev-parse --show-toplevel` of the builder's cwd, §39)
+        that names a unit in progress, or "no checkpoint".
         The git calls and the file read run in a thread, so the queue keeps moving.
         """
         cwd = self.config.role("builder").cwd
@@ -1365,10 +1439,33 @@ def _progress_git(cwd: Path) -> list[str]:
     return [f"branch: {branch.strip()}", *log.splitlines()]
 
 
-def _checkpoint_line(cwd: Path) -> str:
-    """§38: `checkpoint: <the first line naming a unit in progress>`, or "no checkpoint"."""
+def _checkpoint_root(cwd: Path) -> Path:
+    """§39: `git -C <cwd> rev-parse --show-toplevel`, or `cwd` itself when git gives none.
+
+    The design names only the repository root; a cwd outside a repository (or a
+    git that fails or hangs) falls back to the cwd, the simplest reading.
+    """
     try:
-        text = (cwd / PROGRESS_CHECKPOINT).read_text(encoding="utf-8", errors="replace")
+        done = subprocess.run(
+            ["git", "-C", str(cwd), "rev-parse", "--show-toplevel"],
+            capture_output=True,
+            text=True,
+            errors="replace",
+            timeout=PROGRESS_GIT_TIMEOUT_S,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return cwd
+    top = done.stdout.strip() if done.returncode == 0 else ""
+    return Path(top) if top else cwd
+
+
+def _checkpoint_line(cwd: Path) -> str:
+    """§38, §39: `checkpoint: <the first line naming a unit in progress>` of the
+    `meta/CHECKPOINT.md` at the repository root of `cwd`, or "no checkpoint"."""
+    try:
+        path = _checkpoint_root(cwd) / PROGRESS_CHECKPOINT
+        text = path.read_text(encoding="utf-8", errors="replace")
     except OSError:
         return "no checkpoint"
     for line in text.splitlines():

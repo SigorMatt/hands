@@ -242,10 +242,10 @@ KICKOFF = (
 )
 
 
-def test_this_repositorys_playbook_loads_with_20_rules_and_the_mission_less_kickoff() -> None:
+def test_this_repositorys_playbook_loads_with_21_rules_and_the_mission_less_kickoff() -> None:
     book = parse_playbook((ROOT / "PLAYBOOK.toml").read_text(encoding="utf-8"), path=ROOT)
     assert book.kickoff == KICKOFF
-    assert len(book.rules) == 20
+    assert len(book.rules) == 21  # §39 (H-057): `aux.orphaned → resume` is the 21st
 
 
 def test_a_kit_of_a_brief_carrying_the_new_kickoff_checks_against_this_repository(

@@ -47,6 +47,7 @@ from hands.phone import ARCHITECT_TITLE, BUILDER_TITLE, PhoneChannel, answer_rep
 from hands.playbook import PlaybookEngine, series_roles_problem
 from hands.runner import LINE_LIMIT, Runner, RunnerError, reconcile_orphans
 from hands.spool import (
+    ORPHAN_DAEMON_STOP,
     TERMINAL_STATES,
     Event,
     Job,
@@ -288,10 +289,13 @@ class Daemon:
         still_held = self._publish_held()
         message = f"{self.config.project} on {self.socket_path}"
         for job in resumed:  # §38: the start notification names what was resumed
-            message += (
-                f"\nResumed: {job.role} job {job.id}, from job {job.resumed_from} "
-                "which a daemon stop orphaned"
-            )
+            message += f"\nResumed: {job.role} job {job.id}, from job {job.resumed_from} "
+            # §39 (review 22 should-fix 4): a daemon stop only when the orphan says so.
+            orphan = self.spool.load_job(str(job.resumed_from))
+            if orphan.orphan_reason == ORPHAN_DAEMON_STOP:
+                message += "which a daemon stop orphaned"
+            else:
+                message += "which this start found orphaned (its process was gone)"
         log.info(
             "handsd %s listening on %s (project %s)",
             __version__, self.socket_path, self.config.project,
@@ -660,7 +664,10 @@ class Daemon:
             log.info("job %s (%s) %s", job_id, role, finished.state)
             if finished.state == "orphaned":
                 # §38: the daemon's own stop ended it. The engine hears it at the next
-                # start (`_feed_orphans`), not in a daemon going down.
+                # start (`_feed_orphans`), not in a daemon going down. §39 (review 22
+                # should-fix 3): a phone `reply` or `answer` it ended is published as
+                # its end now; the stop drains what is queued to publish.
+                self._reply_ended(finished)
                 return
             # §6: a `limited` job schedules its own resume, a `done` one clears
             # the resume counter. Both are the limit manager's, not the queue's.

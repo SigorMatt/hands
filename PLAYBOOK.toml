@@ -105,6 +105,12 @@ then = "resume"
 on = "builder.failed"
 then = "resume"
 
+# §39 (H-057): a review a daemon restart (or a crash) killed is re-sent, its
+# prompt to a fresh context, bounded by max_resumes.
+[[rule]]
+on = "aux.orphaned"
+then = "resume"
+
 [[rule]]
 on = "aux.failed"
 then = "stop"

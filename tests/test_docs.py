@@ -40,7 +40,7 @@ EXAMPLE = ROOT / "tests" / "fixtures" / "playbook_example.toml"
 #: Words that follow `hands ` in a command without naming a command of §4.
 NOT_COMMANDS = {"--help", "--version", "--project", "--json", "--socket", "<command>"}
 #: Commands of §4 the CLI answers itself, with no daemon method (`kit check`, §26).
-CLIENT_COMMANDS = {"kit", "migrate-spool", "handbook", "project"}  # §29, §38: no daemon
+CLIENT_COMMANDS = {"kit", "migrate-spool", "handbook", "project", "hosted-review"}  # §29, §38, §39
 #: `hands <command>`, where `hands` is the program and not the tail of a path
 #: (`git clone …/hands repo`) — hence the lookbehind.
 COMMAND_RE = re.compile(r"(?<![\w/.~-])hands (?:--\w+ [\w<>-]+ )?([a-z-]+|--[a-z-]+)")
@@ -638,6 +638,28 @@ def test_progress_is_documented_in_the_command_channel_the_playbook_doc_and_the_
     assert "`progress <secret>`" in playbook_doc
     assert "progress <secret>" in (phone.__doc__ or "")
     assert "accepts ten" in flattened(phone.__doc__ or "")
+
+
+#: §39 (REVIEW-22 should-fix 6): the ten phone commands, in the phone module's order.
+PHONE_COMMANDS = ("approve", "deny", "pause", "resume", "status", "progress", "go", "kit",
+                  "reply", "answer")
+
+
+def test_the_readme_phone_command_list_names_all_ten_commands() -> None:
+    """§39: README's command-channel bullet names each of the ten phone commands,
+    and says ten; the phone module's own list has the same ten."""
+    from hands import phone
+
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    bullet = readme.split("- **The command channel**", 1)[1].split("\n- ", 1)[0]
+    bullet = flattened(bullet)
+    for name in PHONE_COMMANDS:
+        assert f"`{name}`" in bullet, f"README's command list omits `{name}`"
+    assert "ten commands" in bullet
+    listed = (phone.__doc__ or "").split("second word:", 1)[1].split("**`reply`**", 1)[0]
+    assert tuple(line.split()[0] for line in listed.splitlines() if line.strip()) == (
+        PHONE_COMMANDS
+    )
 
 
 def test_the_readme_names_kit_check_go_and_the_kit_transport() -> None:
@@ -2162,6 +2184,29 @@ def test_the_handbook_section_9_is_the_pull_request_flow_of_section_35() -> None
     assert "auto-merge on a clean review" not in handbook
 
 
+def test_the_handbook_section_9_reads_the_hosted_review_by_command() -> None:
+    """§39 "The hosted review, read mechanically" and "The hosted review's findings
+    are fixed in the pull request they belong to": §9 says the builder's last unit
+    reads and fixes the bot's findings and records a disposition each, and the
+    reviewer reads it by command in a fresh context and audits the dispositions."""
+    section = handbook_section(9)
+    for said in (
+        "`hands hosted-review <pr>`",
+        "docs/QODO-EXTRACTION.md",
+        "up to ten minutes",
+        "fixes the findings that are within the design",
+        "never fixed in silence",
+        "`fixed in <sha>` | `dismissed: <reason>` | `finding H-nnn filed`",
+        "fresh-context sub-agent",
+        "`meta/reviews/hosted/PR-<n>/<k>/`",
+        "committed with the review file",
+        "from the Code Review comment only",
+        '"no bot comment yet", is the wait, never a clean review',
+        "audits the builder's dispositions against the archive",
+    ):
+        assert said in section, f"handbook §9 does not say {said!r}"
+
+
 def test_the_integration_doc_names_the_gh_prerequisite_and_doctors_gh_row() -> None:
     """§35 `hands doctor`: `gh` installed, `gh auth login` for the user handsd runs
     as, a `repo`-scoped token; doctor's `gh` row as OK and as WARN (the remedy is
@@ -2375,3 +2420,239 @@ def test_the_readme_points_at_progress_project_add_and_handbook() -> None:
     readme = flattened((ROOT / "README.md").read_text(encoding="utf-8"))
     for said in ("`progress <secret>`", "`hands project add", "`hands handbook`"):
         assert said in readme, f"README.md does not mention {said}"
+
+
+# ------------------------------------------- mission 23 U9: hooks and docs (§39)
+
+#: Every hook invocation a shipped file tells a human (or Claude Code) to run:
+#: `python3`, optional quoting and `$CLAUDE_PROJECT_DIR`, then a path to one of
+#: the two hooks. §37 (the guard) and §39 (H-056, no_background) say `-I`.
+HOOK_CALL_RE = re.compile(
+    r"python3(?P<flags>(?:\s+-\w+)*)\s+\S*?(?:\.claude/hooks|driver/hooks)/"
+    r"(?P<hook>bash_guard|no_background)\.py"
+)
+#: The shipped files that spell a hook's command line.
+HOOK_SPELLERS = [
+    *DOCS,
+    ROOT / "architect" / "README.md",
+    ROOT / "architect" / "CLAUDE.md",
+    ROOT / ".claude" / "settings.json",
+    ROOT / "driver" / "settings.json",
+    ROOT / "architect" / "settings.json",
+]
+
+
+def test_every_shipped_hook_command_runs_python3_dash_capital_i() -> None:
+    """§39 (H-056, review 22 should-fix 12): `no_background.py` runs as `python3 -I`
+    in `.claude/settings.json`, in docs/INTEGRATION.md's copy line and in its
+    self-test, under the same rule as the guard (§37). Each spelling of either
+    hook in a shipped doc or settings file carries `-I`."""
+    seen: dict[str, int] = {"bash_guard": 0, "no_background": 0}
+    offenders = []
+    for path in HOOK_SPELLERS:
+        if not path.is_file():
+            continue
+        text = path.read_text(encoding="utf-8").replace('\\"', '"')
+        for match in HOOK_CALL_RE.finditer(text):
+            seen[match["hook"]] += 1
+            if "-I" not in match["flags"].split():
+                offenders.append(f"{path.relative_to(ROOT)}: {match.group(0)!r}")
+    assert not offenders, "a hook runs without -I:\n" + "\n".join(offenders)
+    assert seen["bash_guard"] and seen["no_background"], seen
+
+
+def test_the_integration_doc_installs_no_background_with_dash_capital_i() -> None:
+    """§39 (H-056): the copy recipe's self-test line is `python3 -I`, and the
+    settings it copies run the hook as `python3 -I`."""
+    text = (ROOT / "docs" / "INTEGRATION.md").read_text(encoding="utf-8")
+    assert "    python3 -I .claude/hooks/no_background.py --selftest\n" in text
+    assert "    python3 .claude/hooks/no_background.py" not in text
+    settings = json.loads((ROOT / ".claude" / "settings.json").read_text(encoding="utf-8"))
+    commands = [
+        hook["command"]
+        for entry in settings["hooks"]["PreToolUse"]
+        for hook in entry["hooks"]
+        if "no_background.py" in hook["command"]
+    ]
+    assert commands == ['python3 -I "$CLAUDE_PROJECT_DIR"/.claude/hooks/no_background.py']
+
+
+def _integration() -> str:
+    return flattened((ROOT / "docs" / "INTEGRATION.md").read_text(encoding="utf-8"))
+
+
+def _handbook() -> str:
+    return flattened((ROOT / "docs" / "ARCHITECT-HANDBOOK.md").read_text(encoding="utf-8"))
+
+
+def test_the_integration_doc_says_a_restart_kills_every_job_and_what_resumes_what() -> None:
+    """§38 (H-047), §39 (H-057): a daemon stop orphans every running job of the
+    project; the shipped playbooks resume builder and aux orphans by rule,
+    bounded by `max_resumes`; an orphaned consultation stops."""
+    text = _integration()
+    for said in (
+        "A restart of handsd kills every running job of the project",
+        "`builder.orphaned → resume` and `aux.orphaned → resume`",
+        "bounded by `[limits] max_resumes`",
+        "An orphaned consultation (a driver or architect job) is not resumed: it stops",
+        "A job still queued stays queued",
+    ):
+        assert said in text, f"docs/INTEGRATION.md does not say {said!r}"
+    for path in (ROOT / "PLAYBOOK.toml", *sorted((ROOT / "templates").glob("PLAYBOOK-*.toml"))):
+        rules = tomllib.loads(path.read_text(encoding="utf-8"))["rule"]
+        for event in ("builder.orphaned", "aux.orphaned"):
+            assert [r["then"] for r in rules if r["on"] == event] == ["resume"], (path, event)
+
+
+def test_the_integration_doc_counts_the_kits_hooks() -> None:
+    """§39: the driver kit has one hook and the architect kit two — and the shipped
+    settings files carry exactly that many."""
+    text = _integration()
+    assert "The driver kit has one hook" in text
+    assert "The architect kit has two" in text
+    for kit, count in (("driver", 1), ("architect", 2)):
+        settings = json.loads((ROOT / kit / "settings.json").read_text(encoding="utf-8"))
+        hooks = [h for e in settings["hooks"]["PreToolUse"] for h in e["hooks"]]
+        assert len(hooks) == count, (kit, hooks)
+
+
+def test_the_integration_doc_says_a_clean_review_stop_is_unpaused_by_the_next_apply() -> None:
+    """§39: a clean-review stop pauses the pipeline; the next apply's job, sent
+    with `go`, un-pauses it when it starts (§27)."""
+    text = _integration()
+    assert "A clean review is a stop, so it pauses the pipeline" in text
+    assert "the next kit's apply and the `go` after it un-pause it" in text
+    rules = tomllib.loads(
+        (ROOT / "templates" / "PLAYBOOK-missions.toml").read_text(encoding="utf-8")
+    )["rule"]
+    clean = [r for r in rules if r["on"] == "aux.done" and "blockers=0" in r.get("verdict", "")]
+    assert clean and clean[0]["then"] == "stop", clean
+
+
+def test_the_integration_doc_states_the_server_fallback_as_the_loader_does(
+    tmp_home: Path,
+) -> None:
+    """§39 (H-054): `[server]` is read as the fallback for a config written before
+    `[notify]`; a key set in both tables refuses to load; the migration moves it."""
+    from hands.config import ConfigError, load_config
+
+    text = _integration()
+    for said in (
+        "`[server]` is read as the fallback for a config written before `[notify]`",
+        "a key set in both tables refuses to load",
+        "Move the line: delete it from `[server]` and keep the `[notify]` one.",
+    ):
+        assert said in text, f"docs/INTEGRATION.md does not say {said!r}"
+    path = tmp_home / ".hands" / "demo.toml"
+    base = '[roles.builder]\ncwd = "~/g"\n[server]\nntfy_topic = "hands-demo-old"\n'
+    path.write_text(base)
+    assert load_config("demo").server.ntfy_topic == "hands-demo-old"
+    path.write_text(base + '[notify]\nntfy_topic = "hands-demo-new"\n')
+    with pytest.raises(ConfigError, match=r"ntfy_topic is set in both \[server\] and \[notify\]"):
+        load_config("demo")
+
+
+def test_the_integration_doc_gives_the_architect_handbook_and_reads_under_hands_docs() -> None:
+    """§39 (H-051): the architect's `hands` subcommands gain `handbook`, and the
+    architect reads under `docs/` and `templates/` in `HANDS_DOCS`, not the rest of
+    it — what the guard allows (PR #4 hosted review, finding 7)."""
+    spec = importlib.util.spec_from_file_location(
+        "bash_guard_u9", ROOT / "driver" / "hooks" / "bash_guard.py"
+    )
+    assert spec and spec.loader
+    guard = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(guard)
+    assert "handbook" in guard.ARCHITECT_HANDS_SUBCOMMANDS
+    text = _integration()
+    assert "`hands show|jobs|inbox|pipeline|status|handbook|kit check|kit file`" in text
+    assert guard.DOCS_SUBDIRS == ("docs", "templates")
+    flat = " ".join(text.split())
+    assert ("the architect, under `HANDS_KITS` or under `docs/` and `templates/` in "
+            "`HANDS_DOCS`") in flat
+    assert "nothing else in `HANDS_DOCS`" in flat
+    assert "the architect, under `HANDS_KITS` or `HANDS_DOCS`" not in flat
+
+
+def test_the_handbook_says_status_prints_the_architect_row(tmp_home: Path) -> None:
+    """§39 (H-053): `status` prints one line per configured role, the architect's
+    included — the handbook says so, and the CLI's status block does it."""
+    from hands.cli import _status_block
+    from hands.config import load_config
+    from hands.daemon import Daemon
+    from harness import architect_table, config_body
+
+    assert "one line per configured role, the architect's included" in _handbook()
+    work = tmp_home.parent / "work"
+    work.mkdir()
+    (tmp_home / ".hands" / "demo.toml").write_text(
+        config_body(tmp_home, work, extra=architect_table(tmp_home))
+    )
+    block = _status_block(Daemon(load_config("demo")).status())
+    assert re.search(r"^  architect idle; queued 0/1 ", block, re.M), block
+
+
+def test_the_handbook_says_a_restart_kills_every_running_job() -> None:
+    """§39 (H-057): the install section says a restart kills every running job,
+    not only the builder's."""
+    install = flattened(
+        (ROOT / "docs" / "ARCHITECT-HANDBOOK.md").read_text(encoding="utf-8")
+        .split("## 12. Onboarding a project", 1)[1].split("### Running as", 1)[0]
+    )
+    assert "A restart of handsd kills every running job of the project" in install
+    assert "not only the builder's" in install
+    assert "`aux.orphaned → resume`" in install
+
+
+def test_the_handbook_cites_the_extraction_method_and_the_same_pr_fix_round() -> None:
+    """§39: docs/QODO-EXTRACTION.md cited where the protocol reads the bot; the
+    builder's last unit fixes the hosted review inside the PR, `## Hosted review`."""
+    section = flattened(
+        (ROOT / "docs" / "ARCHITECT-HANDBOOK.md").read_text(encoding="utf-8")
+        .split("## 9. ", 1)[1].split("## 10. ", 1)[0]
+    )
+    assert section.count("docs/QODO-EXTRACTION.md") == 1, "cited once, not duplicated"
+    assert "fixes the findings that are within the design and pushes" in section
+    assert "`## Hosted review` table" in section
+    assert (ROOT / "docs" / "QODO-EXTRACTION.md").is_file()
+
+
+def test_the_handbook_says_job_ids_are_lenient_and_refusals_are_answered() -> None:
+    """§39 (H-058, H-059), as `hands.api.match_job_id` and `phone._refuse` do."""
+    from hands.api import MIN_ID_PREFIX
+
+    assert MIN_ID_PREFIX == 4
+    text = _handbook()
+    for said in (
+        "matched case-insensitively, with `O` read as `0` and `l` or `I` as `1`",
+        "a unique prefix of four or more characters is accepted",
+        "is answered on `ntfy_topic` titled `<command>` with the reason",
+        "only a wrong or missing secret stays silent",
+    ):
+        assert said in text, f"docs/ARCHITECT-HANDBOOK.md does not say {said!r}"
+
+
+def test_the_handbooks_ruling_round_commits_a_dirty_journal_first() -> None:
+    """§39 (H-060): the ruling round tells the builder to commit a dirty
+    `meta/journal.md` first, as `journal: <consultation>`; hands prefixes the same
+    sentence on an `answer` and a `hands send` to the builder."""
+    from hands.playbook import JOURNAL_REMINDER
+
+    assert "`journal: {consultation}`" in JOURNAL_REMINDER
+    ruling = flattened(
+        (ROOT / "docs" / "ARCHITECT-HANDBOOK.md").read_text(encoding="utf-8")
+        .split("## 14. The ruling round", 1)[1].split("## 15. ", 1)[0]
+    )
+    assert "commit a dirty `meta/journal.md` first, on its own, as `journal: <consultation>`" in (
+        ruling
+    )
+    assert "hands puts that sentence before the text itself" in ruling
+
+
+def test_the_playbook_doc_says_the_shipped_playbooks_resume_an_orphaned_review() -> None:
+    """§39 (H-057): beside §10's verbatim example, the shipped playbooks' extra
+    `aux.orphaned → resume` rule."""
+    text = flattened((ROOT / "docs" / "PLAYBOOK.md").read_text(encoding="utf-8"))
+    assert (
+        "This repository's `PLAYBOOK.toml` and both templates also carry `aux.orphaned` → "
+        "`resume`" in text
+    )

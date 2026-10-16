@@ -235,6 +235,15 @@ builder then returns the tree to `main` with `git checkout main && git pull
 --ff-only`, because the next kit apply and the next kickoff run in that tree
 on `main`.
 
+**The hosted review, fixed in its own pull request (DESIGN §39).** Before
+that return to `main`, the last unit waits up to ten minutes for the bot,
+runs `hands hosted-review <pr>` (the method of docs/QODO-EXTRACTION.md as a
+command), fixes the findings that are within the design and pushes; a
+finding that needs a design decision is filed, never fixed in silence. The
+final report's `## Hosted review` table gives each finding one disposition:
+`fixed in <sha>` | `dismissed: <reason>` | `finding H-nnn filed`, and the
+archive of the builder's fetch is committed on the branch with it.
+
 **The review.** The review prompt names no PR and no commit: the protocol
 finds the mission's pull request itself (`gh pr list --head mission-N --state
 open --json number,baseRefName,headRefOid`). With a PR it reviews the PR's
@@ -242,12 +251,23 @@ commits since the last reviewed tip (`git log <base>..origin/mission-N`: the
 merge-base with `main` for a first review, the `reviewed:` sha of the
 previous REVIEW file for a closer); without one, every commit on `main` since
 the last `review:` commit, as before. Before writing, the reviewer reads the
-hosted review on the PR (`gh api repos/<owner>/<repo>/issues/<pr>/comments`,
-`pulls/<pr>/comments`, `pulls/<pr>/reviews`), waiting in the foreground up to
-ten minutes for it, and treats it as a second cold reviewer:
-`REVIEW-N.md` gains a `## Hosted review` section listing each bot finding
-verbatim as confirmed (carried as blocker k or should-fix m) or dismissed
-(with the reason), and `reviewed: <sha>` on its first line after the title.
+hosted review on the PR by command: a fresh-context sub-agent runs `hands
+hosted-review <pr>` in a worktree at the branch. The command fetches the
+bot's issue comments, reviews and review comments (`gh api
+repos/<owner>/<repo>/issues/<pr>/comments`, `pulls/<pr>/reviews`,
+`pulls/<pr>/comments`, every page), archives each body byte for byte under
+`meta/reviews/hosted/PR-<n>/<k>/`, which is committed with the review file,
+diffs it against the previous fetch by comment id, and takes the verdict
+from the Code Review comment only, because the bot edits that comment in
+place after a push and leaves its inline comments as they were. Exit 3,
+"no bot comment yet", is the wait, never a clean review: the sub-agent waits
+in the foreground up to ten minutes for the bot. It then audits the
+builder's dispositions against the archive and the edited comment. The
+reviewer treats the bot as a second cold reviewer: `REVIEW-N.md` gains a
+`## Hosted review` section listing each bot finding verbatim as confirmed
+(carried as blocker k or should-fix m) or dismissed (with the reason), with
+the audit of its disposition, and `reviewed: <sha>` on its first line after
+the title.
 
 **The merge.** The review file is committed to `main` before any merge (as
 `review: mission N`, pushed at once), so your clone reads it from `main` whatever
@@ -410,6 +430,15 @@ the templates directory, and every role job carries their directory as
 `$HANDS_DOCS/templates/`). A copy in a project's clone is not the hands
 that runs the project and may be older (HF-002).
 
+**A restart kills running work (DESIGN §38, §39).** A restart of handsd
+kills every running job of the project, not only the builder's: a run, a
+review and a consultation alike end `orphaned`, and the next start hands each
+to the playbook once. The shipped playbooks carry `builder.orphaned → resume`
+and `aux.orphaned → resume`, so a killed run or review is re-sent to a fresh
+context, bounded by `[limits] max_resumes`; a playbook you write should carry
+both. An orphaned consultation is not resumed: it stops. Restart between jobs
+when you can (docs/INTEGRATION.md, "Run handsd").
+
 **The laptop check of a role-mode plan kit (HF-005).** A kit whose playbook
 sets `[series] architect = "role"` is judged against the project's hands
 config, which a chat sandbox does not have, so its playbook check fails
@@ -542,12 +571,23 @@ A ruling is a question only the human (the owner) can answer. End to end:
    text ends with its path), or at the laptop `hands send --role builder
    --context keep "<text>"`. The builder commits the file as `plan: decisions
    <date> (owner)`, the one commit the review protocol reads for what it says
-   it does and does not review as a unit.
+   it does and does not review as a unit. After an escalation the builder's
+   tree holds the consultation's uncommitted journal line (DESIGN §27, §39,
+   H-060), so the send tells the builder to commit a dirty `meta/journal.md`
+   first, on its own, as `journal: <consultation>`. On an `answer` and on a
+   `hands send` to the builder, hands puts that sentence before the text itself
+   while the file is dirty; a ruling sent any other way says it.
 4. **The §8 hold, answered by typing.** A laptop or driver send whose text
    matches a gate pattern (`Apply ~/Downloads/`, `decisions-`, `playbook-`, …)
    is held for a human. Answer it by typing `approve <job> <secret>` on
    `cmd_topic`, or `hands approve <job>` at the laptop. The phone's `answer` is
-   never held: its secret is the approval.
+   never held: its secret is the approval. A job id, on the phone and at the
+   laptop alike, is matched case-insensitively, with `O` read as `0` and `l` or
+   `I` as `1`, and a unique prefix of four or more characters is accepted
+   (DESIGN §39, H-059). A command with the right secret that handsd refuses (no
+   such job, a job not held, no resumable session) is answered on `ntfy_topic`
+   titled `<command>` with the reason; only a wrong or missing secret stays
+   silent (H-058).
 5. **The resume.** The brief template's recovery rule: a `keep` send after
    `VERDICT: question` is the answer. The builder carries it out, continues the
    mission from `meta/CHECKPOINT.md`, and ends the reply with one of the brief's
@@ -603,8 +643,8 @@ opening them; and the review checks that commit by `git show --stat` alone.
 - **`hands send` takes the prompt as a plain argument**, after the flags:
   `hands send --role builder --context keep "<text>"`. There is no `--prompt`
   flag; prose with quotes goes through `--prompt-file <path>` or `--stdin`.
-- **`hands status`** prints one line per configured role: running a job, or
-  idle, and `queued N/M`. It says nothing about how far the work has got.
+- **`hands status`** prints one line per configured role, the architect's
+  included (DESIGN §39, H-053): running a job, or idle, and `queued N/M`. It says nothing about how far the work has got.
 - **`hands jobs` lists newest first**, 20 by default (`-n`), filtered by
   `--role`, `--origin`, `--grep` (the prompt) and `--since`.
 - **`hands pipeline`'s `auto-runs` counts only the runs a `send` rule with

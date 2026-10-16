@@ -45,7 +45,8 @@ has no `pr=`.
 - You are a thin orchestrator. You plan units, write the checkpoint,
   dispatch ONE sub-agent per unit (Task tool, foreground only), verify the
   unit cheaply, record one line, move on. You run nothing longer than `git
-  status`, `git log --oneline -5`, and `./scripts/check` yourself.
+  status`, `git log --oneline -5`, `hands hosted-review <pr>` and
+  `./scripts/check` yourself.
 - Before each unit: write `meta/CHECKPOINT.md` (unit id, intent, what
   "done" means, standing constraints). After each unit: update it and
   append one line to `meta/journal.md`.
@@ -121,8 +122,22 @@ named paths.
 `meta/drafts/`, moved in by this commit): what changed (sha per unit),
 what tests prove, NOT PROVEN (mandatory), the `## Review items` table for
 the previous review's blockers and should-fix. On a pull-request mission it
-then opens the pull request (see Branch) and returns the tree to `main`.
-Then the verdict line.
+then opens the pull request (see Branch) and waits up to ten minutes for the
+bot, the hosted reviewer, in one-minute foreground steps: `hands
+hosted-review <pr>` exits 3 with "no bot comment yet", writing nothing,
+until the bot has posted its Code Review comment, which is the wait, never
+a clean review; exit 4 means the findings could not be parsed against the
+header counts, so read the archived comment itself. The command's reading is
+docs/QODO-EXTRACTION.md's method; it archives the bot's words under
+`meta/reviews/hosted/PR-<pr>/<k>/` and takes the verdict from the Code
+Review comment only. The unit then fixes each finding that is within the
+design, by a sub-agent under the sub-agent rules, committed and pushed to
+the branch; a finding that needs a design decision is filed in
+`meta/findings/FINDINGS.md`, never fixed in silence. It pushes, then writes
+the `## Hosted review` table into the final report, one row per finding,
+the finding verbatim and one disposition: `fixed in <sha>` | `dismissed:
+<reason>` | `finding H-nnn filed`; it commits that table with the archive
+directory, pushes, and returns the tree to `main`. Then the verdict line.
 
 ## Acceptance
 
@@ -130,6 +145,6 @@ Then the verdict line.
 - Every unit commit's body lists every file it touches; U0 is `plan:`.
 - <One line per thing the mission promised, each checkable by a command.>
 - `meta/FINAL-REPORT-N.md` exists with NOT PROVEN and the review-items
-  table.
+  table; on a pull-request mission, with the `## Hosted review` table too.
 - On a pull-request mission: the PR from `mission-N` to `main` is open
   (`gh pr list --head mission-N --state open`), and the tree is on `main`.

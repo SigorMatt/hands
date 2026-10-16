@@ -1239,6 +1239,102 @@ def test_your_own_session_changing_publishes_nothing(utc: None) -> None:
     assert len(post.sent) == 1
 
 
+class ScriptedPrints(who.Debounce):
+    """A debounce whose fingerprints are scripted, one per scan, so the test moves
+    the fingerprint and the picture independently (review 22, should-fix 1)."""
+
+    def __init__(self, prints: list[str]) -> None:
+        super().__init__()
+        self.prints = list(prints)
+
+    def fingerprint(self, items: list[tuple[str, str]]) -> str:
+        return self.prints.pop(0)
+
+
+def test_a_fingerprint_change_with_the_same_blanked_picture_publishes_nothing() -> None:
+    """§38: publish needs both to differ; the fingerprint alone is not enough."""
+    box, post = Box(), Recorder()
+    p = pusher(box, post, min_gap=0.0)
+    p.debounce = ScriptedPrints(["a", "b", "c"])
+
+    async def scenario() -> list[bool]:
+        return [await p.scan(), await p.scan(), await p.scan()]
+
+    assert asyncio.run(scenario()) == [True, False, False]
+    assert len(post.sent) == 1
+
+
+def test_a_blanked_picture_change_with_the_same_fingerprint_publishes_nothing() -> None:
+    """§38: publish needs both to differ; the picture alone is not enough."""
+    box, post = Box(), Recorder()
+    p = pusher(box, post, min_gap=0.0)
+    p.debounce = ScriptedPrints(["a", "a", "b"])
+
+    async def scenario() -> list[bool]:
+        first = await p.scan()
+        box.state["roles"]["aux"]["queued"] = ["j2", "j4"]
+        second = await p.scan()  # the picture changed, the fingerprint did not
+        third = await p.scan()  # now the fingerprint changes too
+        return [first, second, third]
+
+    assert asyncio.run(scenario()) == [True, False, True]
+    assert len(post.sent) == 2
+    assert "role aux — 2 jobs queued" in strip_paths(post.sent[1]["message"])
+
+
+def test_the_fingerprint_is_stored_whenever_the_blanked_picture_equals_the_last_published(
+) -> None:
+    """Review 22 should-fix 2: a scan whose blanked picture equals the published one
+    stores its fingerprint, so a later picture-only change does not count as both."""
+    box, post = Box(), Recorder()
+    p = pusher(box, post, min_gap=0.0)
+    p.debounce = ScriptedPrints(["a", "b", "b"])
+
+    async def scenario() -> list[bool]:
+        first = await p.scan()
+        second = await p.scan()  # same picture, new fingerprint: stored
+        stored = p.fp
+        box.state["roles"]["aux"]["queued"] = ["j2", "j4"]
+        third = await p.scan()  # picture changed, fingerprint equals the stored one
+        assert stored == "b"
+        return [first, second, third]
+
+    assert asyncio.run(scenario()) == [True, False, False]
+    assert len(post.sent) == 1
+
+
+def test_a_peer_debounce_settling_after_a_publish_lets_your_session_publish_nothing(
+    utc: None,
+) -> None:
+    """Review 22 should-fix 2's reproduction with the real `Debounce`: under the
+    stale fingerprint the scans published [True, True, False, True] — the fourth
+    only because your own session changed (§24: never fingerprinted)."""
+    box, post = Box(), Recorder()
+    seen = dict(TRANSCRIPTS)
+    src = replace(
+        sources(daemon=box),
+        transcripts=lambda _pid, cwd, _limit, _exclude: ("session", seen.get(cwd)),
+    )
+    p = who.WhoPusher(src, topic=WHO_TOPIC, cmd_topic=None, ntfy_url=NTFY, post=post,
+                      clock=lambda: 1000.0, min_gap=0.0)  # fmt: skip
+
+    async def scenario() -> list[bool]:
+        first = await p.scan()
+        # The driver starts thinking (its debounce now pending) while a real change
+        # publishes the picture that already shows it.
+        seen["/home/u/hands-driver/demo"] = {
+            "waiting": False, "last_prompt": "check", "idle_s": 3.0}  # fmt: skip
+        box.state["roles"]["aux"]["queued"] = ["j2", "j4"]
+        second = await p.scan()
+        third = await p.scan()  # the debounce settles: fingerprint moves, picture not
+        seen[REPO] = {"waiting": False, "last_prompt": "x", "idle_s": 1.0}
+        fourth = await p.scan()  # your own session alone
+        return [first, second, third, fourth]
+
+    assert asyncio.run(scenario()) == [True, True, False, False]
+    assert len(post.sent) == 2
+
+
 def test_handswho_takes_the_floor_from_the_config(
     tmp_home: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

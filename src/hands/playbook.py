@@ -59,7 +59,15 @@ from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from typing import Any
 
-from hands.config import ARCHITECT_ROLE, CONSULT_ROLES, Config
+from hands.config import (
+    ARCHITECT_ROLE,
+    CONSULT_ROLES,
+    DOCS_ENV,
+    HANDBOOK_PATH,
+    TEMPLATES_PATH,
+    Config,
+    docs_root,
+)
 from hands.limits import LimitManager
 from hands.spool import (
     ARCHITECT_ORIGIN,
@@ -142,6 +150,7 @@ EVENTS: tuple[str, ...] = (
     "builder.orphaned",
     "aux.done",
     "aux.failed",
+    "aux.orphaned",  # §39 (H-057): a review the daemon's stop (or a crash) killed
     "driver.done",
     "driver.failed",
     "driver.killed",  # §28: a consultation's driver job ended any other way
@@ -785,39 +794,89 @@ def _owner_decisions(cwd: Path, since: str | None) -> list[str]:
     oldest first, as `[<path>, committed]` and its text at HEAD, or one line of why
     the files could not be listed.
 
-    §38: the owner files are the ones `git ls-files --full-name` lists at
-    `meta/decisions/*-owner.md` below `cwd`, so their paths are relative to the
-    repository root, as `git log --name-only` writes them, wherever below the root
-    `cwd` is; the path shown is that root-relative one. A file no longer tracked is
-    not listed.
+    §38: the paths are relative to the repository root, as `git log --name-only`
+    writes them, wherever below the root `cwd` is (`git rev-parse --show-prefix`
+    gives `cwd`'s own place); the path shown is that root-relative one. §39: both
+    fallbacks are inclusive, each with a note. A file no longer tracked at HEAD
+    (`git ls-files --full-name` does not list it) is listed with a note in place of
+    its text, and a `since` that is not a commit here lists every owner file, under
+    a note naming the sha.
     """
+    blocks: list[str] = []
+    if since is not None:
+        try:
+            _git(cwd, "rev-parse", "--verify", "-q", f"{since}^{{commit}}")
+        except PlaybookError:
+            blocks.append(
+                f"[hands: the HEAD the last consultation recorded, {since}, is not a commit "
+                f"in {cwd}, so every commit counts and every owner file is listed]"
+            )
+            since = None
     pattern = f":(glob){DECISIONS_DIR.as_posix()}/*{OWNER_SUFFIX}"
     revisions = [f"{since}..HEAD"] if since is not None else []
     try:
-        owned = {
-            name
-            for name in _git(cwd, "ls-files", "-z", "--full-name", "--", pattern).split("\0")
-            if len(PurePosixPath(name).name) > len(OWNER_SUFFIX)
-        }
+        where = _git(cwd, "rev-parse", "--show-prefix").strip()
+        owned = set(_git(cwd, "ls-files", "-z", "--full-name", "--", pattern).split("\0"))
         log = _git(
             cwd, "log", "--format=", "--name-only", "--no-renames", *revisions,
             "--", f"{DECISIONS_DIR.as_posix()}/",
         )
     except PlaybookError as exc:
-        return [f"[hands: the files under {DECISIONS_DIR}/ could not be listed: {exc}]"]
+        return [*blocks, f"[hands: the files under {DECISIONS_DIR}/ could not be listed: {exc}]"]
+    directory = PurePosixPath(where or ".") / DECISIONS_DIR.as_posix()
     names: list[str] = []
     for line in reversed(log.splitlines()):
         name = line.strip()
-        if name in owned and name not in names:
+        path = PurePosixPath(name)
+        if (
+            path.parent == directory
+            and path.name.endswith(OWNER_SUFFIX)
+            and len(path.name) > len(OWNER_SUFFIX)
+            and name not in names
+        ):
             names.append(name)
-    blocks = []
     for name in names:
-        try:
-            text = _git(cwd, "-c", "core.autocrlf=false", "show", f"HEAD:{name}")
-        except PlaybookError as exc:
-            text = f"[hands: no committed copy (`git show HEAD:{name}` in {cwd}: {exc})]"
+        if name not in owned:
+            text = (
+                f"[hands: a commit since the consultation touched it, but it is no longer "
+                f"tracked at HEAD in {cwd} (`git ls-files` does not list it), so there is "
+                "no text to show]"
+            )
+        else:
+            try:
+                text = _git(cwd, "-c", "core.autocrlf=false", "show", f"HEAD:{name}")
+            except PlaybookError as exc:
+                text = f"[hands: no committed copy (`git show HEAD:{name}` in {cwd}: {exc})]"
         blocks.append(f"[{name}, committed]\n{text}")
     return blocks
+
+
+#: §39 (H-060): the one sentence the resume path puts before a builder prompt while
+#: `meta/journal.md` is dirty, and how §36 knows it again to leave it out.
+JOURNAL_REMINDER = (
+    "[hands: {journal} is uncommitted in your working tree (`git status --porcelain` "
+    "shows it): commit it first, on its own, as `journal: {consultation}`, then do "
+    "what follows.]"
+)
+_JOURNAL_REMINDER_RE = re.compile(r"\A\[hands: meta/journal\.md is uncommitted [^\n]*\]\n\n")
+
+
+#: §39: the sample verdict lines an architect consult on `builder.done` is judged by.
+BLOCKED_SAMPLE = "VERDICT: mission 1 blocked U2"
+FINISHED_SAMPLE = "VERDICT: mission 1 finished"
+
+
+def _blocked_sample_refusal(verdict: re.Pattern[str] | None) -> str | None:
+    """§39: why `verdict` cannot be an architect consult's regex on `builder.done`,
+    or None: it must match `BLOCKED_SAMPLE` and must not match `FINISHED_SAMPLE`
+    (searched, as `_choose` matches a rule)."""
+    if verdict is None:
+        return f"the rule needs a verdict regex that matches {BLOCKED_SAMPLE!r}"
+    if verdict.search(BLOCKED_SAMPLE) is None:
+        return f"its verdict regex must match {BLOCKED_SAMPLE!r}, and does not"
+    if verdict.search(FINISHED_SAMPLE) is not None:
+        return f"its verdict regex must not match {FINISHED_SAMPLE!r}, and does"
+    return None
 
 
 def _lf(data: bytes) -> bytes:
@@ -1136,16 +1195,17 @@ def _rule(index: int, table: dict[str, Any], path: Path, *, auto_runs: tuple[int
                 f'{where}: a consult with role = "{ARCHITECT}" is on the review outcome '
                 f"§31 names ({', '.join(CONSULT_EVENTS[ARCHITECT])}), got {on}"
             )
-        if role == ARCHITECT and on == BUILDER_DONE and (
-            verdict is None or BLOCKED not in verdict.pattern
-        ):
+        if role == ARCHITECT and on == BUILDER_DONE:
             # §38: the architect is consulted on a builder's *blocked* verdict, and
             # its prompt says so; a rule that could fire on another end would hand it
-            # a finished or applied reply under that heading.
-            raise PlaybookError(
-                f'{where}: a consult with role = "{ARCHITECT}" on {BUILDER_DONE} is on the '
-                f"builder's {BLOCKED} verdict (§38): its verdict regex must name {BLOCKED!r}"
-            )
+            # a finished or applied reply under that heading. §39: the compiled regex
+            # is judged against sample verdict lines, never its text.
+            wrong = _blocked_sample_refusal(verdict)
+            if wrong is not None:
+                raise PlaybookError(
+                    f'{where}: a consult with role = "{ARCHITECT}" on {BUILDER_DONE} is on '
+                    f"the builder's {BLOCKED} verdict (§38, §39): {wrong}"
+                )
         if context is not None and context != "clear":
             raise PlaybookError(
                 f"{where}: a consult starts a fresh {role} session: context is clear, "
@@ -2216,8 +2276,15 @@ class PlaybookEngine:
             return
 
         role = self.config.role(job.role)
-        if job.role == "builder":  # §10/§6: the resume line when configured, else the
+        if is_builder_answer(job):
+            # §39 (review 22 should-fix 3): a phone `answer` is re-sent as what it was,
+            # its text to the builder's session as a `keep`, never as a clear.
+            prompt, context = job.prompt, "keep"
+        elif job.role == "builder":  # §10/§6: the resume line when configured, else the
             prompt, context = role.resume_prompt(job.prompt), "clear"  # same prompt (H-008)
+        elif job.state == "orphaned":
+            # §39 (H-057): an orphaned review's prompt goes to a fresh context.
+            prompt, context = job.prompt, "clear"
         else:
             prompt, context = job.prompt, job.context
         try:
@@ -2417,9 +2484,38 @@ class PlaybookEngine:
                 said = "`hands send --role builder --context keep`"
             else:
                 continue
-            blocks.append(f"[{said}: builder job {record.id}, {record.created}]\n{record.prompt}")
+            # §39 (H-060): the journal sentence is hands', not the human's words.
+            words = _JOURNAL_REMINDER_RE.sub("", record.prompt, count=1)
+            blocks.append(f"[{said}: builder job {record.id}, {record.created}]\n{words}")
         blocks.extend(_owner_decisions(self.config.role("builder").cwd, since))
         return "\n\n".join(blocks)
+
+    def journal_reminder(self) -> str | None:
+        """§39 (H-060): the sentence telling the builder to commit a dirty
+        `meta/journal.md` first, or None when `git status --porcelain --
+        meta/journal.md` in the builder's cwd prints nothing (or git cannot answer).
+
+        Any line counts as dirty — modified, or untracked as a first consult line
+        leaves it; `<consultation>` is the job of the newest `consult.done` event
+        (the line §27 appended last), "consultation" when there is none.
+        """
+        try:
+            status = _git(
+                self.config.role("builder").cwd, "status", "--porcelain", "--",
+                JOURNAL.as_posix(),
+            )
+        except PlaybookError:
+            return None
+        if not status.strip():
+            return None
+        consultation = "consultation"
+        for event in reversed(self.spool.events()):
+            if event.kind == "consult.done" and isinstance(event.payload.get("job"), str):
+                consultation = event.payload["job"]
+                break
+        return JOURNAL_REMINDER.format(
+            journal=JOURNAL.as_posix(), consultation=" ".join(consultation.split())
+        )
 
     def architect_consults_used(self) -> int:
         """§31: the architect consultations of this *series* — architect jobs (a §6
@@ -3151,6 +3247,8 @@ def _architect_prompt(event: str, job: Job, brief: ArchitectBrief | None) -> str
         "([limits] max_architect_consults); when the budget is exhausted handsd stops the "
         "series itself, naming budget-exhausted\n"
         "\n"
+        f"{_docs_paragraph()}"
+        "\n"
         f"The instruction: {ARCHITECT_INSTRUCTION}.\n"
         "Stage the kit as a directory kits/<name>/<repository paths> and file it with "
         "`hands kit file kits/<name>` before you reply `VERDICT: next kit <name>`: "
@@ -3159,6 +3257,25 @@ def _architect_prompt(event: str, job: Job, brief: ArchitectBrief | None) -> str
         "Your reply's first line is exactly one of:\n"
         "\n"
         + "".join(f"    {line}\n" for line in ARCHITECT_VERDICTS)
+    )
+
+
+def _docs_paragraph() -> str:
+    """§39 (H-051): the installed handbook's and templates' absolute paths — the
+    `docs_root` the runner exports as `HANDS_DOCS` — for the role to Read, since
+    nothing it may run prints the variable; or a plain statement that this hands
+    carries none (a broken install)."""
+    root = docs_root()
+    if root is None:
+        return (
+            f"[hands: this hands carries no handbook or templates, so {DOCS_ENV} is not "
+            "set; reinstall hands (§38)]\n"
+        )
+    return (
+        f"The handbook of the hands that runs you ({DOCS_ENV}={root}); Read it before "
+        "writing anything:\n"
+        f"    handbook  = `{root / HANDBOOK_PATH}`\n"
+        f"    templates = `{root / TEMPLATES_PATH}`\n"
     )
 
 

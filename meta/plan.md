@@ -1,51 +1,49 @@
-# plan — mission 22 (the operational findings and the onboarding half)
+# plan — mission 23 (review 22, the four findings, the hosted review read mechanically)
 
-Source: meta/BUILDER-22-PROMPT.md, DESIGN v3.21 §38 (with §26, §31, §33,
-§36, §37), meta/reviews/REVIEW-21.md. Units run in order; each ends with a
-commit and a push to `mission-22`; the last unit opens the pull request to
-`main` (§35). `[x]` = done and pushed, `[b]` = blocked (two failures).
+Source: meta/BUILDER-23-PROMPT.md, DESIGN v3.22 §39 (with §24, §27, §31,
+§35, §38), meta/reviews/REVIEW-22.md, docs/QODO-EXTRACTION.md. Units run in
+order; each ends with a commit and a push to `mission-23`; the last unit
+opens the pull request to `main` (§35), reads the hosted review with `hands
+hosted-review` and fixes its findings. `[x]` = done and pushed, `[b]` =
+blocked (two failures).
 
-Base of the mission: 7ddc0e8 (`plan: mission 22 kit (DESIGN v3.21)`).
+Base of the mission: 23eff6c (`plan: mission 23 kit (DESIGN v3.22)`).
 
-- [x] U0 Plan, branch and findings (`plan:`) 759f605 — this file, meta/CHECKPOINT.md,
-      meta/journal.md, meta/findings/FINDINGS.md (H-049, H-050 filed;
-      H-037, H-046..H-048 in progress)
-- [x] U1 The buttons carry the token (H-037) 3feb89b — src/hands/notify.py,
-      src/hands/phone.py, src/hands/doctor.py, tests
-- [x] U2 `handswho` on change only; doctor's broker warning (H-046) —
-      src/hands/who.py, src/hands/config.py, src/hands/doctor.py,
-      docs/INTEGRATION.md, tests
-- [x] U3 A daemon stop does not strand the builder (H-047) —
-      src/hands/daemon.py, src/hands/runner.py, src/hands/spool.py,
-      src/hands/playbook.py, tests
-- [x] U4 A blocked mission consults the role (H-048) 5f3b7ad 96d3fbb 69364de — src/hands/playbook.py,
-      src/hands/kit.py, templates/PLAYBOOK-missions.toml, docs/PLAYBOOK.md,
-      tests
-- [x] U5 `progress <secret>` f16c331 — src/hands/phone.py, src/hands/api.py,
-      docs/INTEGRATION.md, docs/PLAYBOOK.md, tests
-- [x] U6 Review 20's two notes on U6 22a2ef5 — src/hands/playbook.py, tests
-- [x] U7 The protocols (H-049, H-050; review 21 should-fix 2) —
-      templates/REVIEW-PROTOCOL.md, meta/REVIEW-PROTOCOL.md, tests
-- [x] U8 The templates cfb7e71 7df5bce — templates/DECISIONS-owner.md (new),
-      templates/BUILDER-N-PROMPT.md, docs/ARCHITECT-INSTRUCTION.md,
-      architect/CLAUDE.md, src/hands/kit.py, tests
-- [x] U9 The installed handbook and templates (HF-002, HF-004, HF-005) —
-      pyproject.toml, src/hands/cli.py, src/hands/runner.py,
-      src/hands/config.py, architect/CLAUDE.md, docs/ARCHITECT-INSTRUCTION.md,
-      docs/ARCHITECT-HANDBOOK.md, tests
-- [x] U10 `hands project add` b6e2511 f1936b1 — src/hands/cli.py, src/hands/project.py (new),
-      docs/INTEGRATION.md, tests
-- [x] U11 Docs (review 21 should-fix 3) 9fae4ee — docs/INTEGRATION.md,
-      docs/ARCHITECT-HANDBOOK.md, docs/PLAYBOOK.md, README.md, tests
-- [x] U12 Final report and the pull request (the commit that carries this line) — meta/FINAL-REPORT-22.md
-      (drafted under meta/drafts/)
+- [x] U0 Plan, branch and findings (`plan:`) (this commit) — this file, meta/CHECKPOINT.md,
+      meta/journal.md, meta/findings/FINDINGS.md (H-055..H-060 filed;
+      H-051..H-054 decided)
+- [x] U1 The who watcher 9c5d729 (should-fix 1, 2) — src/hands/who.py, tests
+- [x] U2 Orphans, refusals and ids bcc3d53 (should-fix 3, 4; H-057, H-058, H-059) —
+      src/hands/daemon.py, src/hands/playbook.py, src/hands/phone.py,
+      src/hands/notify.py, PLAYBOOK.toml, templates/PLAYBOOK-missions.toml,
+      templates/PLAYBOOK-runs.toml, tests
+- [x] U3 e36d558 The engine's small fixes (should-fix 5, 7; H-060) —
+      src/hands/playbook.py, src/hands/api.py, tests
+- [x] U4 0c6d725 `progress` and the README (should-fix 6) — src/hands/phone.py,
+      README.md, tests
+- [x] U5 59678ee `hands hosted-review <pr>` — src/hands/cli.py, src/hands/hosted.py
+      (new), tests
+- [x] U6 dc9698e The protocol and the brief template (should-fix 8; H-055) —
+      templates/REVIEW-PROTOCOL.md, meta/REVIEW-PROTOCOL.md,
+      templates/BUILDER-N-PROMPT.md, docs/ARCHITECT-HANDBOOK.md §9, tests
+- [x] U7 2b4df10 H-051 and H-052 (should-fix 10; HF-002) — src/hands/playbook.py,
+      driver/hooks/bash_guard.py, architect/settings.json, architect/CLAUDE.md,
+      src/hands/cli.py, src/hands/project.py, meta/findings/FINDINGS.md, tests
+- [x] U8 a09b85f `project add` after a failed clone; the role's rulings
+      (should-fix 9, 11) — src/hands/project.py, architect/CLAUDE.md, tests
+- [x] U9 515b736 Hooks and docs (should-fix 12; H-053, H-054, H-056) —
+      .claude/settings.json, docs/INTEGRATION.md, docs/ARCHITECT-HANDBOOK.md,
+      docs/PLAYBOOK.md, tests
+- [x] U10 d50af2a 1276251 (this commit) Final report, the pull request and the hosted review's findings —
+      meta/FINAL-REPORT-23.md (drafted under meta/drafts/),
+      meta/reviews/hosted/PR-<n>/
 
-Review items. REVIEW-21 should-fix 1 → U12 (the report's sentence);
-should-fix 2 → U7 (H-049); should-fix 3 → U11.
+Review items (REVIEW-22 should-fix). 1, 2 → U1; 3, 4 → U2; 5, 7 → U3;
+6 → U4; 8 → U6; 9, 11 → U8; 10 → U7; 12 → U9.
 
-Findings. H-037 → U1; H-046 → U2; H-047 → U3; H-048 → U4; H-049, H-050 →
-U7; HF-002, HF-004, HF-005 → U9.
+Findings. H-051, H-052, HF-002 → U7; H-053, H-054, H-056 → U9; H-055 → U6;
+H-057, H-058, H-059 → U2; H-060 → U3.
 
-Dependencies. All units run in order (shared files: doctor.py U1/U2,
-playbook.py U3/U4/U6, phone.py U1/U5, kit.py U4/U8, cli.py U9/U10,
-INTEGRATION.md U2/U5/U10/U11). U12 last.
+Dependencies. All units run in order (shared files: playbook.py U2/U3/U7,
+phone.py U2/U4, project.py U7/U8, architect/CLAUDE.md U7/U8, cli.py U5/U7,
+ARCHITECT-HANDBOOK.md U6/U9). U10 last; it uses U5's command.

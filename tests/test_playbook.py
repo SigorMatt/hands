@@ -30,7 +30,7 @@ import hands.runner as hands_runner
 from conftest import commit_file, strip_paths
 from hands.api import ApiError
 from hands.cli import _pipeline_block
-from hands.config import Config, load_config, parse_config
+from hands.config import Config, docs_root, load_config, parse_config
 from hands.daemon import Daemon
 from hands.gates import DECIDERS
 from hands.kit import Apply, apply_params
@@ -498,6 +498,7 @@ def test_the_events_and_actions_are_exactly_section_10s() -> None:
         "builder.orphaned",
         "aux.done",
         "aux.failed",
+        "aux.orphaned",  # §39 (H-057): a review a daemon stop killed
         "driver.done",  # §27: a consultation's driver job ended done
         "driver.failed",  # §27: … or failed
         "driver.killed",  # §28: … or any other way, each a stop the engine enforces
@@ -4048,6 +4049,61 @@ def test_the_architect_consult_is_refused_at_load_not_when_it_fires(
     assert because in strip_paths(str(caught.value)), caught.value
 
 
+def _architect_on_blocked(regex: str) -> str:
+    return (
+        'version = 1\n[series]\narchitect = "role"\n[[rule]]\non = "builder.done"\n'
+        f"verdict = '{regex}'\nthen = \"consult\"\nrole = \"architect\"\n"
+    )
+
+
+@pytest.mark.parametrize(
+    "regex",
+    [
+        "^VERDICT: mission (?P<n>\\d+) blocked",
+        "(?i)^verdict: MISSION \\d+ BLOCKED",
+        "bl[o]cked",
+    ],
+    ids=["blocked", "(?i) and upper case", "a class"],
+)
+def test_an_architect_consult_on_builder_done_whose_regex_matches_blocked_loads(
+    workdir: Path, regex: str
+) -> None:
+    """§39 (review 22 should-fix 5): the load check judges the compiled regex against
+    sample verdict lines, not its text: `VERDICT: mission 1 blocked U2` must match
+    and `VERDICT: mission 1 finished` must not; a `(?i)` regex is fine."""
+    book = parse_playbook(_architect_on_blocked(regex), path=workdir / "PLAYBOOK.toml")
+    [rule] = book.rules
+    assert rule.verdict is not None
+    assert rule.verdict.search("VERDICT: mission 1 blocked U2")
+
+
+@pytest.mark.parametrize(
+    "regex",
+    [
+        "^VERDICT: mission \\d+ not-blocked",
+        "unblocked",
+        "^(?!.*blocked)",
+        "(blocked|finished)",
+        "^VERDICT: mission",
+    ],
+    ids=["not-blocked", "unblocked", "a lookahead against blocked",
+         "blocked or finished", "any mission verdict"],
+)
+def test_an_architect_consult_on_builder_done_whose_regex_misjudges_the_samples_is_refused(
+    workdir: Path, regex: str
+) -> None:
+    """§39: a regex that cannot match the blocked sample, or that matches the
+    finished one, is refused at load, naming the sample it got wrong."""
+    with pytest.raises(PlaybookError) as caught:
+        parse_playbook(_architect_on_blocked(regex), path=workdir / "PLAYBOOK.toml")
+    said = strip_paths(str(caught.value))
+    assert "blocked" in strip_paths(said), said
+    assert (
+        "VERDICT: mission 1 blocked U2" in strip_paths(said)
+        or "VERDICT: mission 1 finished" in strip_paths(said)
+    ), said
+
+
 def test_the_architect_events_are_not_playbook_events(tmp_home: Path, workdir: Path) -> None:
     """§31 puts the follow-up in the engine, so no rule fires on an architect end:
     `EVENTS` stays the closed list it is today, without the architect's states."""
@@ -4109,6 +4165,29 @@ def test_the_architect_prompt_carries_the_event_the_review_the_roadmap_and_the_i
     assert sent.payload["event"] == "aux.done"
     assert sent.payload["consults"] == 1
     assert sent.payload["max_consults"] == 12
+
+
+def test_the_architect_prompt_names_the_installed_handbook_and_templates(
+    tmp_home: Path, workdir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """§39 ruling on H-051: the prompt names the installed handbook's and
+    templates' absolute paths — `docs_root()`, the value the runner exports as
+    `HANDS_DOCS` — so the role can Read them; with no docs it says so."""
+    root = docs_root()
+    assert root is not None
+    engine, recorder = architect_engine(tmp_home, workdir)
+    review = reviewed(engine.spool)
+    run(engine.on_job(review))
+    [call] = recorder.enqueued
+    prompt = call["prompt"]
+    assert f"`{root / 'docs' / 'ARCHITECT-HANDBOOK.md'}`" in prompt
+    assert f"`{root / 'templates'}`" in prompt
+    assert "HANDS_DOCS" in strip_paths(prompt)
+
+    monkeypatch.setattr("hands.playbook.docs_root", lambda: None)
+    bare = consult_prompt("aux.done", review, role=ARCHITECT)
+    assert "carries no handbook" in strip_paths(bare)
+    assert "handbook  =" not in strip_paths(bare)
 
 
 def test_a_review_whose_headings_are_missing_is_carried_whole(
@@ -6005,6 +6084,79 @@ def test_a_builder_cwd_two_levels_below_the_root_lists_its_owner_files(
     assert "NOT an owner file" not in strip_paths(section)
     assert "ROOT's owner file" not in strip_paths(section)
     assert "could not" not in strip_paths(section)
+
+
+def _git_in(cwd: Path, *args: str) -> None:
+    subprocess.run(["git", "-C", str(cwd), *args], check=True, capture_output=True)
+
+
+def test_an_owner_file_committed_since_the_consultation_but_untracked_now_is_listed_with_a_note(
+    tmp_home: Path, workdir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """§39 (review 22 should-fix 7): the fallback is inclusive again — an owner file
+    a commit touched since the consultation and no longer tracked at HEAD is listed,
+    with a note that it has no text at HEAD, beside a tracked one listed as usual."""
+    engine, recorder = architect_engine(tmp_home, workdir)
+    _consultation(engine, recorder)
+    _commit_dated(monkeypatch, workdir, "meta/decisions/002-owner.md",
+                  "GONE owner decision\n", "2099-01-01T00:00:00+00:00")
+    _git_in(workdir, "rm", "-q", "meta/decisions/002-owner.md")
+    _git_in(workdir, "commit", "-q", "-m", "remove 002")
+    _commit_dated(monkeypatch, workdir, "meta/decisions/003-owner.md",
+                  "KEPT owner decision\n", "2099-01-02T00:00:00+00:00")
+
+    said = strip_paths(engine.human_decisions())
+
+    assert "[meta/decisions/002-owner.md, committed]" in strip_paths(said), said
+    gone = said[said.index("[meta/decisions/002-owner.md, committed]"):]
+    assert "no longer tracked" in strip_paths(gone.split("\n\n")[0]), said
+    assert "GONE owner decision" not in strip_paths(said)  # nothing at HEAD to show
+    assert "[meta/decisions/003-owner.md, committed]\nKEPT owner decision" in strip_paths(said)
+    assert said.index("002-owner") < said.index("003-owner")  # oldest commit first
+
+
+def test_an_unknown_recorded_sha_lists_every_owner_file_with_a_note(
+    tmp_home: Path, workdir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """§39 (review 22 should-fix 7): a consultation whose recorded HEAD is not a
+    commit here (garbage-collected, or another clone's) lists every owner file —
+    every commit counts — with a note naming the sha, rather than none."""
+    engine, _ = architect_engine(tmp_home, workdir)
+    _commit_dated(monkeypatch, workdir, "meta/decisions/001-owner.md",
+                  "FIRST owner decision\n", "2001-01-01T00:00:00+00:00")
+    time.sleep(0.003)
+    consultation = engine.spool.create_job(
+        role=ARCHITECT, context="clear", prompt="consulted", origin="playbook"
+    )
+    unknown = "0123456789abcdef0123456789abcdef01234567"
+    engine.spool.append_event("consult.sent", {"job": consultation.id, "head": unknown})
+    _commit_dated(monkeypatch, workdir, "meta/decisions/002-owner.md",
+                  "SECOND owner decision\n", "2099-01-01T00:00:00+00:00")
+
+    said = strip_paths(engine.human_decisions())
+
+    assert unknown in strip_paths(said), said
+    assert "every owner file" in strip_paths(said), said
+    assert "could not be listed" not in strip_paths(said), said
+    assert "[meta/decisions/001-owner.md, committed]\nFIRST owner decision" in strip_paths(said)
+    assert "[meta/decisions/002-owner.md, committed]\nSECOND owner decision" in strip_paths(said)
+
+
+def test_the_journal_reminder_is_not_listed_as_the_humans_words(
+    tmp_home: Path, workdir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """§36 lists an answer verbatim; the §39 (H-060) sentence hands put before it is
+    hands' own, so the architect is told the human's text without it."""
+    engine, _ = architect_engine(tmp_home, workdir)
+    commit_file(workdir, "meta/journal.md", "a line\n")
+    (workdir / "meta" / "journal.md").write_text("a line\nthe consult line\n")
+    reminder = engine.journal_reminder()
+    assert reminder is not None and "meta/journal.md" in strip_paths(reminder)
+    _human_job(engine.spool, role="builder", context="keep", origin="phone",
+               prompt=f"{reminder}\n\nTake option B.")
+    said = strip_paths(engine.human_decisions())
+    assert "Take option B." in strip_paths(said)
+    assert reminder not in strip_paths(said), said
 
 
 def test_with_nothing_decided_the_architect_is_told_so(tmp_home: Path, workdir: Path) -> None:

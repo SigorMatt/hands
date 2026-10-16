@@ -2281,6 +2281,10 @@ HF-004: handbook §6 lists every `playbook.SERIES_KEYS` key with the
 loader's default. HF-005: handbook §12 names `hands kit check <kit> --repo
 <clone>` at the laptop before a role-mode plan kit's apply, and the first
 plan kit's silent apply. Tests: tests/test_handbook.py)
+HF-002 resolved in full by mission 23 U7 with H-051's resolution: the
+architect role can now reach the handbook (the consult prompt names its path,
+and the guard reads under `HANDS_DOCS`); `hands handbook`'s help names
+`$HANDS_DOCS/docs/…` (REVIEW-22 should-fix 10).
 
 ## H-051 — the architect role cannot learn the value of `HANDS_DOCS`
 
@@ -2306,7 +2310,7 @@ consult prompt names the handbook's and templates' paths; or the
 architect's table and settings allow `hands handbook [--templates]`; or
 the guard's read roots gain `HANDS_DOCS` and the instruction says `cat`.
 
-Status: open
+Status: resolved (mission 23 U7 — the architect's consult prompt names `docs_root()`'s handbook and templates paths; architect mode's read roots gain `HANDS_DOCS` and its `hands` subcommands `handbook`; architect/CLAUDE.md rule 2 says to Read the named paths. Tests: tests/test_playbook.py, tests/test_bash_guard.py)
 
 ## H-052 — `project add` writes the architect role's `CLAUDE.md` from the role variant
 
@@ -2331,8 +2335,7 @@ the wheel under `hands/shipped/`. If the design meant the phone instruction
 literally, the role would answer consultations in a vocabulary no consult
 rule matches.
 
-Status: open (for the architect: confirm the reading in the next DESIGN
-revision, or rule otherwise)
+Status: resolved (mission 23 U7 — U10's code already writes architect/CLAUDE.md filled and prints the filled phone instruction last; tests pin the written bytes and the `--dry-run` source line. Tests: tests/test_project_add.py)
 
 ## H-053 — §38 says `status` hides the architect row; the code shows it
 
@@ -2358,7 +2361,9 @@ picture), and the sentence is corrected in the next DESIGN revision; or
 `status` should leave the architect out, which is a code change with its
 own test.
 
-Status: open
+Status: resolved-by-doc (mission 23 U9 515b736 — docs/ARCHITECT-HANDBOOK.md
+says status prints one line per configured role, the architect's included,
+checked against the CLI's status block by test)
 
 ## H-054 — §38 says a `[server] ntfy_topic` config refuses to load; the loader still reads it
 
@@ -2382,5 +2387,160 @@ Direction (for the architect): either correct §38's sentence in the next
 DESIGN revision (the refusal is for a key set twice), or make the
 `[server]` spelling a load error with a migration message, which is a code
 change with its own test.
+
+Status: resolved-by-doc (mission 23 U9 515b736 — docs/INTEGRATION.md says
+[server] is the fallback, a key set in both tables refuses to load, and the
+migration moves the key; checked against the loader by test)
+
+
+## H-055 — the protocol's revert step fails for a file the commit deletes
+
+Severity: medium · Component: templates/REVIEW-PROTOCOL.md,
+meta/REVIEW-PROTOCOL.md; DESIGN §38, §39
+Filed by: mission 23 orchestrator, U0 (2026-10-15).
+Evidence: REVIEW-22 should-fix 8 (the U7 sub-agent, in a scratch repo).
+
+Symptom. A file the commit deletes exists at `<sha>~1`, so the revert step
+checks it out; the restore `git checkout <sha> -- <the same files>` then
+stops with "pathspec did not match" and restores none of the listed files.
+H-049's failure turned around; the step does not require a clean `git
+status` afterwards, so a reviewer can continue on a half-restored tree.
+
+Direction. §39: `git rm -q` a listed file absent at `<sha>` before the
+restore, and `git status --short` must be empty after it. Mission 23 U6.
+
+Status: resolved-by-doc (mission 23 U6 dc9698e — both protocols git rm -q -f
+a listed file absent at <sha> before the restore (plain -q refuses the
+deletion the revert staged) and require git status --short empty after it; a
+scratch-repo test runs the steps)
+
+## H-056 — `no_background.py` runs without `-I`
+
+Severity: medium · Component: .claude/settings.json, docs/INTEGRATION.md;
+DESIGN §38, §39
+Filed by: mission 23 orchestrator, U0 (2026-10-15).
+Evidence: REVIEW-22 should-fix 12: `.claude/settings.json:9` runs
+`python3 "$CLAUDE_PROJECT_DIR"/.claude/hooks/no_background.py`; INTEGRATION's
+copy line and self-test lack `-I` too.
+
+Symptom. The hook imports json, re and sys, so a module planted in the
+role's cwd is imported before the hook runs — the attack `-I` closed for
+the guard.
+
+Direction. §39: `python3 -I` in the settings file, the copy line and the
+self-test, under the same rule as the guard. Mission 23 U9.
+
+Status: resolved (mission 23 U9 515b736 — .claude/settings.json,
+INTEGRATION's copy line and self-test run python3 -I; a planted json.py
+beside the hook is ignored by the settings' command, imported without -I)
+
+## H-057 — a daemon restart kills a running review and nothing resumes it
+
+Severity: high · Component: src/hands/daemon.py, src/hands/playbook.py,
+PLAYBOOK.toml, templates/PLAYBOOK-*.toml; DESIGN §38, §39
+Filed by: mission 23 orchestrator, U0 (2026-10-15).
+Evidence: a `handsd` restart at 2026-10-15 20:23 killed the review job of
+mission 22 an hour in; no job followed.
+
+Symptom. §38's stop records only builder jobs as orphaned with a reason the
+engine feeds; `aux.orphaned` is not in `EVENTS` and no playbook rule
+covers it, so a killed review waits for a human who is not told.
+
+Direction. §39: `aux.orphaned` joins the events; the daemon's stop records
+an aux job orphaned as it does a builder's; both templates and this
+repository's playbook carry `aux.orphaned → resume` (the review's prompt to
+a fresh context, bounded by `max_resumes`). Mission 23 U2.
+
+Status: resolved-by-code (mission 23 U2 bcc3d53 — aux.orphaned in EVENTS,
+the stop records an aux job orphaned, aux.orphaned -> resume in
+PLAYBOOK.toml and both templates; a stop-orphaned review is resumed with its
+prompt in a fresh context at the next start; INTEGRATION and the handbook
+say a restart kills every running job, U9)
+
+## H-058 — a refused phone command is logged, not published
+
+Severity: medium · Component: src/hands/phone.py, src/hands/notify.py;
+DESIGN §39
+Filed by: mission 23 orchestrator, U0 (2026-10-15).
+Evidence: two phone commands on 2026-10-15 carried the right secret, were
+refused by handsd ("no such job"), and the phone saw nothing; the reason
+was only in the daemon log. About an hour lost each.
+
+Symptom. The human cannot tell a refused command from a lost one.
+
+Direction. §39: a command with the right secret that handsd refuses is
+published on `ntfy_topic` titled `<command>` with the reason; a wrong or
+missing secret stays silent. Mission 23 U2.
+
+Status: resolved-by-code (mission 23 U2 bcc3d53 — a refusal of a command
+with the right secret is published titled <command> with the reason; wrong
+or missing secret silent)
+
+## H-059 — job ids typed on a phone arrive with `O` for `0` and are refused
+
+Severity: medium · Component: src/hands/phone.py, src/hands/api.py,
+src/hands/notify.py; DESIGN §39
+Filed by: mission 23 orchestrator, U0 (2026-10-15).
+Evidence: the same two commands of H-058 carried a job id copied by eye
+from a notification, with `O` for `0`.
+
+Symptom. An exact-match id lookup refuses a near-miss a human cannot see.
+
+Direction. §39: ids in `approve`, `deny`, `answer`, `reply`, `cancel` are
+matched case-insensitively with `O`→`0`, `l`/`I`→`1`, and a unique prefix
+of four or more characters is accepted; an ambiguous prefix is refused with
+the candidates; the hold notification prints the id on its own line.
+Mission 23 U2.
+
+Status: resolved-by-code (mission 23 U2 bcc3d53 — api.match_job_id: case-
+insensitive, O->0, l/I->1, unique prefix of four or more, ambiguous refused
+with candidates, in approve, deny, cancel (answer and reply carry no id);
+hold notification prints the id on its own line)
+
+## H-060 — the consult journal line after an escalation is left uncommitted
+
+Severity: low · Component: src/hands/playbook.py, src/hands/api.py,
+docs/ARCHITECT-HANDBOOK.md; DESIGN §27, §39
+Filed by: mission 23 orchestrator, U0 (2026-10-15).
+Evidence: after mission 22's escalation the consult line §27 appends to the
+builder's `meta/journal.md` was never committed; the next ruling send met a
+dirty tree.
+
+Symptom. No builder commit follows an escalation, so the line stays dirty
+and the builder's §R treats the tree as a unit in progress.
+
+Direction. §39: the resume path (an `answer`, a cli `--context keep|clear`
+send to the builder) prefixes the prompt with one sentence telling the
+builder to commit a dirty `meta/journal.md` first when `git status
+--porcelain -- meta/journal.md` in its cwd shows it; the handbook's ruling
+round says the same for a human. Mission 23 U3.
+
+Status: resolved-by-code (mission 23 U3 e36d558 — an answer and a cli
+keep/clear send to the builder are prefixed with the commit-the-journal
+sentence when git status --porcelain -- meta/journal.md shows it; the
+handbook's ruling round says the same, U9 515b736)
+
+## H-061 — discotrade's playbook has no `aux.orphaned` rule; a restarted review stops its pipeline
+
+Severity: medium · Component: discotrade's `PLAYBOOK.toml` (another
+repository); DESIGN §39 "A killed review is resumed (H-057)", §35
+Filed by: mission 23 orchestrator, U10 (2026-10-16), from the hosted
+review of PR #4, finding 2 "Discotrade reviews stop after restarts"
+(meta/reviews/hosted/PR-4/5/issue-comment-6204626963.md).
+Evidence: mission 23 U2 (bcc3d53) adds `aux.orphaned` to `EVENTS` and the
+rule to this repository's PLAYBOOK.toml and both templates; a project whose
+playbook was written from the older templates has no rule for the event.
+
+Symptom. After this merges, a daemon stop that orphans a discotrade review
+feeds `aux.orphaned` to an engine with no matching rule, which stops the
+pipeline and tells the human instead of re-sending the review. Before it,
+the orphaned review was stranded silently, so the stop is the less bad
+outcome, but it is not the resume §39 describes.
+
+Direction (for the architect): the next discotrade kit (or the series
+switch point of M5b) adds `aux.orphaned → resume` to its playbook; hands
+does not edit another project's playbook. Whether `kit check` should warn
+on a playbook that has `aux.done` rules but no `aux.orphaned` rule is a
+design question.
 
 Status: open

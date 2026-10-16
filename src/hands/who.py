@@ -913,7 +913,8 @@ class WhoPusher:
 
     async def scan(self, *, requested: bool = False) -> bool:
         """One scan; publish on request, or when both the fingerprint and the picture
-        without its times changed and the floor has passed (§24, §38)."""
+        without its times changed and the floor has passed (§24, §38). A scan whose
+        picture without its times equals the published one stores its fingerprint."""
         async with self._lock:
             text, items = await asyncio.to_thread(build_summary, self.sources)
             fp = self.debounce.fingerprint(items)
@@ -921,6 +922,11 @@ class WhoPusher:
             now = self.clock()
             gap_ok = self.last_push is None or now - self.last_push >= self.min_gap
             changed = fp != self.fp and shown != self.shown
+            if shown == self.shown:
+                # Review 22 (§24): the phone already shows this picture, so its
+                # fingerprint is the published one; a stale one would let a
+                # picture-only change (your own session) count as both.
+                self.fp = fp
             if not requested and not (changed and gap_ok):
                 return False
             # §38 (H-046): the attempt starts the floor, so a broker that refuses

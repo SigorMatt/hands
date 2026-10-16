@@ -867,7 +867,13 @@ def test_unknown_malformed_and_not_held_commands_are_ignored(
 
         assert (await ok("show", done["id"]))["gate"] is None
         status = as_published("hands: status")
-        assert [item["title"] for item in posts.sent[published:]] == [status]
+        # §39 (H-058): each command carrying the secret that handsd refused is
+        # answered titled `<command>`; the unknown verbs and the bare secret are not
+        # commands, and stay silent.
+        assert [item["title"] for item in posts.sent[published:]] == [
+            as_published(title)
+            for title in ("approve", "pause", "approve", "deny", "approve")
+        ] + [status]
         assert (await ok("pipeline"))["paused"] is False
 
     phone_drive(body)
@@ -1079,10 +1085,12 @@ def test_go_with_a_bad_or_missing_secret_or_a_nonce_is_refused(
         await daemon.notifier.drain()
         assert [row["id"] for row in (await ok("jobs"))["jobs"]] == [job["id"]]
         assert go_answers(daemon) == []
+        # §39 (H-058): the one carrying the secret is refused out loud, titled `go`.
+        assert refusals(daemon, "go") == ["go refused: it takes only the secret"]
 
     phone_drive(body)
     assert_refused(caplog, "bad secret")
-    assert "phone: command ignored (go takes only the secret)" in strip_paths(caplog.text)
+    assert "phone: command ignored (go: it takes only the secret)" in strip_paths(caplog.text)
 
 
 def test_go_after_a_stop_un_pauses_when_its_job_starts_and_the_done_fires_a_rule(
@@ -1226,6 +1234,25 @@ def test_progress_outside_a_repository_with_no_job_answers_plain_lines(
     phone_drive(body)
 
 
+def test_progress_reads_the_checkpoint_at_the_repository_root_below_it(tmp_path: Path) -> None:
+    """§39 (REVIEW-22 should-fix 6): a builder cwd two levels below the repository
+    root finds `meta/CHECKPOINT.md` at `git rev-parse --show-toplevel`, not under
+    the cwd; a copy under the cwd itself is not the one read."""
+    from hands.api import _checkpoint_line
+
+    root = tmp_path / "repo"
+    commit_file(root, "one.txt", "1\n")
+    (root / "meta").mkdir()
+    (root / "meta" / "CHECKPOINT.md").write_text(f"# CHECKPOINT\n\n{UNIT_LINE}\n", "utf-8")
+    cwd = root / "sub" / "deeper"
+    cwd.mkdir(parents=True)
+    assert _checkpoint_line(cwd) == f"checkpoint: {UNIT_LINE}"
+    (cwd / "meta").mkdir()
+    (cwd / "meta" / "CHECKPOINT.md").write_text("Unit in progress: the cwd's copy\n", "utf-8")
+    assert _checkpoint_line(cwd) == f"checkpoint: {UNIT_LINE}"
+    assert _checkpoint_line(root) == f"checkpoint: {UNIT_LINE}"
+
+
 def test_progress_with_a_wrong_or_missing_secret_or_a_nonce_is_refused(
     project: str, workdir: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
@@ -1239,12 +1266,17 @@ def test_progress_with_a_wrong_or_missing_secret_or_a_nonce_is_refused(
                      f"progress now {SECRET}"):
             await say(daemon, fake, text)
         await daemon.notifier.drain()
-        assert progress_answers(daemon) == []
+        # §39 (H-058): only the one carrying the secret is answered, with its refusal.
+        assert [item["message"] for item in progress_answers(daemon)] == [
+            "progress refused: it takes only the secret"
+        ]
         assert [row["id"] for row in (await ok("jobs"))["jobs"]] == [job["id"]]
 
     phone_drive(body)
     assert "phone: command ignored (progress: bad secret)" in strip_paths(caplog.text)
-    assert "phone: command ignored (progress takes only the secret)" in strip_paths(caplog.text)
+    assert "phone: command ignored (progress: it takes only the secret)" in strip_paths(
+        caplog.text
+    )
     assert SECRET not in strip_paths(caplog.text)
 
 
@@ -2146,11 +2178,13 @@ def test_a_kit_with_a_missing_or_wrong_secret_is_refused_before_the_fetch(
         assert kit_server.hits == []
         assert list(downloads.iterdir()) == []
         assert kit_events(daemon) == [] and kit_answers(daemon) == []
-        assert kit_refusals(daemon) == []  # not authenticated: nothing is filed
+        assert kit_refusals(daemon) == []  # malformed or not authenticated: nothing is filed
+        # §39 (H-058): the one carrying the secret is refused out loud, titled `kit`.
+        assert refusals(daemon, "kit") == ["kit refused: it takes only the secret"]
 
     phone_drive(body)
     assert_kit_refused(caplog, ": bad secret")
-    assert "phone: command ignored (kit takes only the secret)" in strip_paths(caplog.text)
+    assert "phone: command ignored (kit: it takes only the secret)" in strip_paths(caplog.text)
 
 
 @pytest.mark.parametrize(
@@ -2954,6 +2988,112 @@ def test_an_answer_whose_text_names_a_decisions_file_is_not_held(
     phone_drive(body)
 
 
+#: §39 (H-060): the sentence the resume path puts before a builder prompt while
+#: `meta/journal.md` is dirty in the builder's cwd.
+JOURNAL_SAID = "commit it first"
+CONSULTATION = "J-consultation-0001"
+
+
+def journal(workdir: Path, *, dirty: bool) -> None:
+    """A local repository (no remote) whose `meta/journal.md` is committed, and then,
+    when `dirty`, given one more line — the consult line §27 appends."""
+    commit_file(workdir, "meta/journal.md", "2026-10-15  mission 23 started\n")
+    if dirty:
+        with (workdir / "meta" / "journal.md").open("a", encoding="utf-8") as handle:
+            handle.write(f"2026-10-15  consult {CONSULTATION} (architect done)\n")
+
+
+def assert_reminded(prompt: str, text: str) -> None:
+    first, _, rest = prompt.partition("\n\n")
+    assert JOURNAL_SAID in strip_paths(first), prompt
+    assert "meta/journal.md" in strip_paths(first), prompt
+    assert f"`journal: {CONSULTATION}`" in strip_paths(first), prompt
+    assert "\n" not in strip_paths(first), "the reminder is one line"
+    assert rest == text, prompt
+
+
+@pytest.mark.parametrize("dirty", [True, False], ids=["dirty", "clean"])
+def test_an_answer_tells_the_builder_to_commit_a_dirty_journal_first(
+    project: str, workdir: Path, dirty: bool
+) -> None:
+    """§39 (H-060): the resume path prefixes the answer with one sentence telling the
+    builder to commit a dirty `meta/journal.md` first (`journal: <consultation>`),
+    only when `git status --porcelain -- meta/journal.md` in its cwd shows it; the
+    `answer.sent` event keeps the human's text alone."""
+    journal(workdir, dirty=dirty)
+
+    async def body(daemon: Daemon, fake: FakeNtfy) -> None:
+        asked = await builder_asked(daemon)
+        daemon.spool.append_event("consult.done", {"job": CONSULTATION})
+        await say(daemon, fake, f"answer {SECRET} {ANSWER_TEXT}")
+        (row,) = [r for r in (await ok("jobs"))["jobs"] if r["id"] != asked["id"]]
+        record = await ok("wait", row["id"])
+        if dirty:
+            assert_reminded(record["prompt"], ANSWER_TEXT)
+        else:
+            assert record["prompt"] == ANSWER_TEXT
+        assert answer_events(daemon) == [
+            {"job": row["id"], "text": ANSWER_TEXT, "attachment": None}
+        ]
+
+    phone_drive(body)
+
+
+@pytest.mark.parametrize("context", ["keep", "clear"])
+@pytest.mark.parametrize("dirty", [True, False], ids=["dirty", "clean"])
+def test_a_cli_send_to_the_builder_tells_it_to_commit_a_dirty_journal_first(
+    project: str, workdir: Path, dirty: bool, context: str
+) -> None:
+    """§39 (H-060): a cli `--context keep|clear` send to the builder carries the same
+    sentence, only while the journal is dirty; a send to aux never does."""
+    journal(workdir, dirty=dirty)
+    text = "FAKE:result VERDICT: mission 23 finished"
+
+    async def body(daemon: Daemon, fake: FakeNtfy) -> None:
+        await builder_asked(daemon)
+        daemon.spool.append_event("consult.done", {"job": CONSULTATION})
+        sent = await ok("send", "--role", "builder", "--context", context, text)
+        record = await ok("wait", sent["id"])
+        if dirty:
+            assert_reminded(record["prompt"], text)
+        else:
+            assert record["prompt"] == text
+        aux = await ok("send", "--role", "aux", "--context", "clear", text)
+        assert (await ok("wait", aux["id"]))["prompt"] == text
+
+    phone_drive(body)
+
+
+def test_the_journal_reminder_runs_off_the_event_loop(project: str, workdir: Path) -> None:
+    """PR #4 hosted review, "A send to the builder can stall the daemon on git":
+    `journal_reminder` (a `git status` and an inbox read) runs in a worker thread for
+    an `answer` and for a cli send to the builder, and its sentence still leads."""
+    journal(workdir, dirty=True)
+
+    async def body(daemon: Daemon, fake: FakeNtfy) -> None:
+        loop_thread = threading.get_ident()
+        threads: list[int] = []
+        real = daemon.playbook.journal_reminder
+
+        def recorded() -> str | None:
+            threads.append(threading.get_ident())
+            return real()
+
+        daemon.playbook.journal_reminder = recorded  # type: ignore[method-assign]
+        asked = await builder_asked(daemon)
+        daemon.spool.append_event("consult.done", {"job": CONSULTATION})
+        await say(daemon, fake, f"answer {SECRET} {ANSWER_TEXT}")
+        (row,) = [r for r in (await ok("jobs"))["jobs"] if r["id"] != asked["id"]]
+        assert_reminded((await ok("wait", row["id"]))["prompt"], ANSWER_TEXT)
+        text = "FAKE:result VERDICT: mission 23 finished"
+        sent = await ok("send", "--role", "builder", "--context", "keep", text)
+        assert_reminded((await ok("wait", sent["id"]))["prompt"], text)
+        assert len(threads) >= 2, threads  # builder_asked's own send is a cli send too
+        assert all(thread != loop_thread for thread in threads), (loop_thread, threads)
+
+    phone_drive(body)
+
+
 def test_answer_is_refused_when_the_builder_has_no_resumable_session(
     project: str, caplog: pytest.LogCaptureFixture
 ) -> None:
@@ -3142,5 +3282,200 @@ def test_an_answer_whose_attachment_breaks_the_kit_rules_is_refused_before_the_f
         assert_answer_refused(daemon, caplog, why, 1)
         assert kit_server.hits == []
         assert list(downloads.iterdir()) == []
+
+    phone_drive(body)
+
+
+# -------------------------------- §39 (H-058, H-059): refusals answered; lenient ids
+
+
+def refusals(daemon: Daemon, command: str) -> list[str]:
+    """The published refusals of `command`, titled `<command>` (§39)."""
+    return [
+        item["message"]
+        for item in daemon.notifier.post.sent
+        if item["title"] == as_published(command)
+    ]
+
+
+def mangled(job_id: str) -> str:
+    """A job id as a phone keyboard and an eye copy it: upper case, `0` read as `O`."""
+    return job_id.upper().replace("0", "O")
+
+
+def test_a_refused_approve_with_the_secret_publishes_its_reason(project: str) -> None:
+    """H-058: a command with the right secret that handsd refuses is published on
+    ntfy_topic titled `<command>` with the reason."""
+
+    async def body(daemon: Daemon, fake: FakeNtfy) -> None:
+        done = await ok("send", "--role", "aux", "--context", "clear", "FAKE:result ok")
+        assert (await ok("wait", done["id"]))["state"] == "done"
+        await say(daemon, fake, f"approve nosuchjob {SECRET}")
+        await say(daemon, fake, f"deny {done['id']} {SECRET}")
+        await say(daemon, fake, f"approve {SECRET}")
+        await daemon.notifier.drain()
+        missing, malformed = refusals(daemon, "approve")
+        assert missing.startswith("approve refused: "), missing
+        assert "no such job" in strip_paths(missing), missing
+        assert malformed.startswith("approve refused: "), malformed
+        [not_held] = refusals(daemon, "deny")
+        assert f"{done['id']} is done, not held" in strip_paths(not_held), not_held
+        for item in daemon.notifier.post.sent:
+            assert SECRET not in strip_paths(json.dumps(item, default=str)), item
+        assert [item["url"] for item in daemon.notifier.post.sent
+                if item["title"] == as_published("approve")] == [f"{NTFY}/{EVENTS_TOPIC}"] * 2
+
+    phone_drive(body)
+
+
+def test_a_refused_command_never_publishes_or_logs_the_secret_typed_as_its_job_id(
+    project: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    """PR #4 hosted review, "A refused phone command can expose its secret": the
+    secret typed as the job id (alone, inside a longer id, or in other case) is
+    authenticated by the final token, refused as "no such job", and neither the
+    published reason nor the log carries it."""
+    caplog.set_level(logging.DEBUG)
+
+    async def body(daemon: Daemon, fake: FakeNtfy) -> None:
+        await say(daemon, fake, f"approve {SECRET} {SECRET}")
+        await say(daemon, fake, f"deny x{SECRET}y because {SECRET}")
+        await say(daemon, fake, f"approve {SECRET.lower()} {SECRET}")
+        await daemon.notifier.drain()
+        approve = refusals(daemon, "approve")
+        deny = refusals(daemon, "deny")
+        assert len(approve) == 2 and len(deny) == 1, (approve, deny)
+        for message in approve + deny:
+            assert "no such job" in strip_paths(message), message
+            assert SECRET.lower() not in strip_paths(message.lower()), message
+        for item in daemon.notifier.post.sent:
+            assert SECRET.lower() not in strip_paths(json.dumps(item, default=str).lower()), item
+
+    phone_drive(body)
+    assert "no such job" in strip_paths(caplog.text)
+    assert SECRET.lower() not in strip_paths(caplog.text.lower())
+
+
+def test_a_refused_command_with_a_wrong_or_missing_secret_stays_silent(project: str) -> None:
+    async def body(daemon: Daemon, fake: FakeNtfy) -> None:
+        await daemon.notifier.drain()
+        before = len(daemon.notifier.post.sent)
+        for text in ("approve nosuchjob not-the-secret", "approve nosuchjob", "go wrong",
+                     "deny nosuchjob some reason", "go"):
+            await say(daemon, fake, text)
+        await daemon.notifier.drain()
+        assert daemon.notifier.post.sent[before:] == []
+
+    phone_drive(body)
+
+
+def test_a_refused_go_with_the_secret_publishes_its_reason(project: str) -> None:
+    async def body(daemon: Daemon, fake: FakeNtfy) -> None:
+        await say(daemon, fake, f"go {SECRET}")
+        await daemon.notifier.drain()
+        assert refusals(daemon, "go") == ["go refused: no playbook is loaded"]
+
+    phone_drive(body)
+
+
+def test_approve_resolves_an_id_typed_with_o_for_zero_in_upper_case(project: str) -> None:
+    """H-059: `Omv9a9z9a-arir`-shaped ids — upper case, `O` for `0` — name the job."""
+
+    async def body(daemon: Daemon, fake: FakeNtfy) -> None:
+        job = await held()
+        typed = mangled(job["id"])
+        assert typed != job["id"] and typed[0] == "O"  # ids begin with `0` until 2059
+        await say(daemon, fake, f"approve {typed} {SECRET}")
+        assert (await ok("wait", job["id"]))["state"] == "done"
+        assert (await ok("show", job["id"]))["gate"]["decided_by"] == "phone"
+
+    phone_drive(body)
+
+
+def test_deny_resolves_a_unique_prefix_of_four_characters(project: str) -> None:
+    async def body(daemon: Daemon, fake: FakeNtfy) -> None:
+        job = await held()
+        await say(daemon, fake, f"deny {mangled(job['id'][:4])} {SECRET}")
+        assert await state(job["id"]) == "denied"
+
+    phone_drive(body)
+
+
+def test_the_held_notification_prints_the_job_id_on_a_line_of_its_own(project: str) -> None:
+    async def body(daemon: Daemon, fake: FakeNtfy) -> None:
+        job = await held()
+
+        async def published() -> Any:
+            await daemon.notifier.drain()
+            return [item for item in daemon.notifier.post.sent
+                    if item["title"] == as_published(HELD_TITLE)]
+
+        [note] = await poll(published, "the held notification")
+        assert job["id"] in note["message"].splitlines(), note["message"]
+
+    phone_drive(body)
+
+
+def test_an_orphaned_reply_is_published_as_its_end(
+    architect_phone: str, tmp_home: Path
+) -> None:
+    """Review 22 should-fix 3: a phone `reply` the daemon's stop ends is published on
+    ntfy_topic titled `architect` as its end."""
+    posts = Recorder()
+    seen: dict[str, Any] = {}
+
+    async def body(daemon: Daemon, fake: FakeNtfy) -> None:
+        await consulted(daemon)
+        seen["id"] = (await daemon.api.reply_architect("Hold on.\nFAKE:block"))["id"]
+        await running_job("architect")
+
+    phone_drive(body, posts)
+    record = load_config(PROJECT)
+    spool_job = json.loads(
+        (record.spool_root / "jobs" / f"{seen['id']}.json").read_text(encoding="utf-8")
+    )
+    assert (spool_job["state"], spool_job["orphan_reason"]) == ("orphaned", "daemon_stop")
+    title = as_published(ARCHITECT_TITLE)
+    ended = [item["message"] for item in posts.sent if item["title"] == title]
+    assert ended == [f"architect job {seen['id']} ended orphaned with no reply"], posts.sent
+
+
+def test_a_job_id_is_matched_leniently_and_an_ambiguous_prefix_names_its_candidates(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """H-059: case-insensitive, `O` read as `0`, `l` or `I` as `1`, a unique prefix
+    of four or more characters; an ambiguous prefix is refused with the candidates."""
+    from hands import spool as spool_mod
+    from hands.api import ApiError, match_job_id
+    from hands.spool import Spool
+
+    ids = iter(["0mv9a9z9a-arir", "0mv9a9z9b-qqqq", "0k1la1zzz-i1o0", "1abcdefgh-wxyz"])
+    monkeypatch.setattr(spool_mod, "new_job_id", lambda: next(ids))
+    spool = Spool(tmp_path / "spool")
+    for _ in range(4):
+        spool.create_job(role="aux", context="clear", prompt="p", origin="cli")
+
+    assert match_job_id(spool, "0mv9a9z9a-arir") == "0mv9a9z9a-arir"
+    assert match_job_id(spool, "Omv9a9z9a-arir") == "0mv9a9z9a-arir"
+    assert match_job_id(spool, "OMV9A9Z9A-ARIR") == "0mv9a9z9a-arir"
+    assert match_job_id(spool, "Ok1Ia1zzz-l1OO") == "0k1la1zzz-i1o0"
+    assert match_job_id(spool, "OMV9A9Z9B") == "0mv9a9z9b-qqqq"  # a unique prefix
+    assert match_job_id(spool, "1abc") == "1abcdefgh-wxyz"  # four characters
+    with pytest.raises(ApiError) as ambiguous:
+        match_job_id(spool, "Omv9a9z9")
+    said = strip_paths(str(ambiguous.value))
+    assert "0mv9a9z9a-arir" in strip_paths(said) and "0mv9a9z9b-qqqq" in strip_paths(said), said
+    assert "ambiguous" in strip_paths(said), said
+    for short in ("1ab", "nosuchjob", "../../etc", ""):
+        with pytest.raises(ApiError):
+            match_job_id(spool, short)
+
+
+def test_cancel_at_the_laptop_takes_a_lenient_id(project: str) -> None:
+    async def body(daemon: Daemon, fake: FakeNtfy) -> None:
+        sent = await ok("send", "--role", "builder", "--context", "clear", "FAKE:block")
+        await running_job("builder")
+        out = await ok("cancel", mangled(sent["id"]))
+        assert out["id"] == sent["id"]
 
     phone_drive(body)

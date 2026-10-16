@@ -53,8 +53,9 @@ does not say: the builder's running job and its age, or the last ended builder
 job, its state and its verdict line; `branch: <name>` and `git log --oneline -3`
 of the builder's cwd (`git -C <cwd> rev-parse --abbrev-ref HEAD`), or one plain
 line when that cwd is not a repository or has no commit; and the first line of
-the working tree's `meta/CHECKPOINT.md` naming a unit in progress, or "no
-checkpoint" (`Api.progress_report`). It is read-only and starts no job.
+`meta/CHECKPOINT.md` at the repository root (`git rev-parse --show-toplevel` of
+the builder's cwd, §39; the cwd itself outside a repository) naming a unit in
+progress, or "no checkpoint" (`Api.progress_report`). It is read-only and starts no job.
 
 **`go`** (§26) is the one way to start work from the phone: it sends the
 playbook's `[series] kickoff` line to the builder as a `clear` send with
@@ -127,9 +128,19 @@ accepted `go` publishes the id and state of the job it filed there, a
 written kit publishes its name, size and sha256, and a `reply` with the secret
 publishes the job it filed or why it was refused (then the architect's answer),
 and an `answer` with the secret likewise (then the builder's final reply).
-Nothing else is answered: a bad token, an unknown or malformed command, a
-command for a job that is not held — each is logged (without the token, and
-without any word of the message that could be one) and ignored.
+§39 (H-058): every other command carrying the right secret (or, for `approve`
+and `deny`, the job's nonce) that handsd refuses — malformed, no such job, a job
+that is not held, a refused `go` or `kit` — is answered on `ntfy_topic` titled
+`<command>` with `<command> refused: <reason>`, in hands' own words. Nothing
+else is answered: a wrong or missing token, and a message whose first word is no
+command, are logged (without the token, and without any word of the message that
+could be one) and ignored.
+
+**Job ids** (§39, H-059). `approve` and `deny` match their job id as
+`hands.api.match_job_id` does for the laptop's `approve`, `deny` and `cancel`:
+case-insensitively, with `O` read as `0` and `l` or `I` as `1`, and a unique
+prefix of four or more characters accepted; an ambiguous one is refused with the
+candidates. A held job's notification prints its id on a line of its own.
 
 **Replays.** The first connection asks for `since=<unix time the channel
 started>`, and a message whose `time` is before that is not acted on, so a
@@ -160,11 +171,11 @@ from typing import IO, TYPE_CHECKING
 from urllib.parse import quote
 
 from hands import notify as notify_mod
-from hands.api import ApiError, attachment_sentence
+from hands.api import ApiError, attachment_sentence, match_job_id
 from hands.kit import KitError, apply_from_zip, home_shown
 from hands.notify import PAIR_SPACING_S
 from hands.playbook import PlaybookError, load_playbook, playbook_path
-from hands.spool import Job, PathEscape, SpoolError, new_kit_id, resolve_under_roots
+from hands.spool import Job, PathEscape, new_kit_id, resolve_under_roots
 
 if TYPE_CHECKING:  # pragma: no cover
     import httpx
@@ -363,46 +374,77 @@ class PhoneChannel:
         if verb == "answer":
             return await self._answer_command(text, attachment)
         if verb in _SECRET_ONLY:
-            if len(words) != 2:
-                return self._ignore(f"{verb} takes only the secret")
             if not self._is_secret(token):
                 return self._ignore(f"{verb}: bad secret")
+            if len(words) != 2:
+                return await self._refuse(verb, "it takes only the secret")
             if verb == "go":
                 return await self._go()
             if verb == "kit":
                 return await self._kit(attachment)
-            if verb == "pause":
-                await self.daemon.playbook.pause(by="phone")
-            elif verb == "resume":
-                await self.daemon.api.resume()
-            elif verb == "progress":  # §38: read-only; it starts no job
-                report = await self.daemon.api.progress_report()
-                await self.daemon.notifier.answer(PROGRESS_TITLE, report)
-            else:
-                await self.daemon.notifier.answer(STATUS_TITLE, status_summary(self.daemon))
+            try:
+                if verb == "pause":
+                    await self.daemon.playbook.pause(by="phone")
+                elif verb == "resume":
+                    await self.daemon.api.resume()
+                elif verb == "progress":  # §38: read-only; it starts no job
+                    report = await self.daemon.api.progress_report()
+                    await self.daemon.notifier.answer(PROGRESS_TITLE, report)
+                else:
+                    await self.daemon.notifier.answer(STATUS_TITLE, status_summary(self.daemon))
+            except ApiError as exc:
+                return await self._refuse(verb, str(exc))
             log.info("phone: %s", verb)
             return None
         if verb in _DECISIONS:
-            if len(words) < 3 or (verb == "approve" and len(words) != 3):
-                return self._ignore(f"{verb}: malformed")
-            job_id = words[1]
-            reason = " ".join(words[2:-1]) or None
-            if not (self._is_secret(token) or self._is_nonce(job_id, token)):
-                return self._ignore(f"{verb} {self._label(job_id)}: bad secret or nonce")
-            try:
-                record = self.daemon.spool.load_job(job_id)
-            except SpoolError:
-                return self._ignore(f"{verb}: no such job")
-            if record.state != "held":
-                return self._ignore(f"{verb} {job_id}: the job is {record.state}, not held")
-            try:
-                await self.daemon.api.decide_from_phone(job_id, _DECISIONS[verb], reason=reason)
-            except ApiError as exc:
-                return self._ignore(f"{verb} {job_id}: {exc}")
-            self.discard(job_id)
-            log.info("phone: %s %s", verb, job_id)
-            return None
+            return await self._decide(verb, words)
         return self._ignore("not a command")
+
+    async def _decide(self, verb: str, words: list[str]) -> None:
+        """`approve <job> <secret|nonce>` / `deny <job> [reason…] <secret|nonce>`.
+
+        §39 (H-059): the job id is matched leniently (`hands.api.match_job_id`) before
+        the token is judged, so a button's nonce still authorizes the job it names.
+        §39 (H-058): once the token is the secret or that job's nonce, every refusal is
+        published titled `<verb>`; a wrong or missing token is only logged."""
+        token = words[-1]
+        if len(words) < 3 or (verb == "approve" and len(words) != 3):
+            if not self._is_secret(token):
+                return self._ignore(f"{verb}: malformed")
+            shape = "<job> <secret>" if verb == "approve" else "<job> [reason] <secret>"
+            return await self._refuse(verb, f"malformed: {verb} takes {shape}")
+        typed = words[1]
+        reason = " ".join(words[2:-1]) or None
+        job_id: str | None = None
+        missing = ""
+        try:
+            job_id = match_job_id(self.daemon.spool, typed)
+        except ApiError as exc:
+            missing = str(exc)
+        if not (self._is_secret(token) or (job_id is not None and self._is_nonce(job_id, token))):
+            return self._ignore(f"{verb} {job_id or '(an unknown job)'}: bad secret or nonce")
+        if job_id is None:
+            return await self._refuse(verb, missing)
+        record = self.daemon.spool.load_job(job_id)
+        if record.state != "held":
+            return await self._refuse(verb, f"job {job_id} is {record.state}, not held")
+        try:
+            await self.daemon.api.decide_from_phone(job_id, _DECISIONS[verb], reason=reason)
+        except ApiError as exc:
+            return await self._refuse(verb, str(exc))
+        self.discard(job_id)
+        log.info("phone: %s %s", verb, job_id)
+        return None
+
+    async def _refuse(self, command: str, why: str) -> None:
+        """§39 (H-058): a command whose token was the secret (or a nonce), refused:
+        logged, and published on `ntfy_topic` titled `<command>` with the reason.
+        `why` is hands' own text, but it can quote what was typed (a job id that
+        was no job): the secret is cut out of it, in any case, before it is logged
+        or published (PR #4 hosted review, finding 1)."""
+        why = self._redact(why)
+        self._ignore(f"{command}: {why}")
+        await self.daemon.notifier.answer(command, f"{command} refused: {why}")
 
     async def _go(self) -> None:
         """§26, §27: the series' kickoff line to the builder, `clear`, `origin: phone`.
@@ -419,25 +461,25 @@ class PhoneChannel:
         """
         busy = self._builder_busy()
         if busy is not None:
-            return self._ignore(f"go: {busy}")
+            return await self._refuse("go", busy)
         config = self.daemon.config
         try:
             book = await asyncio.to_thread(
                 load_playbook, playbook_path(config), cwd=config.role("builder").cwd
             )
         except PlaybookError as exc:
-            return self._ignore(f"go: no playbook is loaded: it cannot be loaded ({exc})")
+            return await self._refuse("go", f"no playbook is loaded: it cannot be loaded ({exc})")
         if book is None:
-            return self._ignore("go: no playbook is loaded")
+            return await self._refuse("go", "no playbook is loaded")
         if book.kickoff is None:
-            return self._ignore("go: the playbook has no [series] kickoff")
+            return await self._refuse("go", "the playbook has no [series] kickoff")
         busy = self._builder_busy()
         if busy is not None:
-            return self._ignore(f"go: {busy}")
+            return await self._refuse("go", busy)
         try:
             job = await self.daemon.api.go_builder(book.kickoff)
         except ApiError as exc:
-            return self._ignore(f"go: the send was refused ({exc})")
+            return await self._refuse("go", f"the send was refused ({exc})")
         log.info("phone: go filed builder job %s (%s)", job["id"], job["state"])
         await self.daemon.notifier.answer(GO_TITLE, f"go: builder job {job['id']} {job['state']}")
         return None
@@ -598,7 +640,7 @@ class PhoneChannel:
         """
         fetched = await self._fetch(attachment)
         if isinstance(fetched, str):
-            return self._refuse_kit(fetched)
+            return await self._refuse_kit(fetched)
         directory, written, total, digest = fetched
         self.daemon.spool.append_event(
             "kit.received", {"name": written, "bytes": total, "sha256": digest}
@@ -628,13 +670,15 @@ class PhoneChannel:
         try:
             plan = await asyncio.to_thread(apply_from_zip, path, cwd, home_shown(path))
         except KitError as exc:
-            return self._refuse_kit(f"the apply was not filed: {exc}")
+            return await self._refuse_kit(f"the apply was not filed: {exc}")
         try:
             # §31, §32: the one path `hands kit file` takes too (`Api.file_apply`),
             # with this route's origin, and a `kit_id` handsd mints here.
             job = await self.daemon.api.file_apply(plan, "kit", new_kit_id())
         except ApiError as exc:
-            return self._refuse_kit(f"the apply was not filed: the send was refused ({exc})")
+            return await self._refuse_kit(
+                f"the apply was not filed: the send was refused ({exc})"
+            )
         log.info("phone: kit apply filed as builder job %s (%s)", job["id"], job["state"])
         if plan.default_why is not None:  # §28: the notification says so
             text = (
@@ -653,35 +697,29 @@ class PhoneChannel:
             await self.daemon.notifier.answer(KIT_TITLE, text)
         return None
 
-    def _refuse_kit(self, why: str) -> None:
+    async def _refuse_kit(self, why: str) -> None:
         """An authenticated `kit` refused: logged, and filed as `kit.refused` (§27).
 
         `why` is hands' own text naming the check; it never carries the attachment's
         name or URL. A `kit` with a bad secret is only logged, like any command.
         """
         self.daemon.spool.append_event("kit.refused", {"reason": why})
-        self._ignore(f"kit: {why}")
+        await self._refuse("kit", why)  # §39 (H-058): and published, titled `kit`
 
     def _is_secret(self, token: str) -> bool:
         secret = self.notify.cmd_secret
         return secret is not None and hmac.compare_digest(token.encode(), secret.encode())
 
+    def _redact(self, text: str) -> str:
+        """`text` with every occurrence of the command secret, in any case, replaced."""
+        secret = self.notify.cmd_secret
+        if not secret:
+            return text
+        return re.sub(re.escape(secret), "<secret>", text, flags=re.IGNORECASE)
+
     def _is_nonce(self, job_id: str, token: str) -> bool:
         nonce = self.nonces.get(job_id)
         return nonce is not None and hmac.compare_digest(token.encode(), nonce.encode())
-
-    def _label(self, job_id: str) -> str:
-        """A job id fit for the log: only one that names a real job is echoed.
-
-        Before the token is accepted, the second word of a command is anything
-        the sender typed — possibly the secret itself — so it is logged only when
-        a job record by that name exists.
-        """
-        try:
-            self.daemon.spool.load_job(job_id)
-        except SpoolError:
-            return "(an unknown job)"
-        return job_id
 
     @staticmethod
     def _ignore(why: str) -> None:

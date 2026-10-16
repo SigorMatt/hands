@@ -1594,6 +1594,7 @@ ARCHITECT_MODE: list[tuple[str, bool]] = [
     ("hands inbox", True),
     ("hands pipeline", True),
     ("hands status --json", True),
+    ("hands handbook --templates", True),  # §39, H-051
     # ... and every authority command, by name
     ("hands send --role builder --context keep 'do it'", False),
     ("hands send --role builder --context clear 'do it'", False),
@@ -1711,7 +1712,7 @@ def test_architect_mode_case(cmd: str, allowed: bool) -> None:
 
 #: §31: the `hands` subcommands architect mode allows — `architect/settings.json`'s
 #: own allow list, which is the role's shipped instruction.
-ARCHITECT_HANDS = {"show", "jobs", "inbox", "pipeline", "status", "kit"}
+ARCHITECT_HANDS = {"show", "jobs", "inbox", "pipeline", "status", "kit", "handbook"}
 #: Refused by name (§31), `resume` and `tail` with them: the settings deny
 #: `hands resume` and allow neither.
 ARCHITECT_REFUSED_HANDS = ["send", "approve", "deny", "go", "put", "pause", "resume",
@@ -3188,3 +3189,82 @@ def test_the_guards_selftest_carries_the_review_20_write_rows() -> None:
     assert shapes.get(("planted", "--write kits/pay/KIT.md")) is False
     assert shapes.get(("clean", "--write kits/pay/KIT.md")) is True
     assert guard.symlink_selftest() == 0
+
+
+# --- §39 ruling on H-051: the architect reads the installed hands' docs -------
+#
+# The consult prompt names the handbook's and templates' absolute paths; the
+# guard's read roots gain `HANDS_DOCS` (architect mode, as `HANDS_KITS`), and the
+# architect's `hands` subcommands gain `handbook`.
+
+DOCS = "/opt/hands/shipped"
+
+
+def test_the_architect_reads_under_hands_docs_and_nowhere_else() -> None:
+    with_docs = {**ARCHITECT, "spool": SPOOL, "docs": DOCS}
+    for cmd in (f"cat {DOCS}/docs/x.md", f"cat {DOCS}/docs/ARCHITECT-HANDBOOK.md",
+                f"ls {DOCS}/templates", f"head -n 5 {DOCS}/templates/KIT.md",
+                f"grep -n -e kit {DOCS}/docs/x.md"):
+        assert guard.check(cmd, **with_docs) is None, cmd
+    for cmd in ("cat /opt/hands/other.md", f"cat {DOCS}/../secret", "cat ~/.ssh/id_rsa",
+                f"cat {DOCS}x/docs/x.md"):
+        reason = guard.check(cmd, **with_docs)
+        assert reason is not None and CONFINED in reason, (cmd, reason)
+    # unset or empty, it confines nothing: the docs are not readable then
+    for docs in (None, ""):
+        reason = guard.check(f"cat {DOCS}/docs/x.md", **{**with_docs, "docs": docs})
+        assert reason is not None and CONFINED in reason, (docs, reason)
+    # the driver role is not given the root (the ruling names the architect)
+    reason = guard.check(f"cat {DOCS}/docs/x.md", **{**MODES["driver"], "docs": DOCS})
+    assert reason is not None and CONFINED in reason, reason
+
+
+def test_the_architect_reads_only_docs_and_templates_under_hands_docs() -> None:
+    """PR #4 hosted review, "Architects can read unrelated hands files": in a
+    source-tree install `HANDS_DOCS` is the repository root, so the roots are
+    `$HANDS_DOCS/docs` and `$HANDS_DOCS/templates`, not the whole directory."""
+    with_docs = {**ARCHITECT, "spool": SPOOL, "docs": DOCS}
+    for cmd in (f"cat {DOCS}/pyproject.toml", f"cat {DOCS}/src/x.py", f"ls {DOCS}",
+                f"cat {DOCS}/README.md", f"cat {DOCS}/docsx/a.md", f"cat {DOCS}/templates2/a",
+                f"grep -r -e secret {DOCS}", f"cat {DOCS}/docs/../src/x.py"):
+        reason = guard.check(cmd, **with_docs)
+        assert reason is not None and CONFINED in reason, (cmd, reason)
+    for cmd in (f"ls {DOCS}/docs", f"cat {DOCS}/templates/PLAYBOOK.toml"):
+        assert guard.check(cmd, **with_docs) is None, cmd
+
+
+def test_the_architect_runs_hands_handbook_and_the_driver_role_does_not() -> None:
+    for cmd in ("hands handbook", "hands handbook --templates", "hands --json handbook"):
+        assert guard.check(cmd, **ARCHITECT) is None, cmd
+    assert "handbook" in guard.ARCHITECT_HANDS_SUBCOMMANDS
+    reason = guard.check("hands handbook", **MODES["driver"])
+    assert reason is not None, reason
+
+
+def test_the_shipped_file_reads_hands_docs_from_the_environment(tmp_path: Path) -> None:
+    """The way Claude Code runs it: `HANDS_DOCS` in the hook's environment."""
+    docs = tmp_path / "shipped"
+    base = {k: v for k, v in os.environ.items() if not k.startswith("HANDS_")}
+    env = {**base, "HANDS_ROLE": "architect", "HANDS_KITS": str(tmp_path / "kits"),
+           "HANDS_CLONE": str(tmp_path / "repo"), "HANDS_DOCS": str(docs)}
+    cases = [
+        (f"cat {docs}/docs/x.md", 0),
+        ("hands handbook", 0),
+        ("hands handbook --templates", 0),
+        (f"cat {tmp_path}/elsewhere/x.md", 2),
+        (f"cat {docs}/pyproject.toml", 2),
+        (f"cat {docs}/src/x.py", 2),
+        ("cat /etc/hostname", 2),
+    ]
+    for cmd, expected in cases:
+        data = {"tool_name": "Bash", "tool_input": {"command": cmd}}
+        done = subprocess.run([sys.executable, str(GUARD)], input=json.dumps(data),
+                              capture_output=True, text=True, env=env, timeout=30, check=False)
+        assert done.returncode == expected, (cmd, done.stderr)
+    done = subprocess.run([sys.executable, str(GUARD)],
+                          input=json.dumps({"tool_name": "Bash",
+                                            "tool_input": {"command": f"cat {docs}/x.md"}}),
+                          capture_output=True, text=True,
+                          env={k: v for k, v in env.items() if k != "HANDS_DOCS"},
+                          timeout=30, check=False)
+    assert done.returncode == 2, done.stderr

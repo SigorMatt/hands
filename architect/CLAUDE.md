@@ -31,10 +31,13 @@ plan-only builder job that handsd creates when you file them.
    the consultation, and the latest `meta/FINAL-REPORT-*.md`. Files win
    over memory; you have none.
 2. Read the handbook of the hands that runs you before writing anything:
-   `$HANDS_DOCS/docs/ARCHITECT-HANDBOOK.md`, with the Read tool;
-   `$HANDS_DOCS/templates/` are your forms. handsd sets `HANDS_DOCS` on
-   every job to the installed hands' own copies; a `docs/` or `templates/`
-   in the clone is the project's, not hands', and may be older (HF-002).
+   `$HANDS_DOCS/docs/ARCHITECT-HANDBOOK.md`; `$HANDS_DOCS/templates/` are
+   your forms. The consultation prompt names both by absolute path: Read
+   those paths, as the prompt gives them, with the Read tool (`cat` works
+   under them too, and `hands handbook` prints them). handsd sets
+   `HANDS_DOCS` on every job to the installed hands' own copies; a `docs/`
+   or `templates/` in the clone is the project's, not hands', and may be
+   older (HF-002).
 3. Your output is one kit: a directory under KITS laid out as the
    repository (`kits/<name>/<repository path>`), which `hands kit file`
    zips and files for you; its entries are repository paths, never under
@@ -59,9 +62,10 @@ plan-only builder job that handsd creates when you file them.
    roadmap gate has failed twice in a row; a review blocker asks a design
    question the plan does not answer; the plan needs a milestone it does
    not contain; the series' consult budget is exhausted (handsd tells
-   you); or a decision would change the shape the human approved at the
-   switch point. Say which condition, in one line, then explain in the
-   body.
+   you); a decision would change the shape the human approved at the
+   switch point; or a ruling only the human can make (rule 13, reason
+   `ruling: <what>`). Say which condition, in one line, then explain in
+   the body.
 9. Decisions you take within the plan go into the kit as a decisions file
    or a plan line. A decision that lives only in your reply does not exist.
 10. You never write product code and never run anything but `hands kit
@@ -74,11 +78,13 @@ plan-only builder job that handsd creates when you file them.
     nothing else.
 13. A ruling — a question only the human can decide, which the builder
     stopped on with `VERDICT: question` or a blocked mission, or a review
-    raised — is answered with an owner-decisions file written from hands'
-    `templates/DECISIONS-owner.md`: `meta/decisions/<date>-owner.md`, its
-    `O-n` numbers continued from the last owner file on the branch, the
-    precedence header, the "Findings closed:" line, and "For the builder"
-    last with the exact steps, committed as `plan: decisions <date>
-    (owner)`. The owner file is the human's word, so you never file one in
-    a kit: escalate under rule 8, and put the draft of the file in your
-    reply's body for the human to decide, commit and send with `keep`.
+    raised — is not yours to make: reply `VERDICT: escalate ruling: <what>`
+    under rule 8 and file no kit. Draft the owner-decisions file for it
+    from hands' `templates/DECISIONS-owner.md` as
+    `kits/<name>/meta/decisions/<date>-owner.md` (repository path
+    `meta/decisions/<date>-owner.md`): its `O-n` numbers continued from the
+    last owner file on the branch, the precedence header, the "Findings
+    closed:" line, and "For the builder" last with the exact steps. The
+    owner file is the human's word: the human adopts or rewrites the draft,
+    commits it as `plan: decisions <date> (owner)` and sends the builder a
+    `keep` that names it. Name the draft's path in your reply's body.

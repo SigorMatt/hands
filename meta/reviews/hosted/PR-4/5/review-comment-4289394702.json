@@ -1,0 +1,69 @@
+{
+  "url": "https://api.github.com/repos/SigorMatt/hands/pulls/comments/4289394702",
+  "pull_request_review_id": 5541251475,
+  "id": 4289394702,
+  "node_id": "PRRC_kwDOUVwTn87_qvgO",
+  "diff_hunk": "@@ -142,6 +150,7 @@\n     \"builder.orphaned\",\n     \"aux.done\",\n     \"aux.failed\",\n+    \"aux.orphaned\",  # §39 (H-057): a review the daemon's stop (or a crash) killed",
+  "path": "src/hands/playbook.py",
+  "commit_id": "d50af2a99203bf98a3b4a628daf4227b1466e8c4",
+  "original_commit_id": "d50af2a99203bf98a3b4a628daf4227b1466e8c4",
+  "user": {
+    "login": "qodo-code-review[bot]",
+    "id": 151058649,
+    "node_id": "BOT_kgDOCQD42Q",
+    "avatar_url": "https://avatars.githubusercontent.com/in/484649?v=4",
+    "gravatar_id": "",
+    "url": "https://api.github.com/users/qodo-code-review%5Bbot%5D",
+    "html_url": "https://github.com/apps/qodo-code-review",
+    "followers_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/followers",
+    "following_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/following{/other_user}",
+    "gists_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/gists{/gist_id}",
+    "starred_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/starred{/owner}{/repo}",
+    "subscriptions_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/subscriptions",
+    "organizations_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/orgs",
+    "repos_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/repos",
+    "events_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/events{/privacy}",
+    "received_events_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/received_events",
+    "type": "Bot",
+    "user_view_type": "public",
+    "site_admin": false
+  },
+  "body": "<img src=\"https://img.shields.io/badge/High-634FD1?style=flat-square\" height=\"20px\" alt=\"Action required\">\n\n2\\. Discotrade reviews stop after restarts <code>🔗 Cross-repo conflict</code> <code>≡ Correctness</code>\n\n<pre>\nAdding <b><i>aux.orphaned</i></b> to the events that hands routes makes a restarted review reach the playbook,\nbut discotrade&#x27;s <b><i>PLAYBOOK.toml</i></b> has no rule for that event. When a discotrade review is orphaned,\nhands stops its pipeline instead of resending the review prompt.\n</pre>\n\n\n<details>\n<summary><strong>Agent Prompt</strong></summary>\n\n```\n## Issue description\nThe new `aux.orphaned` event reaches discotrade's playbook, which has no matching rule, so a restarted review stops the pipeline.\n\n## Fix Focus Areas\n- /cross_repos/discotrade/PLAYBOOK.toml[108-117]\n- src/hands/playbook.py[150-154]\n\n## Recommended Fix\nCoordinate a discotrade playbook update adding `aux.orphaned → resume`, and deploy that playbook alongside the new hands behavior.\n```\n\n<code>ⓘ Copy this prompt and use it to remediate the issue with your preferred AI generation tools</code>\n</details>\n\n[Dismiss ↗](https://app.qodo.ai/findings/31283123-92e0-42da-9607-c6497e52ce98?action=dismiss&origin=git) | [View ↗](https://app.qodo.ai/findings/31283123-92e0-42da-9607-c6497e52ce98)",
+  "created_at": "2026-10-15T23:44:39Z",
+  "updated_at": "2026-10-15T23:44:39Z",
+  "html_url": "https://github.com/SigorMatt/hands/pull/4#discussion_r4289394702",
+  "pull_request_url": "https://api.github.com/repos/SigorMatt/hands/pulls/4",
+  "_links": {
+    "self": {
+      "href": "https://api.github.com/repos/SigorMatt/hands/pulls/comments/4289394702"
+    },
+    "html": {
+      "href": "https://github.com/SigorMatt/hands/pull/4#discussion_r4289394702"
+    },
+    "pull_request": {
+      "href": "https://api.github.com/repos/SigorMatt/hands/pulls/4"
+    }
+  },
+  "reactions": {
+    "url": "https://api.github.com/repos/SigorMatt/hands/pulls/comments/4289394702/reactions",
+    "total_count": 0,
+    "+1": 0,
+    "-1": 0,
+    "laugh": 0,
+    "hooray": 0,
+    "confused": 0,
+    "heart": 0,
+    "rocket": 0,
+    "eyes": 0
+  },
+  "start_line": null,
+  "original_start_line": null,
+  "start_side": null,
+  "line": 153,
+  "original_line": 153,
+  "side": "RIGHT",
+  "author_association": "NONE",
+  "original_position": 21,
+  "position": 21,
+  "subject_type": "line"
+}

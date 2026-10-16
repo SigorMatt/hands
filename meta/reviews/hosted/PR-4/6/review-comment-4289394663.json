@@ -1,0 +1,69 @@
+{
+  "url": "https://api.github.com/repos/SigorMatt/hands/pulls/comments/4289394663",
+  "pull_request_review_id": 5541251475,
+  "id": 4289394663,
+  "node_id": "PRRC_kwDOUVwTn87_qvfn",
+  "diff_hunk": "@@ -363,47 +374,75 @@ async def command(self, text: str, *, attachment: object = None) -> None:\n         if verb == \"answer\":\n             return await self._answer_command(text, attachment)\n         if verb in _SECRET_ONLY:\n-            if len(words) != 2:\n-                return self._ignore(f\"{verb} takes only the secret\")\n             if not self._is_secret(token):\n                 return self._ignore(f\"{verb}: bad secret\")\n+            if len(words) != 2:\n+                return await self._refuse(verb, \"it takes only the secret\")\n             if verb == \"go\":\n                 return await self._go()\n             if verb == \"kit\":\n                 return await self._kit(attachment)\n-            if verb == \"pause\":\n-                await self.daemon.playbook.pause(by=\"phone\")\n-            elif verb == \"resume\":\n-                await self.daemon.api.resume()\n-            elif verb == \"progress\":  # §38: read-only; it starts no job\n-                report = await self.daemon.api.progress_report()\n-                await self.daemon.notifier.answer(PROGRESS_TITLE, report)\n-            else:\n-                await self.daemon.notifier.answer(STATUS_TITLE, status_summary(self.daemon))\n-            log.info(\"phone: %s\", verb)\n-            return None\n-        if verb in _DECISIONS:\n-            if len(words) < 3 or (verb == \"approve\" and len(words) != 3):\n-                return self._ignore(f\"{verb}: malformed\")\n-            job_id = words[1]\n-            reason = \" \".join(words[2:-1]) or None\n-            if not (self._is_secret(token) or self._is_nonce(job_id, token)):\n-                return self._ignore(f\"{verb} {self._label(job_id)}: bad secret or nonce\")\n             try:\n-                record = self.daemon.spool.load_job(job_id)\n-            except SpoolError:\n-                return self._ignore(f\"{verb}: no such job\")\n-            if record.state != \"held\":\n-                return self._ignore(f\"{verb} {job_id}: the job is {record.state}, not held\")\n-            try:\n-                await self.daemon.api.decide_from_phone(job_id, _DECISIONS[verb], reason=reason)\n+                if verb == \"pause\":\n+                    await self.daemon.playbook.pause(by=\"phone\")\n+                elif verb == \"resume\":\n+                    await self.daemon.api.resume()\n+                elif verb == \"progress\":  # §38: read-only; it starts no job\n+                    report = await self.daemon.api.progress_report()\n+                    await self.daemon.notifier.answer(PROGRESS_TITLE, report)\n+                else:\n+                    await self.daemon.notifier.answer(STATUS_TITLE, status_summary(self.daemon))\n             except ApiError as exc:\n-                return self._ignore(f\"{verb} {job_id}: {exc}\")\n-            self.discard(job_id)\n-            log.info(\"phone: %s %s\", verb, job_id)\n+                return await self._refuse(verb, str(exc))\n+            log.info(\"phone: %s\", verb)\n             return None\n+        if verb in _DECISIONS:\n+            return await self._decide(verb, words)\n         return self._ignore(\"not a command\")\n \n+    async def _decide(self, verb: str, words: list[str]) -> None:\n+        \"\"\"`approve <job> <secret|nonce>` / `deny <job> [reason…] <secret|nonce>`.\n+\n+        §39 (H-059): the job id is matched leniently (`hands.api.match_job_id`) before\n+        the token is judged, so a button's nonce still authorizes the job it names.\n+        §39 (H-058): once the token is the secret or that job's nonce, every refusal is\n+        published titled `<verb>`; a wrong or missing token is only logged.\"\"\"\n+        token = words[-1]\n+        if len(words) < 3 or (verb == \"approve\" and len(words) != 3):\n+            if not self._is_secret(token):\n+                return self._ignore(f\"{verb}: malformed\")\n+            shape = \"<job> <secret>\" if verb == \"approve\" else \"<job> [reason] <secret>\"\n+            return await self._refuse(verb, f\"malformed: {verb} takes {shape}\")\n+        typed = words[1]\n+        reason = \" \".join(words[2:-1]) or None\n+        job_id: str | None = None\n+        missing = \"\"\n+        try:\n+            job_id = match_job_id(self.daemon.spool, typed)\n+        except ApiError as exc:\n+            missing = str(exc)\n+        if not (self._is_secret(token) or (job_id is not None and self._is_nonce(job_id, token))):\n+            return self._ignore(f\"{verb} {job_id or '(an unknown job)'}: bad secret or nonce\")\n+        if job_id is None:\n+            return await self._refuse(verb, missing)",
+  "path": "src/hands/phone.py",
+  "commit_id": "1276251870bb3d1ddb4021a1b82472c02861f426",
+  "original_commit_id": "d50af2a99203bf98a3b4a628daf4227b1466e8c4",
+  "user": {
+    "login": "qodo-code-review[bot]",
+    "id": 151058649,
+    "node_id": "BOT_kgDOCQD42Q",
+    "avatar_url": "https://avatars.githubusercontent.com/in/484649?v=4",
+    "gravatar_id": "",
+    "url": "https://api.github.com/users/qodo-code-review%5Bbot%5D",
+    "html_url": "https://github.com/apps/qodo-code-review",
+    "followers_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/followers",
+    "following_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/following{/other_user}",
+    "gists_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/gists{/gist_id}",
+    "starred_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/starred{/owner}{/repo}",
+    "subscriptions_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/subscriptions",
+    "organizations_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/orgs",
+    "repos_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/repos",
+    "events_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/events{/privacy}",
+    "received_events_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/received_events",
+    "type": "Bot",
+    "user_view_type": "public",
+    "site_admin": false
+  },
+  "body": "<img src=\"https://img.shields.io/badge/High-634FD1?style=flat-square\" height=\"20px\" alt=\"Action required\">\n\n1\\. A refused phone command can expose its secret <code>🐞 Bug</code> <code>⛨ Security</code>\n\n<pre>\n<b><i>_decide</i></b> passes the typed job id through <b><i>match_job_id</i></b> and then publishes and logs its error\nverbatim when the final token authenticates the command. If someone enters the command secret as\nboth the job id and the final token, the resulting <b><i>no such job</i></b> reason contains that secret in the\nnotification and daemon log.\n</pre>\n\n\n<details>\n<summary><strong>Agent Prompt</strong></summary>\n\n```\n## Issue description\nAn authenticated phone decision can echo a mistyped job id containing the command secret into a notification and log.\n## Fix Focus Areas\n- src/hands/phone.py[416-444]\n- src/hands/api.py[174-201]\n## Recommended Fix\nKeep untrusted typed ids out of published and logged refusal reasons, including ambiguous-id errors. Add a test that supplies the secret as both job id and final token and checks notifications and logs.\n```\n\n<code>ⓘ Copy this prompt and use it to remediate the issue with your preferred AI generation tools</code>\n</details>\n\n[Dismiss ↗](https://app.qodo.ai/findings/e6a1429e-c9f9-49df-ba5b-e9e1197e73e0?action=dismiss&origin=git) | [View ↗](https://app.qodo.ai/findings/e6a1429e-c9f9-49df-ba5b-e9e1197e73e0)",
+  "created_at": "2026-10-15T23:44:39Z",
+  "updated_at": "2026-10-15T23:44:39Z",
+  "html_url": "https://github.com/SigorMatt/hands/pull/4#discussion_r4289394663",
+  "pull_request_url": "https://api.github.com/repos/SigorMatt/hands/pulls/4",
+  "_links": {
+    "self": {
+      "href": "https://api.github.com/repos/SigorMatt/hands/pulls/comments/4289394663"
+    },
+    "html": {
+      "href": "https://github.com/SigorMatt/hands/pull/4#discussion_r4289394663"
+    },
+    "pull_request": {
+      "href": "https://api.github.com/repos/SigorMatt/hands/pulls/4"
+    }
+  },
+  "reactions": {
+    "url": "https://api.github.com/repos/SigorMatt/hands/pulls/comments/4289394663/reactions",
+    "total_count": 0,
+    "+1": 0,
+    "-1": 0,
+    "laugh": 0,
+    "hooray": 0,
+    "confused": 0,
+    "heart": 0,
+    "rocket": 0,
+    "eyes": 0
+  },
+  "start_line": 426,
+  "original_start_line": 426,
+  "start_side": "RIGHT",
+  "line": 427,
+  "original_line": 427,
+  "side": "RIGHT",
+  "author_association": "NONE",
+  "original_position": 133,
+  "position": 133,
+  "subject_type": "line"
+}

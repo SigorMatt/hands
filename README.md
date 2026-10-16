@@ -137,8 +137,9 @@ Off unless configured in `[notify]`; `docs/INTEGRATION.md` has the setup.
   Tailscale, the documented default for role mode, and says what of it has run
   on a real server.
 - **The command channel**: with `cmd_topic` and `cmd_secret` set, handsd takes
-  `approve`, `deny`, `pause`, `resume` and `status` from your phone, and a held
-  job's notification carries Approve/Deny buttons. A decision taken that way is
+  ten commands from your phone: `approve`, `deny`, `pause`, `resume`, `status`,
+  `progress`, `go`, `kit`, `reply` and `answer`, and a held job's notification
+  carries Approve/Deny buttons. A decision taken that way is
   recorded `decided_by: phone`.
 - **`go <secret>`** on `cmd_topic` sends the playbook's `[series] kickoff` line
   to the builder as a `clear` send, `origin: phone`. It is the only way to start
