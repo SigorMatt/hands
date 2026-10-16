@@ -34,7 +34,7 @@ Base of the mission: 23eff6c (`plan: mission 23 kit (DESIGN v3.22)`).
 - [x] U9 515b736 Hooks and docs (should-fix 12; H-053, H-054, H-056) —
       .claude/settings.json, docs/INTEGRATION.md, docs/ARCHITECT-HANDBOOK.md,
       docs/PLAYBOOK.md, tests
-- [ ] U10 Final report, the pull request and the hosted review's findings —
+- [x] U10 d50af2a 1276251 (this commit) Final report, the pull request and the hosted review's findings —
       meta/FINAL-REPORT-23.md (drafted under meta/drafts/),
       meta/reviews/hosted/PR-<n>/
 

@@ -1,0 +1,69 @@
+{
+  "url": "https://api.github.com/repos/SigorMatt/hands/pulls/comments/4289394682",
+  "pull_request_review_id": 5541251475,
+  "id": 4289394682,
+  "node_id": "PRRC_kwDOUVwTn87_qvf6",
+  "diff_hunk": "@@ -0,0 +1,389 @@\n+\"\"\"`hands hosted-review <pr>`: the hosted review, read mechanically (DESIGN §39, §35).\n+\n+The method is docs/QODO-EXTRACTION.md's. The bot posts three things on a pull\n+request: a summary issue comment with no findings, a \"Code Review\" issue comment\n+that is the canonical numbered list under header counts, and a `COMMENTED`\n+review with one inline comment per finding. After a push it edits the Code\n+Review comment in place and posts nothing new, so the reading is:\n+\n+1. fetch the issue comments, the reviews and the review comments, every page\n+   (an explicit `page=` loop up to the first empty page), through `gh api`;\n+2. keep the bot's (`--bot`, default `qodo-code-review[bot]`); with none, say\n+   \"no bot comment yet\", write nothing and exit 3 — a state to wait on, never\n+   a clean review;\n+3. archive each body byte for byte (`<kind>-<id>.md`) with the comment's JSON\n+   (`<kind>-<id>.json`) under `meta/reviews/hosted/PR-<n>/<k>/` at the\n+   repository root, `k` one more than the highest already there;\n+4. print the Code Review comment's header categories as found, every numbered\n+   finding verbatim with its file:line anchor, the summary comment's id, the\n+   diff against the previous `k` by comment id, and the verdict — taken from\n+   the Code Review comment only, never from the inline comments.\n+\n+Speaks a transport only through `gh`, as `hands doctor`'s `gh` row does.\n+\"\"\"\n+\n+from __future__ import annotations\n+\n+import difflib\n+import json\n+import re\n+import subprocess\n+from collections.abc import Sequence\n+from dataclasses import dataclass\n+from pathlib import Path\n+from typing import Any, TextIO\n+\n+DEFAULT_BOT = \"qodo-code-review[bot]\"\n+#: §39: \"no bot comment yet\" (and no Code Review comment yet) is a state to wait on.\n+EXIT_NOT_YET = 3\n+PER_PAGE = 100\n+#: A loop that never meets an empty page is a broken `gh`, not a long review.\n+MAX_PAGES = 100\n+GH_TIMEOUT_S = 120\n+\n+#: (endpoint under `repos/{owner}/{repo}/`, the kind that names its files)\n+SOURCES: tuple[tuple[str, str], ...] = (\n+    (\"issues/{n}/comments\", \"issue-comment\"),\n+    (\"pulls/{n}/reviews\", \"review\"),\n+    (\"pulls/{n}/comments\", \"review-comment\"),\n+)\n+\n+_HEADING = re.compile(r\"<h\\d>([^<]*)</h\\d>\")\n+_CATEGORY = re.compile(r\"<code>\\s*([^<]*?\\(\\d+\\))\\s*</code>\")\n+_FINDING = re.compile(r\"<summary>[ \\t]*(\\d+)\\.[ \\t]+([^\\n]*?)[ \\t]*</summary>\")\n+_DESCRIPTION = re.compile(r\"<summary>Description</summary>.*?<pre>(.*?)</pre>\", re.DOTALL)\n+_ANCHOR = re.compile(r\"\\[([^\\[\\]\\s()]+?)\\\\?\\[R?(\\d+)(?:-R?(\\d+))?\\\\?\\]\\]\\(\")\n+_INLINE_TITLE = re.compile(r\"^[ \\t]*(\\d+)\\\\?\\.[ \\t]+(.+)$\", re.MULTILINE)\n+_STRUCK = re.compile(r\"<s>|<del>|<strike>|~~|Resolved\")",
+  "path": "src/hands/hosted.py",
+  "commit_id": "d50af2a99203bf98a3b4a628daf4227b1466e8c4",
+  "original_commit_id": "d50af2a99203bf98a3b4a628daf4227b1466e8c4",
+  "user": {
+    "login": "qodo-code-review[bot]",
+    "id": 151058649,
+    "node_id": "BOT_kgDOCQD42Q",
+    "avatar_url": "https://avatars.githubusercontent.com/in/484649?v=4",
+    "gravatar_id": "",
+    "url": "https://api.github.com/users/qodo-code-review%5Bbot%5D",
+    "html_url": "https://github.com/apps/qodo-code-review",
+    "followers_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/followers",
+    "following_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/following{/other_user}",
+    "gists_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/gists{/gist_id}",
+    "starred_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/starred{/owner}{/repo}",
+    "subscriptions_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/subscriptions",
+    "organizations_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/orgs",
+    "repos_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/repos",
+    "events_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/events{/privacy}",
+    "received_events_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/received_events",
+    "type": "Bot",
+    "user_view_type": "public",
+    "site_admin": false
+  },
+  "body": "<img src=\"https://img.shields.io/badge/Low-634FD1?style=flat-square\" height=\"20px\" alt=\"Informational\">\n\n9\\. A finding titled with 'resolved' counts as fixed <code>🐞 Bug</code> <code>≡ Correctness</code>\n\n<pre>\n<b><i>_STRUCK</i></b> matches the bare substring <b><i>Resolved</i></b> anywhere in a finding&#x27;s title, and\n<b><i>Finding.resolved</i></b> uses it to leave a finding out of the open count. An open finding whose title\ncontains that word (e.g. &quot;Resolved paths escape the root&quot;) is printed as <b><i>resolved</i></b>, drops out of\n<b><i>verdict: N of M findings open</i></b>, and the diff reports it as <b><i>resolved since k</i></b>.\n</pre>\n\n\n<details>\n<summary><strong>Agent Prompt</strong></summary>\n\n```\n## Issue description\n`_STRUCK` treats any title containing `Resolved` as a resolved finding.\n\n## Fix Focus Areas\n- src/hands/hosted.py[57-57]\n\n## Recommended Fix\nReplace the bare `Resolved` alternative with the bot's actual marker, e.g. `✓ Resolved` (or `✓\\s*Resolved`), and keep the strike-through tags. Add a test for an open finding whose title contains the word 'Resolved'.\n```\n\n<code>ⓘ Copy this prompt and use it to remediate the issue with your preferred AI generation tools</code>\n</details>\n\n[Dismiss ↗](https://app.qodo.ai/findings/db36f07b-e11d-4b66-bb1d-7851cebaf0ab?action=dismiss&origin=git) | [View ↗](https://app.qodo.ai/findings/db36f07b-e11d-4b66-bb1d-7851cebaf0ab)",
+  "created_at": "2026-10-15T23:44:39Z",
+  "updated_at": "2026-10-15T23:44:39Z",
+  "html_url": "https://github.com/SigorMatt/hands/pull/4#discussion_r4289394682",
+  "pull_request_url": "https://api.github.com/repos/SigorMatt/hands/pulls/4",
+  "_links": {
+    "self": {
+      "href": "https://api.github.com/repos/SigorMatt/hands/pulls/comments/4289394682"
+    },
+    "html": {
+      "href": "https://github.com/SigorMatt/hands/pull/4#discussion_r4289394682"
+    },
+    "pull_request": {
+      "href": "https://api.github.com/repos/SigorMatt/hands/pulls/4"
+    }
+  },
+  "reactions": {
+    "url": "https://api.github.com/repos/SigorMatt/hands/pulls/comments/4289394682/reactions",
+    "total_count": 0,
+    "+1": 0,
+    "-1": 0,
+    "laugh": 0,
+    "hooray": 0,
+    "confused": 0,
+    "heart": 0,
+    "rocket": 0,
+    "eyes": 0
+  },
+  "start_line": null,
+  "original_start_line": null,
+  "start_side": null,
+  "line": null,
+  "original_line": 57,
+  "side": "RIGHT",
+  "author_association": "NONE",
+  "original_position": 57,
+  "position": 1,
+  "subject_type": "line"
+}

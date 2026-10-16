@@ -26,9 +26,10 @@ Done: U8 a09b85f — git clone -q -- <url>; failed clone/push-url removes everyt
 
 Done: U9 515b736 — no_background python3 -I (settings, copy line, self-test; planted json.py test); INTEGRATION restart/resume, hooks, pause, [server], handbook/HANDS_DOCS, ids, refusals; handbook status, restart, ids, ruling round; PLAYBOOK aux.orphaned; green 3/3 (4493).
 
-Unit in progress: U10 Final report, the pull request and the hosted review's findings.
-Intent: report: commit (FINAL-REPORT-23, plan, checkpoint, journal, FINDINGS H-053..H-060); gh pr create; wait <=10 min; hands hosted-review <pr>; fix within §39; push; re-run; ## Hosted review table in a final report: commit; push; tree to main.
-Done means: PR open; archive under meta/reviews/hosted/PR-<n>/ with two fetches; tree on main.
+Done: U10 d50af2a (report:) PR #4 opened; 1276251 seven hosted findings fixed (green 3/3, 4504); fetch 6 after the bot's in-place re-review: 4 of 11 open = 3 dismissed + H-061 filed.
+
+U10 final report: commit (this commit): ## Hosted review table, H-061, archive PR-4/1..6, plan, checkpoint, journal.
+Mission 23 — FINISHED after this push; tree returns to main. Open for the architect: H-061.
 
 Standing constraints: one foreground sub-agent per unit, commit and push every
 unit to `mission-23`, ./scripts/check green three consecutive runs before each

@@ -11,7 +11,7 @@ unit opens the pull request `mission-23` → `main`, reads the hosted review
 with `hands hosted-review` and fixes its findings in the same pull request.
 Findings resolved: H-051, H-052 (U7), H-053, H-054, H-056 (U9), H-055 (U6),
 H-057, H-058, H-059 (U2), H-060 (U3, U9); HF-002 in full (U7). Findings
-filed and left open: none.
+filed and left open: H-061 (from the hosted review of PR #4, finding 2).
 
 ## 1. What changed (sha per unit)
 
@@ -96,10 +96,24 @@ filed and left open: none.
   the ruling round's journal sentence; PLAYBOOK: `aux.orphaned → resume`.
   Files .claude/settings.json, docs/INTEGRATION.md,
   docs/ARCHITECT-HANDBOOK.md, docs/PLAYBOOK.md, tests. Green 3/3, 4493.
-- U10 (`report:`, this commit): this report, plan, checkpoint, journal,
-  FINDINGS statuses (H-053..H-060); then the pull request, the hosted
-  review read with `hands hosted-review`, its fixes, and the `## Hosted
-  review` table in a final `report:` commit.
+- U10 d50af2a (`report:`): this report, plan, checkpoint, journal,
+  FINDINGS statuses (H-053..H-060); PR #4 opened from it.
+- U10 1276251 (`hosted, phone, guard, api:`) — the hosted review's seven
+  in-design findings on PR #4 (see §Hosted review): a refusal never
+  publishes or logs the secret; the archive is written to a temporary
+  sibling and renamed when complete; the architect's read roots are
+  `$HANDS_DOCS/docs` and `$HANDS_DOCS/templates` (narrower than §39's
+  "`HANDS_DOCS`": in a source-tree install `docs_root()` is the repository
+  root); header counts above zero with no open parsed finding exits 4 and a
+  parse/header mismatch is printed; "resolved" means struck through or
+  `✓ Resolved`, not the word in a title; bot comments without a Code
+  Review comment write nothing and exit 3; the journal reminder runs off
+  the event loop; inline comments match titles case-insensitively. Files
+  phone.py, hosted.py, api.py, cli.py, driver/hooks/bash_guard.py,
+  docs/INTEGRATION.md, both REVIEW-PROTOCOL.md, templates/BUILDER-N-PROMPT.md,
+  tests. Green 3/3, 4504.
+- U10 (`report:`, this commit): the `## Hosted review` table, H-061, the
+  archive meta/reviews/hosted/PR-4/1..6/.
 
 ## 2. What the tests prove
 
@@ -157,10 +171,15 @@ filed and left open: none.
   runs the old code (`hands --project hands pipeline` shows 20 rules until
   it is reinstalled); the load of the 21-rule playbook is shown by
   `load_playbook` on this tree.
-- `hands hosted-review` ran against recorded pages in the tests, and in
-  this unit against the real PR (§Hosted review); its reading of how the bot
-  marks a resolved finding comes from docs/QODO-EXTRACTION.md, not from a
-  recorded edit (until this PR's second fetch).
+- `hands hosted-review` ran against recorded pages in the tests and against
+  PR #4 twice (fetch 5 before the fixes, fetch 6 after the bot's in-place
+  re-review): the real `gh` paginated, the categories, the eleven findings
+  and their resolved marks were read. The fixed command (1276251)
+  ran only fetch 6; fetches 1-4 were written by the U5 code during the
+  wait and are the very behaviour of finding 10, kept as the record of the
+  bot's placeholder comment 6204572525 that vanished. The journal-reminder
+  thread test does not prove a slow git leaves the loop free under real
+  timing; the redaction removes the full secret only.
 - An `answer` or `reply` orphaned by a crash (not a stop) is not published.
 - Storing the fingerprint on a requested or in-floor scan (§39 says
   "whenever"; taken literally).
@@ -216,3 +235,30 @@ filed and left open: none.
 | H-059 | resolved-by-code | U2 bcc3d53 |
 | H-060 | resolved-by-code | U3 e36d558 (handbook U9) |
 | HF-002 | resolved in full | U7 2b4df10 |
+| H-061 | open (filed from PR #4 finding 2) | U10 |
+
+## Hosted review
+
+PR #4, `qodo-code-review[bot]`, read with `hands hosted-review 4`. Archive:
+meta/reviews/hosted/PR-4/ — fetches 1-4 (the wait: the bot's placeholder
+and summary, no Code Review comment yet), 5 (the first full review: issue
+comment 6204626963 updated 2026-10-15T23:44:37Z, header Bugs 7, Rule
+violations 3, Cross-repo conflicts 1, Skill insights 0; eleven findings), 6
+(after the fix push: the same comment edited in place at
+2026-10-16T00:19:46Z, seven findings struck through `✓ Resolved`, header
+Bugs 0; verdict "4 of 11 findings open", the four below dismissed or
+filed). Numbers are fetch 5's.
+
+| # | Finding (title as the bot wrote it) | Disposition |
+|---|---|---|
+| 1 | A refused phone command can expose its secret | fixed in 1276251 |
+| 2 | Discotrade reviews stop after restarts | finding H-061 filed (another repository's playbook; hands does not edit it) |
+| 3 | The review command alters the repository | dismissed: §39 requires the command to archive each body under meta/reviews/hosted/PR-<n>/<k>/, and the protocol has a fresh sub-agent run it |
+| 4 | Reports omit auditable tool evidence | dismissed: short shas are this repository's report convention (every FINAL-REPORT), they resolve uniquely, and each commit body carries its gate counts |
+| 5 | Hosted reviews hide the verdict | dismissed: `VERDICT:` is the agents' reply contract that playbook rules match; a tool printing it would be matched as an agent verdict. The command's verdict is its last line and its exit status (0, 3, 4) |
+| 6 | A failed archive leaves a false review fetch | fixed in 1276251 |
+| 7 | Architects can read unrelated hands files | fixed in 1276251 (roots narrowed to docs/ and templates/ under HANDS_DOCS; stated as a reading of §39) |
+| 8 | A misparsed Code Review reads as a clean review | fixed in 1276251 |
+| 9 | A finding titled with 'Resolved' counts as fixed | fixed in 1276251 (fetch 5 itself showed it: "10 of 11 open") |
+| 10 | Each wait-loop retry writes another archive | fixed in 1276251 (fetches 1-4 are its evidence, kept) |
+| 11 | A send to the builder can stall the daemon on git | fixed in 1276251 |

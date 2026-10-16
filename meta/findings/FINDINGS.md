@@ -2519,3 +2519,28 @@ Status: resolved-by-code (mission 23 U3 e36d558 — an answer and a cli
 keep/clear send to the builder are prefixed with the commit-the-journal
 sentence when git status --porcelain -- meta/journal.md shows it; the
 handbook's ruling round says the same, U9 515b736)
+
+## H-061 — discotrade's playbook has no `aux.orphaned` rule; a restarted review stops its pipeline
+
+Severity: medium · Component: discotrade's `PLAYBOOK.toml` (another
+repository); DESIGN §39 "A killed review is resumed (H-057)", §35
+Filed by: mission 23 orchestrator, U10 (2026-10-16), from the hosted
+review of PR #4, finding 2 "Discotrade reviews stop after restarts"
+(meta/reviews/hosted/PR-4/5/issue-comment-6204626963.md).
+Evidence: mission 23 U2 (bcc3d53) adds `aux.orphaned` to `EVENTS` and the
+rule to this repository's PLAYBOOK.toml and both templates; a project whose
+playbook was written from the older templates has no rule for the event.
+
+Symptom. After this merges, a daemon stop that orphans a discotrade review
+feeds `aux.orphaned` to an engine with no matching rule, which stops the
+pipeline and tells the human instead of re-sending the review. Before it,
+the orphaned review was stranded silently, so the stop is the less bad
+outcome, but it is not the resume §39 describes.
+
+Direction (for the architect): the next discotrade kit (or the series
+switch point of M5b) adds `aux.orphaned → resume` to its playbook; hands
+does not edit another project's playbook. Whether `kit check` should warn
+on a playbook that has `aux.done` rules but no `aux.orphaned` rule is a
+design question.
+
+Status: open

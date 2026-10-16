@@ -1,0 +1,69 @@
+{
+  "url": "https://api.github.com/repos/SigorMatt/hands/pulls/comments/4289394651",
+  "pull_request_review_id": 5541251475,
+  "id": 4289394651,
+  "node_id": "PRRC_kwDOUVwTn87_qvfb",
+  "diff_hunk": "@@ -0,0 +1,218 @@\n+# FINAL-REPORT-23 — review 22, the four findings, the hosted review read mechanically\n+\n+VERDICT: mission 23 finished pr=4\n+\n+Brief: meta/BUILDER-23-PROMPT.md. Design: DESIGN v3.22 §39 (with §24, §27,\n+§31, §35, §38). Review read: meta/reviews/REVIEW-22.md (`reviewed:\n+baa0b6e`, blockers 0, should-fix 12); docs/QODO-EXTRACTION.md. Shape: pull\n+request. The branch `mission-23` was created from `main` at 23eff6c (`plan:\n+mission 23 kit (DESIGN v3.22)`); every unit committed and pushed to it; this\n+unit opens the pull request `mission-23` → `main`, reads the hosted review\n+with `hands hosted-review` and fixes its findings in the same pull request.\n+Findings resolved: H-051, H-052 (U7), H-053, H-054, H-056 (U9), H-055 (U6),\n+H-057, H-058, H-059 (U2), H-060 (U3, U9); HF-002 in full (U7). Findings\n+filed and left open: none.\n+\n+## 1. What changed (sha per unit)\n+\n+- U0 b7b5c10 (`plan:`): meta/plan.md, meta/CHECKPOINT.md, meta/journal.md,\n+  meta/findings/FINDINGS.md (H-055..H-060 filed; H-051..H-054 set to\n+  \"decided (DESIGN §39, mission 23 U<n>)\"). Green 3/3, 4387 passed.",
+  "path": "meta/FINAL-REPORT-23.md",
+  "commit_id": "1276251870bb3d1ddb4021a1b82472c02861f426",
+  "original_commit_id": "d50af2a99203bf98a3b4a628daf4227b1466e8c4",
+  "user": {
+    "login": "qodo-code-review[bot]",
+    "id": 151058649,
+    "node_id": "BOT_kgDOCQD42Q",
+    "avatar_url": "https://avatars.githubusercontent.com/in/484649?v=4",
+    "gravatar_id": "",
+    "url": "https://api.github.com/users/qodo-code-review%5Bbot%5D",
+    "html_url": "https://github.com/apps/qodo-code-review",
+    "followers_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/followers",
+    "following_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/following{/other_user}",
+    "gists_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/gists{/gist_id}",
+    "starred_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/starred{/owner}{/repo}",
+    "subscriptions_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/subscriptions",
+    "organizations_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/orgs",
+    "repos_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/repos",
+    "events_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/events{/privacy}",
+    "received_events_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/received_events",
+    "type": "Bot",
+    "user_view_type": "public",
+    "site_admin": false
+  },
+  "body": "<img src=\"https://img.shields.io/badge/Medium-634FD1?style=flat-square\" height=\"20px\" alt=\"Remediation recommended\">\n\n4\\. Reports omit auditable tool evidence <code>📘 Rule violation</code> <code>✧ Quality</code>\n\n<pre>\n<b><i>meta/FINAL-REPORT-23.md</i></b> records short commit identifiers and prose summaries of test runs without\nfull SHAs or verbatim tool output. When readers rely on the report to verify the claimed units and\nchecks, they cannot reproduce the exact commits, counts, messages, or line references from the\nreport itself.\n</pre>\n\n\n<details>\n<summary><strong>Agent Prompt</strong></summary>\n\n```\n## Issue description\nThe final report uses abbreviated commit identifiers and summarizes test results without including exact integer metrics and raw command output.\n\n## Fix Focus Areas\n- meta/FINAL-REPORT-23.md[16-20]\n- meta/FINAL-REPORT-23.md[128-134]\n\n## Recommended Fix\nReplace each abbreviated commit reference with the full commit SHA, add explicit test and failure counts for every reported check, and include clearly marked verbatim raw output sections for the test, lint, and other external tool invocations discussed in the report.\n```\n\n<code>ⓘ Copy this prompt and use it to remediate the issue with your preferred AI generation tools</code>\n</details>\n\n[Dismiss ↗](https://app.qodo.ai/findings/f8015f64-2e5e-4d21-8c79-2cb7cb0b83ba?action=dismiss&origin=git) | [View ↗](https://app.qodo.ai/findings/f8015f64-2e5e-4d21-8c79-2cb7cb0b83ba)",
+  "created_at": "2026-10-15T23:44:39Z",
+  "updated_at": "2026-10-15T23:44:39Z",
+  "html_url": "https://github.com/SigorMatt/hands/pull/4#discussion_r4289394651",
+  "pull_request_url": "https://api.github.com/repos/SigorMatt/hands/pulls/4",
+  "_links": {
+    "self": {
+      "href": "https://api.github.com/repos/SigorMatt/hands/pulls/comments/4289394651"
+    },
+    "html": {
+      "href": "https://github.com/SigorMatt/hands/pull/4#discussion_r4289394651"
+    },
+    "pull_request": {
+      "href": "https://api.github.com/repos/SigorMatt/hands/pulls/4"
+    }
+  },
+  "reactions": {
+    "url": "https://api.github.com/repos/SigorMatt/hands/pulls/comments/4289394651/reactions",
+    "total_count": 0,
+    "+1": 0,
+    "-1": 0,
+    "laugh": 0,
+    "hooray": 0,
+    "confused": 0,
+    "heart": 0,
+    "rocket": 0,
+    "eyes": 0
+  },
+  "start_line": 18,
+  "original_start_line": 18,
+  "start_side": "RIGHT",
+  "line": 20,
+  "original_line": 20,
+  "side": "RIGHT",
+  "author_association": "NONE",
+  "original_position": 20,
+  "position": 20,
+  "subject_type": "line"
+}
