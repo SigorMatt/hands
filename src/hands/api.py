@@ -188,7 +188,10 @@ def match_job_id(spool: Spool, typed: str) -> str:
     read as `0` and `l` or `I` as `1` — a whole id, else a prefix of `MIN_ID_PREFIX`
     or more characters. Two or more jobs matching is refused with the candidates.
     Used by `approve`, `deny` and `cancel` (laptop and phone alike); the phone's
-    `answer` and `reply` carry no job id."""
+    `answer` and `reply` carry no job id.
+
+    The typed id is quoted with `str`, never `repr`: the phone cuts its secret out
+    of the reason, and `repr` doubles a backslash in it (REVIEW-23 should-fix 5)."""
     with contextlib.suppress(SpoolError):
         return spool.load_job(typed).id
     key = _id_key(typed.strip())
@@ -203,12 +206,12 @@ def match_job_id(spool: Spool, typed: str) -> str:
         if len(whole) == 1:
             return whole[0]
     if whole:
-        raise ApiError(f"job id {typed!r} is ambiguous: it matches {', '.join(whole)}")
+        raise ApiError(f"job id `{typed}` is ambiguous: it matches {', '.join(whole)}")
     short = (
         f" (a prefix needs {MIN_ID_PREFIX} or more characters)"
         if 0 < len(key) < MIN_ID_PREFIX else ""
     )
-    raise ApiError(f"no such job {typed!r}{short}")
+    raise ApiError(f"no such job `{typed}`{short}")
 
 
 class Api:

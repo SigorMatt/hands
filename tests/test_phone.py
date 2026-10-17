@@ -3357,6 +3357,50 @@ def test_a_refused_command_never_publishes_or_logs_the_secret_typed_as_its_job_i
     assert SECRET.lower() not in strip_paths(caplog.text.lower())
 
 
+BACKSLASH_SECRET = r"Qm7\Zr4\Wk9\Tp2"
+
+
+def secret_parts(secret: str, shortest: int = 4) -> list[str]:
+    """Every substring of `secret` of `shortest` characters or more."""
+    return [secret[i:j] for i in range(len(secret))
+            for j in range(i + shortest, len(secret) + 1)]
+
+
+def test_a_secret_with_a_backslash_is_neither_published_nor_logged_in_a_refusal(
+    tmp_home: Path, workdir: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """REVIEW-23 should-fix 5: the no-such-job reason quoted the typed id with
+    `repr`, which doubles a backslash, so a secret carrying one no longer matched
+    the redaction and went out nearly verbatim. With the secret typed as the job id
+    (alone, and inside a longer id), no substring of the secret of 4 or more
+    characters is in any published refusal (title or message) or in the log."""
+    notify = NOTIFY.replace(f'cmd_secret = "{SECRET}"', f"cmd_secret = '{BACKSLASH_SECRET}'")
+    (tmp_home / ".hands" / f"{PROJECT}.toml").write_text(
+        config_body(tmp_home, workdir, extra=notify)
+    )
+    assert load_config(PROJECT).notify.cmd_secret == BACKSLASH_SECRET
+    caplog.set_level(logging.DEBUG)
+    parts = secret_parts(BACKSLASH_SECRET)
+
+    async def body(daemon: Daemon, fake: FakeNtfy) -> None:
+        await say(daemon, fake, f"approve {BACKSLASH_SECRET} {BACKSLASH_SECRET}")
+        await say(daemon, fake, f"deny x{BACKSLASH_SECRET}y because {BACKSLASH_SECRET}")
+        await daemon.notifier.drain()
+        approve = refusals(daemon, "approve")
+        deny = refusals(daemon, "deny")
+        assert len(approve) == 1 and len(deny) == 1, (approve, deny)
+        for message in approve + deny:
+            assert "no such job" in strip_paths(message), message
+        for item in daemon.notifier.post.sent:
+            for field in ("title", "message"):
+                said = str(item.get(field) or "")
+                assert not [p for p in parts if p in strip_paths(said)], (field, said)
+
+    phone_drive(body)
+    assert "no such job" in strip_paths(caplog.text)
+    assert not [p for p in parts if p in strip_paths(caplog.text)]
+
+
 def test_a_refused_command_with_a_wrong_or_missing_secret_stays_silent(project: str) -> None:
     async def body(daemon: Daemon, fake: FakeNtfy) -> None:
         await daemon.notifier.drain()
