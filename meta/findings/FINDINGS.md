@@ -2565,6 +2565,8 @@ record is `orphaned`, §38). Mission 24 U3.
 
 Status: resolved-by-code (mission 24 U3 — `MonitorSupervisor` raises `task_killed` once per (session, task id) across every job that reads the transcript, and not for a job `runner.daemon_stopping` names)
 
+Note (mission 25 U0, 2026-10-17): REVIEW-24 should-fix 6 found the session half of the key unpinned (`("", task_id)` left every test green) and the 1024-entry memory's eviction untested. Mission 25 U3 pins the session half (two sessions reporting the same task id each raise once) and the eviction.
+
 ## H-063 — `runner.transcript_path_for` ignores `CLAUDE_CONFIG_DIR`
 
 Severity: high · Component: src/hands/runner.py, src/hands/monitor.py;
