@@ -12,17 +12,17 @@ merged into mission-24 at cc2a9e5.
 
 - [x] U0 Plan and branch (`plan:`) (this commit) — this file, meta/CHECKPOINT.md,
       meta/journal.md, meta/findings/FINDINGS.md (H-062 note)
-- [ ] U1 The capture script (blocker 1; should-fix 1) —
+- [x] U1 11cd19c The capture script (blocker 1; should-fix 1) —
       scripts/capture-quota-stop.sh, docs/OPERATIONS.md, tests
-- [ ] U2 The staged kit (should-fix 2) — src/hands/kit.py, src/hands/api.py,
+- [x] U2 2f9e219 The staged kit (should-fix 2) — src/hands/kit.py, src/hands/api.py,
       tests
-- [ ] U3 Three pins: monitor, api, runner (should-fix 6, 7, 8) —
+- [x] U3 f53ec39 Three pins: monitor, api, runner (should-fix 6, 7, 8) —
       src/hands/monitor.py, src/hands/api.py, src/hands/runner.py, tests
-- [ ] U4 The warning and the stale worktree (should-fix 4, 5) —
+- [x] U4 f0eb0d0 The warning and the stale worktree (should-fix 4, 5) —
       src/hands/kit.py, templates/REVIEW-PROTOCOL.md,
       meta/REVIEW-PROTOCOL.md, docs/ARCHITECT-HANDBOOK.md §7, tests
-- [ ] U5 The probe record (should-fix 3) — docs/HARNESS-PROBE.md
-- [ ] U6 Final report, the push and the hosted review's findings —
+- [x] U5 4f46bda The probe record (should-fix 3) — docs/HARNESS-PROBE.md
+- [x] U6 (this commit) Final report, the push and the hosted review's findings —
       meta/FINAL-REPORT-25.md (drafted under meta/drafts/),
       meta/reviews/hosted/PR-5/
 

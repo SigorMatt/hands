@@ -1,0 +1,69 @@
+{
+  "url": "https://api.github.com/repos/SigorMatt/hands/pulls/comments/4301354656",
+  "pull_request_review_id": 5556157142,
+  "id": 4301354656,
+  "node_id": "PRRC_kwDOUVwTn88AAAABAGF2oA",
+  "diff_hunk": "@@ -0,0 +1,229 @@\n+#!/usr/bin/env bash\n+# capture-quota-stop.sh <project> [<job>] — DESIGN §40, docs/OPERATIONS.md\n+# (\"A usage-limit stop\").\n+#\n+# Writes ~/quota-capture-<project>-<time>.txt, mode 600, with what the first real\n+# usage-limit stop looked like: `hands status`, `hands jobs -n 5`, `hands\n+# pipeline`, the newest job record of the project's spool (or the job named as the\n+# second argument), that job's stream-json tail and its lines about a limit, the\n+# tail of the transcript the record names, the daemon journal's lines that name\n+# the job, and the inbox's tail.\n+#\n+# Read-only: the one file it writes is that output, created new (never over an\n+# existing file). Nothing needs the daemon to be up: a command that fails is\n+# recorded in the file with its exit status, and the capture goes on.\n+#\n+# Redacted before anything reaches the file: every project's command secret\n+# (`[notify] cmd_secret` of each ~/.hands/*.toml and each ~/.hands/*.cmd_secret)\n+# and notification token (`ntfy_token`), and the notification user's token and\n+# password where this machine keeps them (~/.hands/ntfy.token,\n+# ~/.hands/ntfy.password), each matched as a fixed string — raw, as JSON writes\n+# it and URL-encoded — never as a regular expression built from the value; then\n+# keys and bearer tokens by pattern. Read the file before you send it anywhere:\n+# a secret this script does not know of is not redacted.\n+\n+set -u\n+umask 077\n+\n+usage() {\n+    echo \"usage: bash scripts/capture-quota-stop.sh <project> [<job>]\" >&2\n+    exit 2\n+}\n+\n+[ \"$#\" -ge 1 ] && [ \"$#\" -le 2 ] || usage\n+project=$1\n+job=${2:-}\n+case $project in\n+    '' | .* | */*) echo \"capture-quota-stop: bad project name: $project\" >&2; exit 2 ;;\n+esac\n+case $job in\n+    .* | */*) echo \"capture-quota-stop: bad job id: $job\" >&2; exit 2 ;;\n+esac\n+\n+hands_dir=\"$HOME/.hands\"\n+spool=\"$hands_dir/$project\"\n+out=\"$HOME/quota-capture-$project-$(date +%Y%m%d-%H%M%S).txt\"\n+if [ -e \"$out\" ] || [ -L \"$out\" ]; then\n+    echo \"capture-quota-stop: $out exists; run it again in a second\" >&2\n+    exit 1\n+fi\n+\n+CUT=4000  # the longest line kept: transcript and stream lines can be megabytes\n+\n+section() {\n+    printf '\\n== %s ==\\n' \"$1\"\n+}\n+\n+# Run a command; on a non-zero exit, say so in the capture and go on.\n+run() {\n+    \"$@\" 2>&1\n+    local status=$?\n+    [ \"$status\" -eq 0 ] || printf '(failed: exit %s: %s)\\n' \"$status\" \"$*\"\n+    return 0\n+}\n+\n+collect() {\n+    echo \"quota capture: project $project, $(date -Is), by scripts/capture-quota-stop.sh\"\n+    echo \"(read-only; secrets redacted by value and by pattern, see the script's header)\"\n+\n+    section \"hands --project $project status\"\n+    run hands --project \"$project\" status\n+    section \"hands --project $project jobs -n 5\"\n+    run hands --project \"$project\" jobs -n 5\n+    section \"hands --project $project pipeline\"\n+    run hands --project \"$project\" pipeline\n+\n+    if [ -z \"$job\" ]; then\n+        if [ -d \"$spool/jobs\" ]; then\n+            # Job ids are fixed-width base36 milliseconds, so the newest sorts last.\n+            job=$(find \"$spool/jobs\" -maxdepth 1 -name '*.json' -printf '%f\\n' 2>/dev/null \\\n+                | sort | tail -n 1)\n+            job=${job%.json}\n+        fi\n+    fi\n+    if [ -z \"$job\" ]; then\n+        section \"job record\"\n+        echo \"(no job record under $spool/jobs)\"\n+        return 0\n+    fi\n+    record=\"$spool/jobs/$job.json\"\n+    section \"job record $record\"\n+    if [ -f \"$record\" ]; then\n+        run cat \"$record\"\n+        echo\n+    else\n+        echo \"(no such file)\"\n+    fi\n+\n+    stream=\"$spool/jobs/$job.stream.jsonl\"\n+    section \"stream-json tail, last 40 lines: $stream\"\n+    if [ -f \"$stream\" ]; then\n+        tail -n 40 \"$stream\" | cut -c1-\"$CUT\"\n+    else\n+        echo \"(no such file)\"\n+    fi\n+    section \"stream-json lines about a limit (limit, quota, rate, reset, retry, 429, overloaded)\"\n+    if [ -f \"$stream\" ]; then\n+        grep -n -i -E 'limit|quota|rate|reset|retry|429|overloaded' \"$stream\" | tail -n 60 \\\n+            | cut -c1-\"$CUT\"\n+    else\n+        echo \"(no such file)\"\n+    fi\n+\n+    transcript=\"\"\n+    if [ -f \"$record\" ]; then\n+        transcript=$(python3 -I -c '\n+import json, sys\n+try:\n+    print(json.load(open(sys.argv[1], encoding=\"utf-8\")).get(\"transcript_path\") or \"\")\n+except Exception:\n+    pass\n+' \"$record\" 2>/dev/null)\n+    fi\n+    section \"transcript tail, last 40 lines: ${transcript:-(no record, or it names no transcript)}\"\n+    if [ -n \"$transcript\" ] && [ -f \"$transcript\" ]; then\n+        tail -n 40 \"$transcript\" | cut -c1-\"$CUT\"\n+    elif [ -n \"$transcript\" ]; then\n+        echo \"(no such file)\"\n+    fi\n+\n+    section \"journalctl --user -u handsd@$project, lines naming $job\"\n+    journal=$(journalctl --user -u \"handsd@$project\" --no-pager -o short-iso 2>&1)\n+    status=$?\n+    printf '%s\\n' \"$journal\" | grep -F -- \"$job\" | tail -n 100 | cut -c1-\"$CUT\"\n+    [ \"$status\" -eq 0 ] || printf '(failed: exit %s: journalctl)\\n%s\\n' \"$status\" \\\n+        \"$(printf '%s\\n' \"$journal\" | tail -n 3)\"\n+\n+    section \"inbox tail, last 30 events: $spool/inbox.jsonl\"\n+    if [ -f \"$spool/inbox.jsonl\" ]; then\n+        tail -n 30 \"$spool/inbox.jsonl\" | cut -c1-\"$CUT\"\n+    else\n+        echo \"(no such file)\"\n+    fi\n+    return 0\n+}\n+\n+# The redactor reads the secrets itself, so no value is ever on a command line or\n+# in the environment, and replaces each as a fixed string (str.replace), longest\n+# first; the patterns come after.\n+REDACT='\n+import json, re, sys, tomllib\n+from pathlib import Path\n+from urllib.parse import quote\n+\n+hands_dir = Path(sys.argv[1])\n+values = set()\n+\n+def take(value):\n+    if isinstance(value, str) and value.strip():\n+        values.add(value.strip())\n+\n+for config in sorted(hands_dir.glob(\"*.toml\")):\n+    try:\n+        data = tomllib.loads(config.read_text(encoding=\"utf-8\"))\n+    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError):\n+        # Unparseable: take the two keys line by line, as written.\n+        try:\n+            text = config.read_text(encoding=\"utf-8\", errors=\"replace\")\n+        except OSError:\n+            continue\n+        for match in re.finditer(\n+            r\"(?m)^\\s*(?:cmd_secret|ntfy_token)\\s*=\\s*([\\\"\\x27])(.*)\\1\\s*(?:#.*)?$\", text\n+        ):\n+            take(match.group(2))\n+        continue\n+    for table in (\"notify\", \"server\"):\n+        section = data.get(table)\n+        if isinstance(section, dict):\n+            for key in (\"cmd_secret\", \"ntfy_token\"):\n+                take(section.get(key))\n+for name in [*sorted(hands_dir.glob(\"*.cmd_secret\")), hands_dir / \"ntfy.token\",\n+             hands_dir / \"ntfy.password\"]:\n+    try:\n+        take(Path(name).read_text(encoding=\"utf-8\", errors=\"replace\"))\n+    except OSError:\n+        pass\n+\n+forms = set()\n+for value in values:\n+    forms.add(value)\n+    forms.add(json.dumps(value)[1:-1])\n+    forms.add(json.dumps(value, ensure_ascii=False)[1:-1])\n+    forms.add(quote(value, safe=\"\"))\n+forms.discard(\"\")\n+\n+PATTERNS = [\n+    (r\"-----BEGIN [A-Z ]*PRIVATE KEY-----[\\s\\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|\\Z)\",\n+     \"[redacted]\"),\n+    (r\"(?i)(authorization[\\\"\\x27]?\\s*[:=]\\s*[\\\"\\x27]?(?:basic|bearer|token)?\\s*)\"\n+     r\"[^\\s\\\"\\x27,;]+\", r\"\\1[redacted]\"),\n+    (r\"(?i)\\b(bearer)(\\s+|%20)[A-Za-z0-9._~+/=-]{8,}\", r\"\\1\\2[redacted]\"),\n+    (r\"(?i)([?&]auth=)[^&\\s\\\"\\x27]+\", r\"\\1[redacted]\"),\n+    (r\"\\bsk-ant-[A-Za-z0-9_-]{8,}\", \"[redacted]\"),\n+    (r\"\\bsk-[A-Za-z0-9_-]{16,}\", \"[redacted]\"),\n+    (r\"\\btk_[A-Za-z0-9]{8,}\", \"[redacted]\"),\n+    (r\"\\bgh[pousr]_[A-Za-z0-9]{16,}\", \"[redacted]\"),\n+    (r\"\\bgithub_pat_[A-Za-z0-9_]{16,}\", \"[redacted]\"),\n+    (r\"\\bAKIA[0-9A-Z]{16}\\b\", \"[redacted]\"),\n+    (r\"\\bxox[abposr]-[A-Za-z0-9-]{8,}\", \"[redacted]\"),\n+    (r\"\\btskey-[A-Za-z0-9-]{8,}\", \"[redacted]\"),\n+    (r\"\\beyJ[A-Za-z0-9_-]{8,}\\.[A-Za-z0-9_-]{8,}(?:\\.[A-Za-z0-9_-]+)?\", \"[redacted]\"),\n+    (r\"(?i)\\b((?:api[_-]?key|access[_-]?token|refresh[_-]?token|id[_-]?token|\"\n+     r\"client[_-]?secret|cmd_secret|ntfy_token|password|passwd|secret|token)\"\n+     r\"[\\\"\\x27]?\\s*[:=]\\s*[\\\"\\x27]?)[^\\s\\\"\\x27,;}]{6,}\", r\"\\1[redacted]\"),\n+]\n+\n+text = sys.stdin.read()\n+for form in sorted(forms, key=len, reverse=True):\n+    text = text.replace(form, \"[redacted]\")",
+  "path": "scripts/capture-quota-stop.sh",
+  "commit_id": "b940d6d4e822df6d1859ddfe0b8469da9df60d55",
+  "original_commit_id": "a4e3da66e119678523a33ee5180462027a5b12d8",
+  "user": {
+    "login": "qodo-code-review[bot]",
+    "id": 151058649,
+    "node_id": "BOT_kgDOCQD42Q",
+    "avatar_url": "https://avatars.githubusercontent.com/in/484649?v=4",
+    "gravatar_id": "",
+    "url": "https://api.github.com/users/qodo-code-review%5Bbot%5D",
+    "html_url": "https://github.com/apps/qodo-code-review",
+    "followers_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/followers",
+    "following_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/following{/other_user}",
+    "gists_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/gists{/gist_id}",
+    "starred_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/starred{/owner}{/repo}",
+    "subscriptions_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/subscriptions",
+    "organizations_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/orgs",
+    "repos_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/repos",
+    "events_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/events{/privacy}",
+    "received_events_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/received_events",
+    "type": "Bot",
+    "user_view_type": "public",
+    "site_admin": false
+  },
+  "body": "<img src=\"https://img.shields.io/badge/Medium-634FD1?style=flat-square\" height=\"20px\" alt=\"Remediation recommended\">\n\n7\\. Quota capture can abort and leave an empty file <code>🐞 Bug</code> <code>☼ Reliability</code>\n\n<pre>\nThe script cuts transcript, stream-json, grep and inbox lines with <b><i>cut -c1-4000</i></b>, then pipes\neverything into a Python redactor that calls <b><i>sys.stdin.read()</i></b> in text mode. GNU <b><i>cut -c</i></b> counts\nbytes, so a long line whose 4000th byte falls inside a multi-byte UTF-8 character (<b><i>—</i></b>, <b><i>§</i></b> and\nsimilar are common in this project&#x27;s transcripts) is split mid-character; under a UTF-8 locale stdin\ndecodes strictly, the redactor raises <b><i>UnicodeDecodeError</i></b>, and the capture fails, leaving only the\nempty <b><i>$out</i></b> that <b><i>noclobber</i></b> already created.\n</pre>\n\n\n<details>\n<summary><strong>Agent Prompt</strong></summary>\n\n```\n## Issue description\nThe redactor reads stdin as strict UTF-8, but `cut -c` truncates by bytes and can split a multi-byte character. When that happens the whole capture fails and leaves an empty output file.\n\n## Fix Focus Areas\n- scripts/capture-quota-stop.sh[216-216]\n\n## Recommended Fix\nReplace `text = sys.stdin.read()` with `text = sys.stdin.buffer.read().decode(\"utf-8\", errors=\"replace\")`, and write the result with `sys.stdout.buffer.write(text.encode(\"utf-8\"))` or keep `sys.stdout.write` with UTF-8 output. Optionally delete `$out` when the pipeline fails.\n```\n\n<code>ⓘ Copy this prompt and use it to remediate the issue with your preferred AI generation tools</code>\n</details>\n\n[Dismiss ↗](https://app.qodo.ai/findings/92713585-8626-48f7-bd08-76ee1d7d1180?action=dismiss&origin=git) | [View ↗](https://app.qodo.ai/findings/92713585-8626-48f7-bd08-76ee1d7d1180)",
+  "created_at": "2026-10-17T04:25:57Z",
+  "updated_at": "2026-10-17T04:25:57Z",
+  "html_url": "https://github.com/SigorMatt/hands/pull/5#discussion_r4301354656",
+  "pull_request_url": "https://api.github.com/repos/SigorMatt/hands/pulls/5",
+  "_links": {
+    "self": {
+      "href": "https://api.github.com/repos/SigorMatt/hands/pulls/comments/4301354656"
+    },
+    "html": {
+      "href": "https://github.com/SigorMatt/hands/pull/5#discussion_r4301354656"
+    },
+    "pull_request": {
+      "href": "https://api.github.com/repos/SigorMatt/hands/pulls/5"
+    }
+  },
+  "reactions": {
+    "url": "https://api.github.com/repos/SigorMatt/hands/pulls/comments/4301354656/reactions",
+    "total_count": 0,
+    "+1": 0,
+    "-1": 0,
+    "laugh": 0,
+    "hooray": 0,
+    "confused": 0,
+    "heart": 0,
+    "rocket": 0,
+    "eyes": 0
+  },
+  "start_line": null,
+  "original_start_line": 216,
+  "start_side": "RIGHT",
+  "line": null,
+  "original_line": 218,
+  "side": "RIGHT",
+  "author_association": "NONE",
+  "original_position": 218,
+  "position": 1,
+  "subject_type": "line"
+}
