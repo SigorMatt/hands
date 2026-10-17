@@ -66,7 +66,7 @@ import shutil
 import signal
 import subprocess
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, TextIO
@@ -255,14 +255,24 @@ def project_dir_name(cwd: str | os.PathLike[str]) -> str:
     return _NON_ALNUM_RE.sub("-", str(Path(cwd)))
 
 
-def transcript_path_for(cwd: str | os.PathLike[str], session_id: str) -> str:
-    """`~/.claude/projects/<dashed cwd>/<session_id>.jsonl` (§2).
+#: The variable that moves Claude Code's configuration directory, transcripts
+#: included (§40, H-063).
+CLAUDE_CONFIG_DIR_ENV = "CLAUDE_CONFIG_DIR"
 
-    Derived, never verified: the file is Claude Code's to create, and at the
-    moment of the init event it may not exist yet.
+
+def transcript_path_for(
+    cwd: str | os.PathLike[str], session_id: str, env: Mapping[str, str] | None = None
+) -> str:
+    """`<config dir>/projects/<dashed cwd>/<session_id>.jsonl` (§2, §40 H-063).
+
+    The config dir is `$CLAUDE_CONFIG_DIR` of the job's environment `env` when it
+    is set and not empty — a relative one is taken from `cwd`, where claude runs —
+    and `~/.claude` otherwise. Derived, never verified: the file is Claude Code's
+    to create, and at the moment of the init event it may not exist yet.
     """
-    base = Path("~/.claude/projects").expanduser()
-    return str(base / project_dir_name(cwd) / f"{session_id}.jsonl")
+    configured = (env or {}).get(CLAUDE_CONFIG_DIR_ENV)
+    root = Path(cwd) / configured if configured else Path("~/.claude").expanduser()
+    return str(root / "projects" / project_dir_name(cwd) / f"{session_id}.jsonl")
 
 
 def extract_verdict(result: str | None) -> str | None:
@@ -742,6 +752,12 @@ class Runner:
             _signal(proc, signal.SIGTERM)
         return True
 
+    def daemon_stopping(self, job_id: str) -> bool:
+        """Is the daemon's own stop ending this job (§38)? True from its signal until
+        the run has read the last of its stream; the monitor raises no
+        `task_killed` for such a job (§40 H-062)."""
+        return job_id in self._daemon_stop
+
     # ------------------------------------------------------- job end (§24)
 
     def _observe_alive(self, job: Job) -> None:
@@ -948,7 +964,12 @@ class Runner:
         if isinstance(session_id, str) and session_id and parsed.session_id is None:
             parsed.session_id = session_id
             job.session_id = session_id
-            job.transcript_path = transcript_path_for(role.cwd, session_id)
+            # §40 (H-063): from the environment the job was spawned with, so a
+            # role's `CLAUDE_CONFIG_DIR` moves it; recorded before the monitor's
+            # first scan, which waits for this event (`wait_for_session`).
+            job.transcript_path = transcript_path_for(
+                role.cwd, session_id, job_env(job, role, self.config.project)
+            )
             self.spool.save_job(job)
             # Written as soon as it is known so that a `keep` send arriving while
             # this job runs can see that the session's last job is not terminal.

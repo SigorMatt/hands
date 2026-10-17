@@ -12,9 +12,11 @@ def _no_hands_environment(monkeypatch: pytest.MonkeyPatch) -> None:
     """DESIGN §36 "Hermetic tests" (H-040): every `HANDS_*` variable of the
     environment that runs the suite is removed for every test, so the gate is
     the same inside a hands job (which carries `HANDS_PROJECT` and `HANDS_JOB`)
-    and outside one. A test that wants one sets it itself."""
+    and outside one. A test that wants one sets it itself. §40 (H-063):
+    `CLAUDE_CONFIG_DIR` goes too, since it moves every job's transcript path."""
     for name in [name for name in os.environ if name.startswith("HANDS_")]:
         monkeypatch.delenv(name)
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
 
 
 @pytest.fixture

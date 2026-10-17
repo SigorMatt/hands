@@ -2563,7 +2563,7 @@ Direction. §40: raised once per killed task, keyed by the task's id in the
 transcript, across scans; never for a job the daemon is stopping (its
 record is `orphaned`, §38). Mission 24 U3.
 
-Status: open
+Status: resolved-by-code (mission 24 U3 — `MonitorSupervisor` raises `task_killed` once per (session, task id) across every job that reads the transcript, and not for a job `runner.daemon_stopping` names)
 
 ## H-063 — `runner.transcript_path_for` ignores `CLAUDE_CONFIG_DIR`
 
@@ -2581,7 +2581,7 @@ rotation by configuration directory.
 Direction. §40: the path is computed from the job's environment and
 recorded in the job record before the first scan. Mission 24 U3.
 
-Status: open
+Status: resolved-by-code (mission 24 U3 — `runner.transcript_path_for` takes the job's environment and uses `$CLAUDE_CONFIG_DIR/projects/…` when it is set; the runner records it at the init event, before the monitor's first scan)
 
 ## H-064 — §39's lenient-id command list named `answer` and `reply`
 

@@ -29,6 +29,13 @@ backslash, so a multi-line result fits on one line of a test:
     FAKE:sleep <seconds>   sleep this long after the init event
     FAKE:block             block until SIGINT (exit 130) or SIGTERM (exit 143)
     FAKE:ignore-int        with FAKE:block, ignore SIGINT so only SIGTERM ends it
+    FAKE:kill-on-stop <task-id> <command>
+                           with FAKE:block, emit the task-killed notice for it
+                           when SIGINT or SIGTERM ends the process, as a real
+                           claude does for the tasks it kills on its way out
+    FAKE:transcript        also append every event to the transcript Claude Code
+                           keeps: `$CLAUDE_CONFIG_DIR` (else `~/.claude`), then
+                           `projects/<cwd, non-alphanumerics as ->/<session>.jsonl`
     FAKE:rate-limit <msg>  emit system/api_retry with error "rate_limit", then exit
     FAKE:no-result         exit without emitting a `result` event
     FAKE:no-turns          leave `num_turns` out of the result event
@@ -90,6 +97,7 @@ import argparse
 import fcntl
 import json
 import os
+import re
 import signal
 import subprocess
 import sys
@@ -130,9 +138,30 @@ def parse_directives(prompt: str) -> dict[str, list[str]]:
     return found
 
 
+#: `FAKE:transcript`: where every emitted event is also appended, once known.
+TRANSCRIPT: list[str] = []
+
+
+def transcript_path(session_id: str) -> str:
+    """Claude Code's transcript of `session_id` for this cwd (DESIGN §2, §40, H-063).
+
+    Written independently of `hands.runner.transcript_path_for`, so a test that
+    finds the file where the job record says it is proves the two agree.
+    """
+    root = os.environ.get("CLAUDE_CONFIG_DIR") or os.path.join(
+        os.path.expanduser("~"), ".claude"
+    )
+    dashed = re.sub(r"[^a-zA-Z0-9]", "-", os.getcwd())
+    return os.path.join(root, "projects", dashed, f"{session_id}.jsonl")
+
+
 def emit(event: dict[str, object]) -> None:
-    sys.stdout.write(json.dumps(event) + "\n")
+    line = json.dumps(event) + "\n"
+    sys.stdout.write(line)
     sys.stdout.flush()
+    for path in TRANSCRIPT:
+        with open(path, "a", encoding="utf-8") as handle:
+            handle.write(line)
 
 
 def emit_many(count: int, session_id: str) -> None:
@@ -336,15 +365,22 @@ def parse_argv(argv: list[str]) -> argparse.Namespace:
     return args
 
 
+#: `FAKE:kill-on-stop`: (session id, task id, command) noticed on the way out.
+KILL_ON_STOP: list[tuple[str, str, str]] = []
+
+
 def install_block_handlers(ignore_int: bool) -> None:
     """Arm the exit codes DESIGN §2 expects: 143 on SIGTERM, 130 on SIGINT.
 
     Armed before the init event is emitted, so a caller that waits for the
-    session id knows the handlers are already in place.
+    session id knows the handlers are already in place. Each `FAKE:kill-on-stop`
+    task's notice is emitted before the exit.
     """
 
     def die(code: int):  # noqa: ANN202 - builds a signal handler
         def handler(signum: int, frame: object) -> None:
+            for session_id, task_id, command in KILL_ON_STOP:
+                emit_task_killed(session_id, task_id, command)
             os._exit(code)
 
         return handler
@@ -444,6 +480,13 @@ def main(argv: list[str]) -> int:
         install_block_handlers("ignore-int" in directives)
 
     session_id = args.resume or one("session") or str(uuid.uuid4())
+    if "transcript" in directives:
+        path = transcript_path(session_id)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        TRANSCRIPT.append(path)
+    for spec in directives.get("kill-on-stop", []):
+        task_id, _, command = spec.partition(" ")
+        KILL_ON_STOP.append((session_id, task_id, command))
     emit(
         {
             "type": "system",

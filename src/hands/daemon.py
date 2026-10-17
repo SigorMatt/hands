@@ -141,6 +141,8 @@ class Daemon:
             ready=self.runner.wait_for_session,
             on_event=self._monitor_event,
             pids=self.runner.live_pids,  # §5's `--pids`: the job's scope or group (§24)
+            # §40 (H-062): no `task_killed` for a job the daemon's own stop ends.
+            stopping=self.runner.daemon_stopping,
         )
         #: §24: what is still alive in a job's scope or group when claude exits is
         #: filed as `monitor.orphan_processes`; the runner then kills it.
