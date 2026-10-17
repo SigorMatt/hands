@@ -2543,7 +2543,7 @@ does not edit another project's playbook. Whether `kit check` should warn
 on a playbook that has `aux.done` rules but no `aux.orphaned` rule is a
 design question.
 
-Status: decided (DESIGN §40, mission 24 U6 — `hands kit check` and the engine's load warn, and do not refuse, on a playbook with an `aux.done` rule and no `aux.orphaned` rule, and likewise `builder.done` without `builder.orphaned`)
+Status: resolved-by-code (mission 24 U6: `hands kit check` prints a `WARN playbook:` line, and the engine logs a warning at load, for a playbook with an `aux.done` rule and no `aux.orphaned` rule, and likewise `builder.done` without `builder.orphaned`; neither refuses; one function, `playbook.orphaned_rule_warnings`, computes both; docs/PLAYBOOK.md says so)
 
 ## H-062 — the monitor raises `task_killed` once per transcript line, not once per task
 

@@ -25,7 +25,7 @@ import pytest
 from conftest import strip_paths
 from hands import kit as kit_mod
 from hands.cli import main
-from hands.playbook import parse_playbook
+from hands.playbook import orphaned_rule_warnings, parse_playbook
 from harness import CRAFTED_HOWS, CRAFTED_NAME, CRAFTED_TARGET, crafted_zip
 
 ROOT = Path(__file__).parents[1]
@@ -2841,3 +2841,82 @@ def test_each_shipped_playbook_resumes_an_orphaned_review(name: str) -> None:
     book = parse_playbook(text, path=Path("PLAYBOOK.toml"))
     rules = [rule for rule in book.rules if rule.on == "aux.orphaned"]
     assert [(rule.then, rule.verdict) for rule in rules] == [("resume", None)], rules
+
+
+# ---------------------- §40 (H-061): the playbook without `aux.orphaned` warns
+
+AUX_ORPHANED = '\n[[rule]]\non = "aux.orphaned"\nthen = "resume"\n'
+BUILDER_ORPHANED = '\n[[rule]]\non = "builder.orphaned"\nthen = "resume"\n'
+
+
+def warn_lines(out: str) -> list[str]:
+    return [text for text in out.splitlines() if text.startswith("WARN ")]
+
+
+@pytest.mark.parametrize(
+    ("added", "warned", "silent"),
+    [
+        # PLAYBOOK has rules on builder.done and aux.done and none on either orphaned.
+        (AUX_ORPHANED, "builder", "aux"),
+        (BUILDER_ORPHANED, "aux", "builder"),
+    ],
+)
+def test_a_done_rule_without_its_orphaned_rule_warns_and_passes_six_of_six(
+    tmp_path: Path, repo: Path, added: str, warned: str, silent: str
+) -> None:
+    """§40: `kit check` warns, and does not refuse, on a playbook with a rule on
+    `<role>.done` and none on `<role>.orphaned`; the playbook line still passes."""
+    kit = write_tree(tmp_path / "k", {**good_kit(), "PLAYBOOK.toml": PLAYBOOK + added})
+    code, out, err = run_check(kit, repo)
+    assert code == 0, out + err
+    for name in CHECK_NAMES:
+        assert line(out, name).startswith(f"PASS {name}: "), out
+    assert "kit check: pass (6 of 6 checks)" in strip_paths(out)
+    warns = warn_lines(out)
+    assert len(warns) == 1, out
+    assert warns[0].startswith("WARN playbook: "), out
+    assert f"{warned}.done" in strip_paths(warns[0]), out
+    assert f"{warned}.orphaned" in strip_paths(warns[0]), out
+    assert f"{silent}." not in strip_paths(warns[0]), out
+
+
+def test_both_done_rules_without_orphaned_rules_warn_twice(tmp_path: Path, repo: Path) -> None:
+    kit = write_tree(tmp_path / "k", good_kit())
+    code, out, err = run_check(kit, repo)
+    assert code == 0, out + err
+    assert "kit check: pass (6 of 6 checks)" in strip_paths(out)
+    warns = warn_lines(out)
+    assert len(warns) == 2, out
+    assert "aux.orphaned" in strip_paths(" ".join(warns)), out
+    assert "builder.orphaned" in strip_paths(" ".join(warns)), out
+    answer = json.loads(run_check(kit, repo, "--json")[1])
+    assert answer["ok"] is True
+    assert answer["warnings"] == [text.removeprefix("WARN playbook: ") for text in warns]
+
+
+def test_a_playbook_with_both_orphaned_rules_warns_nothing(tmp_path: Path, repo: Path) -> None:
+    book = PLAYBOOK + AUX_ORPHANED + BUILDER_ORPHANED
+    kit = write_tree(tmp_path / "k", {**good_kit(), "PLAYBOOK.toml": book})
+    code, out, err = run_check(kit, repo)
+    assert code == 0, out + err
+    assert warn_lines(out) == [], out
+    assert json.loads(run_check(kit, repo, "--json")[1])["warnings"] == []
+
+
+def test_the_repos_playbook_in_force_warns_too(tmp_path: Path, repo: Path) -> None:
+    """A kit that carries no playbook is judged against the repo's, which warns."""
+    kit = write_tree(tmp_path / "k", {"meta/BUILDER-11-PROMPT.md": BRIEF})
+    code, out, _ = run_check(kit, repo)
+    assert code == 0, out
+    assert len(warn_lines(out)) == 2, out
+
+
+@pytest.mark.parametrize(
+    "name", ["PLAYBOOK-missions.toml", "PLAYBOOK-runs.toml", "this repository's PLAYBOOK.toml"]
+)
+def test_each_shipped_playbook_warns_nothing(name: str) -> None:
+    if name.startswith("this"):
+        text = (ROOT / "PLAYBOOK.toml").read_text(encoding="utf-8")
+    else:
+        text = template(name)
+    assert orphaned_rule_warnings(parse_playbook(text, path=Path("PLAYBOOK.toml"))) == []

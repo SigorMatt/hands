@@ -60,6 +60,7 @@ from hands.playbook import (
     consult_prompt,
     load_playbook,
     next_milestone,
+    orphaned_rule_warnings,
     parse_playbook,
     playbook_path,
     render,
@@ -6301,3 +6302,66 @@ def test_a_phone_mode_template_stops_on_a_blocked_verdict(
     assert recorder.enqueued == [] and recorder.sent == []
     assert engine.state.paused
     assert "Mission 17 blocked" in strip_paths(engine.state.stop_reason or "")
+
+
+# ---------------------- §40 (H-061): the playbook without `aux.orphaned` warns
+
+AUX_ORPHANED = '\n[[rule]]\non = "aux.orphaned"\nthen = "resume"\n'
+
+
+def _warnings_logged(caplog: pytest.LogCaptureFixture) -> list[str]:
+    return [
+        record.getMessage()
+        for record in caplog.records
+        if record.name == "hands.playbook" and record.levelname == "WARNING"
+    ]
+
+
+def test_the_engine_logs_a_warning_at_load_for_aux_done_without_aux_orphaned(
+    tmp_home: Path, workdir: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """§40: §10's example has `aux.done` rules and `builder.orphaned`, and no
+    `aux.orphaned`; the engine loads it, logs one warning, and does not stop."""
+    engine, recorder = engine_for(tmp_home, workdir)
+    with caplog.at_level("WARNING", logger="hands.playbook"):
+        run(engine.on_job_start(finished(engine.spool, origin="cli")))
+    assert engine.playbook is not None and engine.load_error is None
+    assert engine.pipeline()["paused"] is False
+    assert recorder.notified == []
+    logged = _warnings_logged(caplog)
+    assert len(logged) == 1, logged
+    assert "aux.done" in strip_paths(logged[0]), logged
+    assert "aux.orphaned" in strip_paths(logged[0]), logged
+    assert logged[0] == "playbook: " + orphaned_rule_warnings(engine.playbook)[0]
+
+
+def test_the_engine_logs_a_warning_at_load_for_builder_done_without_builder_orphaned(
+    tmp_home: Path, workdir: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    body = EXAMPLE.replace('on = "builder.orphaned"', 'on = "aux.orphaned"')
+    assert body != EXAMPLE
+    engine, _ = engine_for(tmp_home, workdir, body=body)
+    with caplog.at_level("WARNING", logger="hands.playbook"):
+        run(engine.on_job_start(finished(engine.spool, origin="cli")))
+    assert engine.playbook is not None and engine.pipeline()["paused"] is False
+    logged = _warnings_logged(caplog)
+    assert len(logged) == 1, logged
+    assert "builder.done" in strip_paths(logged[0]), logged
+    assert "builder.orphaned" in strip_paths(logged[0]), logged
+
+
+def test_the_engine_logs_no_warning_when_both_orphaned_rules_are_there(
+    tmp_home: Path, workdir: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    engine, _ = engine_for(tmp_home, workdir, body=EXAMPLE + AUX_ORPHANED)
+    with caplog.at_level("WARNING", logger="hands.playbook"):
+        run(engine.on_job_start(finished(engine.spool, origin="cli")))
+    assert engine.playbook is not None
+    assert orphaned_rule_warnings(engine.playbook) == []
+    assert _warnings_logged(caplog) == []
+
+
+def test_a_playbook_without_done_rules_warns_nothing(tmp_path: Path) -> None:
+    """The warning is for a `<role>.done` rule without its `<role>.orphaned` one only."""
+    body = 'version = 1\n\n[[rule]]\non = "monitor.tripwire"\nthen = "stop"\n'
+    assert orphaned_rule_warnings(parse_playbook(body, path=tmp_path / "PLAYBOOK.toml")) == []

@@ -592,6 +592,28 @@ class Playbook:
         return [rule for rule in self.rules if rule.on == event]
 
 
+#: §40 (H-061): each `<role>.done` whose playbook should also say what its
+#: `<role>.orphaned` does, and what that job is, for the warning's sentence.
+ORPHANED_PAIRS: tuple[tuple[str, str, str], ...] = (
+    ("builder.done", "builder.orphaned", "builder job"),
+    ("aux.done", "aux.orphaned", "review"),
+)
+
+
+def orphaned_rule_warnings(book: Playbook) -> list[str]:
+    """§40 (H-061): one sentence per `<role>.done` the playbook has a rule on and
+    whose `<role>.orphaned` it has none on. A warning, never a refusal: `hands kit
+    check` prints each as a `WARN playbook:` line and the engine logs each at load
+    (`PlaybookEngine._load`); both read this one function."""
+    events = {rule.on for rule in book.rules}
+    return [
+        f"{book.path} has a rule on {done} and none on {orphaned}: a {what} a daemon "
+        f"stop orphans would stop the pipeline rather than resume (DESIGN §39, §40, H-061)"
+        for done, orphaned, what in ORPHANED_PAIRS
+        if done in events and orphaned not in events
+    ]
+
+
 def playbook_path(config: Config) -> Path:
     """§10, §13: `<roles.builder.cwd>/<playbook.path>`."""
     return config.role("builder").cwd / config.playbook.path
@@ -1600,6 +1622,8 @@ class PlaybookEngine:
         self.load_error = None
         self.playbook = book
         if book is not None:
+            for warning in orphaned_rule_warnings(book):  # §40 (H-061): warns, loads
+                log.warning("playbook: %s", warning)
             self._anchor_series(book)
         if book is not None and book.kickoff is not None:
             kickoff = book.kickoff.strip()

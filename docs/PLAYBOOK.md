@@ -212,6 +212,16 @@ playbook that no longer loads stops the pipeline with the loader's reason.
 crash ended; the shipped playbooks map it to `resume`, which re-sends the
 review's prompt to a fresh context, bounded by `max_resumes`.
 
+A playbook with a rule on `aux.done` and none on `aux.orphaned` — or a rule on
+`builder.done` and none on `builder.orphaned` — still loads, and `hands kit
+check` still passes its `playbook` line, but each such pairing is warned of
+(DESIGN §40, H-061): `kit check` prints a `WARN playbook:` line after its
+checks (and `--json` lists it under `warnings`), and handsd logs a warning
+each time the engine loads the file. With no rule the orphaned event stops
+the pipeline and tells you rather than resuming the job. hands never edits
+another project's playbook; add `on = "aux.orphaned"` / `then = "resume"`
+(or the builder's) at that project's next switch point.
+
 `driver.done`, `driver.failed`, `driver.killed`, `driver.orphaned` and
 `driver.limited` (DESIGN §27, §28) are a consultation's driver job ending that
 way. Every one of them but a resolved `driver.done` is a stop the engine

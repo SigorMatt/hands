@@ -124,6 +124,7 @@ from hands.playbook import (
     PlaybookConfigError,
     PlaybookError,
     check_series_roles,
+    orphaned_rule_warnings,
     parse_playbook,
 )
 
@@ -297,6 +298,9 @@ class Report:
     kit_md_note: str = ""
     #: §36: the sha256 of the zip bytes the checks read (None for a directory).
     sha256: str | None = None
+    #: §40 (H-061): the playbook in force's warnings; printed `WARN playbook: …`,
+    #: and none of them fails a check.
+    warnings: list[str] = field(default_factory=list)
 
     @property
     def ok(self) -> bool:
@@ -316,6 +320,7 @@ class Report:
             "commit_message": self.commit_message,
             "apply_prompt": self.apply_prompt,
             "kit_md": self.kit_md,
+            "warnings": self.warnings,
         }
 
 
@@ -1336,6 +1341,7 @@ def check_kit(
         kit_md=plan.kit_md,
         kit_md_note=kit_md_note(plan),
         sha256=kit.sha256,
+        warnings=orphaned_rule_warnings(book) if book is not None else [],
     )
     if report.ok:
         report.apply_prompt = plan.prompt
@@ -1380,6 +1386,8 @@ def run(
         return 0 if report.ok else 1
     for check in report.checks:
         print(check.line(), file=out)
+    for warning in report.warnings:
+        print(f"WARN playbook: {warning}", file=out)
     failed = [check for check in report.checks if not check.ok]
     if failed:
         print(report.kit_md_note, file=out)
