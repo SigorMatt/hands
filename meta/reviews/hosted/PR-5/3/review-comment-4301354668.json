@@ -1,0 +1,69 @@
+{
+  "url": "https://api.github.com/repos/SigorMatt/hands/pulls/comments/4301354668",
+  "pull_request_review_id": 5556157142,
+  "id": 4301354668,
+  "node_id": "PRRC_kwDOUVwTn88AAAABAGF2rA",
+  "diff_hunk": "@@ -700,6 +708,28 @@ async def _run(self, role: str, job_id: str) -> None:\n             self._running[role] = None\n             await self._announce()\n \n+    def wants_journal_sentence(self, job: Job) -> bool:\n+        \"\"\"§39 (H-060): is `job` on the resume path — an `answer` from the phone or a\n+        cli send (`keep` or `clear`) to the builder — which is told to commit a dirty\n+        `meta/journal.md` first? A kickoff (`kickoffs`) is not.\"\"\"\n+        return (\n+            job.role == \"builder\"\n+            and (job.origin == \"cli\" or is_builder_answer(job))\n+            and job.id not in self.kickoffs\n+        )",
+  "path": "src/hands/daemon.py",
+  "commit_id": "53b62cc3cc42af9da538ad58d6edb222dca2369b",
+  "original_commit_id": "a4e3da66e119678523a33ee5180462027a5b12d8",
+  "user": {
+    "login": "qodo-code-review[bot]",
+    "id": 151058649,
+    "node_id": "BOT_kgDOCQD42Q",
+    "avatar_url": "https://avatars.githubusercontent.com/in/484649?v=4",
+    "gravatar_id": "",
+    "url": "https://api.github.com/users/qodo-code-review%5Bbot%5D",
+    "html_url": "https://github.com/apps/qodo-code-review",
+    "followers_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/followers",
+    "following_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/following{/other_user}",
+    "gists_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/gists{/gist_id}",
+    "starred_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/starred{/owner}{/repo}",
+    "subscriptions_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/subscriptions",
+    "organizations_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/orgs",
+    "repos_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/repos",
+    "events_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/events{/privacy}",
+    "received_events_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/received_events",
+    "type": "Bot",
+    "user_view_type": "public",
+    "site_admin": false
+  },
+  "body": "<img src=\"https://img.shields.io/badge/Medium-634FD1?style=flat-square\" height=\"20px\" alt=\"Remediation recommended\">\n\n9\\. A restarted kickoff no longer resets the consult count <code>🐞 Bug</code> <code>≡ Correctness</code>\n\n<pre>\n<b><i>wants_journal_sentence</i></b> leaves out kickoffs only through the in-memory <b><i>Daemon.kickoffs</i></b> set. When\na <b><i>hands go</i></b> job (origin <b><i>cli</i></b>) is still held or queued across a daemon restart and the journal is\ndirty, the runner rewrites the stored <b><i>prompt</i></b> to <b><i>&lt;sentence&gt;\\n\\n&lt;kickoff&gt;</i></b>. <b><i>consults_used</i></b>\nrecognises a kickoff by <b><i>record.prompt.strip() in kickoffs</i></b>, so that job no longer resets the\nconsultation count, and the pipeline can stop early on <b><i>max_consults</i></b>.\n</pre>\n\n\n<details>\n<summary><strong>Agent Prompt</strong></summary>\n\n```\n## Issue description\nA kickoff is recognised only through an in-memory set, so after a restart it gets the journal sentence. That rewrites its recorded prompt, and consults_used stops treating it as a kickoff.\n\n## Fix Focus Areas\n- src/hands/daemon.py[711-719]\n- src/hands/api.py[375-379]\n\n## Recommended Fix\nDecide kickoff status from persisted data. Either compare `job.prompt.strip()` with the playbook's kickoff values (`PipelineState.kickoffs` plus the loaded book's), or store a marker on the job record at enqueue, and check that in `wants_journal_sentence` instead of `self.kickoffs`.\n```\n\n<code>ⓘ Copy this prompt and use it to remediate the issue with your preferred AI generation tools</code>\n</details>\n\n[Dismiss ↗](https://app.qodo.ai/findings/5fe0d239-437d-4a25-ad4e-26b337c2d95c?action=dismiss&origin=git) | [View ↗](https://app.qodo.ai/findings/5fe0d239-437d-4a25-ad4e-26b337c2d95c)",
+  "created_at": "2026-10-17T04:25:57Z",
+  "updated_at": "2026-10-17T04:25:57Z",
+  "html_url": "https://github.com/SigorMatt/hands/pull/5#discussion_r4301354668",
+  "pull_request_url": "https://api.github.com/repos/SigorMatt/hands/pulls/5",
+  "_links": {
+    "self": {
+      "href": "https://api.github.com/repos/SigorMatt/hands/pulls/comments/4301354668"
+    },
+    "html": {
+      "href": "https://github.com/SigorMatt/hands/pull/5#discussion_r4301354668"
+    },
+    "pull_request": {
+      "href": "https://api.github.com/repos/SigorMatt/hands/pulls/5"
+    }
+  },
+  "reactions": {
+    "url": "https://api.github.com/repos/SigorMatt/hands/pulls/comments/4301354668/reactions",
+    "total_count": 0,
+    "+1": 0,
+    "-1": 0,
+    "laugh": 0,
+    "hooray": 0,
+    "confused": 0,
+    "heart": 0,
+    "rocket": 0,
+    "eyes": 0
+  },
+  "start_line": 713,
+  "original_start_line": 715,
+  "start_side": "RIGHT",
+  "line": 717,
+  "original_line": 719,
+  "side": "RIGHT",
+  "author_association": "NONE",
+  "original_position": 44,
+  "position": 35,
+  "subject_type": "line"
+}
