@@ -72,7 +72,25 @@ item names the mission it is scheduled for; unscheduled items say so.
 7. Docs: restart kills every job; one hook vs two; stop pauses, apply+go
    un-pauses; the `[server]` fallback; QODO-EXTRACTION cited.
 
-## Mission 24 (M8a, scheduled 2026-10-16, kit issued) — the harness probe and the seam's shape, the day's findings, operations. Spec: DESIGN v3.23 §40.
+## Mission 25 (closer for review 24, scheduled 2026-10-17, kit issued) — continues mission-24, PR #5. Spec: DESIGN v3.24 §41.
+
+1. Blocker 1 and should-fix 1: the capture script records every timeout and
+   redacts before it cuts; hanging-fake and straddling-secret tests.
+2. Should-fix 2: the staged kit's name checks pinned (`..`, symlink, FIFO,
+   directory, missing), `O_NONBLOCK` + `fstat`, the daemon removes a refused
+   `.part`.
+3. Should-fix 6, 7, 8: the `task_killed` key's session half and eviction;
+   the ambiguous-prefix refusal with a backslash; the prompt cap counts the
+   journal sentence.
+4. Should-fix 4, 5: the WARN on a failing `playbook` line pinned; "stale"
+   defined for the protocol's worktree cleanup and both commands pinned.
+5. Should-fix 3: the probe record — Codex's VERDICT cell `partial`, the
+   verbatim claim qualified, OpenCode/dsh rows filled where a sign-in now
+   exists, one Codex approval-policy row attempted.
+6. Adopted: a cli send equal to the kickoff line is a kickoff (hosted
+   finding 3). The AppArmor host decision is the human's, outside hands.
+
+## Mission 24 — BUILT 2026-10-17 (PR #5; review 24: blockers=1, should-fix=8; the PR stays open for the closer). Spec: DESIGN v3.23 §40.
 
 1. U1 the probe on the laptop's three harnesses (Codex CLI 0.163.0, OpenCode
    1.19.2, dsh 0.2.0-rc.2; Node 22 by nvm, PATH prefix on every command),
@@ -97,9 +115,9 @@ item names the mission it is scheduled for; unscheduled items say so.
    proxy are the checklist; its four integration tiers name the level a
    harness must reach (their Tier 3). Cited, never imported.
 
-## Mission 25 (M8b) — DESIGN §41 from docs/HARNESS-PROBE.md: the seam (per-harness runner or hands as ACP client), the implementations the probe approved, credential profiles (`[profiles.<n>]`, `[roles.<r>] profiles`, the `quota` end with the reset time, resume from the checkpoint on the first non-exhausted profile, doctor rows, the profile named in `status` and the start notification; the quota fixture from the laptop's first real stop), the polish round, the harness-neutral guard and transcript reader, the templates' harness-neutral wording. Builder and aux may run on the second harness; driver and architect stay on Claude until a review finds no hole. Then a closer if needed.
+## Mission 26 (M8b; was 25 before the closer) — DESIGN §42 from docs/HARNESS-PROBE.md and the human's AppArmor decision: the seam (per-harness runner or hands as ACP client), the implementations the probe approved, credential profiles (`[profiles.<n>]`, `[roles.<r>] profiles`, the `quota` end with the reset time, resume from the checkpoint on the first non-exhausted profile, doctor rows, the profile named in `status` and the start notification; the quota fixture from the laptop's first real stop), the polish round, the harness-neutral guard and transcript reader, the templates' harness-neutral wording. Builder and aux may run on the second harness; driver and architect stay on Claude until a review finds no hole. Then a closer if needed.
 
-## Mission 26 (M9, "a machine is replaceable") — `hands export` / `hands import`, `hands upgrade [--accept-builder]`, `hands project refresh <p>`, the spool inventory, ntfy by MagicDNS name, docs/OPERATIONS.md updated; gate: the VM rehearsal. Then M5b (discotrade-v2 on the second harness), M6, M7.
+## Mission 27 (M9, "a machine is replaceable"; was 26) — `hands export` / `hands import`, `hands upgrade [--accept-builder]`, `hands project refresh <p>`, the spool inventory, ntfy by MagicDNS name, docs/OPERATIONS.md updated; gate: the VM rehearsal. Then M5b (discotrade-v2 on the second harness), M6, M7.
 
 ## Mission 22 — DONE 2026-10-15 (review 22: blockers=0, should-fix=12; PR #3 merged by the review, f11cfb1; installed 20:23; M4d closed). Spec: DESIGN v3.21 §38. Items 1–8 below plus: H-037 the buttons carry the token (FIRST; live on the self-hosted server since 2026-10-14, 403 on every button); review 21 should-fix 1–3 (H-049 the revert step for added files, H-050 the reviewer's schedule, the `-I` hook text in INTEGRATION); the human-supplied unit shape in the brief template and the protocol.
 

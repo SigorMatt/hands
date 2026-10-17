@@ -177,15 +177,22 @@ then an install (`uv tool install --force`) and a driver-kit refresh.
   de-duplicated (H-062); the transcript path under `CLAUDE_CONFIG_DIR`
   (H-063); review 23's should-fix; the kit-check warning for H-061; the
   templates' refusal path, worktree cleanup, skip list and gate rule
-  (H-066..H-069); docs/OPERATIONS.md and docs/RELATED.md. Mission 25
-  (+ closer) = M8b (DESIGN §41, written from the probe record): the seam,
+  (H-066..H-069); docs/OPERATIONS.md and docs/RELATED.md — BUILT 2026-10-17
+  on branch mission-24, PR #5; review 24: blockers=1 (the capture script's
+  false timeout line), should-fix=8; the probe found Codex's confining
+  sandboxes do not start on this laptop (AppArmor's unprivileged-userns
+  restriction blocks its bundled bubblewrap) and that its verdict line can
+  be printed while the task failed — the host decision is the human's.
+  Mission 25 (closer, DESIGN §41): review 24, the probe record corrected and
+  its unavailable rows filled where a sign-in exists. Mission 26
+  (+ closer) = M8b (DESIGN §42, written from the probe record): the seam,
   the implementations the probe approved, the credential profiles with the
   `quota` classification and resume on the next profile, doctor rows per
   harness and per profile, the polish round. Gate: one hands mission built
   by a builder on the second backend and reviewed clean, and one quota
   stop resumed on the next profile.
 - **M9 A machine is replaceable** — decided 2026-10-16 (DESIGN §40), mission
-  26, before M5b: `hands export` (everything but secrets, env tables
+  27 (renumbered by the mission-25 closer), before M5b: `hands export` (everything but secrets, env tables
   redacted by name, a printed secrets checklist) and `hands import` (through
   the `project add` path, Purpose and Parameters intact, no daemon until
   `hands doctor` is green); `hands upgrade [--accept-builder]` (the release

@@ -1,0 +1,69 @@
+{
+  "url": "https://api.github.com/repos/SigorMatt/hands/pulls/comments/4301354637",
+  "pull_request_review_id": 5556157142,
+  "id": 4301354637,
+  "node_id": "PRRC_kwDOUVwTn88AAAABAGF2jQ",
+  "diff_hunk": "@@ -1,49 +1,48 @@\n-# plan — mission 23 (review 22, the four findings, the hosted review read mechanically)\n+# plan — mission 24 (M8a: the harness probe and the seam's shape; the day's findings; operations)\n \n-Source: meta/BUILDER-23-PROMPT.md, DESIGN v3.22 §39 (with §24, §27, §31,\n-§35, §38), meta/reviews/REVIEW-22.md, docs/QODO-EXTRACTION.md. Units run in\n-order; each ends with a commit and a push to `mission-23`; the last unit\n-opens the pull request to `main` (§35), reads the hosted review with `hands\n-hosted-review` and fixes its findings. `[x]` = done and pushed, `[b]` =\n-blocked (two failures).\n+Source: meta/BUILDER-24-PROMPT.md, DESIGN v3.23 §40 (with §2, §23, §33,\n+§35, §38, §39), meta/reviews/REVIEW-23.md, docs/RELATED.md,\n+docs/QODO-EXTRACTION.md. Units run in order; each ends with a commit and a\n+push to `mission-24`; the last unit opens the pull request to `main` (§35),\n+reads the hosted review with `hands hosted-review` and fixes its findings.\n+`[x]` = done and pushed, `[b]` = blocked (two failures), `[b] refused` = a\n+sub-agent refused.\n \n-Base of the mission: 23eff6c (`plan: mission 23 kit (DESIGN v3.22)`).\n+Base of the mission: de407f2 (`plan: mission 24 kit (DESIGN v3.23)`).\n \n-- [x] U0 Plan, branch and findings (`plan:`) (this commit) — this file, meta/CHECKPOINT.md,\n-      meta/journal.md, meta/findings/FINDINGS.md (H-055..H-060 filed;\n-      H-051..H-054 decided)\n-- [x] U1 The who watcher 9c5d729 (should-fix 1, 2) — src/hands/who.py, tests\n-- [x] U2 Orphans, refusals and ids bcc3d53 (should-fix 3, 4; H-057, H-058, H-059) —\n-      src/hands/daemon.py, src/hands/playbook.py, src/hands/phone.py,\n-      src/hands/notify.py, PLAYBOOK.toml, templates/PLAYBOOK-missions.toml,\n-      templates/PLAYBOOK-runs.toml, tests\n-- [x] U3 e36d558 The engine's small fixes (should-fix 5, 7; H-060) —\n-      src/hands/playbook.py, src/hands/api.py, tests\n-- [x] U4 0c6d725 `progress` and the README (should-fix 6) — src/hands/phone.py,\n-      README.md, tests\n-- [x] U5 59678ee `hands hosted-review <pr>` — src/hands/cli.py, src/hands/hosted.py\n-      (new), tests\n-- [x] U6 dc9698e The protocol and the brief template (should-fix 8; H-055) —\n-      templates/REVIEW-PROTOCOL.md, meta/REVIEW-PROTOCOL.md,\n-      templates/BUILDER-N-PROMPT.md, docs/ARCHITECT-HANDBOOK.md §9, tests\n-- [x] U7 2b4df10 H-051 and H-052 (should-fix 10; HF-002) — src/hands/playbook.py,\n-      driver/hooks/bash_guard.py, architect/settings.json, architect/CLAUDE.md,\n-      src/hands/cli.py, src/hands/project.py, meta/findings/FINDINGS.md, tests\n-- [x] U8 a09b85f `project add` after a failed clone; the role's rulings\n-      (should-fix 9, 11) — src/hands/project.py, architect/CLAUDE.md, tests\n-- [x] U9 515b736 Hooks and docs (should-fix 12; H-053, H-054, H-056) —\n-      .claude/settings.json, docs/INTEGRATION.md, docs/ARCHITECT-HANDBOOK.md,\n+- [x] U0 Plan, branch and findings (`plan:`) (this commit) — this file,\n+      meta/CHECKPOINT.md, meta/journal.md, meta/findings/FINDINGS.md\n+      (H-062..H-069 filed; H-064, H-065 decided; H-061 decided; H-051 Status corrected)",
+  "path": "meta/plan.md",
+  "commit_id": "53b62cc3cc42af9da538ad58d6edb222dca2369b",
+  "original_commit_id": "a4e3da66e119678523a33ee5180462027a5b12d8",
+  "user": {
+    "login": "qodo-code-review[bot]",
+    "id": 151058649,
+    "node_id": "BOT_kgDOCQD42Q",
+    "avatar_url": "https://avatars.githubusercontent.com/in/484649?v=4",
+    "gravatar_id": "",
+    "url": "https://api.github.com/users/qodo-code-review%5Bbot%5D",
+    "html_url": "https://github.com/apps/qodo-code-review",
+    "followers_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/followers",
+    "following_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/following{/other_user}",
+    "gists_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/gists{/gist_id}",
+    "starred_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/starred{/owner}{/repo}",
+    "subscriptions_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/subscriptions",
+    "organizations_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/orgs",
+    "repos_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/repos",
+    "events_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/events{/privacy}",
+    "received_events_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/received_events",
+    "type": "Bot",
+    "user_view_type": "public",
+    "site_admin": false
+  },
+  "body": "<img src=\"https://img.shields.io/badge/Medium-634FD1?style=flat-square\" height=\"20px\" alt=\"Remediation recommended\">\n\n3\\. Sub-agents alter protected metadata <code>📘 Rule violation</code> <code>§ Compliance</code>\n\n<pre>\n<b><i>meta/plan.md</i></b> and <b><i>meta/CHECKPOINT.md</i></b> are changed in the U0 plan unit even though the mission&#x27;s\nstanding constraint forbids sub-agents from editing them. The protected metadata therefore has a\nsub-agent-authored change in this PR, contrary to the repository workflow requirement.\n</pre>\n\n\n<details>\n<summary><strong>Agent Prompt</strong></summary>\n\n```\n## Issue description\nThe PR changes `meta/plan.md` and `meta/CHECKPOINT.md` in the unit governed by the standing rule that sub-agents must not edit those files.\n\n## Fix Focus Areas\n- meta/plan.md[13-15]\n- meta/CHECKPOINT.md[3-10]\n\n## Recommended Fix\nRemove sub-agent-authored edits to `meta/plan.md` and `meta/CHECKPOINT.md` from the sub-agent unit commit, and have the orchestrator or authorized maintainer apply any required plan and checkpoint updates separately.\n```\n\n<code>ⓘ Copy this prompt and use it to remediate the issue with your preferred AI generation tools</code>\n</details>\n\n[Dismiss ↗](https://app.qodo.ai/findings/7e135550-1599-451f-a8f6-1158430c1133?action=dismiss&origin=git) | [View ↗](https://app.qodo.ai/findings/7e135550-1599-451f-a8f6-1158430c1133)",
+  "created_at": "2026-10-17T04:25:56Z",
+  "updated_at": "2026-10-17T04:25:57Z",
+  "html_url": "https://github.com/SigorMatt/hands/pull/5#discussion_r4301354637",
+  "pull_request_url": "https://api.github.com/repos/SigorMatt/hands/pulls/5",
+  "_links": {
+    "self": {
+      "href": "https://api.github.com/repos/SigorMatt/hands/pulls/comments/4301354637"
+    },
+    "html": {
+      "href": "https://github.com/SigorMatt/hands/pull/5#discussion_r4301354637"
+    },
+    "pull_request": {
+      "href": "https://api.github.com/repos/SigorMatt/hands/pulls/5"
+    }
+  },
+  "reactions": {
+    "url": "https://api.github.com/repos/SigorMatt/hands/pulls/comments/4301354637/reactions",
+    "total_count": 0,
+    "+1": 0,
+    "-1": 0,
+    "laugh": 0,
+    "hooray": 0,
+    "confused": 0,
+    "heart": 0,
+    "rocket": 0,
+    "eyes": 0
+  },
+  "start_line": 13,
+  "original_start_line": 13,
+  "start_side": "RIGHT",
+  "line": 15,
+  "original_line": 15,
+  "side": "RIGHT",
+  "author_association": "NONE",
+  "original_position": 47,
+  "position": 47,
+  "subject_type": "line"
+}

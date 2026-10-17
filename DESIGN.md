@@ -1,4 +1,4 @@
-# hands — DESIGN v3.23
+# hands — DESIGN v3.24
 
 Machinery that replaces the human relay between the planning brain and the two
 Claude Code roles (builder, aux) on the Ubuntu laptop, and that keeps a series
@@ -2422,3 +2422,98 @@ kit-check warning on a playbook without `aux.orphaned`, `hands go` and
 `hands kit apply` in §18, docs/RELATED.md and docs/OPERATIONS.md cited.
 docs/RELATED.md and docs/HARNESS-PROBE.md are new. The instruction paste is
 not due: docs/ARCHITECT-INSTRUCTION.md does not change in this mission.
+
+## 41. Changes from v3.23 (mission 24 review; the closer; what the probe found)
+
+Mission 24 ran on branch `mission-24` and opened PR #5; its hosted review
+posted nine findings, seven fixed in the pull request and two dismissed,
+every disposition upheld by the cold review. REVIEW-24 (`reviewed:
+53b62cc`) found one blocker and eight should-fix items, so the pull request
+stays open and mission 25 is a closer: it continues `mission-24`, closes
+the nine items, corrects the probe record, and leaves the branch for review
+25 to merge. M8b moves to mission 26 and M9 to mission 27; nothing else in
+the roadmap's order changes.
+
+**The blocker, in the capture script.** `scripts/capture-quota-stop.sh`
+exists to record the first real usage-limit stop as the `quota`
+classifier's fixture (§40), so what it writes must be true. The review
+found that `find` and the python read of the job record run under the
+timeout bound but not through the path that writes `(failed: timed out
+after <n>s: <command>)`, so a timeout there falls through to "(no job
+record under …)" or "(no record, or it names no transcript)" — a false
+statement in a file meant to be sent to someone. Every bounded command is
+routed through the one path that records a timeout, the `-k 5` and the
+timeouts on `find` and on the record read are pinned by tests with a
+hanging fake, and (should-fix 1) redaction happens before any line is cut:
+the redactor runs on the whole text first and cuts afterwards, so a secret
+straddling the 4000-byte mark is removed whole. Tests plant a secret across
+byte 4000, a URL-encoded form of a secret, and the by-value read of the
+notification password.
+
+**`hands kit apply`'s staging (should-fix 2).** The daemon-side checks on a
+staged kit name are pinned: a name with `..`, a symlink, a FIFO, a directory
+and a missing name are each refused as a `KitError`, never an internal
+error; the file is opened with `O_NOFOLLOW | O_NONBLOCK` and `fstat`ed
+before it is read, so a FIFO cannot hold a worker thread; and the daemon
+removes a `.part` file it refuses, so a caller other than the CLI leaves
+nothing behind.
+
+**The probe record, corrected (should-fix 3).** Codex's VERDICT cell is
+`partial: printed while the task failed` — under `workspace-write` the
+model printed `VERDICT: probe ok` after the write it was asked for had
+failed, with the failure in its second line. That is the observation §42
+needs most: a harness's verdict line is a claim like any other, and a role
+on such a harness is graded by the review and the pull-request checks, not
+by its verdict. The record's opening claim reads "verbatim except where
+marked `…`". If OpenCode has a default model configured or dsh is signed in
+when the closer runs, the unit fills those harnesses' rows by the same
+procedure as §40; otherwise the rows stay `unavailable`, which is not a
+failure of the unit. The unit also tries one row the probe left as a gap
+when it costs one command: `codex exec` under `-c approval_policy="on-request"`
+with `--json`, recording whether an approval event appears in the stream
+and what a headless run does with it.
+
+**What the probe established, as facts for §42.** On this laptop Codex's
+confining sandboxes (`read-only`, `workspace-write`) do not start: the
+kernel's `apparmor_restrict_unprivileged_userns=1` (the distribution's
+default) blocks Codex's bundled bubblewrap, and `codex exec` asks nothing in
+any mode. The only mode that runs the task is `danger-full-access`, in which
+a write outside the working directory and `curl` both ran unasked. So
+Codex's enforceable permission is `no` as the machine stands, and the
+decision is the human's, outside hands: an AppArmor profile that allows
+Codex's bubblewrap (narrow), or the machine-wide sysctl (broad). §42 is
+written for whichever is chosen, and until a confining mode runs, a Codex
+role's guard story is hands' own — the ACP route, if the adapter
+(`@zed-industries/codex-acp`, 0.16.0 on the registry, not installed)
+routes commands as permission requests — or no Codex role at all. One-shot
+and resume are `yes` (`codex exec --json`, `codex exec resume <id>`, the
+session store under `~/.codex/sessions`); the stream is `partial` (a
+command the sandbox failed to start leaves no `command_execution` item,
+only the agent's prose); the limit output is known only from the binary's
+strings (`usage_limit_reached`, `Try again at`, `reset_after_seconds`)
+until a real stop is captured. OpenCode and dsh are unobserved.
+
+**Smaller rulings.** The kit-check warning for a done rule without its
+orphaned rule prints whether or not the `playbook` line passes, pinned by
+a test (should-fix 4). "Stale", for the protocol's worktree cleanup, is
+defined: a worktree registered under the clone whose path no longer
+exists, or a review worktree under `/tmp` that is not this review's and is
+older than the current aux job's start; a worktree of a review running
+concurrently or one a human made is not stale, and both commands — the
+opening `git worktree remove --force` of stale ones and the closing `git
+worktree prune` — are pinned where they occur (should-fix 5). The
+`task_killed` key's session half is pinned by a test in which two sessions
+report the same task id and each raises once, and the memory's eviction is
+tested (should-fix 6). The ambiguous-prefix refusal's `str` quoting is
+pinned by a typed text containing a backslash (should-fix 7). The prompt
+size cap counts the dispatch-time journal sentence: a prompt at the cap
+with a dirty journal is refused, pinned (should-fix 8). The hosted review's
+finding 3 was fixed with a design-silent choice the design now adopts: a
+cli send whose text equals the playbook's kickoff line is a kickoff for the
+purposes of the journal sentence and the consult count, as the phone's `go`
+is.
+
+**Documentation.** docs/OPERATIONS.md's capture section says what the
+script records on a timeout and that redaction precedes cutting; the
+handbook's §7 carries the definition of a stale worktree. The instruction
+paste is not due.
