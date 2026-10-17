@@ -25,6 +25,7 @@ from hands.config import Config, load_config, parse_config
 from hands.daemon import Daemon
 from hands.monitor import (
     MAX_CMDLINE,
+    TASK_MEMORY,
     BlockBuffer,
     MonitorSupervisor,
     TaskKillWatch,
@@ -617,6 +618,67 @@ def test_task_killed_is_raised_once_per_task_of_a_transcript_across_its_scans(
         assert [e.payload["task_id"] for e in events] == expected
 
     drive(body)
+
+
+def in_session(spool: Spool, session_id: str, *, role: str = "builder") -> Job:
+    """A running job whose stream is the transcript of `session_id`."""
+    job = spool.create_job(role=role, context="clear", prompt="p", origin="cli")
+    return spool.transition(job, "running", pid=os.getpid(), session_id=session_id)
+
+
+def killed(task_id: str) -> dict[str, Any]:
+    """The `task_updated` half of the recorded notice, for `task_id` (§24)."""
+    return {"type": "system", "subtype": "task_updated", "task_id": task_id,
+            "patch": {"status": "killed"}}
+
+
+def test_two_sessions_reporting_the_same_task_id_each_raise_it_once(
+    tmp_home: Path, workdir: Path, spool: Spool
+) -> None:
+    """REVIEW-24 should-fix 6 (§41, §40 H-062): the memory is keyed by
+    (transcript, task id), so the same task id in two sessions' transcripts is two
+    kills — each raised once however often its own stream repeats the notice."""
+    monitors = MonitorSupervisor(make_config(tmp_home, workdir), spool)
+    first = in_session(spool, "sess-a")
+    second = in_session(spool, "sess-b")
+    for job in (first, second, first, second):
+        for event in recorded_events():
+            monitors.observe(job, event)
+    raised = [(e.payload["job"], e.payload["task_id"]) for e in monitor_events(spool)]
+    assert raised == [
+        (first.id, "bar46gi30"), (first.id, "bs3zkkxlo"),
+        (second.id, "bar46gi30"), (second.id, "bs3zkkxlo"),
+    ]
+    for job in (first, second):
+        run(lambda job=job: monitors.stop(job.id))
+
+
+def test_the_raised_memory_forgets_its_oldest_kill_when_the_1025th_arrives(
+    tmp_home: Path, workdir: Path, spool: Spool
+) -> None:
+    """§21, §40 H-062: the raised-kill memory holds `TASK_MEMORY` (1024) keys; the
+    1025th evicts the oldest, which a later `keep` read of the same transcript then
+    raises again, while the second-oldest is still remembered and is not."""
+    assert TASK_MEMORY == 1024
+    monitors = MonitorSupervisor(make_config(tmp_home, workdir), spool)
+    scan = in_session(spool, "sess-long")
+    for n in range(TASK_MEMORY):
+        monitors.observe(scan, killed(f"t{n}"))
+    assert len(monitor_events(spool)) == TASK_MEMORY
+    again = in_session(spool, "sess-long")
+    monitors.observe(again, killed("t0"))  # still remembered: the memory is full, not over
+    assert len(monitor_events(spool)) == TASK_MEMORY
+    monitors.observe(scan, killed(f"t{TASK_MEMORY}"))  # the 1025th
+    assert len(monitor_events(spool)) == TASK_MEMORY + 1
+    later = in_session(spool, "sess-long")
+    monitors.observe(later, killed("t1"))  # the second-oldest: not raised again
+    assert len(monitor_events(spool)) == TASK_MEMORY + 1
+    monitors.observe(later, killed("t0"))  # the oldest left: raised again
+    events = monitor_events(spool)
+    assert len(events) == TASK_MEMORY + 2
+    assert (events[-1].payload["job"], events[-1].payload["task_id"]) == (later.id, "t0")
+    for job in (scan, again, later):
+        run(lambda job=job: monitors.stop(job.id))
 
 
 def _stopped_daemon(tmp_home: Path, tmp_path: Path, how: str) -> tuple[Spool, str]:

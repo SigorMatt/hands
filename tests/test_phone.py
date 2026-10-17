@@ -35,6 +35,7 @@ from hands.config import ConfigError, load_config
 from hands.daemon import Daemon
 from hands.notify import PAIR_SPACING_S, http_post, http_stream
 from hands.phone import ARCHITECT_TITLE, GO_TITLE, KIT_TITLE, PROGRESS_TITLE, REPLY_TITLE
+from hands.runner import MAX_PROMPT_BYTES
 from harness import (
     CONSULT_HEAD,
     PROJECT,
@@ -3165,6 +3166,39 @@ def test_claude_reads_the_prompt_the_running_record_keeps(
     phone_drive(body)
 
 
+@pytest.mark.parametrize("dirty", [True, False], ids=["dirty", "clean"])
+def test_the_prompt_cap_counts_the_journal_sentence(
+    project: str, workdir: Path, dirty: bool
+) -> None:
+    """REVIEW-24 should-fix 8 (§41, §2, §39): the cap is on what claude reads. A cli
+    send to the builder exactly at `MAX_PROMPT_BYTES` is accepted; with a dirty
+    `meta/journal.md` the dispatch-time sentence puts it over, and the job is
+    `killed` before it starts with the cap's reason; with a clean journal it is sent
+    as it was typed."""
+    journal(workdir, dirty=dirty)
+    text = "x" * MAX_PROMPT_BYTES
+
+    async def body(daemon: Daemon, fake: FakeNtfy) -> None:
+        await builder_asked(daemon)
+        daemon.spool.append_event("consult.done", {"job": CONSULTATION})
+        sent = await ok("send", "--role", "builder", "--context", "keep", text)
+        record = await ok("wait", sent["id"])
+        reasons = [e.payload.get("reason") for e in daemon.spool.events()
+                   if e.kind == "job.killed" and e.payload.get("job") == sent["id"]]
+        if dirty:
+            assert record["state"] == "killed", record["state"]
+            assert record["started"] is None, "nothing was spawned"
+            assert len(reasons) == 1, reasons
+            said = f"over the {MAX_PROMPT_BYTES} byte cap of §2"
+            assert said in strip_paths(reasons[0]), reasons
+        else:
+            assert record["state"] == "done", record["state"]
+            assert reasons == []
+            assert record["prompt"] == text
+
+    phone_drive(body)
+
+
 def test_answer_is_refused_when_the_builder_has_no_resumable_session(
     project: str, caplog: pytest.LogCaptureFixture
 ) -> None:
@@ -3468,6 +3502,41 @@ def test_a_secret_with_a_backslash_is_neither_published_nor_logged_in_a_refusal(
 
     phone_drive(body)
     assert "no such job" in strip_paths(caplog.text)
+    assert not [p for p in parts if p in strip_paths(caplog.text)]
+
+
+def test_an_ambiguous_prefix_carrying_a_backslash_secret_leaks_no_part_of_it(
+    tmp_home: Path, workdir: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """REVIEW-24 should-fix 7 (§41): the "is ambiguous" reason quotes the typed id
+    with `str`, as "no such job" does. Job ids never carry a backslash, so two job
+    records whose ids begin with the secret are planted for the typed secret to be
+    an ambiguous prefix of; no substring of the secret of 4 or more characters is in
+    the published refusal (title or message) or in the log."""
+    notify = NOTIFY.replace(f'cmd_secret = "{SECRET}"', f"cmd_secret = '{BACKSLASH_SECRET}'")
+    (tmp_home / ".hands" / f"{PROJECT}.toml").write_text(
+        config_body(tmp_home, workdir, extra=notify)
+    )
+    caplog.set_level(logging.DEBUG)
+    parts = secret_parts(BACKSLASH_SECRET)
+
+    async def body(daemon: Daemon, fake: FakeNtfy) -> None:
+        jobs = daemon.spool.jobs_dir
+        for suffix in ("a", "b"):
+            (jobs / f"{BACKSLASH_SECRET}{suffix}.json").write_text("{}", encoding="utf-8")
+        assert BACKSLASH_SECRET.count("\\") == 3, "the backslashes `repr` would double"
+        await say(daemon, fake, f"approve {BACKSLASH_SECRET} {BACKSLASH_SECRET}")
+        await daemon.notifier.drain()
+        approve = refusals(daemon, "approve")
+        assert len(approve) == 1, approve
+        assert "is ambiguous" in strip_paths(approve[0]), approve
+        for item in daemon.notifier.post.sent:
+            for field in ("title", "message"):
+                said = str(item.get(field) or "")
+                assert not [p for p in parts if p in strip_paths(said)], (field, said)
+
+    phone_drive(body)
+    assert "is ambiguous" in strip_paths(caplog.text)
     assert not [p for p in parts if p in strip_paths(caplog.text)]
 
 
