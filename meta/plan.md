@@ -13,28 +13,28 @@ Base of the mission: de407f2 (`plan: mission 24 kit (DESIGN v3.23)`).
 - [x] U0 Plan, branch and findings (`plan:`) (this commit) — this file,
       meta/CHECKPOINT.md, meta/journal.md, meta/findings/FINDINGS.md
       (H-062..H-069 filed; H-064, H-065 decided; H-061 decided; H-051 Status corrected)
-- [ ] U1 The harness probe — docs/HARNESS-PROBE.md (new)
-- [ ] U2 `hands go` and `hands kit apply` — src/hands/cli.py, api.py,
+- [x] U1 f558f0f The harness probe — docs/HARNESS-PROBE.md (new)
+- [x] U2 b003bee `hands go` and `hands kit apply` — src/hands/cli.py, api.py,
       kit.py/phone.py, README.md, tests
-- [ ] U3 The monitor and the runner (H-062, H-063) — src/hands/monitor.py,
+- [x] U3 6f373cd The monitor and the runner (H-062, H-063) — src/hands/monitor.py,
       runner.py, daemon.py, tests
-- [ ] U4 The hosted-review command's proofs (should-fix 3, 4, 5) —
+- [x] U4 8c081d0 The hosted-review command's proofs (should-fix 3, 4, 5) —
       src/hands/hosted.py, phone.py, api.py, tests, fixtures
-- [ ] U5 The engine, the docs' claim, two unpinned behaviours (should-fix
+- [x] U5 24ac73d The engine, the docs' claim, two unpinned behaviours (should-fix
       6, 7, 8, 9) — api.py/daemon.py/runner.py, docs/INTEGRATION.md,
       project.py, tests
-- [ ] U6 The playbook without `aux.orphaned` (H-061) — kit.py, playbook.py,
+- [x] U6 529b91f The playbook without `aux.orphaned` (H-061) — kit.py, playbook.py,
       docs/PLAYBOOK.md, tests
-- [ ] U7 Templates and handbook: refusals, worktrees, skip list, gate
+- [x] U7 649417d Templates and handbook: refusals, worktrees, skip list, gate
       (H-066..H-069) — templates/BUILDER-N-PROMPT.md,
       templates/REVIEW-PROTOCOL.md, meta/REVIEW-PROTOCOL.md,
       architect/CLAUDE.md, docs/ARCHITECT-HANDBOOK.md §7 §17, tests
-- [ ] U8 docs/OPERATIONS.md, the capture script, the doctor row (H-067) —
+- [x] U8 c6b70c1 docs/OPERATIONS.md, the capture script, the doctor row (H-067) —
       docs/OPERATIONS.md (new), scripts/capture-quota-stop.sh (new),
       src/hands/doctor.py, tests
-- [ ] U9 The docs — docs/INTEGRATION.md, docs/ARCHITECT-HANDBOOK.md §18,
+- [x] U9 6fc7e6e The docs — docs/INTEGRATION.md, docs/ARCHITECT-HANDBOOK.md §18,
       README.md, tests
-- [ ] U10 Final report, the pull request and the hosted review's findings —
+- [x] U10 (this commit) Final report, the pull request and the hosted review's findings —
       meta/FINAL-REPORT-24.md, meta/reviews/hosted/PR-<n>/
 
 Review items (REVIEW-23 should-fix). 1 → H-064, 2 → H-065 (decided in §40,
