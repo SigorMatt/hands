@@ -46,10 +46,11 @@ from hands.kit import (
     check_kit,
     home_shown,
     is_kit_file_name,
-    is_staged_name,
     kit_directory,
     place_kit,
     read_staged,
+    remove_staged,
+    staged_path,
 )
 from hands.notify import NotifyError, send_test
 from hands.playbook import PlaybookError, load_playbook, playbook_path
@@ -709,11 +710,13 @@ class Api:
 
         `name` is the zip's file name (judged as the phone's `kit` judges one,
         `is_kit_file_name`) and `staged` the hidden basename the client wrote its
-        bytes under in `[files] kit_dir` (`is_staged_name`, `kit.stage_kit`): the
+        bytes under in `[files] kit_dir` (`kit.staged_path`, `kit.stage_kit`): the
         bytes never travel over the socket, so a kit at `[files] kit_max_mb` fits
         the line room (PR #5 hosted review, finding 8). The staged file is read
-        (a regular file, not through a symlink, at most kit_max_mb) and removed
-        whatever follows. The kit is checked as `hands kit check` checks it
+        (`read_staged`: a regular file, not through a symlink, never blocking on a
+        FIFO, at most kit_max_mb) and removed whatever follows, a refusal of the
+        name, the builder or the file included (§41). The kit is checked as
+        `hands kit check` checks it
         (`check_kit`, against the builder's cwd and this daemon's config, as
         `kit_file` does), on a copy under its own name in a scratch directory; a
         failing kit is refused with the check's output and nothing is copied or
@@ -725,32 +728,29 @@ class Api:
         with `origin: kit` and a `kit_id` handsd mints — a held builder job, its
         hold published as any hold is, released by `hands approve`.
         """
-        if not is_kit_file_name(name):
-            raise ApiError(
-                "kit_apply: the name must be a printable .zip basename not starting "
-                "with a dot (§26, §40)"
-            )
-        if not is_staged_name(staged):
-            raise ApiError(
-                "kit_apply: staged must be the hidden .hands-kit-*.part basename hands "
-                "kit apply wrote in [files] kit_dir (§40)"
-            )
         files_config = self.config.files
         cap = files_config.kit_max_mb * _MIB
-        if "builder" not in self.config.roles:
-            raise ApiError("kit_apply: this project configures no builder to apply a kit")
         try:
             directory = kit_directory(files_config)
+            source = staged_path(directory, staged)
         except KitError as exc:
             raise ApiError(f"kit_apply: {exc}") from exc
-        source = directory / staged
+        # §41: from here every refusal removes the staged entry, so a caller other
+        # than the CLI (which removes its own on every path) leaves nothing behind.
         try:
-            data = await asyncio.to_thread(read_staged, source, cap)
-        except KitError as exc:
-            raise ApiError(f"kit_apply: {exc}") from exc
+            if not is_kit_file_name(name):
+                raise ApiError(
+                    "kit_apply: the name must be a printable .zip basename not starting "
+                    "with a dot (§26, §40)"
+                )
+            if "builder" not in self.config.roles:
+                raise ApiError("kit_apply: this project configures no builder to apply a kit")
+            try:
+                data = await asyncio.to_thread(read_staged, source, cap)
+            except KitError as exc:
+                raise ApiError(f"kit_apply: {exc}") from exc
         finally:
-            with contextlib.suppress(FileNotFoundError):
-                source.unlink()
+            await asyncio.to_thread(remove_staged, source)
         builder = self.config.role("builder").cwd
         try:
             report = await asyncio.to_thread(self._check_bytes, name, data, builder)

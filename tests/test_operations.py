@@ -9,16 +9,21 @@ the builder is `tests/fake_claude.py`. Nothing here touches the network.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import hashlib
+import json
+import os
 import time
 from pathlib import Path
+from typing import Any
 
 import pytest
 
 from conftest import commit_file, strip_paths
 from hands import kit as kit_mod
+from hands.api import HANDS_ERROR
 from hands.config import load_config
-from hands.daemon import Daemon
+from hands.daemon import INTERNAL_ERROR, Daemon
 from hands.runner import LINE_LIMIT
 from harness import (
     PROJECT,
@@ -310,5 +315,160 @@ def test_kit_apply_files_a_kit_larger_than_the_daemons_line_room(
         assert (downloads / "m24-large.zip").read_bytes() == kit.read_bytes()
         assert answer["copied"] is True
         assert sorted(p.name for p in downloads.iterdir()) == ["m24-large.zip"]
+
+    drive(body)
+
+
+# ------------------------------------- kit apply's staged name (§41, should-fix 2)
+#
+# REVIEW-24 should-fix 2: the daemon-side checks on `staged` are driven by a socket
+# client that is not the CLI (`raw_kit_apply`), since the CLI only ever names a
+# `.part` it wrote itself. Each refusal is a reasoned hands error (a `KitError`
+# reported as an `ApiError`), never the daemon's internal error.
+
+#: How long a refusal may take before the FIFO guard calls it a hang.
+REFUSAL_S = 10.0
+
+
+async def raw_kit_apply(daemon: Daemon, name: str, staged: str) -> dict[str, Any]:
+    """One `kit_apply` request on the daemon's socket, its JSON-RPC answer."""
+    reader, writer = await asyncio.open_unix_connection(str(daemon.socket_path))
+    try:
+        request = {
+            "jsonrpc": "2.0", "id": 7, "method": "kit_apply",
+            "params": {"name": name, "staged": staged},
+        }  # fmt: skip
+        writer.write(json.dumps(request).encode("utf-8") + b"\n")
+        await writer.drain()
+        return dict(json.loads(await reader.readline()))
+    finally:
+        writer.close()
+        with contextlib.suppress(ConnectionError):
+            await writer.wait_closed()
+
+
+def refused(answer: dict[str, Any]) -> str:
+    """The message of a hands refusal — never the internal error's code."""
+    assert isinstance(answer.get("error"), dict), answer
+    assert answer["error"]["code"] == HANDS_ERROR, answer
+    assert answer["error"]["code"] != INTERNAL_ERROR, answer
+    return str(answer["error"]["message"])
+
+
+def test_kit_apply_refuses_a_staged_name_with_dot_dot(
+    project: str, workdir: Path, downloads: Path, tmp_path: Path
+) -> None:
+    """A `..` name is refused by the staged-name check and the file it points at,
+    a passing kit outside `kit_dir`, is neither read nor removed."""
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    target = outside / ".hands-kit-abc.part"
+    target.write_bytes(kit_zip(passing_kit()))
+
+    async def body(daemon: Daemon) -> None:
+        said = refused(await raw_kit_apply(daemon, "m24.zip", "../outside/.hands-kit-abc.part"))
+        assert "staged must be the hidden .hands-kit-*.part basename" in strip_paths(said), said
+        assert target.read_bytes() == kit_zip(passing_kit())
+        assert (await ok("jobs"))["jobs"] == []
+        assert list(downloads.iterdir()) == []
+
+    drive(body)
+
+
+def test_kit_apply_refuses_a_staged_symlink_and_removes_the_link_only(
+    project: str, workdir: Path, downloads: Path, tmp_path: Path
+) -> None:
+    """A staged name that is a symlink — here to a passing kit — is refused, never
+    followed (`O_NOFOLLOW`); the link is removed, its target is not."""
+    target = tmp_path / "outside" / "m24.zip"
+    a_kit(target, passing_kit())
+    link = downloads / ".hands-kit-link.part"
+    link.symlink_to(target)
+
+    async def body(daemon: Daemon) -> None:
+        said = refused(await raw_kit_apply(daemon, "m24.zip", link.name))
+        assert f"the staged kit {link.name!r} is a symlink" in strip_paths(said), said
+        assert target.read_bytes() == kit_zip(passing_kit())
+        assert (await ok("jobs"))["jobs"] == []
+        assert list(downloads.iterdir()) == []
+
+    drive(body)
+
+
+def test_kit_apply_refuses_a_staged_fifo_without_blocking(
+    project: str, workdir: Path, downloads: Path
+) -> None:
+    """A FIFO is refused as not a regular file, at once: the daemon opens it with
+    `O_NONBLOCK`. Should it block, the guard opens the FIFO's write end (itself
+    non-blocking) to free the daemon's thread, and the test fails, not hangs."""
+    fifo = downloads / ".hands-kit-fifo.part"
+    os.mkfifo(fifo)
+
+    async def body(daemon: Daemon) -> None:
+        try:
+            answer = await asyncio.wait_for(
+                raw_kit_apply(daemon, "m24.zip", fifo.name), REFUSAL_S
+            )
+        except TimeoutError:
+            with contextlib.suppress(OSError):
+                os.close(os.open(fifo, os.O_WRONLY | os.O_NONBLOCK))
+            pytest.fail("kit_apply blocked on a staged FIFO")
+        said = refused(answer)
+        assert f"the staged kit {fifo.name!r} is not a regular file" in strip_paths(said), said
+        assert (await ok("jobs"))["jobs"] == []
+        assert list(downloads.iterdir()) == []
+
+    drive(body)
+
+
+def test_kit_apply_refuses_a_staged_directory(
+    project: str, workdir: Path, downloads: Path
+) -> None:
+    """A directory is refused as not a regular file (review 24: it was an
+    `IsADirectoryError` from `os.fdopen`, then another from the unlink)."""
+    (downloads / ".hands-kit-dir.part").mkdir()
+
+    async def body(daemon: Daemon) -> None:
+        said = refused(await raw_kit_apply(daemon, "m24.zip", ".hands-kit-dir.part"))
+        expected = "the staged kit '.hands-kit-dir.part' is not a regular file"
+        assert expected in strip_paths(said), said
+        assert (await ok("jobs"))["jobs"] == []
+
+    drive(body)
+
+
+def test_kit_apply_refuses_a_missing_staged_name(
+    project: str, workdir: Path, downloads: Path
+) -> None:
+    async def body(daemon: Daemon) -> None:
+        said = refused(await raw_kit_apply(daemon, "m24.zip", ".hands-kit-gone.part"))
+        assert "no staged kit '.hands-kit-gone.part' in [files] kit_dir" in strip_paths(said), said
+        assert (await ok("jobs"))["jobs"] == []
+        assert list(downloads.iterdir()) == []
+
+    drive(body)
+
+
+@pytest.mark.parametrize("case", ["bad-name", "over-cap", "failing-kit"])
+def test_a_part_the_daemon_refuses_is_removed_by_the_daemon(
+    case: str, project: str, workdir: Path, downloads: Path
+) -> None:
+    """§41: a `.part` staged by a caller that is not the CLI (which removes its own
+    on every path) and refused — for its kit name, its size over kit_max_mb, or a
+    failing check — is removed by the daemon."""
+    data = {
+        "bad-name": kit_zip(passing_kit()),
+        "over-cap": b"x" * (1024 * 1024 + 1),
+        "failing-kit": kit_zip(UNCHECKED_KIT),
+    }[case]
+    name = ".hidden.zip" if case == "bad-name" else "m24.zip"
+    staged = kit_mod.stage_kit(downloads, data)
+
+    async def body(daemon: Daemon) -> None:
+        said = refused(await raw_kit_apply(daemon, name, staged.name))
+        assert said.startswith("kit_apply: "), said
+        assert not staged.exists()
+        assert (await ok("jobs"))["jobs"] == []
+        assert list(downloads.iterdir()) == []
 
     drive(body)

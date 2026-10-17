@@ -97,6 +97,7 @@ from __future__ import annotations
 
 import base64
 import contextlib
+import errno
 import hashlib
 import io
 import itertools
@@ -156,6 +157,8 @@ __all__ = [
     "kit_directory",
     "place_kit",
     "read_staged",
+    "remove_staged",
+    "staged_path",
     "stage_kit",
     "kit_dir_under_kits",
     "kickoff_line",
@@ -1482,23 +1485,59 @@ def stage_kit(directory: Path, data: bytes) -> Path:
     return temp
 
 
+def staged_path(directory: Path, staged: object) -> Path:
+    """`directory/staged` when `staged` is a basename `stage_kit` writes
+    (`is_staged_name`), else `KitError` — so `..`, a path or an absolute name
+    never reaches the file system."""
+    if not is_staged_name(staged):
+        raise KitError(
+            "staged must be the hidden .hands-kit-*.part basename hands kit apply "
+            "wrote in [files] kit_dir (§40)"
+        )
+    return directory / str(staged)
+
+
 def read_staged(path: Path, cap: int) -> bytes:
     """The bytes of a staged kit (`stage_kit`): a regular file, never through a
-    symlink (`O_NOFOLLOW`), at most `cap` bytes, else `KitError`."""
+    symlink (`O_NOFOLLOW`), at most `cap` bytes, else `KitError`. It is opened
+    with `O_NONBLOCK`, so a FIFO cannot hold the caller, and `fstat`ed before
+    anything is read, so a FIFO, a directory or a device is refused by its type."""
     try:
-        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
     except FileNotFoundError:
         raise KitError(f"no staged kit {path.name!r} in [files] kit_dir") from None
     except OSError as exc:
+        if exc.errno == errno.ELOOP:
+            raise KitError(f"the staged kit {path.name!r} is a symlink") from None
         raise KitError(f"the staged kit {path.name!r} cannot be opened ({exc.strerror})") from exc
-    with os.fdopen(fd, "rb") as handle:
-        info = os.fstat(handle.fileno())
+    try:
+        info = os.fstat(fd)
         if not stat.S_ISREG(info.st_mode):
             raise KitError(f"the staged kit {path.name!r} is not a regular file")
-        data = handle.read(cap + 1)
+        chunks: list[bytes] = []
+        left = cap + 1
+        while left > 0:
+            chunk = os.read(fd, min(left, _MIB))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            left -= len(chunk)
+    except OSError as exc:
+        raise KitError(f"the staged kit {path.name!r} cannot be read ({exc.strerror})") from exc
+    finally:
+        os.close(fd)
+    data = b"".join(chunks)
     if len(data) > cap:
         raise KitError(f"the staged kit is over [files] kit_max_mb ({cap} bytes)")
     return data
+
+
+def remove_staged(path: Path) -> None:
+    """Remove a staged entry the daemon has read or refused. `unlink` removes a
+    symlink, not its target, and never a directory; an entry that cannot be
+    removed (a directory, one already gone) is left, the refusal already said."""
+    with contextlib.suppress(OSError):
+        os.unlink(path)
 
 
 def place_kit(directory: Path, name: str, data: bytes) -> bool:
