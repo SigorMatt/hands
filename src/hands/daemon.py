@@ -141,6 +141,8 @@ class Daemon:
             ready=self.runner.wait_for_session,
             on_event=self._monitor_event,
             pids=self.runner.live_pids,  # §5's `--pids`: the job's scope or group (§24)
+            # §40 (H-062): no `task_killed` for a job the daemon's own stop ends.
+            stopping=self.runner.daemon_stopping,
         )
         #: §24: what is still alive in a job's scope or group when claude exits is
         #: filed as `monitor.orphan_processes`; the runner then kills it.
@@ -659,8 +661,9 @@ class Daemon:
         try:
             # §10: the playbook is the file in the builder's repo as it is *now*.
             await self.playbook.on_job_start(job)
+            preface = await self._journal_sentence(job)
             log.info("job %s (%s) starting", job_id, role)
-            finished = await self.runner.run(job)
+            finished = await self.runner.run(job, preface=preface)
             log.info("job %s (%s) %s", job_id, role, finished.state)
             if finished.state == "orphaned":
                 # §38: the daemon's own stop ended it. The engine hears it at the next
@@ -699,6 +702,31 @@ class Daemon:
                 await self.monitors.stop(job_id)  # §5: the watch ends with the job
             self._running[role] = None
             await self._announce()
+
+    def wants_journal_sentence(self, job: Job) -> bool:
+        """§39 (H-060): is `job` on the resume path — an `answer` from the phone or a
+        cli send (`keep` or `clear`) to the builder — which is told to commit a dirty
+        `meta/journal.md` first? A kickoff is not: `PlaybookEngine.is_kickoff`, decided
+        from the record and the persisted pipeline state (PR #5 hosted review, finding
+        9), after `on_job_start` has loaded the playbook, so a held `hands go` released
+        by a restarted daemon is still left out."""
+        return (
+            job.role == "builder"
+            and (job.origin == "cli" or is_builder_answer(job))
+            and not self.playbook.is_kickoff(job)
+        )
+
+    async def _journal_sentence(self, job: Job) -> str | None:
+        """§39 (H-060), review 23 should-fix 6: the journal sentence for a job being
+        dispatched, decided now and not at its enqueue, so a held or queued send
+        carries it only if `meta/journal.md` is dirty when it starts. The `git status`
+        runs in a worker thread (PR #4 hosted review, "A send to the builder can stall
+        the daemon on git"). The runner puts it before the prompt in the record it
+        moves to `running`; the stored prompt of a held or queued job is the sender's
+        alone."""
+        if not self.wants_journal_sentence(job):
+            return None
+        return await asyncio.to_thread(self.playbook.journal_reminder)
 
     async def _consultation_ended(self, job: Job) -> None:
         """§28, §31: a consulted role's job that ended outside the worker's run (never

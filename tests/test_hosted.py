@@ -402,3 +402,97 @@ def test_the_help_names_both_exit_statuses(capsys: pytest.CaptureFixture[str]) -
     assert "Code Review comment is not there yet" in strip_paths(text)
     assert ("exit 4 when the header counts findings and none parsed is open (the findings "
             "could not be parsed against the header counts: no verdict)") in strip_paths(text)
+
+
+def _code_review_body(directory: Path) -> str:
+    return json.loads((directory / "issues-3-comments.page-2.json").read_text(
+        encoding="utf-8"))[0]["body"]
+
+
+@pytest.mark.parametrize(("stem", "decoy_id"), [
+    ("pulls-3-reviews", 9001),   # a review whose body is headed "Code Review"
+    ("pulls-3-comments", 9002),  # an inline comment headed "Code Review"
+])
+def test_the_verdict_comes_from_the_code_review_issue_comment_only(
+    repo: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, stem: str, decoy_id: int
+) -> None:
+    """§39: "takes the verdict from the Code Review comment only" (REVIEW-23
+    should-fix 3). A review body or an inline comment headed "Code Review", newer
+    (higher id) than the Code Review issue comment and with every finding struck,
+    is archived but never read for the verdict."""
+    pages = tmp_path / "pages"
+    shutil.copytree(FIXTURES / "first", pages)
+    decoy = json.loads((pages / f"{stem}.page-1.json").read_text(encoding="utf-8"))[-1]
+    decoy = {**decoy, "id": decoy_id, "body": _code_review_body(FIXTURES / "edited")
+             .replace("The report hides its verdict",
+                      "<s>The report hides its verdict</s> ✓ Resolved")
+             .replace("The sibling repository expects the old name",
+                      "<s>The sibling repository expects the old name</s> ✓ Resolved")
+             .replace("(1)", "(0)")}
+    assert decoy["user"]["login"] == BOT
+    assert "<h3>Code Review by Qodo</h3>" in strip_paths(decoy["body"])
+    page = pages / f"{stem}.page-1.json"
+    data = json.loads(page.read_text(encoding="utf-8"))
+    page.write_text(json.dumps([*data, decoy], ensure_ascii=False), encoding="utf-8")
+    serve(monkeypatch, pages)
+    code, out, err = run("3")
+    assert code == 0, err
+    kind = {"pulls-3-reviews": "review", "pulls-3-comments": "review-comment"}[stem]
+    archive = repo / "meta" / "reviews" / "hosted" / "PR-3" / "1"
+    assert (archive / f"{kind}-{decoy_id}.md").read_bytes() == decoy["body"].encode("utf-8")
+    assert "code review comment: issue-comment 6002 " in strip_paths(out)
+    assert "verdict: 3 of 3 findings open in the Code Review comment" in strip_paths(out)
+    assert "no finding open" not in strip_paths(out)
+
+
+def test_of_two_code_review_comments_the_newest_gives_the_verdict(
+    repo: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """§39 (REVIEW-23 should-fix 3): two Code Review issue comments from the bot —
+    the newer (6003, the edited reading: one of three struck) gives the verdict,
+    not the older (6002, three open), which the API lists first."""
+    pages = tmp_path / "pages"
+    shutil.copytree(FIXTURES / "first", pages)
+    page = pages / "issues-3-comments.page-2.json"
+    data = json.loads(page.read_text(encoding="utf-8"))
+    newer = {**data[0], "id": 6003, "created_at": "2026-10-15T16:52:23Z",
+             "updated_at": "2026-10-15T16:52:23Z",
+             "body": _code_review_body(FIXTURES / "edited")}
+    page.write_text(json.dumps([*data, newer], ensure_ascii=False), encoding="utf-8")
+    serve(monkeypatch, pages)
+    code, out, err = run("3")
+    assert code == 0, err
+    assert "code review comment: issue-comment 6003 " in strip_paths(out)
+    assert "code review comment: issue-comment 6002" not in strip_paths(out)
+    assert "verdict: 2 of 3 findings open in the Code Review comment" in strip_paths(out)
+
+
+def test_a_header_counting_one_whose_only_finding_is_struck_exits_4(
+    repo: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """REVIEW-23 should-fix 4: the header counts one finding (the bot reset
+    nothing) and the only finding parsed is struck through — every parsed finding
+    resolved, none open against a count above zero: no clean verdict, exit 4."""
+    pages = tmp_path / "pages"
+    shutil.copytree(FIXTURES / "edited", pages)
+    page = pages / "issues-3-comments.page-2.json"
+    data = json.loads(page.read_text(encoding="utf-8"))
+    body = data[0]["body"]
+    head, rest = body.split("<details>\n<summary>  2.", 1)
+    tail = "<!--" + rest.split("<!--", 1)[1]
+    body = (head + tail).replace("Bugs (0)", "Bugs (1)")
+    for label in ("Rule violations", "Cross-repo conflicts"):
+        body = body.replace(f"{label} (1)", f"{label} (0)")
+    data[0]["body"] = body
+    page.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+    serve(monkeypatch, pages)
+    code, out, err = run("3")
+    assert code == 4, (out, err)
+    findings_part = out.split("findings:")[1]
+    assert ("  1.  <s>A failed load leaves the widget half-built</s> ✓ Resolved"
+            in strip_paths(findings_part))
+    assert "  2.  " not in strip_paths(findings_part)
+    assert "  3.  " not in strip_paths(findings_part)
+    assert "no finding open" not in strip_paths(out)
+    assert ("verdict: the findings could not be parsed against the header counts "
+            "(the header counts 1, 1 parsed, 0 open)") in strip_paths(out)

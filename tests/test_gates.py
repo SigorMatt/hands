@@ -293,9 +293,12 @@ def test_the_playbook_decider_releases_nothing_but_an_architects_hold(
     async def body(daemon: Daemon) -> None:
         prompt = "please open the PR now"
         # §37: `origin: phone` on a builder `clear` job is the phone's `go`, which
-        # `send` refuses to a socket client.
+        # `send` refuses to a socket client; `Api.kickoff` files it through `_send`
+        # with the playbook's kickoff, so this prompt goes to `_send` directly.
         job = await (
-            daemon.api.go_builder(prompt) if origin == "phone" else daemon.api.send(
+            daemon.api._send(
+                role="builder", context="clear", prompt=prompt, origin=origin,
+            ) if origin == "phone" else daemon.api.send(
                 role="builder", context="clear", prompt=prompt, origin=origin,
             )
         )

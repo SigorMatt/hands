@@ -3244,3 +3244,124 @@ def test_an_address_just_outside_the_private_and_tailnet_ranges_is_public(
     with_ntfy_url(write_config(tmp_home, tmp_path), url)
     _code, found = checks()
     assert found["broker"]["status"] == "warn"
+
+
+# ------------------------------------------- §40 (H-067): dangling worktrees
+
+
+def _worktree_git(repo: Path, *args: str) -> None:
+    subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True)
+
+
+def test_doctor_warns_on_a_worktree_registered_under_a_role_clone_whose_path_is_missing(
+    tmp_home: Path, tmp_path: Path, fake_mode: None
+) -> None:
+    """§40 (H-067): an aborted review leaves a worktree registered under the clone
+    after its directory is gone. Doctor names it, and only it, as a warning — a
+    live worktree beside it is not named — and the remedy is `git worktree prune`.
+    A local repository, no remote."""
+    work = tmp_path / "work"
+    commit_file(work, "README.md", "hi\n")
+    gone, alive = tmp_path / "review-gone", tmp_path / "review-alive"
+    _worktree_git(work, "worktree", "add", "--detach", str(gone))
+    _worktree_git(work, "worktree", "add", "--detach", str(alive))
+    shutil.rmtree(gone)
+    write_config(tmp_home, tmp_path)
+    code, found = checks()
+    row = found["worktrees"]
+    assert row["status"] == "warn", row
+    detail = strip_paths(row["detail"])
+    assert str(gone) in row["detail"], row
+    assert "review-gone is missing" in strip_paths(detail), row
+    assert "review-alive" not in strip_paths(detail), row
+    assert "git worktree prune" in strip_paths(detail), row
+    assert "(builder, aux)" in strip_paths(detail), row
+    assert code == 0, "a dangling worktree is a warning, not a failure"
+
+    _worktree_git(work, "worktree", "prune")
+    _code, found = checks()
+    row = found["worktrees"]
+    assert row["status"] == "ok", row
+    assert "review-gone" not in strip_paths(row["detail"]), row
+
+
+def test_doctors_worktree_row_is_ok_on_a_clone_with_no_linked_worktree(
+    tmp_home: Path, tmp_path: Path, fake_mode: None
+) -> None:
+    """The stand-in `.git` of `write_config` registers nothing: the row is `ok`."""
+    write_config(tmp_home, tmp_path)
+    _code, found = checks()
+    assert found["worktrees"]["status"] == "ok", found["worktrees"]
+
+
+def test_doctor_reads_a_relative_gitdir_and_a_missing_gitdir_file(
+    tmp_home: Path, tmp_path: Path, fake_mode: None
+) -> None:
+    """A worktree entry is `.git/worktrees/<name>/gitdir`, the path of the worktree's
+    `.git` file, absolute or (git's `worktree.useRelativePaths`) relative to the
+    entry; an entry without its gitdir file is one git's prune removes too."""
+    work = tmp_path / "work"
+    (work / ".git" / "worktrees" / "rel").mkdir(parents=True)
+    (work / ".git" / "worktrees" / "rel" / "gitdir").write_text("../../../../rel-wt/.git\n")
+    (work / ".git" / "worktrees" / "nofile").mkdir()
+    write_config(tmp_home, tmp_path)
+    _code, found = checks()
+    row = found["worktrees"]
+    assert row["status"] == "warn", row
+    assert str(tmp_path / "rel-wt") in row["detail"], row
+    assert "nofile: no readable" in strip_paths(row["detail"]), row
+    (tmp_path / "rel-wt").mkdir()
+    (tmp_path / "rel-wt" / ".git").write_text("gitdir: x\n")
+    _code, found = checks()
+    assert "rel-wt" not in strip_paths(found["worktrees"]["detail"])
+
+
+def test_doctor_reports_an_unreadable_worktrees_dir_as_a_warning_and_every_other_row(
+    tmp_home: Path, tmp_path: Path, fake_mode: None
+) -> None:
+    """PR #5 hosted finding 4: an OSError on `.git/worktrees` itself — here a mode
+    000 directory — is a WARN row naming the clone, not a doctor that stops; the
+    rows after it are still reported."""
+    if os.geteuid() == 0:
+        pytest.skip("root reads a mode 000 directory")
+    work = tmp_path / "work"
+    admin = work / ".git" / "worktrees"
+    (admin / "rel").mkdir(parents=True)
+    write_config(tmp_home, tmp_path)
+    admin.chmod(0)
+    try:
+        code, found = checks()
+    finally:
+        admin.chmod(0o755)
+    row = found["worktrees"]
+    assert row["status"] == "warn", row
+    assert f"{work.resolve()} (builder, aux)" in row["detail"], row
+    assert "cannot be read" in strip_paths(row["detail"]), row
+    assert {"daemon", "allowed roots"} <= set(found), sorted(found)
+    assert code == 0, "an unreadable worktrees directory is a warning, not a failure"
+
+
+def test_doctor_reports_a_worktrees_dir_that_vanishes_during_the_check_as_a_warning(
+    tmp_home: Path, tmp_path: Path, fake_mode: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """PR #5 hosted finding 4: `.git/worktrees` present when looked at, gone when
+    listed (a `git worktree prune` in between) is a WARN row naming the clone."""
+    work = tmp_path / "work"
+    (work / ".git" / "worktrees").mkdir(parents=True)
+    write_config(tmp_home, tmp_path)
+    real = Path.iterdir
+
+    def vanishing(self: Path) -> Any:
+        if self.name == "worktrees" and self.parent.name == ".git":
+            raise FileNotFoundError(2, "No such file or directory", str(self))
+        return real(self)
+
+    monkeypatch.setattr(Path, "iterdir", vanishing)
+    code, found = checks()
+    row = found["worktrees"]
+    assert row["status"] == "warn", row
+    assert f"{work.resolve()} (builder, aux)" in row["detail"], row
+    assert "cannot be read" in strip_paths(row["detail"]), row
+    assert "No such file or directory" in strip_paths(row["detail"]), row
+    assert {"daemon"} <= set(found), sorted(found)
+    assert code == 0

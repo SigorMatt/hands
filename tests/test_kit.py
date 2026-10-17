@@ -25,7 +25,7 @@ import pytest
 from conftest import strip_paths
 from hands import kit as kit_mod
 from hands.cli import main
-from hands.playbook import parse_playbook
+from hands.playbook import orphaned_rule_warnings, parse_playbook
 from harness import CRAFTED_HOWS, CRAFTED_NAME, CRAFTED_TARGET, crafted_zip
 
 ROOT = Path(__file__).parents[1]
@@ -997,9 +997,7 @@ PROTOCOL_36_SENTENCES = {
     "no-pr-records-nothing-reviewed": "`reviewed: none`",
     "commits-exclude-mains-history": "`git log <base>..origin/<branch> ^origin/main`",
     "merge-base-of-the-branch": "`git merge-base origin/main origin/<branch>`",
-    "skip-merge-commits": "skip `meta:` bookkeeping commits and merge commits",
     "sub-agents-one-at-a-time": "one at a time, never concurrently",
-    "one-check-per-sub-agent": "Runs `./scripts/check` once at that commit",
     "tests-only-commit-body-names-wrong-changes": (
         "A commit that changes only tests must name in its body each wrong change"
         " that would make them red"
@@ -2779,6 +2777,25 @@ def test_the_role_escalates_a_ruling_with_a_drafted_owner_file() -> None:
     assert "the draft of the file in your reply's body" not in strip_paths(thirteen)
 
 
+def test_the_roles_rule_2_reads_the_paths_the_prompt_names() -> None:
+    """§39 (H-051 ruling), review 23 should-fix 8: rule 2 tells the role that the
+    consultation prompt names the installed handbook and templates by absolute path,
+    to Read those paths as the prompt gives them, that `cat` works under them and
+    that `hands handbook` prints them. Reverting architect/CLAUDE.md to its text
+    before mission 23 U7 (2b4df10~1) turns this red."""
+    two = _role_rule(2)
+    assert strip_paths(two).startswith("Read the handbook of the hands that runs you"), two
+    for said in (
+        "`$HANDS_DOCS/docs/ARCHITECT-HANDBOOK.md`",
+        "`$HANDS_DOCS/templates/` are your forms",
+        "The consultation prompt names both by absolute path",
+        "Read those paths, as the prompt gives them, with the Read tool",
+        "(`cat` works under them too, and `hands handbook` prints them)",
+        "a `docs/` or `templates/` in the clone is the project's, not hands'",
+    ):
+        assert said in strip_paths(two), f"rule 2 does not say {said!r}: {two}"
+
+
 def test_the_filled_templates_with_an_owner_file_pass_six_of_six(tmp_path: Path) -> None:
     """§38's gate for U8: a kit built from the templates with placeholders filled —
     the brief with its new §R and Units text, the playbook, the protocol, and an owner
@@ -2822,3 +2839,294 @@ def test_each_shipped_playbook_resumes_an_orphaned_review(name: str) -> None:
     book = parse_playbook(text, path=Path("PLAYBOOK.toml"))
     rules = [rule for rule in book.rules if rule.on == "aux.orphaned"]
     assert [(rule.then, rule.verdict) for rule in rules] == [("resume", None)], rules
+
+
+# ---------------------- §40 (H-061): the playbook without `aux.orphaned` warns
+
+AUX_ORPHANED = '\n[[rule]]\non = "aux.orphaned"\nthen = "resume"\n'
+BUILDER_ORPHANED = '\n[[rule]]\non = "builder.orphaned"\nthen = "resume"\n'
+
+
+def warn_lines(out: str) -> list[str]:
+    return [text for text in out.splitlines() if text.startswith("WARN ")]
+
+
+@pytest.mark.parametrize(
+    ("added", "warned", "silent"),
+    [
+        # PLAYBOOK has rules on builder.done and aux.done and none on either orphaned.
+        (AUX_ORPHANED, "builder", "aux"),
+        (BUILDER_ORPHANED, "aux", "builder"),
+    ],
+)
+def test_a_done_rule_without_its_orphaned_rule_warns_and_passes_six_of_six(
+    tmp_path: Path, repo: Path, added: str, warned: str, silent: str
+) -> None:
+    """§40: `kit check` warns, and does not refuse, on a playbook with a rule on
+    `<role>.done` and none on `<role>.orphaned`; the playbook line still passes."""
+    kit = write_tree(tmp_path / "k", {**good_kit(), "PLAYBOOK.toml": PLAYBOOK + added})
+    code, out, err = run_check(kit, repo)
+    assert code == 0, out + err
+    for name in CHECK_NAMES:
+        assert line(out, name).startswith(f"PASS {name}: "), out
+    assert "kit check: pass (6 of 6 checks)" in strip_paths(out)
+    warns = warn_lines(out)
+    assert len(warns) == 1, out
+    assert warns[0].startswith("WARN playbook: "), out
+    assert f"{warned}.done" in strip_paths(warns[0]), out
+    assert f"{warned}.orphaned" in strip_paths(warns[0]), out
+    assert f"{silent}." not in strip_paths(warns[0]), out
+
+
+def test_both_done_rules_without_orphaned_rules_warn_twice(tmp_path: Path, repo: Path) -> None:
+    kit = write_tree(tmp_path / "k", good_kit())
+    code, out, err = run_check(kit, repo)
+    assert code == 0, out + err
+    assert "kit check: pass (6 of 6 checks)" in strip_paths(out)
+    warns = warn_lines(out)
+    assert len(warns) == 2, out
+    assert "aux.orphaned" in strip_paths(" ".join(warns)), out
+    assert "builder.orphaned" in strip_paths(" ".join(warns)), out
+    answer = json.loads(run_check(kit, repo, "--json")[1])
+    assert answer["ok"] is True
+    assert answer["warnings"] == [text.removeprefix("WARN playbook: ") for text in warns]
+
+
+def test_a_playbook_with_both_orphaned_rules_warns_nothing(tmp_path: Path, repo: Path) -> None:
+    book = PLAYBOOK + AUX_ORPHANED + BUILDER_ORPHANED
+    kit = write_tree(tmp_path / "k", {**good_kit(), "PLAYBOOK.toml": book})
+    code, out, err = run_check(kit, repo)
+    assert code == 0, out + err
+    assert warn_lines(out) == [], out
+    assert json.loads(run_check(kit, repo, "--json")[1])["warnings"] == []
+
+
+def test_the_repos_playbook_in_force_warns_too(tmp_path: Path, repo: Path) -> None:
+    """A kit that carries no playbook is judged against the repo's, which warns."""
+    kit = write_tree(tmp_path / "k", {"meta/BUILDER-11-PROMPT.md": BRIEF})
+    code, out, _ = run_check(kit, repo)
+    assert code == 0, out
+    assert len(warn_lines(out)) == 2, out
+
+
+@pytest.mark.parametrize(
+    ("book", "said"),
+    [
+        (PLAYBOOK.replace("BUILDER-11-PROMPT.md and", "BUILDER-12-PROMPT.md and"), "BUILDER-12"),
+        (re.sub(r"kickoff = .*\n", "", PLAYBOOK), "[series] kickoff"),
+    ],
+    ids=["kickoff-differs", "no-kickoff"],
+)
+def test_the_warning_prints_when_the_playbook_line_fails_too(
+    tmp_path: Path, repo: Path, book: str, said: str
+) -> None:
+    """§41 "Smaller rulings" (REVIEW-24 should-fix 4): the WARN for a done rule
+    without its orphaned rule prints whether or not the `playbook` line passes.
+    Making the warning conditional on `playbook_check.ok` turns this red."""
+    kit = write_tree(tmp_path / "k", {**good_kit(), "PLAYBOOK.toml": book + AUX_ORPHANED})
+    code, out, _ = run_check(kit, repo)
+    assert said in strip_paths(assert_failed_only(code, out, "playbook"))
+    warns = warn_lines(out)
+    assert len(warns) == 1, out
+    assert warns[0].startswith("WARN playbook: "), out
+    assert "builder.orphaned" in strip_paths(warns[0]), out
+    answer = json.loads(run_check(kit, repo, "--json")[1])
+    assert answer["ok"] is False
+    assert answer["warnings"] == [warns[0].removeprefix("WARN playbook: ")]
+
+
+@pytest.mark.parametrize(
+    "name", ["PLAYBOOK-missions.toml", "PLAYBOOK-runs.toml", "this repository's PLAYBOOK.toml"]
+)
+def test_each_shipped_playbook_warns_nothing(name: str) -> None:
+    if name.startswith("this"):
+        text = (ROOT / "PLAYBOOK.toml").read_text(encoding="utf-8")
+    else:
+        text = template(name)
+    assert orphaned_rule_warnings(parse_playbook(text, path=Path("PLAYBOOK.toml"))) == []
+
+
+# ------------------------- §40 (H-066..H-069): refusals, worktrees, skip list, gate
+
+#: §40 (H-066): the brief template's sub-agent rule and execution-model rule,
+#: worded as meta/BUILDER-24-PROMPT.md has them, flattened.
+BRIEF_40_SUB_AGENT_RULE = (
+    "if you cannot or will not produce what the unit asks, report `refused: <one"
+    " line>` and stop, changing nothing;"
+)
+BRIEF_40_EXECUTION_RULE = (
+    "A sub-agent that reports `refused: <one line>` is not retried: mark the unit"
+    " `[b] refused` and continue likewise."
+)
+
+
+def test_the_brief_templates_sub_agent_rules_say_refused() -> None:
+    """§40 (H-066): the verbatim sub-agent brief carries the `refused:` sentence."""
+    section = _brief_section(
+        "Sub-agent brief (give this to every unit sub-agent, verbatim, plus the unit)"
+    )
+    assert BRIEF_40_SUB_AGENT_RULE in strip_paths(section), section
+
+
+def test_the_brief_templates_execution_model_marks_a_refusal_b_refused() -> None:
+    """§40 (H-066): a refusal is not retried; the unit is `[b] refused`, the
+    mission continues with units that do not depend on it, and the verdict
+    vocabulary still has the blocked line the playbook matches."""
+    section = _brief_section("Execution model (binding)")
+    assert BRIEF_40_EXECUTION_RULE in strip_paths(section), section
+    retry = "Retry a failed unit once with the sub-agent's report attached"
+    assert section.index(retry) < section.index(BRIEF_40_EXECUTION_RULE)
+    assert "`VERDICT: mission N blocked <unit>`" in strip_paths(section)
+
+
+def test_the_roles_rule_8_escalates_a_unit_no_agent_will_author() -> None:
+    """§40 (H-066), §38: rule 8's conditions gain "a unit no agent will author",
+    answered `VERDICT: escalate ruling: human-supplied content` and naming the
+    human-supplied unit shape of the brief template."""
+    eight = _role_rule(8)
+    for said in (
+        "a unit no agent will author",
+        "`VERDICT: escalate ruling: human-supplied content`",
+        "human-supplied unit",
+        "`templates/BUILDER-N-PROMPT.md`",
+        "`~/Downloads/<name>/`",
+    ):
+        assert said in strip_paths(eight), f"rule 8 does not say {said!r}: {eight}"
+
+
+#: §40 (H-067, H-068, H-069): the sentences both protocol files carry, flattened.
+PROTOCOL_40_SENTENCES = {
+    "the-reviewer-starts-with-prune": "Before anything else, run `git worktree prune`",
+    "stale-review-worktrees-under-tmp-removed": (
+        "remove each stale review worktree an earlier review left under `/tmp`"
+    ),
+    "worktrees-removed-with-force": "`git worktree remove --force <path>`",
+    "the-review-ends-by-removing-its-own": (
+        "Last, remove every worktree this review added"
+    ),
+    "plan-read-for-what-it-says": (
+        "Every other `plan:` commit (the mission's U0 among them) is read the same"
+        " way, for what it says it does"
+    ),
+    "meta-journal-report-for-forbidden-edits-only": (
+        "A `meta:`, `journal:` or `report:` commit is read for forbidden edits only"
+        " and never reviewed as a unit"
+    ),
+    "a-file-outside-meta-is-forbidden": (
+        "a file it lists outside `meta/` is a forbidden edit"
+    ),
+    "review-and-merge-commits-skipped": "A `review:` commit and a merge commit are skipped",
+    "the-gate-once-in-the-foreground": (
+        "run `./scripts/check` once, in the foreground, and report only when every"
+        " command has finished"
+    ),
+}
+
+#: §36's skip list and gate step, superseded by §40.
+PROTOCOL_40_SUPERSEDED = (
+    "skip `meta:` bookkeeping commits and merge commits",
+    "Runs `./scripts/check` once at that commit",
+)
+
+
+def _protocol(name: str) -> str:
+    return flat((ROOT / name / "REVIEW-PROTOCOL.md").read_text(encoding="utf-8"))
+
+
+@pytest.mark.parametrize("key", sorted(PROTOCOL_40_SENTENCES))
+@pytest.mark.parametrize("name", ["templates", "meta"])
+def test_the_protocol_prunes_worktrees_skips_bookkeeping_and_runs_the_gate_once(
+    name: str, key: str
+) -> None:
+    """§40: both protocol files carry H-067's worktree hygiene, H-068's skip list
+    and H-069's gate sentence; §36's skip list and gate step are gone."""
+    text = _protocol(name)
+    said = PROTOCOL_40_SENTENCES[key]
+    assert said in strip_paths(text), f"{name}/REVIEW-PROTOCOL.md does not say {said!r}"
+    for old in PROTOCOL_40_SUPERSEDED:
+        assert old not in strip_paths(text), f"{name}/REVIEW-PROTOCOL.md still says {old!r}"
+
+
+@pytest.mark.parametrize("name", ["templates", "meta"])
+def test_the_protocol_prunes_first_and_removes_its_own_worktrees_last(name: str) -> None:
+    """§40 (H-067): the prune comes before the commits are found, and the removal
+    of the review's own worktrees after the merge, before the verdict line."""
+    text = strip_paths(_protocol(name))
+    prune = text.index(PROTOCOL_40_SENTENCES["the-reviewer-starts-with-prune"])
+    assert prune < text.index("## The commits under review")
+    own = text.index(PROTOCOL_40_SENTENCES["the-review-ends-by-removing-its-own"])
+    assert text.index("## The merge (with a PR)") < own
+    assert own < text.index("Your reply's first line is exactly")
+
+
+#: §41 "Smaller rulings" (REVIEW-24 should-fix 5): what "stale" means, as both
+#: protocol files and the handbook's §7 say it, flattened.
+STALE_DEFINITION = (
+    "A worktree is stale when it is registered under the clone and its path no longer"
+    " exists, or when it is a review worktree under `/tmp` that is not this review's"
+    " and is older than the current aux job's start",
+    "a worktree of a review running concurrently, or one a human made, is never stale",
+)
+
+
+def _paragraph(text: str, opening: str) -> str:
+    """The one blank-line-separated paragraph of `text` that starts with `opening`, flattened."""
+    found = [flat(p) for p in re.split(r"\n\s*\n", text) if flat(p).startswith(opening)]
+    assert len(found) == 1, (opening, found)
+    return found[0]
+
+
+@pytest.mark.parametrize("name", ["templates", "meta"])
+def test_the_protocol_defines_stale_and_pins_each_worktree_command_where_it_occurs(
+    name: str,
+) -> None:
+    """§41: the opening paragraph defines stale and removes stale worktrees with
+    `git worktree remove --force`; the closing paragraph removes the review's own
+    with `git worktree remove --force` and then runs `git worktree prune`.
+    Deleting any one of the three commands, or the definition, turns this red."""
+    raw = (ROOT / name / "REVIEW-PROTOCOL.md").read_text(encoding="utf-8")
+    opening = _paragraph(raw, "Before anything else, run `git worktree prune`")
+    assert "under `/tmp` with `git worktree remove --force <path>`" in strip_paths(opening), opening
+    for said in STALE_DEFINITION:
+        assert said in strip_paths(opening), f"{name}: the opening paragraph does not say {said!r}"
+    closing = _paragraph(raw, "Last, remove every worktree this review added")
+    assert "`git worktree remove --force <path>` for each" in strip_paths(closing), closing
+    assert "then `git worktree prune`" in strip_paths(closing), closing
+
+
+def test_the_handbook_section_7_defines_stale() -> None:
+    """§41 "Documentation": the handbook's §7 carries the definition."""
+    text = (ROOT / "docs" / "ARCHITECT-HANDBOOK.md").read_text(encoding="utf-8")
+    section = flat(text.split("\n## 7. ", 1)[1].split("\n## ", 1)[0])
+    for said in STALE_DEFINITION:
+        assert said in strip_paths(section), f"handbook §7 does not say {said!r}"
+
+
+@pytest.mark.parametrize(
+    ("number", "said"),
+    [
+        (7, "`git worktree prune`"),
+        (7, "stale review worktree"),
+        (7, "ends by removing its own"),
+        (7, "`plan:` (read for what it says)"),
+        (7, "`meta:`, `journal:` and `report:` (read for forbidden edits only, never"
+            " reviewed as a unit)"),
+        (7, "`review:` and merge commits"),
+        (7, "run `./scripts/check` once, in the foreground, and report only when every"
+            " command has finished"),
+        (17, "`refused: <one line>`"),
+        (17, "`[b] refused`"),
+        (17, "`VERDICT: mission N blocked <unit>`"),
+        (17, "`autonomous`"),
+        (17, "a unit no agent will author"),
+        (17, "`VERDICT: escalate ruling: human-supplied content`"),
+    ],
+)
+def test_the_handbook_says_section_40s_rules(number: int, said: str) -> None:
+    """§40 "Documentation": the handbook's §7 says the worktree hygiene, the skip
+    list and the gate sentence; §17 says the refusal path."""
+    text = (ROOT / "docs" / "ARCHITECT-HANDBOOK.md").read_text(encoding="utf-8")
+    heads = re.findall(rf"^## {number}\. .*$", text, flags=re.M)
+    assert len(heads) == 1, number
+    section = flat(text.split(heads[0], 1)[1].split("\n## ", 1)[0])
+    assert said in strip_paths(section), f"handbook §{number} does not say {said!r}"

@@ -14,7 +14,10 @@
 Beside whichever of those decides, every role job's stream-json (builder and
 aux alike) is read for the harness's task-killed notice (§24): the runner hands
 each parsed event to `MonitorSupervisor.observe`, and a killed task is one
-`monitor.task_killed` event carrying the task's command line, once per task.
+`monitor.task_killed` event carrying the task's command line, once per task:
+keyed by the task's id in its transcript (the session), across every job that
+reads that transcript, and never for a job the daemon's own stop is ending,
+whose record becomes `orphaned` instead (§38, §40 H-062).
 
 At job end the runner hands over what was still alive in the job's scope or
 process group once claude had exited (§24): `MonitorSupervisor.orphan_processes`
@@ -579,8 +582,13 @@ class MonitorSupervisor:
         clock: Callable[[], float] = time.monotonic,
         stop_grace_s: float = STOP_GRACE_S,
         pids: Callable[[Job], list[int]] = pid_list,
+        stopping: Callable[[str], bool] | None = None,
     ) -> None:
         self.config = config
+        #: Is the daemon's own stop ending this job? The daemon passes
+        #: `runner.daemon_stopping`; a task such a job's claude kills on its way
+        #: out is not `monitor.task_killed` (§38, §40 H-062).
+        self.stopping = stopping
         #: The live pid set of a job, which is what `--pids` carries (§5, §24). The
         #: daemon passes `runner.live_pids`: the job's scope or process group.
         self.pids = pids
@@ -599,6 +607,11 @@ class MonitorSupervisor:
         #: job id → the task-killed reader of its stream (§24), for every role.
         #: Created by the first event `observe` sees and dropped by `stop`.
         self._kill_watches: dict[str, TaskKillWatch] = {}
+        #: (transcript, task id) of every kill already raised, the transcript named
+        #: by the job's session id: a `keep` job reads the same transcript again,
+        #: and its kills are raised once across those reads (§40 H-062). Outlives
+        #: the job, so it is capped at `TASK_MEMORY` (§21).
+        self._raised: OrderedDict[tuple[str, str], None] = OrderedDict()
 
     @property
     def source(self) -> str:
@@ -689,17 +702,29 @@ class MonitorSupervisor:
         """One parsed stream-json event of a running job, of any role (§24).
 
         The runner calls this for every event as it reads it. A killed task is
-        filed as `monitor.task_killed`, once per task per job; nothing else is
-        done with the event, and a failure here is logged, never raised into the
-        run (§1 invariant 4).
+        filed as `monitor.task_killed`, once per task id per transcript (§40
+        H-062), and not at all while the daemon's own stop is ending the job; nothing
+        else is done with the event, and a failure here is logged, never raised
+        into the run (§1 invariant 4).
         """
         try:
             watch = self._kill_watches.get(job.id)
             if watch is None:
                 watch = self._kill_watches[job.id] = TaskKillWatch()
             kill = watch.feed(event)
-            if kill is not None:
-                self._task_killed(job, kill)
+            if kill is None:
+                return
+            key = (job.session_id or job.id, kill.task_id)
+            if key in self._raised:
+                return
+            _remember(self._raised, key, None)
+            if self.stopping is not None and self.stopping(job.id):
+                log.info(
+                    "job %s: task %s killed by the daemon's stop; not raised",
+                    job.id, kill.task_id,
+                )
+                return
+            self._task_killed(job, kill)
         except Exception:
             log.exception("job %s: the task-killed reader failed; the job is untouched", job.id)
 

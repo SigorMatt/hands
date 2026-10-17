@@ -15,6 +15,10 @@ Environment (a test sets what it needs; everything is optional):
                               files blocks as they arrive and not at exit
     HANDS_FAKE_MONITOR_EXIT   exit with this code after the last block instead
                               of idling until it is killed
+    HANDS_FAKE_MONITOR_READ   before anything else, wait (up to 10 s) for the
+                              `--transcript` file to hold a line and emit
+                              `EVENT transcript <its first line>`, or
+                              `EVENT transcript unreadable <path>`
 """
 
 from __future__ import annotations
@@ -43,6 +47,20 @@ def _on_term(signum: int, frame: Any) -> None:
     sys.exit(0)
 
 
+def read_transcript(path: str) -> str:
+    """The first line of the transcript the monitor was handed, once there is one."""
+    for _ in range(500):
+        try:
+            with open(path, encoding="utf-8") as handle:
+                line = handle.readline().strip()
+        except OSError:
+            line = ""
+        if line:
+            return f"EVENT transcript {line}"
+        time.sleep(0.02)
+    return f"EVENT transcript unreadable {path}"
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(prog="fake_monitor")
     parser.add_argument("--pids", required=True)
@@ -66,6 +84,8 @@ def main() -> int:
 
     signal.signal(signal.SIGTERM, _on_term)
 
+    if os.environ.get("HANDS_FAKE_MONITOR_READ"):
+        emit(read_transcript(args.transcript))
     emit(FIRST)
     gate = os.environ.get("HANDS_FAKE_MONITOR_GO")
     if gate:

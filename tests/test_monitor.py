@@ -21,9 +21,11 @@ import pytest
 
 from conftest import kill_quietly, process_live, strip_paths
 from fake_monitor import FAREWELL, FIRST, SECOND, THIRD
-from hands.config import Config, parse_config
+from hands.config import Config, load_config, parse_config
+from hands.daemon import Daemon
 from hands.monitor import (
     MAX_CMDLINE,
+    TASK_MEMORY,
     BlockBuffer,
     MonitorSupervisor,
     TaskKillWatch,
@@ -35,8 +37,9 @@ from hands.monitor import (
     group_pids,
     pid_list,
 )
+from hands.runner import project_dir_name
 from hands.spool import Event, Job, Spool
-from harness import BLOCK, config_body, drive, ok, write_project
+from harness import BLOCK, PROJECT, TIMEOUT, config_body, drive, ok, write_project
 
 FAKE_MONITOR = Path(__file__).with_name("fake_monitor.py")
 FAKE_CLAUDE = Path(__file__).with_name("fake_claude.py")
@@ -580,6 +583,188 @@ def test_a_queued_reply_can_carry_the_notice(
         assert [(e.payload["task_id"], e.payload["command"]) for e in events] == [
             ("bg9", "npm run dev")
         ]
+
+    drive(body)
+
+
+@pytest.mark.parametrize(
+    ("scans", "expected"),
+    [
+        ([[KILL_A], [KILL_A], [KILL_A]], ["bg1"]),
+        ([[KILL_A], [KILL_A, KILL_B], [KILL_B]], ["bg1", "bg2"]),
+    ],
+    ids=["one-task-three-scans", "two-tasks-three-scans"],
+)
+def test_task_killed_is_raised_once_per_task_of_a_transcript_across_its_scans(
+    tmp_home: Path, tmp_path: Path, scans: list[list[str]], expected: list[str]
+) -> None:
+    """§40 (H-062): once per killed task, keyed by the task's id in the transcript,
+    across scans. Each scan is one job's read of the same session (`keep`), whose
+    stream repeats the notice of a task an earlier scan already raised."""
+    workdir = tmp_path / "work"
+    workdir.mkdir()
+    write_project(tmp_home, config_body(tmp_home, workdir))
+
+    async def body(daemon: Any) -> None:
+        jobs = []
+        for n, lines in enumerate(scans):
+            prompt = "\n".join(["go", "FAKE:session sess-scans", *lines])
+            context = "clear" if n == 0 else "keep"
+            job = await ok("send", "--role", "builder", "--context", context, prompt)
+            assert (await ok("wait", job["id"]))["state"] == "done"
+            jobs.append(job["id"])
+        assert {daemon.spool.load_job(job_id).session_id for job_id in jobs} == {"sess-scans"}
+        events = [e for e in daemon.spool.events() if e.kind == "monitor.task_killed"]
+        assert [e.payload["task_id"] for e in events] == expected
+
+    drive(body)
+
+
+def in_session(spool: Spool, session_id: str, *, role: str = "builder") -> Job:
+    """A running job whose stream is the transcript of `session_id`."""
+    job = spool.create_job(role=role, context="clear", prompt="p", origin="cli")
+    return spool.transition(job, "running", pid=os.getpid(), session_id=session_id)
+
+
+def killed(task_id: str) -> dict[str, Any]:
+    """The `task_updated` half of the recorded notice, for `task_id` (§24)."""
+    return {"type": "system", "subtype": "task_updated", "task_id": task_id,
+            "patch": {"status": "killed"}}
+
+
+def test_two_sessions_reporting_the_same_task_id_each_raise_it_once(
+    tmp_home: Path, workdir: Path, spool: Spool
+) -> None:
+    """REVIEW-24 should-fix 6 (§41, §40 H-062): the memory is keyed by
+    (transcript, task id), so the same task id in two sessions' transcripts is two
+    kills — each raised once however often its own stream repeats the notice."""
+    monitors = MonitorSupervisor(make_config(tmp_home, workdir), spool)
+    first = in_session(spool, "sess-a")
+    second = in_session(spool, "sess-b")
+    for job in (first, second, first, second):
+        for event in recorded_events():
+            monitors.observe(job, event)
+    raised = [(e.payload["job"], e.payload["task_id"]) for e in monitor_events(spool)]
+    assert raised == [
+        (first.id, "bar46gi30"), (first.id, "bs3zkkxlo"),
+        (second.id, "bar46gi30"), (second.id, "bs3zkkxlo"),
+    ]
+    for job in (first, second):
+        run(lambda job=job: monitors.stop(job.id))
+
+
+def test_the_raised_memory_forgets_its_oldest_kill_when_the_1025th_arrives(
+    tmp_home: Path, workdir: Path, spool: Spool
+) -> None:
+    """§21, §40 H-062: the raised-kill memory holds `TASK_MEMORY` (1024) keys; the
+    1025th evicts the oldest, which a later `keep` read of the same transcript then
+    raises again, while the second-oldest is still remembered and is not."""
+    assert TASK_MEMORY == 1024
+    monitors = MonitorSupervisor(make_config(tmp_home, workdir), spool)
+    scan = in_session(spool, "sess-long")
+    for n in range(TASK_MEMORY):
+        monitors.observe(scan, killed(f"t{n}"))
+    assert len(monitor_events(spool)) == TASK_MEMORY
+    again = in_session(spool, "sess-long")
+    monitors.observe(again, killed("t0"))  # still remembered: the memory is full, not over
+    assert len(monitor_events(spool)) == TASK_MEMORY
+    monitors.observe(scan, killed(f"t{TASK_MEMORY}"))  # the 1025th
+    assert len(monitor_events(spool)) == TASK_MEMORY + 1
+    later = in_session(spool, "sess-long")
+    monitors.observe(later, killed("t1"))  # the second-oldest: not raised again
+    assert len(monitor_events(spool)) == TASK_MEMORY + 1
+    monitors.observe(later, killed("t0"))  # the oldest left: raised again
+    events = monitor_events(spool)
+    assert len(events) == TASK_MEMORY + 2
+    assert (events[-1].payload["job"], events[-1].payload["task_id"]) == (later.id, "t0")
+    for job in (scan, again, later):
+        run(lambda job=job: monitors.stop(job.id))
+
+
+def _stopped_daemon(tmp_home: Path, tmp_path: Path, how: str) -> tuple[Spool, str]:
+    """A builder job that kills task bg1 on its way out, ended by `how`: the
+    daemon's own stop, or a human's cancel. The spool and the job's id."""
+    workdir = tmp_path / "work"
+    workdir.mkdir()
+    write_project(tmp_home, config_body(tmp_home, workdir, builder="cancel_gated = false"))
+    seen: dict[str, str] = {}
+
+    async def scenario() -> None:
+        daemon = Daemon(load_config(PROJECT))
+        await daemon.start()
+        try:
+            prompt = "\n".join(["go", BLOCK, "FAKE:kill-on-stop bg1 sleep 600"])
+            job = await ok("send", "--role", "builder", "--context", "clear", prompt)
+            seen["id"] = job["id"]
+            await daemon.runner.wait_for_session(job["id"])
+            if how == "cancel":
+                await ok("cancel", job["id"], "--reason", "a human ended it")
+                await daemon.wait_for_terminal(job["id"], timeout=TIMEOUT)
+        finally:
+            await daemon.stop()
+
+    asyncio.run(asyncio.wait_for(scenario(), TIMEOUT))
+    return Spool(tmp_home / ".hands" / PROJECT), seen["id"]
+
+
+def test_a_daemon_stop_raises_no_task_killed_for_the_job_it_orphans(
+    tmp_home: Path, tmp_path: Path
+) -> None:
+    """§40 (H-062), §38: the job the daemon's own stop ends is `orphaned`, and the
+    tasks its claude kills on the way out are not `monitor.task_killed`."""
+    spool, job_id = _stopped_daemon(tmp_home, tmp_path, "daemon_stop")
+    record = spool.load_job(job_id)
+    assert (record.state, record.orphan_reason) == ("orphaned", "daemon_stop")
+    assert [e for e in spool.events() if e.kind == "monitor.task_killed"] == []
+
+
+def test_a_cancel_still_raises_the_task_its_claude_kills_on_the_way_out(
+    tmp_home: Path, tmp_path: Path
+) -> None:
+    """The control of the test above: the same job ended by a human's cancel is
+    `killed`, and the notice the fake emits on that signal is raised once."""
+    spool, job_id = _stopped_daemon(tmp_home, tmp_path, "cancel")
+    assert spool.load_job(job_id).state == "killed"
+    events = [e for e in spool.events() if e.kind == "monitor.task_killed"]
+    assert [(e.payload["job"], e.payload["task_id"]) for e in events] == [(job_id, "bg1")]
+
+
+def test_the_monitor_reads_the_transcript_under_the_roles_claude_config_dir(
+    tmp_home: Path, tmp_path: Path, opsdir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """§40 (H-063): a role whose env sets `CLAUDE_CONFIG_DIR` has its transcript
+    under that directory's `projects/`; the runner records the path in the job
+    record before the monitor starts, and the monitor reads the file the fake
+    claude wrote there."""
+    monkeypatch.setenv("HANDS_FAKE_MONITOR_READ", "1")
+    workdir = tmp_path / "work"
+    workdir.mkdir()
+    config_dir = tmp_path / "claude-b"
+    builder = f'cancel_gated = false\nenv = {{ CLAUDE_CONFIG_DIR = "{config_dir}" }}'
+    write_project(
+        tmp_home,
+        config_body(
+            tmp_home,
+            workdir,
+            builder=builder,
+            extra=f'\n[ops]\nrepo = "{opsdir}"\nmonitor_cmd = "watch_monitor.sh"\n',
+        ),
+    )
+    expected = config_dir / "projects" / project_dir_name(workdir) / "sess-cfg.jsonl"
+
+    async def body(daemon: Any) -> None:
+        prompt = "\n".join(["go", "FAKE:session sess-cfg", "FAKE:transcript", BLOCK])
+        job = await ok("send", "--role", "builder", "--context", "clear", prompt)
+        events = await wait_for(
+            lambda: [e for e in daemon.spool.events() if e.kind.startswith("monitor.")],
+            "the monitor's first block",
+        )
+        assert daemon.spool.load_job(job["id"]).transcript_path == str(expected)
+        first_line = expected.read_text(encoding="utf-8").splitlines()[0]
+        assert json.loads(first_line)["session_id"] == "sess-cfg"
+        assert events[0].payload["block"] == f"EVENT transcript {first_line}"
+        assert not (tmp_home / ".claude").exists()
+        await ok("cancel", job["id"], "--reason", "the run is over")
 
     drive(body)
 

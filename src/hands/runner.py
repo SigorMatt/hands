@@ -66,7 +66,7 @@ import shutil
 import signal
 import subprocess
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, TextIO
@@ -255,14 +255,24 @@ def project_dir_name(cwd: str | os.PathLike[str]) -> str:
     return _NON_ALNUM_RE.sub("-", str(Path(cwd)))
 
 
-def transcript_path_for(cwd: str | os.PathLike[str], session_id: str) -> str:
-    """`~/.claude/projects/<dashed cwd>/<session_id>.jsonl` (§2).
+#: The variable that moves Claude Code's configuration directory, transcripts
+#: included (§40, H-063).
+CLAUDE_CONFIG_DIR_ENV = "CLAUDE_CONFIG_DIR"
 
-    Derived, never verified: the file is Claude Code's to create, and at the
-    moment of the init event it may not exist yet.
+
+def transcript_path_for(
+    cwd: str | os.PathLike[str], session_id: str, env: Mapping[str, str] | None = None
+) -> str:
+    """`<config dir>/projects/<dashed cwd>/<session_id>.jsonl` (§2, §40 H-063).
+
+    The config dir is `$CLAUDE_CONFIG_DIR` of the job's environment `env` when it
+    is set and not empty — a relative one is taken from `cwd`, where claude runs —
+    and `~/.claude` otherwise. Derived, never verified: the file is Claude Code's
+    to create, and at the moment of the init event it may not exist yet.
     """
-    base = Path("~/.claude/projects").expanduser()
-    return str(base / project_dir_name(cwd) / f"{session_id}.jsonl")
+    configured = (env or {}).get(CLAUDE_CONFIG_DIR_ENV)
+    root = Path(cwd) / configured if configured else Path("~/.claude").expanduser()
+    return str(root / "projects" / project_dir_name(cwd) / f"{session_id}.jsonl")
 
 
 def extract_verdict(result: str | None) -> str | None:
@@ -594,13 +604,18 @@ class Runner:
         event = self._session_ready.setdefault(job_id, asyncio.Event())
         await asyncio.wait_for(event.wait(), timeout)
 
-    async def run(self, job: Job) -> Job:
-        """Run one `queued` job to a terminal state and return the finished record."""
+    async def run(self, job: Job, *, preface: str | None = None) -> Job:
+        """Run one `queued` job to a terminal state and return the finished record.
+
+        `preface`, when given, is put before the prompt, then a blank line, in the
+        record moved to `running` and in what claude reads (§39's journal sentence,
+        decided by the daemon at dispatch)."""
         if job.state != "queued":
             raise RunnerError(f"job {job.id} is {job.state}; only a queued job can be run")
         role = self.config.role(job.role)
 
-        size = len(job.prompt.encode("utf-8"))
+        delivered = job.prompt if preface is None else f"{preface}\n\n{job.prompt}"
+        size = len(delivered.encode("utf-8"))
         if size > MAX_PROMPT_BYTES:
             raise RunnerError(
                 f"prompt is {size} bytes, over the {MAX_PROMPT_BYTES} byte cap of §2; "
@@ -635,7 +650,10 @@ class Runner:
             raise RunnerError(
                 f"job {job.id} became {current.state} before it started; nothing spawned"
             )
-        job = self.spool.transition(current, "running", head_at_start=head_at_start)
+        started: dict[str, Any] = {"head_at_start": head_at_start}
+        if preface is not None:
+            started["prompt"] = f"{preface}\n\n{current.prompt}"
+        job = self.spool.transition(current, "running", **started)
         if advance_error is not None:
             return await self._finish(
                 job, role, "failed", _Parsed(), None, advance_error,
@@ -741,6 +759,12 @@ class Runner:
         except TimeoutError:
             _signal(proc, signal.SIGTERM)
         return True
+
+    def daemon_stopping(self, job_id: str) -> bool:
+        """Is the daemon's own stop ending this job (§38)? True from its signal until
+        the run has read the last of its stream; the monitor raises no
+        `task_killed` for such a job (§40 H-062)."""
+        return job_id in self._daemon_stop
 
     # ------------------------------------------------------- job end (§24)
 
@@ -948,7 +972,12 @@ class Runner:
         if isinstance(session_id, str) and session_id and parsed.session_id is None:
             parsed.session_id = session_id
             job.session_id = session_id
-            job.transcript_path = transcript_path_for(role.cwd, session_id)
+            # §40 (H-063): from the environment the job was spawned with, so a
+            # role's `CLAUDE_CONFIG_DIR` moves it; recorded before the monitor's
+            # first scan, which waits for this event (`wait_for_session`).
+            job.transcript_path = transcript_path_for(
+                role.cwd, session_id, job_env(job, role, self.config.project)
+            )
             self.spool.save_job(job)
             # Written as soon as it is known so that a `keep` send arriving while
             # this job runs can see that the session's last job is not terminal.

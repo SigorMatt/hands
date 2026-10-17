@@ -806,6 +806,42 @@ def test_the_job_carries_the_derived_transcript_path(
     assert job.transcript_path == expected
 
 
+def test_the_transcript_path_follows_claude_config_dir(tmp_home: Path, tmp_path: Path) -> None:
+    """§40 (H-063): `$CLAUDE_CONFIG_DIR/projects/…` when the job's environment sets
+    it (a relative one is the job's cwd's), `~/.claude/projects/…` otherwise."""
+    cwd = "/home/msi/git/hands"
+    config_dir = tmp_path / "claude-b"
+    assert transcript_path_for(cwd, "s1", {"CLAUDE_CONFIG_DIR": str(config_dir)}) == str(
+        config_dir / "projects/-home-msi-git-hands/s1.jsonl"
+    )
+    assert transcript_path_for(cwd, "s1", {"CLAUDE_CONFIG_DIR": "rel"}) == (
+        "/home/msi/git/hands/rel/projects/-home-msi-git-hands/s1.jsonl"
+    )
+    default = str(tmp_home / ".claude/projects/-home-msi-git-hands/s1.jsonl")
+    assert transcript_path_for(cwd, "s1", {}) == default
+    assert transcript_path_for(cwd, "s1", {"CLAUDE_CONFIG_DIR": ""}) == default
+
+
+def test_a_role_with_claude_config_dir_records_the_transcript_claude_writes(
+    tmp_home: Path, tmp_path: Path, workdir: Path, spool: Spool
+) -> None:
+    """§40 (H-063): the role's `env` table sets `CLAUDE_CONFIG_DIR`; the job record's
+    transcript path is under it, and the fake claude wrote that very file."""
+    config_dir = tmp_path / "claude-b"
+    data = {
+        "roles": {"builder": {"cwd": str(workdir), "env": {"CLAUDE_CONFIG_DIR": str(config_dir)}}},
+        "runner": {"claude": str(FAKE), "cancel_grace_s": 0.2},
+    }
+    config = parse_config(data, project="demo", path=tmp_home / ".hands" / "demo.toml")
+    job = send(Runner(config, spool), spool, "FAKE:session sess-b\nFAKE:transcript\nFAKE:result ok")
+    expected = config_dir / "projects" / project_dir_name(workdir) / "sess-b.jsonl"
+    assert job.state == "done"
+    assert job.transcript_path == str(expected)
+    assert spool.load_job(job.id).transcript_path == str(expected)
+    assert json.loads(expected.read_text().splitlines()[0])["session_id"] == "sess-b"
+    assert not (tmp_home / ".claude").exists()
+
+
 # ---------------------------------------------------------------- orphaned
 
 

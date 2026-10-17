@@ -96,6 +96,8 @@ The checks, in order (docs/ARCHITECT-HANDBOOK.md §11 says the same):
 from __future__ import annotations
 
 import base64
+import contextlib
+import errno
 import hashlib
 import io
 import itertools
@@ -115,7 +117,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any, TextIO
 
 import hands.config as config_mod
-from hands.config import CLONE_ENV, KITS_ENV, Config
+from hands.config import CLONE_ENV, KITS_ENV, Config, FilesConfig
 from hands.playbook import (
     DRIVER_VERDICTS,
     GIT_ENV_CLEARED,
@@ -123,8 +125,10 @@ from hands.playbook import (
     PlaybookConfigError,
     PlaybookError,
     check_series_roles,
+    orphaned_rule_warnings,
     parse_playbook,
 )
+from hands.spool import PathEscape, resolve_under_roots
 
 __all__ = [
     "APPLY_EXCEPTION",
@@ -148,6 +152,14 @@ __all__ = [
     "file_run",
     "final_reply_literals",
     "home_shown",
+    "is_kit_file_name",
+    "is_staged_name",
+    "kit_directory",
+    "place_kit",
+    "read_staged",
+    "remove_staged",
+    "staged_path",
+    "stage_kit",
     "kit_dir_under_kits",
     "kickoff_line",
     "kit_md_message",
@@ -157,6 +169,7 @@ __all__ = [
     "plan_apply",
     "review_literals",
     "run",
+    "apply_run",
 ]
 
 #: DESIGN §10: `PLAYBOOK.toml` next to `WORKPLAN.md`, or agile-skills' `meta/PLAYBOOK.toml`.
@@ -293,6 +306,9 @@ class Report:
     kit_md_note: str = ""
     #: §36: the sha256 of the zip bytes the checks read (None for a directory).
     sha256: str | None = None
+    #: §40 (H-061): the playbook in force's warnings; printed `WARN playbook: …`,
+    #: and none of them fails a check.
+    warnings: list[str] = field(default_factory=list)
 
     @property
     def ok(self) -> bool:
@@ -312,6 +328,7 @@ class Report:
             "commit_message": self.commit_message,
             "apply_prompt": self.apply_prompt,
             "kit_md": self.kit_md,
+            "warnings": self.warnings,
         }
 
 
@@ -1332,6 +1349,7 @@ def check_kit(
         kit_md=plan.kit_md,
         kit_md_note=kit_md_note(plan),
         sha256=kit.sha256,
+        warnings=orphaned_rule_warnings(book) if book is not None else [],
     )
     if report.ok:
         report.apply_prompt = plan.prompt
@@ -1376,6 +1394,8 @@ def run(
         return 0 if report.ok else 1
     for check in report.checks:
         print(check.line(), file=out)
+    for warning in report.warnings:
+        print(f"WARN playbook: {warning}", file=out)
     failed = [check for check in report.checks if not check.ok]
     if failed:
         print(report.kit_md_note, file=out)
@@ -1390,6 +1410,238 @@ def run(
     print(f"commit message: {report.commit_message}", file=out)
     print(report.kit_md_note, file=out)
     print(f"kit check: pass ({len(report.checks)} of {len(report.checks)} checks)", file=out)
+    return 0
+
+
+# ------------------------------------------ `hands kit apply <zip>` (§40, the human)
+
+
+def is_kit_file_name(name: object) -> bool:
+    """§26's "sanitized to a basename; `.zip` only", as a refusal, not a rewrite.
+
+    Printable, no path separator of either platform, no leading dot (which also
+    rules out `.`, `..` and a bare `.zip`), and a lowercase `.zip` after a
+    non-empty stem. A name that fails is refused rather than cleaned up, so the
+    name written is the name the sender chose. The phone's `kit` and `hands kit
+    apply` (§40) judge a kit's file name by this one rule.
+    """
+    return (
+        isinstance(name, str)
+        and name.isprintable()
+        and "/" not in name
+        and "\\" not in name
+        and not name.startswith(".")
+        and name.endswith(".zip")
+        and len(name) > len(".zip")
+    )
+
+
+#: §40: the hidden name a kit's bytes are written under in `[files] kit_dir`
+#: before they are named (`stage_kit`): `.hands-kit-<random>.part`.
+STAGE_PREFIX = ".hands-kit-"
+STAGE_SUFFIX = ".part"
+_MIB = 1024 * 1024
+
+
+def is_staged_name(name: object) -> bool:
+    """Is `name` a basename `stage_kit` writes — hidden, `.hands-kit-…part`?"""
+    return (
+        isinstance(name, str)
+        and name.isprintable()
+        and "/" not in name
+        and "\\" not in name
+        and name.startswith(STAGE_PREFIX)
+        and name.endswith(STAGE_SUFFIX)
+        and len(name) > len(STAGE_PREFIX) + len(STAGE_SUFFIX)
+    )
+
+
+def kit_directory(files: FilesConfig) -> Path:
+    """`[files] kit_dir`, resolved, refused (`KitError`) outside `[files]
+    allowed_roots` or when it is not a directory — the phone's rule (§26)."""
+    try:
+        directory = resolve_under_roots(files.kit_dir, files.allowed_roots)
+    except PathEscape as exc:
+        raise KitError("[files] kit_dir is outside [files] allowed_roots") from exc
+    if not directory.is_dir():
+        raise KitError("[files] kit_dir is not a directory")
+    return directory
+
+
+def stage_kit(directory: Path, data: bytes) -> Path:
+    """Write `data` to a new hidden `.hands-kit-<random>.part` in `directory`,
+    flushed, and return its path. The caller removes it."""
+    handle, temp_name = tempfile.mkstemp(prefix=STAGE_PREFIX, suffix=STAGE_SUFFIX, dir=directory)
+    temp = Path(temp_name)
+    try:
+        with os.fdopen(handle, "wb") as out:
+            out.write(data)
+            out.flush()
+            os.fsync(out.fileno())
+    except BaseException:
+        with contextlib.suppress(FileNotFoundError):
+            temp.unlink()
+        raise
+    return temp
+
+
+def staged_path(directory: Path, staged: object) -> Path:
+    """`directory/staged` when `staged` is a basename `stage_kit` writes
+    (`is_staged_name`), else `KitError` — so `..`, a path or an absolute name
+    never reaches the file system."""
+    if not is_staged_name(staged):
+        raise KitError(
+            "staged must be the hidden .hands-kit-*.part basename hands kit apply "
+            "wrote in [files] kit_dir (§40)"
+        )
+    return directory / str(staged)
+
+
+def read_staged(path: Path, cap: int) -> bytes:
+    """The bytes of a staged kit (`stage_kit`): a regular file, never through a
+    symlink (`O_NOFOLLOW`), at most `cap` bytes, else `KitError`. It is opened
+    with `O_NONBLOCK`, so a FIFO cannot hold the caller, and `fstat`ed before
+    anything is read, so a FIFO, a directory or a device is refused by its type."""
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except FileNotFoundError:
+        raise KitError(f"no staged kit {path.name!r} in [files] kit_dir") from None
+    except OSError as exc:
+        if exc.errno == errno.ELOOP:
+            raise KitError(f"the staged kit {path.name!r} is a symlink") from None
+        raise KitError(f"the staged kit {path.name!r} cannot be opened ({exc.strerror})") from exc
+    try:
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode):
+            raise KitError(f"the staged kit {path.name!r} is not a regular file")
+        chunks: list[bytes] = []
+        left = cap + 1
+        while left > 0:
+            chunk = os.read(fd, min(left, _MIB))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            left -= len(chunk)
+    except OSError as exc:
+        raise KitError(f"the staged kit {path.name!r} cannot be read ({exc.strerror})") from exc
+    finally:
+        os.close(fd)
+    data = b"".join(chunks)
+    if len(data) > cap:
+        raise KitError(f"the staged kit is over [files] kit_max_mb ({cap} bytes)")
+    return data
+
+
+def remove_staged(path: Path) -> None:
+    """Remove a staged entry the daemon has read or refused. `unlink` removes a
+    symlink, not its target, and never a directory; an entry that cannot be
+    removed (a directory, one already gone) is left, the refusal already said."""
+    with contextlib.suppress(OSError):
+        os.unlink(path)
+
+
+def place_kit(directory: Path, name: str, data: bytes) -> bool:
+    """§40: put `data` at `directory/name`, never replacing another file.
+
+    True when it was copied there; False when `directory/name` already holds
+    exactly these bytes (the kit is already there — `hands kit apply` of a kit in
+    `kit_dir`, or of the same kit again). Any other entry of that name refuses
+    (`KitError`) and is left as it was. The bytes go to a hidden temp file in
+    `directory` (`stage_kit`), then hard-linked to the name (`os.link`, which
+    never replaces an existing entry, a dangling symlink included), and the temp
+    file is removed in every case.
+    """
+    target = directory / name
+    temp = stage_kit(directory, data)
+    try:
+        try:
+            os.link(temp, target)
+        except FileExistsError:
+            same = (
+                not target.is_symlink()
+                and target.is_file()
+                and target.stat().st_size == len(data)
+                and target.read_bytes() == data
+            )
+            if same:
+                return False
+            raise KitError(
+                f"[files] kit_dir already holds another file named {name!r}, and hands "
+                "kit apply never overwrites one; nothing is filed (§40)"
+            ) from None
+        return True
+    finally:
+        with contextlib.suppress(FileNotFoundError):
+            temp.unlink()
+
+
+def apply_run(
+    kit: str,
+    *,
+    files: FilesConfig,
+    send: Callable[[dict[str, Any]], dict[str, Any]],
+    out: TextIO,
+    as_json: bool,
+) -> int:
+    """`hands kit apply <zip>` (§40): the phone's kit path without the phone.
+
+    The client reads the zip — a regular file named as the phone's `kit` names
+    one (`is_kit_file_name`), at most [files] kit_max_mb — and writes its bytes
+    under a hidden staging name in `[files] kit_dir` (`stage_kit`; the directory
+    confined to `[files] allowed_roots`, `kit_directory`). The request names the
+    kit and the staged file, never carries the bytes, so any kit the size check
+    accepts fits the socket's line room (PR #5 hosted review, finding 8).
+    handsd's `kit_apply` reads the staged file, removes it, runs the check, copies
+    the zip to its own name in `kit_dir` and files the held apply (`origin: kit`).
+    The staged file is removed here too, whatever the answer. A refusal comes back
+    as the daemon's error, the failing check's lines in it.
+    """
+    cap = files.kit_max_mb * _MIB
+    path = Path(kit).expanduser()
+    if not is_kit_file_name(path.name):
+        raise KitError(
+            f"hands kit apply takes a .zip whose name is a printable basename not "
+            f"starting with a dot; {path.name!r} is not one (§26, §40)"
+        )
+    if not path.is_file():
+        raise KitError(f"hands kit apply: {path} is not a regular file")
+    size = path.stat().st_size
+    if size > cap:
+        raise KitError(
+            f"hands kit apply: {path} is {size} bytes, over [files] kit_max_mb ({cap} bytes)"
+        )
+    try:
+        directory = kit_directory(files)
+    except KitError as exc:
+        raise KitError(f"hands kit apply: {exc}") from exc
+    data = path.read_bytes()
+    if len(data) > cap:
+        raise KitError(
+            f"hands kit apply: {path} is {len(data)} bytes, over [files] kit_max_mb "
+            f"({cap} bytes)"
+        )
+    staged = stage_kit(directory, data)
+    try:
+        answer = send({"name": path.name, "staged": staged.name})
+    finally:
+        with contextlib.suppress(FileNotFoundError):
+            staged.unlink()
+    if as_json:
+        print(json.dumps(answer, sort_keys=True), file=out)
+        return 0
+    job = answer["job"]
+    where = "copied to" if answer.get("copied") else "already at"
+    print(f"kit apply: {path.name} {where} {answer.get('zip')} (sha256 {answer.get('sha256')})",
+          file=out)
+    print(f"commit message: {answer.get('commit_message')}", file=out)
+    if answer.get("default_why"):
+        print(f"the commit message is the default: {answer['default_why']}", file=out)
+    print(
+        f"kit apply: filed {job['id']} as a {job['state']} builder job "
+        f"(gate: {job.get('gate', {}).get('reason')}, origin: kit, kit_id: {job.get('kit_id')})",
+        file=out,
+    )
+    print(f"release it with `hands approve {job['id']}` (or the phone's buttons)", file=out)
     return 0
 
 

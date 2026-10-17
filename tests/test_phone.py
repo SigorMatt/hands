@@ -28,12 +28,14 @@ import httpx
 import pytest
 
 from conftest import commit_file, strip_paths
+from hands import api as api_mod
 from hands import daemon as daemon_mod
 from hands import phone as phone_mod
 from hands.config import ConfigError, load_config
 from hands.daemon import Daemon
 from hands.notify import PAIR_SPACING_S, http_post, http_stream
 from hands.phone import ARCHITECT_TITLE, GO_TITLE, KIT_TITLE, PROGRESS_TITLE, REPLY_TITLE
+from hands.runner import MAX_PROMPT_BYTES
 from harness import (
     CONSULT_HEAD,
     PROJECT,
@@ -1043,7 +1045,7 @@ def test_go_checks_the_builder_again_after_the_playbook_load(
 
     async def body(daemon: Daemon, fake: FakeNtfy) -> None:
         loop = asyncio.get_running_loop()
-        real = phone_mod.load_playbook
+        real = api_mod.load_playbook
 
         def loading(*args: Any, **kwargs: Any) -> Any:
             sent = threading.Event()
@@ -1059,7 +1061,7 @@ def test_go_checks_the_builder_again_after_the_playbook_load(
             assert sent.wait(TIMEOUT)
             return real(*args, **kwargs)
 
-        monkeypatch.setattr(phone_mod, "load_playbook", loading)
+        monkeypatch.setattr(api_mod, "load_playbook", loading)  # §40: `Api.kickoff` reads it
         await say(daemon, fake, f"go {SECRET}")
         assert len(filed) == 1
         await ok("wait", filed[0])
@@ -1163,6 +1165,13 @@ def test_progress_names_the_running_job_the_branch_three_commits_and_the_checkpo
     async def body(daemon: Daemon, fake: FakeNtfy) -> None:
         busy = await ok("send", "--role", "builder", "--context", "clear", "FAKE:block")
         assert (await running_job())["id"] == busy["id"]
+
+        async def started() -> bool:
+            # The worker names the job running before the runner stamps its record
+            # (§39's journal sentence is decided in between, off the event loop).
+            return (await ok("show", busy["id"]))["started"] is not None
+
+        await poll(started, "the running job's record to be stamped")
         await say(daemon, fake, f"progress {SECRET}")
         await daemon.notifier.drain()
         (answer,) = progress_answers(daemon)
@@ -3094,6 +3103,102 @@ def test_the_journal_reminder_runs_off_the_event_loop(project: str, workdir: Pat
     phone_drive(body)
 
 
+@pytest.mark.parametrize("dirty_at_enqueue", [True, False], ids=["dirty-then-committed",
+                                                                  "clean-then-dirty"])
+def test_the_journal_sentence_is_decided_when_the_send_is_dispatched(
+    project: str, workdir: Path, dirty_at_enqueue: bool
+) -> None:
+    """Review 23 should-fix 6: §39's commit-the-journal sentence is decided when the
+    job is dispatched, not when it is enqueued. A held cli send to the builder is
+    stored, and its hold published, with the human's prompt alone; it carries the
+    sentence only if `meta/journal.md` is dirty when the approved job starts."""
+    journal(workdir, dirty=dirty_at_enqueue)
+    text = "FAKE:result VERDICT: mission 23 finished"
+
+    async def body(daemon: Daemon, fake: FakeNtfy) -> None:
+        await builder_asked(daemon)
+        daemon.spool.append_event("consult.done", {"job": CONSULTATION})
+        sent = await ok("send", "--role", "builder", "--context", "keep", "--gate", "hold", text)
+        assert sent["state"] == "held" and sent["prompt"] == text, sent
+        assert (await ok("show", sent["id"]))["prompt"] == text
+        await daemon.notifier.drain()
+        for item in daemon.notifier.post.sent:
+            assert JOURNAL_SAID not in strip_paths(json.dumps(item, default=str)), item
+        if dirty_at_enqueue:
+            commit_file(workdir, "meta/journal.md",
+                        (workdir / "meta" / "journal.md").read_text(encoding="utf-8"))
+        else:
+            with (workdir / "meta" / "journal.md").open("a", encoding="utf-8") as handle:
+                handle.write(f"2026-10-15  consult {CONSULTATION} (architect done)\n")
+        await ok("approve", sent["id"])
+        record = await ok("wait", sent["id"])
+        assert record["state"] == "done", record
+        if dirty_at_enqueue:
+            assert record["prompt"] == text
+        else:
+            assert_reminded(record["prompt"], text)
+
+    phone_drive(body)
+
+
+@pytest.mark.parametrize("dirty", [True, False], ids=["dirty", "clean"])
+def test_claude_reads_the_prompt_the_running_record_keeps(
+    project: str, workdir: Path, dirty: bool
+) -> None:
+    """PR #5 hosted review, finding 1: what claude reads on stdin (the fake's
+    `FAKE:stdin` answers it back) is the record's prompt — the journal sentence and
+    a blank line before the sender's text exactly when the dispatch decided it."""
+    journal(workdir, dirty=dirty)
+    text = "FAKE:stdin"
+
+    async def body(daemon: Daemon, fake: FakeNtfy) -> None:
+        await builder_asked(daemon)
+        daemon.spool.append_event("consult.done", {"job": CONSULTATION})
+        sent = await ok("send", "--role", "builder", "--context", "keep", text)
+        record = await ok("wait", sent["id"])
+        assert record["state"] == "done", record
+        assert record["result"] == record["prompt"], record
+        if dirty:
+            assert_reminded(record["result"], text)
+        else:
+            assert record["result"] == text
+
+    phone_drive(body)
+
+
+@pytest.mark.parametrize("dirty", [True, False], ids=["dirty", "clean"])
+def test_the_prompt_cap_counts_the_journal_sentence(
+    project: str, workdir: Path, dirty: bool
+) -> None:
+    """REVIEW-24 should-fix 8 (§41, §2, §39): the cap is on what claude reads. A cli
+    send to the builder exactly at `MAX_PROMPT_BYTES` is accepted; with a dirty
+    `meta/journal.md` the dispatch-time sentence puts it over, and the job is
+    `killed` before it starts with the cap's reason; with a clean journal it is sent
+    as it was typed."""
+    journal(workdir, dirty=dirty)
+    text = "x" * MAX_PROMPT_BYTES
+
+    async def body(daemon: Daemon, fake: FakeNtfy) -> None:
+        await builder_asked(daemon)
+        daemon.spool.append_event("consult.done", {"job": CONSULTATION})
+        sent = await ok("send", "--role", "builder", "--context", "keep", text)
+        record = await ok("wait", sent["id"])
+        reasons = [e.payload.get("reason") for e in daemon.spool.events()
+                   if e.kind == "job.killed" and e.payload.get("job") == sent["id"]]
+        if dirty:
+            assert record["state"] == "killed", record["state"]
+            assert record["started"] is None, "nothing was spawned"
+            assert len(reasons) == 1, reasons
+            said = f"over the {MAX_PROMPT_BYTES} byte cap of §2"
+            assert said in strip_paths(reasons[0]), reasons
+        else:
+            assert record["state"] == "done", record["state"]
+            assert reasons == []
+            assert record["prompt"] == text
+
+    phone_drive(body)
+
+
 def test_answer_is_refused_when_the_builder_has_no_resumable_session(
     project: str, caplog: pytest.LogCaptureFixture
 ) -> None:
@@ -3354,6 +3459,85 @@ def test_a_refused_command_never_publishes_or_logs_the_secret_typed_as_its_job_i
     phone_drive(body)
     assert "no such job" in strip_paths(caplog.text)
     assert SECRET.lower() not in strip_paths(caplog.text.lower())
+
+
+BACKSLASH_SECRET = r"Qm7\Zr4\Wk9\Tp2"
+
+
+def secret_parts(secret: str, shortest: int = 4) -> list[str]:
+    """Every substring of `secret` of `shortest` characters or more."""
+    return [secret[i:j] for i in range(len(secret))
+            for j in range(i + shortest, len(secret) + 1)]
+
+
+def test_a_secret_with_a_backslash_is_neither_published_nor_logged_in_a_refusal(
+    tmp_home: Path, workdir: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """REVIEW-23 should-fix 5: the no-such-job reason quoted the typed id with
+    `repr`, which doubles a backslash, so a secret carrying one no longer matched
+    the redaction and went out nearly verbatim. With the secret typed as the job id
+    (alone, and inside a longer id), no substring of the secret of 4 or more
+    characters is in any published refusal (title or message) or in the log."""
+    notify = NOTIFY.replace(f'cmd_secret = "{SECRET}"', f"cmd_secret = '{BACKSLASH_SECRET}'")
+    (tmp_home / ".hands" / f"{PROJECT}.toml").write_text(
+        config_body(tmp_home, workdir, extra=notify)
+    )
+    assert load_config(PROJECT).notify.cmd_secret == BACKSLASH_SECRET
+    caplog.set_level(logging.DEBUG)
+    parts = secret_parts(BACKSLASH_SECRET)
+
+    async def body(daemon: Daemon, fake: FakeNtfy) -> None:
+        await say(daemon, fake, f"approve {BACKSLASH_SECRET} {BACKSLASH_SECRET}")
+        await say(daemon, fake, f"deny x{BACKSLASH_SECRET}y because {BACKSLASH_SECRET}")
+        await daemon.notifier.drain()
+        approve = refusals(daemon, "approve")
+        deny = refusals(daemon, "deny")
+        assert len(approve) == 1 and len(deny) == 1, (approve, deny)
+        for message in approve + deny:
+            assert "no such job" in strip_paths(message), message
+        for item in daemon.notifier.post.sent:
+            for field in ("title", "message"):
+                said = str(item.get(field) or "")
+                assert not [p for p in parts if p in strip_paths(said)], (field, said)
+
+    phone_drive(body)
+    assert "no such job" in strip_paths(caplog.text)
+    assert not [p for p in parts if p in strip_paths(caplog.text)]
+
+
+def test_an_ambiguous_prefix_carrying_a_backslash_secret_leaks_no_part_of_it(
+    tmp_home: Path, workdir: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """REVIEW-24 should-fix 7 (§41): the "is ambiguous" reason quotes the typed id
+    with `str`, as "no such job" does. Job ids never carry a backslash, so two job
+    records whose ids begin with the secret are planted for the typed secret to be
+    an ambiguous prefix of; no substring of the secret of 4 or more characters is in
+    the published refusal (title or message) or in the log."""
+    notify = NOTIFY.replace(f'cmd_secret = "{SECRET}"', f"cmd_secret = '{BACKSLASH_SECRET}'")
+    (tmp_home / ".hands" / f"{PROJECT}.toml").write_text(
+        config_body(tmp_home, workdir, extra=notify)
+    )
+    caplog.set_level(logging.DEBUG)
+    parts = secret_parts(BACKSLASH_SECRET)
+
+    async def body(daemon: Daemon, fake: FakeNtfy) -> None:
+        jobs = daemon.spool.jobs_dir
+        for suffix in ("a", "b"):
+            (jobs / f"{BACKSLASH_SECRET}{suffix}.json").write_text("{}", encoding="utf-8")
+        assert BACKSLASH_SECRET.count("\\") == 3, "the backslashes `repr` would double"
+        await say(daemon, fake, f"approve {BACKSLASH_SECRET} {BACKSLASH_SECRET}")
+        await daemon.notifier.drain()
+        approve = refusals(daemon, "approve")
+        assert len(approve) == 1, approve
+        assert "is ambiguous" in strip_paths(approve[0]), approve
+        for item in daemon.notifier.post.sent:
+            for field in ("title", "message"):
+                said = str(item.get(field) or "")
+                assert not [p for p in parts if p in strip_paths(said)], (field, said)
+
+    phone_drive(body)
+    assert "is ambiguous" in strip_paths(caplog.text)
+    assert not [p for p in parts if p in strip_paths(caplog.text)]
 
 
 def test_a_refused_command_with_a_wrong_or_missing_secret_stays_silent(project: str) -> None:

@@ -5,6 +5,17 @@ reviewing; that is the point. The prompt names the mission number N;
 everything else you learn from disk and from the forge. Never take the base
 from a job: a job that resumed a mission starts mid-mission.
 
+Before anything else, run `git worktree prune` in your clone, then `git
+worktree list`, and remove each stale review worktree an earlier review left
+under `/tmp` with `git worktree remove --force <path>`: an aborted review
+leaves its worktrees registered. A worktree is stale when it is registered
+under the clone and its path no longer exists, or when it is a review
+worktree under `/tmp` that is not this review's and is older than the
+current aux job's start; a worktree of a review running concurrently, or one
+a human made, is never stale, and you leave it. Every worktree this review
+adds, yours and each sub-agent's, goes under `/tmp`, and the review ends by
+removing them (below).
+
 ## The commits under review (DESIGN §35, §36)
 
 The Branch section of the brief decides the shape, and nothing else does.
@@ -77,13 +88,20 @@ and names the `<k>` it wrote.
 
 ## The per-commit sub-agents
 
-Dispatch ONE sub-agent per unit commit (skip `meta:` bookkeeping commits
-and merge commits), one at a time, never concurrently: the next starts when
-the last has reported, because each runs `./scripts/check` and one run at a
-time fits inside the 20-minute cap. Two kinds of commit are not units:
+Dispatch ONE sub-agent per unit commit, one at a time, never concurrently:
+the next starts when the last has reported, because each runs
+`./scripts/check` and one run at a time fits inside the 20-minute cap. These
+commits are not units, and none gets a sub-agent, a revert or a run of the
+gate:
 
 - A `plan: decisions <date> (owner)` commit is read for what it says it does
   and is not reviewed as a unit: no sub-agent, no revert, no run of the gate.
+  Every other `plan:` commit (the mission's U0 among them) is read the same
+  way, for what it says it does.
+- A `meta:`, `journal:` or `report:` commit is read for forbidden edits only
+  and never reviewed as a unit: `git show --stat <sha>`, and a file it lists
+  outside `meta/` is a forbidden edit, a blocker.
+- A `review:` commit and a merge commit are skipped.
 - A human-supplied commit (`fixtures:`, from a "human-supplied unit" of the
   brief) is checked by `git show --stat` alone: you compare the files and
   paths it lists with the ones the unit names, open none of them, and run
@@ -111,7 +129,8 @@ Each sub-agent, in a `git worktree` at that commit:
    sub-agent makes each one in the worktree, without committing, runs the
    relevant tests, expects red, and restores. A tests-only commit whose body
    names none is a blocker.
-3. Runs `./scripts/check` once at that commit; records green/red verbatim.
+3. At that commit: run `./scripts/check` once, in the foreground, and
+   report only when every command has finished; record green/red verbatim.
 4. Checks design conformance against the named sections, and that nothing
    forbidden was touched (`DESIGN.md`, `meta/plan.md`, `meta/CHECKPOINT.md`
    by a sub-agent commit).
@@ -159,6 +178,10 @@ squash: the per-unit commits are what the next cold review works on) — then
 bring the local tree level: `git checkout main && git pull --ff-only`. With
 blockers, the review leaves the PR open; say so in the reply, after the
 verdict line. Without a PR there is nothing to merge.
+
+Last, remove every worktree this review added: `git worktree remove --force
+<path>` for each (yours and each sub-agent's, under `/tmp`), then `git
+worktree prune`, so that the clone registers none of them.
 
 Your reply's first line is exactly:
 

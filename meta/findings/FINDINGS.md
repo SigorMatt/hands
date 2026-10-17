@@ -2310,7 +2310,7 @@ consult prompt names the handbook's and templates' paths; or the
 architect's table and settings allow `hands handbook [--templates]`; or
 the guard's read roots gain `HANDS_DOCS` and the instruction says `cat`.
 
-Status: resolved (mission 23 U7 — the architect's consult prompt names `docs_root()`'s handbook and templates paths; architect mode's read roots gain `HANDS_DOCS` and its `hands` subcommands `handbook`; architect/CLAUDE.md rule 2 says to Read the named paths. Tests: tests/test_playbook.py, tests/test_bash_guard.py)
+Status: resolved (mission 23 U7 — the architect's consult prompt names `docs_root()`'s handbook and templates paths; architect mode's read roots gain `$HANDS_DOCS/docs` and `$HANDS_DOCS/templates` (narrowed from §39's "HANDS_DOCS" by mission 23 U10 1276251; the narrower roots are the design, DESIGN §40, H-065) and its `hands` subcommands `handbook`; architect/CLAUDE.md rule 2 says to Read the named paths. Tests: tests/test_playbook.py, tests/test_bash_guard.py)
 
 ## H-052 — `project add` writes the architect role's `CLAUDE.md` from the role variant
 
@@ -2543,4 +2543,133 @@ does not edit another project's playbook. Whether `kit check` should warn
 on a playbook that has `aux.done` rules but no `aux.orphaned` rule is a
 design question.
 
-Status: open
+Status: resolved-by-code (mission 24 U6: `hands kit check` prints a `WARN playbook:` line, and the engine logs a warning at load, for a playbook with an `aux.done` rule and no `aux.orphaned` rule, and likewise `builder.done` without `builder.orphaned`; neither refuses; one function, `playbook.orphaned_rule_warnings`, computes both; docs/PLAYBOOK.md says so)
+
+## H-062 — the monitor raises `task_killed` once per transcript line, not once per task
+
+Severity: medium · Component: src/hands/monitor.py, src/hands/daemon.py;
+DESIGN §40 "The monitor's `task_killed`, de-duplicated", §2, §38
+Filed by: mission 24 orchestrator, U0 (2026-10-17).
+Evidence: 2026-10-16 13:45, two `monitor.task_killed` raises within a
+second for a builder the daemon's own stop had orphaned; 2026-10-16 16:05,
+three raises within 120 ms for one review job whose single sub-agent ended
+and which went on to finish. Each raise fired the playbook's rule and
+published a line.
+
+Symptom. The monitor raises once per transcript line that shows a killed
+task, on every scan, and also for a job the daemon itself is stopping.
+
+Direction. §40: raised once per killed task, keyed by the task's id in the
+transcript, across scans; never for a job the daemon is stopping (its
+record is `orphaned`, §38). Mission 24 U3.
+
+Status: resolved-by-code (mission 24 U3 — `MonitorSupervisor` raises `task_killed` once per (session, task id) across every job that reads the transcript, and not for a job `runner.daemon_stopping` names)
+
+Note (mission 25 U0, 2026-10-17): REVIEW-24 should-fix 6 found the session half of the key unpinned (`("", task_id)` left every test green) and the 1024-entry memory's eviction untested. Mission 25 U3 pins the session half (two sessions reporting the same task id each raise once) and the eviction.
+
+## H-063 — `runner.transcript_path_for` ignores `CLAUDE_CONFIG_DIR`
+
+Severity: high · Component: src/hands/runner.py, src/hands/monitor.py;
+DESIGN §40 "The transcript path follows the configuration directory"
+Filed by: mission 24 orchestrator, U0 (2026-10-17).
+Evidence: `runner.transcript_path_for` names `~/.claude/projects/<dashed
+cwd>/` by name; a role whose `[roles.<role>].env` sets `CLAUDE_CONFIG_DIR`
+keeps its transcripts under that directory's `projects/`.
+
+Symptom. The monitor reads nothing for such a role: no stall and no
+task-killed detection. It blocks every credential profile and any manual
+rotation by configuration directory.
+
+Direction. §40: the path is computed from the job's environment and
+recorded in the job record before the first scan. Mission 24 U3.
+
+Status: resolved-by-code (mission 24 U3 — `runner.transcript_path_for` takes the job's environment and uses `$CLAUDE_CONFIG_DIR/projects/…` when it is set; the runner records it at the init event, before the monitor's first scan)
+
+## H-064 — §39's lenient-id command list named `answer` and `reply`
+
+Severity: low · Component: DESIGN §39, src/hands/phone.py, src/hands/api.py
+Filed by: mission 24 orchestrator, U0 (2026-10-17), from REVIEW-23
+should-fix 1.
+Evidence: §39 says a job id in `approve`, `deny`, `answer`, `reply` and
+`cancel` is matched leniently; `answer <secret> <text>` and `reply <secret>
+<text>` carry no job id (phone.py), so mission 23 U2 (bcc3d53) applied
+lenient matching to `approve`, `deny` and `cancel` only, and a refused
+`reply`/`answer` keeps the titles `hands: reply` / `hands: answer`.
+
+Status: decided (DESIGN §40 "Rulings on review 23's should-fix items 1 and
+2" — the code's behaviour is the design)
+
+## H-065 — the architect's read roots are narrower than §39 says
+
+Severity: low · Component: driver/hooks/bash_guard.py (`DOCS_SUBDIRS`,
+`Reads.__init__`); DESIGN §39, §40
+Filed by: mission 24 orchestrator, U0 (2026-10-17), from REVIEW-23
+should-fix 2.
+Evidence: §39 (H-051's ruling) says "the guard's read roots gain
+`HANDS_DOCS`"; mission 23 U10 (1276251) admits only `$HANDS_DOCS/docs` and
+`$HANDS_DOCS/templates`, answering the hosted finding "Architects can read
+unrelated hands files" (in a source-tree install `docs_root()` is the
+repository root). H-051's Status line said the wider roots.
+
+Status: decided (DESIGN §40 — the narrower roots are the design; H-051's
+Status line corrected in this commit)
+
+## H-066 — a sub-agent may refuse to author what a unit asks
+
+Severity: medium · Component: templates/BUILDER-N-PROMPT.md,
+architect/CLAUDE.md rule 8, docs/ARCHITECT-HANDBOOK.md §17; DESIGN §40, §38
+Filed by: mission 24 orchestrator, U0 (2026-10-17), carried from another
+project's ledger.
+Evidence: discotrade, 2026-10-14, its HF-009.
+
+Symptom. No escalation condition anticipated a unit no agent will author.
+
+Direction. §40: the brief template's sub-agent rules gain `refused: <one
+line>`; the orchestrator marks the unit `[b] refused` and continues; the
+architect's escalation conditions gain "a unit no agent will author",
+answered `VERDICT: escalate ruling: human-supplied content`. Mission 24 U7.
+
+Status: resolved-by-doc (mission 24 U7 — templates/BUILDER-N-PROMPT.md's sub-agent rules carry the `refused: <one line>` sentence and its execution model the `[b] refused` rule; architect/CLAUDE.md rule 8 gains "a unit no agent will author", answered `VERDICT: escalate ruling: human-supplied content` with the human-supplied unit shape; docs/ARCHITECT-HANDBOOK.md §17 says the path. Tests: tests/test_kit.py)
+
+## H-067 — worktrees of aborted review sessions are left registered
+
+Severity: low · Component: templates/REVIEW-PROTOCOL.md,
+meta/REVIEW-PROTOCOL.md, src/hands/doctor.py; DESIGN §40
+Filed by: mission 24 orchestrator, U0 (2026-10-17), carried from another
+project's ledger.
+Evidence: discotrade, its HF-010, reviews 13–15.
+
+Direction. §40: the reviewer starts with `git worktree prune`, removes
+stale review worktrees of earlier reviews under `/tmp`, ends by removing its
+own; `hands doctor` warns on a worktree registered under a role's clone
+whose path is missing. Mission 24 U7, U8.
+
+Status: resolved — protocol half resolved-by-doc (mission 24 U7, 649417d — both protocols' reviewer starts with `git worktree prune`, removes stale review worktrees of earlier reviews under `/tmp`, and ends by removing its own; handbook §7 says so. Tests: tests/test_kit.py); doctor half resolved-by-code (mission 24 U8 — `hands doctor`'s `worktrees` row reads each role clone's `.git/worktrees/*/gitdir` and warns on a registered worktree whose path is missing, naming `git worktree prune`. Tests: tests/test_doctor.py)
+
+## H-068 — the review protocol's skip list does not name `plan:`, `journal:` or `report:`
+
+Severity: low · Component: templates/REVIEW-PROTOCOL.md,
+meta/REVIEW-PROTOCOL.md; DESIGN §40
+Filed by: mission 24 orchestrator, U0 (2026-10-17), carried from another
+project's ledger.
+Evidence: discotrade, its HF-011.
+
+Direction. §40: `plan:` (read for what it says), `meta:`, `journal:` and
+`report:` (read for forbidden edits only, never reviewed as a unit),
+`review:` and merge commits. Mission 24 U7.
+
+Status: resolved-by-doc (mission 24 U7 — both protocols' skip list: `plan:` read for what it says, `meta:`/`journal:`/`report:` read for forbidden edits only, `review:` and merge commits skipped; handbook §7 says so. Tests: tests/test_kit.py)
+
+## H-069 — a reviewer's sub-agent ran the gate twice, in the background, or returned early
+
+Severity: low · Component: templates/REVIEW-PROTOCOL.md,
+meta/REVIEW-PROTOCOL.md; DESIGN §40
+Filed by: mission 24 orchestrator, U0 (2026-10-17), carried from another
+project's ledger.
+Evidence: discotrade, its HF-012, review 15.
+
+Direction. §40: the protocol's sub-agent rules say "run `./scripts/check`
+once, in the foreground, and report only when every command has finished".
+Mission 24 U7.
+
+Status: resolved-by-doc (mission 24 U7 — both protocols' per-commit step 3 says "run `./scripts/check` once, in the foreground, and report only when every command has finished"; handbook §7 says so. Tests: tests/test_kit.py)

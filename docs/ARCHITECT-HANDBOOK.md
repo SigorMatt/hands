@@ -209,6 +209,20 @@ reply with the verdict line. Blockers are failed gates, missing tests, design
 violations, or claims the disk contradicts; a claim that overreaches is a
 blocker even when the code is right. Should-fix items wait for you.
 
+Three rules of the protocol carry other projects' reviews (DESIGN §40). The
+reviewer starts with `git worktree prune`, removes each stale review
+worktree an earlier, aborted review left under `/tmp`, and ends by removing
+its own (DESIGN §41). A worktree is stale when it is registered under the
+clone and its path no longer exists, or when it is a review worktree under
+`/tmp` that is not this review's and is older than the current aux job's
+start; a worktree of a review running concurrently, or one a human made, is
+never stale. Not every commit is a unit: `plan:` (read for what it says),
+`meta:`, `journal:` and `report:` (read for forbidden edits only, never
+reviewed as a unit), `review:` and merge commits get no sub-agent, and a
+human-supplied commit is checked by `git show --stat` alone (§17). And
+each per-commit sub-agent is told to run `./scripts/check` once, in the
+foreground, and report only when every command has finished.
+
 ## 8. Decisions files
 
 Answers to memos, scope calls, corrections: `decisions-YYYY-MM-DD.md`
@@ -398,6 +412,13 @@ taken relative to the directory. It prints one line per check,
   `API` or `Profile` is read as a path and fails, so rephrase it. A path with
   a `{placeholder}`, such as `meta/reviews/REVIEW-{n}.md`, names a different
   file per job, so only its syntax is checked.
+
+A `WARN playbook: <sentence>` line follows the check lines when the playbook
+in force has a rule on `aux.done` and none on `aux.orphaned`, or on
+`builder.done` and none on `builder.orphaned` (DESIGN §40, H-061): a
+warning, not a check, so the kit still passes and the exit status is
+unchanged; `--json` lists the sentences under `warnings`. A playbook you
+write carries both orphaned rules (§12, "A restart kills running work").
 
 When every check passes, it prints three things. First, the §3 apply prompt,
 which names each file the kit replaces (the file exists in the repo) and each
@@ -638,6 +659,17 @@ their repository paths and the commit message; the human places them under
 `~/Downloads/<name>/`; the builder copies and commits them by path without
 opening them; and the review checks that commit by `git show --stat` alone.
 
+When no plan anticipated it — a sub-agent stops on a text the unit asks for
+— the refusal path takes over (DESIGN §40). The brief's sub-agent rules say
+that a sub-agent that cannot or will not produce what the unit asks reports
+`refused: <one line>` and stops, changing nothing; the orchestrator does not
+retry it, marks the unit `[b] refused` and continues with the units that do
+not depend on it, and the mission ends `VERDICT: mission N blocked <unit>`.
+Under `autonomous` that blocked verdict consults the architect role, whose
+rule 8 names the condition, a unit no agent will author: it replies
+`VERDICT: escalate ruling: human-supplied content`, files no kit, and names
+the human-supplied unit above that would carry the content.
+
 ## 18. Reading hands: `send`, `jobs`, `pipeline`, `progress`
 
 - **`hands send` takes the prompt as a plain argument**, after the flags:
@@ -656,3 +688,16 @@ opening them; and the review checks that commit by `git show --stat` alone.
   verdict), the working tree's branch and `git log --oneline -3`, and the
   first line of `meta/CHECKPOINT.md` naming a unit in progress, or "no
   checkpoint". It is read-only and starts no job (DESIGN §38).
+- **`hands go` and `hands kit apply <zip>`** are the phone's `go` and `kit` at
+  the laptop (DESIGN §40). `go` sends the playbook's `[series] kickoff` line
+  to the builder as a `clear` send with `origin: cli`, refused while a builder
+  job is running, queued or held; `kit apply` checks the kit as `hands kit
+  check` does, refuses a failing one, copies a passing one into `[files]
+  kit_dir` and files its apply as a held builder job (`origin: kit`) that
+  `hands approve <job>` releases. The architect role's guard allows neither:
+  they are the human's commands for when the phone is away.
+- **docs/OPERATIONS.md is the human's runbook** for a hands machine: what it
+  holds, its secrets by kind, a usage-limit stop, operating without the
+  phone, a migration, a disaster and a release install. **docs/RELATED.md
+  records** two readings of other orchestrators, Gas Town and Conductor, that
+  the harness work cites (DESIGN §40). Neither is a design; DESIGN.md is.

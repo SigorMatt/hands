@@ -27,6 +27,7 @@ import re
 import shlex
 import shutil
 import subprocess
+import tempfile
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -44,8 +45,15 @@ from hands.kit import (
     apply_params,
     check_kit,
     home_shown,
+    is_kit_file_name,
+    kit_directory,
+    place_kit,
+    read_staged,
+    remove_staged,
+    staged_path,
 )
 from hands.notify import NotifyError, send_test
+from hands.playbook import PlaybookError, load_playbook, playbook_path
 from hands.runner import KeepRefused
 from hands.spool import (
     ANSWER_ORIGIN,
@@ -67,6 +75,9 @@ from hands.spool import (
 
 #: §31: the origin of the jobs the engine files, a consultation among them.
 ORIGIN_PLAYBOOK = "playbook"
+#: §27, §40: the origin of a kit's held apply filed from the phone's `kit` or from
+#: `hands kit apply`.
+KIT_ORIGIN = "kit"
 
 if TYPE_CHECKING:  # pragma: no cover - import cycle only matters to type checkers
     from hands.daemon import Daemon
@@ -120,12 +131,13 @@ def attachment_sentence(path: Path) -> str:
     return f"The human attached a file to this answer; it is at {path}."
 
 
-def _check_refusal(name: str, repo: Path, report: Report) -> str:
-    """§33: `kit_file`'s refusal of a kit that fails the check — the check's own lines."""
+def _check_refusal(name: str, repo: Path, report: Report, *, method: str = "kit_file") -> str:
+    """§33: `kit_file`'s refusal of a kit that fails the check — the check's own lines.
+    §40: `kit_apply`'s too."""
     failed = [check.name for check in report.checks if not check.ok]
     lines = "\n".join(check.line() for check in report.checks)
     return (
-        f"kit_file: kit {name!r} fails `hands kit check` against the builder's repository "
+        f"{method}: kit {name!r} fails `hands kit check` against the builder's repository "
         f"{repo} ({', '.join(failed)}), so handsd did not file it (§33):\n{lines}"
     )
 
@@ -178,7 +190,10 @@ def match_job_id(spool: Spool, typed: str) -> str:
     read as `0` and `l` or `I` as `1` — a whole id, else a prefix of `MIN_ID_PREFIX`
     or more characters. Two or more jobs matching is refused with the candidates.
     Used by `approve`, `deny` and `cancel` (laptop and phone alike); the phone's
-    `answer` and `reply` carry no job id."""
+    `answer` and `reply` carry no job id.
+
+    The typed id is quoted with `str`, never `repr`: the phone cuts its secret out
+    of the reason, and `repr` doubles a backslash in it (REVIEW-23 should-fix 5)."""
     with contextlib.suppress(SpoolError):
         return spool.load_job(typed).id
     key = _id_key(typed.strip())
@@ -193,12 +208,12 @@ def match_job_id(spool: Spool, typed: str) -> str:
         if len(whole) == 1:
             return whole[0]
     if whole:
-        raise ApiError(f"job id {typed!r} is ambiguous: it matches {', '.join(whole)}")
+        raise ApiError(f"job id `{typed}` is ambiguous: it matches {', '.join(whole)}")
     short = (
         f" (a prefix needs {MIN_ID_PREFIX} or more characters)"
         if 0 < len(key) < MIN_ID_PREFIX else ""
     )
-    raise ApiError(f"no such job {typed!r}{short}")
+    raise ApiError(f"no such job `{typed}`{short}")
 
 
 class Api:
@@ -224,12 +239,22 @@ class Api:
     #: §31, §32: the daemon half of `hands kit file`. `kit` is one row of §4's table
     #: and its `check` is answered by the client, so this is not in `COMMANDS` (which
     #: §4 pins); `method()` answers it as well, because the apply and its `kit_id`
-    #: are the daemon's to create.
-    KIT_METHODS: tuple[str, ...] = ("kit_file",)
+    #: are the daemon's to create. §40: `kit_apply` is the daemon half of `hands kit
+    #: apply <zip>`, the phone's kit path without the phone.
+    KIT_METHODS: tuple[str, ...] = ("kit_file", "kit_apply")
+
+    #: §40: "every phone command has a laptop form" — the commands that were
+    #: phone-only and gained one in mission 24. Not rows of §4's table, so not in
+    #: `COMMANDS`; `method()` answers them.
+    OPERATIONS: tuple[str, ...] = ("go",)
 
     def method(self, name: str) -> Any:
         """The bound coroutine for a command name, or None if there is no such command."""
-        if name not in self.COMMANDS and name not in self.KIT_METHODS:
+        if (
+            name not in self.COMMANDS
+            and name not in self.KIT_METHODS
+            and name not in self.OPERATIONS
+        ):
             return None
         return getattr(self, name)
 
@@ -253,16 +278,12 @@ class Api:
         no `origin: architect`: §32, "a socket client cannot set `origin:
         architect`" — only `kit_file` files an architect-origin job. Nor `origin:
         phone`: §37, only the daemon's own phone channel sets it (`answer_builder`,
-        `reply_architect`, `go_builder`), so a raw send cannot be published as the
+        `reply_architect`, `kickoff`), so a raw send cannot be published as the
         builder's answer or listed to the architect as a human decision.
 
-        A cli send to the builder reads §39's journal reminder (H-060) first, in a
-        worker thread, before any check: nothing is awaited between `_send`'s checks
-        and its enqueue.
+        A cli send to the builder gets §39's journal sentence (H-060) when it is
+        dispatched, not here (review 23 should-fix 6): `Daemon._run`.
         """
-        reminder = (
-            await self._journal_reminder() if origin == "cli" and role == "builder" else None
-        )
         if origin == ARCHITECT_ORIGIN:
             raise ApiError(
                 f"origin {ARCHITECT_ORIGIN!r} is handsd's own: it marks the apply handsd files "
@@ -284,7 +305,6 @@ class Api:
             gate=gate,
             origin=origin,
             playbook_sha256=playbook_sha256,
-            journal_reminder=reminder,
         )
 
     async def _send(
@@ -301,7 +321,6 @@ class Api:
         reply: bool = False,
         ungated: bool = False,
         attached: list[dict[str, Any]] | None = None,
-        journal_reminder: str | None = None,
     ) -> dict[str, Any]:
         if role not in self.config.roles:
             known = ", ".join(sorted(self.config.roles))
@@ -343,13 +362,6 @@ class Api:
         # its sha256 (§1 invariant 2). Every path is confined before any byte is
         # written, so a path outside the roots refuses the whole send.
         written = self._write_files(file or []) + list(attached or [])
-
-        if journal_reminder is not None and role == "builder":
-            # §39 (H-060): the resume path — an `answer`, a cli send to the builder —
-            # tells the builder to commit a dirty `meta/journal.md` first. Put
-            # before the prompt after §8's gate has judged the sender's own text.
-            # The caller read it off the event loop (`_journal_reminder`).
-            prompt = f"{journal_reminder}\n\n{prompt}"
 
         job = self.daemon.enqueue(
             role=role,
@@ -435,14 +447,68 @@ class Api:
             role=ARCHITECT_ROLE, context="keep", prompt=text, origin=REPLY_ORIGIN, reply=True
         )
 
-    async def go_builder(self, prompt: str) -> dict[str, Any]:
-        """The phone's `go`: the playbook's kickoff to the builder, one `clear` job of
-        origin `phone`. Not a command of §4 and in neither `COMMANDS` nor
-        `KIT_METHODS`, so the phone channel is its only caller; `send` refuses the
-        origin to a socket client (§37). Gated by §8 as `send` is."""
-        return await self._send(
-            role="builder", context="clear", prompt=prompt, origin=ANSWER_ORIGIN
-        )
+    async def go(self) -> dict[str, Any]:
+        """§40: `hands go` — the phone's `go` from the laptop, with `origin: cli`.
+
+        The same code the phone's `go` runs (`kickoff`), so the refusals are the
+        phone's: while a builder job is running, queued or held, with no playbook,
+        and with no `[series] kickoff`."""
+        return await self.kickoff("cli")
+
+    async def kickoff(self, origin: str) -> dict[str, Any]:
+        """§26, §27, §40: the playbook's `[series] kickoff` line to the builder, one
+        `clear` job of `origin` — `phone` for the phone's `go`, `cli` for `hands go`.
+        Returns the job; refuses with `ApiError`, whose text is the reason.
+
+        Refused while the builder has a job running, queued or held (§27). The
+        builder is checked first, with nothing awaited before it, and again after
+        the playbook is read: the read runs in a thread, and a `hands send` can land
+        meanwhile (review 10 should-fix 1). `_send` awaits nothing before its
+        enqueue, so the second check and the job it allows are one step of the event
+        loop. The playbook is read from the builder's cwd now, by the same loader the
+        engine uses (only the committed file loads, §10) — not taken from the
+        engine's last load, which happens only when a job starts — and a read never
+        files a stop. Gated by §8 as `send` is. Not reachable with `origin: phone`
+        from a socket client: `go` is the socket's method and passes `cli` (§37).
+        """
+        busy = self.builder_busy()
+        if busy is not None:
+            raise ApiError(busy)
+        try:
+            book = await asyncio.to_thread(
+                load_playbook, playbook_path(self.config), cwd=self.config.role("builder").cwd
+            )
+        except PlaybookError as exc:
+            raise ApiError(f"no playbook is loaded: it cannot be loaded ({exc})") from exc
+        if book is None:
+            raise ApiError("no playbook is loaded")
+        if book.kickoff is None:
+            raise ApiError("the playbook has no [series] kickoff")
+        busy = self.builder_busy()
+        if busy is not None:
+            raise ApiError(busy)
+        try:
+            return await self._send(
+                role="builder", context="clear", prompt=book.kickoff, origin=origin
+            )
+        except ApiError as exc:
+            raise ApiError(f"the send was refused ({exc})") from exc
+
+    def builder_busy(self) -> str | None:
+        """Why the builder cannot take a `go` now — a job running, queued or held — or None."""
+        builder = self.daemon.status()["roles"]["builder"]
+        if builder["running"]:
+            return f"the builder has a job running ({builder['running']['id']})"
+        if builder["queued"]:
+            return f"the builder has a job queued ({', '.join(builder['queued'])})"
+        held = [
+            job.id
+            for job in self.spool.list_jobs()
+            if job.role == "builder" and job.state == "held"
+        ]
+        if held:
+            return f"the builder has a job held ({', '.join(held)})"
+        return None
 
     def answer_refusal(self, text: str) -> str | None:
         """§36: why an `answer` to the builder is refused now, or None.
@@ -484,11 +550,10 @@ class Api:
         `attachment_sentence(path)`, and the path, sha256 and bytes go to the record's
         `files_written` (the record keeps the sha256). `answer.sent` files `text`, the
         attachment's name and its hash. Refusals are `answer_refusal`'s, decided with
-        nothing awaited between them and the enqueue (the journal reminder is read
-        in a thread before them). Not a command of §4 and in neither
+        nothing awaited between them and the enqueue. §39's journal sentence is put
+        before it when it is dispatched (`Daemon._run`). Not a command of §4 and in neither
         `COMMANDS` nor `KIT_METHODS`, so the phone channel is its only caller.
         """
-        reminder = await self._journal_reminder()
         why = self.answer_refusal(text)
         if why is not None:
             raise ApiError(why)
@@ -504,21 +569,11 @@ class Api:
             origin=ANSWER_ORIGIN,
             ungated=True,
             attached=attached,
-            journal_reminder=reminder,
         )
         self.spool.append_event(
             "answer.sent", {"job": job["id"], "text": text, "attachment": filed}
         )
         return job
-
-    async def _journal_reminder(self) -> str | None:
-        """§39 (H-060): `PlaybookEngine.journal_reminder` — a `git status` in the
-        builder's cwd and a read of the inbox — in a worker thread, as
-        `progress_report` runs its git calls, so a slow or locked repository does
-        not stall the queue, the socket and the phone channel (PR #4 hosted review,
-        finding 11). Awaited before a send's checks, never between them and the
-        enqueue."""
-        return await asyncio.to_thread(self.daemon.playbook.journal_reminder)
 
     async def file_apply(self, plan: Apply, origin: str, kit_id: str) -> dict[str, Any]:
         """§27, §31, §32: a kit's held apply, filed by handsd itself.
@@ -647,6 +702,85 @@ class Api:
         except ApiError:
             shutil.rmtree(directory, ignore_errors=True)
             raise
+
+    async def kit_apply(self, *, name: str, staged: str) -> dict[str, Any]:
+        """§40: the daemon half of `hands kit apply <zip>` — the phone's kit path
+        without the phone. Returns `{"job", "zip", "copied", "sha256",
+        "commit_message", "default_why"}`.
+
+        `name` is the zip's file name (judged as the phone's `kit` judges one,
+        `is_kit_file_name`) and `staged` the hidden basename the client wrote its
+        bytes under in `[files] kit_dir` (`kit.staged_path`, `kit.stage_kit`): the
+        bytes never travel over the socket, so a kit at `[files] kit_max_mb` fits
+        the line room (PR #5 hosted review, finding 8). The staged file is read
+        (`read_staged`: a regular file, not through a symlink, never blocking on a
+        FIFO, at most kit_max_mb) and removed whatever follows, a refusal of the
+        name, the builder or the file included (§41). The kit is checked as
+        `hands kit check` checks it
+        (`check_kit`, against the builder's cwd and this daemon's config, as
+        `kit_file` does), on a copy under its own name in a scratch directory; a
+        failing kit is refused with the check's output and nothing is copied or
+        filed. A passing kit is copied into `[files] kit_dir` (inside `[files]
+        allowed_roots`, as the phone requires) under its own name (`place_kit`):
+        unless the same bytes are already there, and never over another file.
+        Then, exactly as the phone's kit path after the fetch: `apply_from_zip` on
+        the copied file, named `~/…` when it is under `$HOME`, and `file_apply`
+        with `origin: kit` and a `kit_id` handsd mints — a held builder job, its
+        hold published as any hold is, released by `hands approve`.
+        """
+        files_config = self.config.files
+        cap = files_config.kit_max_mb * _MIB
+        try:
+            directory = kit_directory(files_config)
+            source = staged_path(directory, staged)
+        except KitError as exc:
+            raise ApiError(f"kit_apply: {exc}") from exc
+        # §41: from here every refusal removes the staged entry, so a caller other
+        # than the CLI (which removes its own on every path) leaves nothing behind.
+        try:
+            if not is_kit_file_name(name):
+                raise ApiError(
+                    "kit_apply: the name must be a printable .zip basename not starting "
+                    "with a dot (§26, §40)"
+                )
+            if "builder" not in self.config.roles:
+                raise ApiError("kit_apply: this project configures no builder to apply a kit")
+            try:
+                data = await asyncio.to_thread(read_staged, source, cap)
+            except KitError as exc:
+                raise ApiError(f"kit_apply: {exc}") from exc
+        finally:
+            await asyncio.to_thread(remove_staged, source)
+        builder = self.config.role("builder").cwd
+        try:
+            report = await asyncio.to_thread(self._check_bytes, name, data, builder)
+            if not report.ok:
+                raise ApiError(_check_refusal(name, builder, report, method="kit_apply"))
+            copied = await asyncio.to_thread(place_kit, directory, name, data)
+            path = directory / name
+            shown = home_shown(path)
+            plan = await asyncio.to_thread(apply_from_zip, path, builder, shown)
+        except KitError as exc:
+            raise ApiError(f"kit_apply: the apply was not filed: {exc}") from exc
+        except OSError as exc:
+            why = type(exc).__name__
+            raise ApiError(f"kit_apply: the kit could not be written ({why})") from exc
+        job = await self.file_apply(plan, KIT_ORIGIN, new_kit_id())
+        return {
+            "job": job,
+            "zip": shown,
+            "copied": copied,
+            "sha256": report.sha256,
+            "commit_message": plan.commit_message,
+            "default_why": plan.default_why,
+        }
+
+    def _check_bytes(self, name: str, data: bytes, repo: Path) -> Report:
+        """`check_kit` on `data`, written as `name` in a scratch directory."""
+        with tempfile.TemporaryDirectory(prefix="hands-kit-apply-") as scratch:
+            path = Path(scratch) / name
+            path.write_bytes(data)
+            return check_kit(path, repo, config=self.config)
 
     def _consultation_for(self, name: str) -> str:
         """§32: the architect consultation a kit named `name` is filed during, by job
