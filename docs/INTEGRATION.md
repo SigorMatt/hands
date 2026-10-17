@@ -8,6 +8,13 @@ Nothing in hands is a background daemon you have to trust blindly: `hands
 doctor` is the check, and `hands status`, `hands pipeline` and `hands inbox`
 are the whole of its state.
 
+docs/OPERATIONS.md is the human's runbook for a hands machine (DESIGN §40):
+what the machine holds, its secrets by kind, and what to do at a usage-limit
+stop, without the phone, for a planned migration, after a disaster and at a
+release install. docs/RELATED.md records two readings of other orchestrators,
+Gas Town and Conductor, that the harness work cites; docs/HARNESS-PROBE.md is
+the dated record of the harness probe.
+
 ---
 
 ## 1. Install (once per machine)
@@ -409,6 +416,35 @@ Notes that are easy to get wrong:
   Every role job's environment also carries `HANDS_PROJECT`, the config's
   project name (§36, H-043), over handsd's own environment and this table
   alike; doctor prints it on each role's row as `env HANDS_PROJECT=<project>`.
+
+  **A harness installed under nvm** (DESIGN §40, "The harness probe"). A job
+  handsd spawns does not read a shell profile: under systemd nothing sources
+  the `~/.bashrc` where nvm puts itself on PATH, so a harness under
+  `~/.nvm/versions/node/<version>/bin` (the Codex and dsh binaries
+  docs/HARNESS-PROBE.md records are in `~/.nvm/versions/node/v22.23.3/bin`)
+  is not on a job's PATH unless the role's `env` table puts it there. A
+  `PATH` in the table replaces handsd's own for that role's jobs; it is not
+  prepended to it, so write the nvm directory first and then every directory
+  the job still needs (`python3` for the hooks, `git`, `systemd-run`):
+
+      [roles.builder.env]
+      PATH = "/home/<you>/.nvm/versions/node/v22.23.3/bin:/home/<you>/.local/bin:/usr/local/bin:/usr/bin:/bin"
+
+  The value is taken as written: no `~`, `$HOME` or `$PATH` in it is expanded.
+  Those two harnesses start with `#!/usr/bin/env node`, so even one named by
+  an absolute path needs the nvm directory on the job's PATH, for the `node`
+  it runs on. Doctor's `claude` row looks `[runner] claude` up on doctor's own
+  PATH, not on a role's `env` PATH.
+
+  **The transcript path follows `CLAUDE_CONFIG_DIR`** (DESIGN §40, H-063). A
+  role whose `env` sets `CLAUDE_CONFIG_DIR` keeps its transcripts under that
+  directory's `projects/`, and the monitor reads them there: a job's
+  transcript is `$CLAUDE_CONFIG_DIR/projects/<dashed cwd>/<session>.jsonl`
+  when the job's environment — handsd's own or the role's `env` table — sets
+  the variable (a relative value is taken from the role's cwd), and
+  `~/.claude/projects/<dashed cwd>/<session>.jsonl` otherwise. The runner
+  writes that path into the job record's `transcript_path` when claude
+  reports its session, before the monitor's first scan.
 - **How a job ends** (§6, §23). A job is `failed` when the process ends without
   a final `result` event, with a `result` of subtype `error` (claude's `error_*`
   family, `error_max_turns` included, whatever its `is_error` says), without
@@ -484,6 +520,15 @@ that does not return, not logged in, or a token without `repo` is a `warn`
 naming the remedy — run `gh auth login` as this user (and grant the `repo`
 scope) — and is a warning, not a failure, because a project may commit
 direct.
+
+The `worktrees` row (DESIGN §40, H-067) reads `.git/worktrees/` in each
+role's clone (`<cwd>/repo` when there is one, else the cwd when it is a git
+repository) from git's own files, running no `git`. It is a **warning** when
+a worktree registered there has no directory any more — an aborted review's
+under `/tmp` — or an entry has no readable `gitdir`, and it names each entry
+and the remedy, `git -C <clone> worktree prune` (a locked entry is `git
+worktree unlock`ed first). Otherwise it is `ok`, with the count of linked
+worktrees per clone.
 
 A config that will not load at all is reported the same way, not as a crash:
 doctor prints its usual report with a failed `config` row carrying the error
@@ -809,7 +854,11 @@ when all of that holds, and says what is missing when it does not.
    the prompt shell-quotes it, and the kit's file name (DESIGN §29; `a b.zip`
    is written `~/Downloads/'a b.zip'`). That prompt is the
    one handsd files in step 2, byte for byte, when the kit is written under the
-   same name in `~/Downloads` (the default `kit_dir`).
+   same name in `~/Downloads` (the default `kit_dir`). A playbook in force
+   with a rule on `aux.done` and none on `aux.orphaned`, or on `builder.done`
+   and none on `builder.orphaned`, adds a `WARN playbook:` line after the
+   check lines; a warning does not fail the kit, and the engine logs the same
+   sentence each time it loads the file (docs/PLAYBOOK.md; DESIGN §40, H-061).
 2. **Send the kit to `cmd_topic`** from the ntfy app, the `.zip` attached and
    the message `kit <secret>`. handsd fetches it into `kit_dir`, and the phone
    buzzes with `kit received <name> <bytes> <sha256>` (title `hands: kit
@@ -857,6 +906,23 @@ when all of that holds, and says what is missing when it does not.
    stop, so it pauses the pipeline too (the missions template's `blockers=0`
    rule is a `stop`, §39): the next kit's apply and the `go` after it un-pause
    it when each job starts, as step 3 says, so no `resume <secret>` is needed.
+
+**The same loop from a terminal** (DESIGN §40). Two commands stand in for
+the phone's `go` and `kit` when the phone is away; both need handsd running,
+and neither needs the command channel. `hands go` sends the playbook's
+`[series] kickoff` line to the builder as a `clear` send with `origin: cli`,
+by the code path the phone's `go` takes: refused while a builder job is
+running, queued or held, when no playbook loads, and when it has no
+`[series] kickoff`. `hands kit apply <zip>` checks the kit as `hands kit
+check` does, against the builder's cwd and the project's config, and
+refuses a failing kit with the check's lines, copying and filing nothing. A
+passing kit is copied into `[files] kit_dir` under its own name: nothing is
+copied when a file of that name holding the same bytes is already there,
+another file of that name refuses and is left untouched (the phone's
+`<stem>-1.zip` renaming is not done), and its apply prompt is then filed as
+a held builder job, `origin: kit`, which `hands approve <job>` releases;
+`hands go` follows the applied kit as step 4's `go` does. docs/OPERATIONS.md,
+"No phone", maps every phone command to its laptop form.
 
 Throughout, the driver is the inspector: it reads `hands inbox`, `hands show`
 and the fetched branch in its clone when you ask it to `check`, and reports.

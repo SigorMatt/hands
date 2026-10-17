@@ -2672,3 +2672,180 @@ def test_the_integration_doc_says_a_malformed_decision_is_answered_only_with_the
         "secret; one whose last word is a nonce is logged and not published." in text
     )
     assert "a builder with a job held, no resumable session, a malformed line — is" not in text
+
+
+# ---------------------------------------------- mission 24 U9: the docs (§40)
+
+
+def test_the_integration_doc_says_a_role_env_path_replaces_handsds_path(
+    tmp_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """§40 "The harness probe": a job handsd spawns reads no shell profile, so a
+    harness under nvm needs its directory in the role's `env` PATH. The doc says the
+    table's PATH replaces handsd's (as `runner.job_env` merges it) and is taken as
+    written (as `config._str_table` reads it)."""
+    from hands.runner import job_env
+    from hands.spool import Spool
+
+    text = _integration()
+    for said in (
+        "A job handsd spawns does not read a shell profile",
+        "`~/.nvm/versions/node/<version>/bin`",
+        "A `PATH` in the table replaces handsd's own for that role's jobs; it is not "
+        "prepended to it",
+        "The value is taken as written: no `~`, `$HOME` or `$PATH` in it is expanded.",
+        "start with `#!/usr/bin/env node`",
+    ):
+        assert said in text, f"docs/INTEGRATION.md does not say {said!r}"
+    work = tmp_home.parent / "work"
+    work.mkdir()
+    cfg = parse_config(
+        {"roles": {"builder": {"cwd": str(work), "env": {
+            "PATH": "/nvm/bin:/usr/bin", "OTHER": "~/x:$PATH"}}}},
+        project="demo", path=tmp_home / ".hands" / "demo.toml",
+    )
+    role = cfg.role("builder")
+    assert role.env["OTHER"] == "~/x:$PATH"  # literal: nothing expanded
+    monkeypatch.setenv("PATH", "/handsd/bin")
+    job = Spool(tmp_home / ".hands" / "demo").create_job(
+        role="builder", context="clear", prompt="p", origin="cli"
+    )
+    assert job_env(job, role, "demo")["PATH"] == "/nvm/bin:/usr/bin"
+
+
+def test_the_integration_doc_says_the_transcript_path_follows_claude_config_dir(
+    tmp_path: Path,
+) -> None:
+    """§40 (H-063), as `runner.transcript_path_for` computes it."""
+    from hands.runner import project_dir_name, transcript_path_for
+
+    text = _integration()
+    for said in (
+        "**The transcript path follows `CLAUDE_CONFIG_DIR`**",
+        "`$CLAUDE_CONFIG_DIR/projects/<dashed cwd>/<session>.jsonl` when the job's "
+        "environment — handsd's own or the role's `env` table — sets the variable",
+        "a relative value is taken from the role's cwd",
+        "`~/.claude/projects/<dashed cwd>/<session>.jsonl` otherwise",
+        "before the monitor's first scan",
+    ):
+        assert said in text, f"docs/INTEGRATION.md does not say {said!r}"
+    cwd = tmp_path / "w"
+    dashed = project_dir_name(cwd)
+    assert transcript_path_for(cwd, "s", {"CLAUDE_CONFIG_DIR": "/c"}) == (
+        f"/c/projects/{dashed}/s.jsonl"
+    )
+    assert transcript_path_for(cwd, "s", {"CLAUDE_CONFIG_DIR": "rel"}) == str(
+        cwd / "rel" / "projects" / dashed / "s.jsonl"
+    )
+    assert transcript_path_for(cwd, "s", {}) == str(
+        Path("~/.claude").expanduser() / "projects" / dashed / "s.jsonl"
+    )
+
+
+def test_the_integration_doc_says_hands_go_and_hands_kit_apply() -> None:
+    """§40 "Operations": `hands go` and `hands kit apply`, as `Api.kickoff` and
+    `Api.kit_apply` do (tests/test_operations.py drives both)."""
+    assert "go" in Api.OPERATIONS and callable(getattr(Api, "kit_apply", None))
+    text = _integration()
+    for said in (
+        "**The same loop from a terminal** (DESIGN §40).",
+        "`hands go` sends the playbook's `[series] kickoff` line to the builder as a "
+        "`clear` send with `origin: cli`",
+        "refused while a builder job is running, queued or held",
+        "`hands kit apply <zip>` checks the kit as `hands kit check` does",
+        "refuses a failing kit with the check's lines, copying and filing nothing",
+        "another file of that name refuses and is left untouched",
+        "filed as a held builder job, `origin: kit`, which `hands approve <job>` releases",
+    ):
+        assert said in text, f"docs/INTEGRATION.md does not say {said!r}"
+
+
+def test_the_integration_doc_names_the_kit_check_warning() -> None:
+    """§40 (H-061), as `kit.run` prints `playbook.orphaned_rule_warnings`."""
+    text = _integration()
+    for said in (
+        "adds a `WARN playbook:` line after the check lines",
+        "a warning does not fail the kit",
+        "the engine logs the same sentence each time it loads the file",
+    ):
+        assert said in text, f"docs/INTEGRATION.md does not say {said!r}"
+    source = (ROOT / "src" / "hands" / "kit.py").read_text(encoding="utf-8")
+    assert 'print(f"WARN playbook: {warning}", file=out)' in source
+
+
+def test_the_integration_doc_names_doctors_worktrees_row() -> None:
+    """§40 (H-067), the row `doctor._worktrees_check` reports."""
+    source = (ROOT / "src" / "hands" / "doctor.py").read_text(encoding="utf-8")
+    assert 'Check("worktrees", WARN' in " ".join(source.split()).replace("( ", "(")
+    text = _integration()
+    for said in (
+        "The `worktrees` row (DESIGN §40, H-067)",
+        "is a **warning** when a worktree registered there has no directory any more",
+        "`git -C <clone> worktree prune`",
+    ):
+        assert said in text, f"docs/INTEGRATION.md does not say {said!r}"
+
+
+@pytest.mark.parametrize("doc", ["INTEGRATION.md", "ARCHITECT-HANDBOOK.md"])
+def test_the_doc_points_at_operations_and_related(doc: str) -> None:
+    """§40 "Documentation": INTEGRATION and the handbook cite both, and both exist."""
+    text = flattened((ROOT / "docs" / doc).read_text(encoding="utf-8"))
+    assert "docs/OPERATIONS.md is the human's runbook" in text, doc
+    assert "docs/RELATED.md records" in text, doc
+    assert (ROOT / "docs" / "OPERATIONS.md").is_file()
+    assert (ROOT / "docs" / "RELATED.md").is_file()
+
+
+def test_the_handbook_section_18_names_go_and_kit_apply_and_the_guard_refuses_them() -> None:
+    """§40: §18 names `hands go` and `hands kit apply`; the architect role's guard
+    allows neither (its `hands` subcommands)."""
+    spec = importlib.util.spec_from_file_location(
+        "bash_guard_u9_24", ROOT / "driver" / "hooks" / "bash_guard.py"
+    )
+    assert spec and spec.loader
+    guard = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(guard)
+    assert "go" not in guard.ARCHITECT_HANDS_SUBCOMMANDS
+    assert "apply" not in guard.ARCHITECT_KIT_SUBCOMMANDS
+    section = flattened(_handbook().split("## 18. ", 1)[1])
+    for said in (
+        "**`hands go` and `hands kit apply <zip>`** are the phone's `go` and `kit` at "
+        "the laptop",
+        "The architect role's guard allows neither",
+    ):
+        assert said in section, f"handbook §18 does not say {said!r}"
+
+
+def test_the_handbook_section_11_names_the_warn_line() -> None:
+    """§40 (H-061): the handbook's kit-check section names the warning."""
+    section = flattened(_handbook().split("## 11. ", 1)[1].split("## 12. ", 1)[0])
+    for said in (
+        "A `WARN playbook: <sentence>` line follows the check lines",
+        "a warning, not a check, so the kit still passes and the exit status is unchanged",
+        "`--json` lists the sentences under `warnings`",
+    ):
+        assert said in section, f"handbook §11 does not say {said!r}"
+
+
+def test_the_readme_points_at_operations_related_and_the_probe() -> None:
+    readme = flattened((ROOT / "README.md").read_text(encoding="utf-8"))
+    for said in ("`docs/OPERATIONS.md` is the human's runbook", "`docs/RELATED.md`",
+                 "`docs/HARNESS-PROBE.md`"):
+        assert said in readme, f"README.md does not mention {said}"
+    assert (ROOT / "docs" / "HARNESS-PROBE.md").is_file()
+
+
+def test_the_phone_docstring_says_a_malformed_decision_is_answered_only_with_the_secret() -> (
+    None
+):
+    """Review 23 should-fix 7, carried from U5: `PhoneChannel._decide` answers a
+    malformed `approve`/`deny` only when its last word is the secret; the module
+    docstring said a nonce made it answered too."""
+    import hands.phone
+
+    doc = flattened(hands.phone.__doc__ or "")
+    assert "that handsd refuses — malformed, no such job" not in doc
+    assert (
+        "A malformed `approve` or `deny` is answered only when its last word is the "
+        "secret; one whose last word is a nonce is logged and not published." in doc
+    )

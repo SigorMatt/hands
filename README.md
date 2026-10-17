@@ -16,7 +16,11 @@ stops and waits for you.
 the install checklist; `docs/PLAYBOOK.md` is the playbook reference;
 `docs/ARCHITECT-HANDBOOK.md` is how the architect writes a kit;
 `driver/` is the kit for the Claude Code session that drives hands from your
-phone.
+phone. `docs/OPERATIONS.md` is the human's runbook: what a hands machine
+holds, its secrets by kind, and what to do at a usage-limit stop, without the
+phone, for a migration, after a disaster and at a release install.
+`docs/HARNESS-PROBE.md` is the dated record of the harness probe, and
+`docs/RELATED.md` two readings of other orchestrators.
 
 ## Shape
 

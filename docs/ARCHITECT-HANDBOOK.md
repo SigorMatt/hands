@@ -409,6 +409,13 @@ taken relative to the directory. It prints one line per check,
   a `{placeholder}`, such as `meta/reviews/REVIEW-{n}.md`, names a different
   file per job, so only its syntax is checked.
 
+A `WARN playbook: <sentence>` line follows the check lines when the playbook
+in force has a rule on `aux.done` and none on `aux.orphaned`, or on
+`builder.done` and none on `builder.orphaned` (DESIGN §40, H-061): a
+warning, not a check, so the kit still passes and the exit status is
+unchanged; `--json` lists the sentences under `warnings`. A playbook you
+write carries both orphaned rules (§12, "A restart kills running work").
+
 When every check passes, it prints three things. First, the §3 apply prompt,
 which names each file the kit replaces (the file exists in the repo) and each
 file it adds. Second, the commit message: the first line of `KIT.md` at the
@@ -677,3 +684,16 @@ the human-supplied unit above that would carry the content.
   verdict), the working tree's branch and `git log --oneline -3`, and the
   first line of `meta/CHECKPOINT.md` naming a unit in progress, or "no
   checkpoint". It is read-only and starts no job (DESIGN §38).
+- **`hands go` and `hands kit apply <zip>`** are the phone's `go` and `kit` at
+  the laptop (DESIGN §40). `go` sends the playbook's `[series] kickoff` line
+  to the builder as a `clear` send with `origin: cli`, refused while a builder
+  job is running, queued or held; `kit apply` checks the kit as `hands kit
+  check` does, refuses a failing one, copies a passing one into `[files]
+  kit_dir` and files its apply as a held builder job (`origin: kit`) that
+  `hands approve <job>` releases. The architect role's guard allows neither:
+  they are the human's commands for when the phone is away.
+- **docs/OPERATIONS.md is the human's runbook** for a hands machine: what it
+  holds, its secrets by kind, a usage-limit stop, operating without the
+  phone, a migration, a disaster and a release install. **docs/RELATED.md
+  records** two readings of other orchestrators, Gas Town and Conductor, that
+  the harness work cites (DESIGN §40). Neither is a design; DESIGN.md is.

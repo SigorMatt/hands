@@ -129,12 +129,14 @@ written kit publishes its name, size and sha256, and a `reply` with the secret
 publishes the job it filed or why it was refused (then the architect's answer),
 and an `answer` with the secret likewise (then the builder's final reply).
 §39 (H-058): every other command carrying the right secret (or, for `approve`
-and `deny`, the job's nonce) that handsd refuses — malformed, no such job, a job
-that is not held, a refused `go` or `kit` — is answered on `ntfy_topic` titled
-`<command>` with `<command> refused: <reason>`, in hands' own words. Nothing
-else is answered: a wrong or missing token, and a message whose first word is no
-command, are logged (without the token, and without any word of the message that
-could be one) and ignored.
+and `deny`, the job's nonce) that handsd refuses — no such job, a job that is
+not held, a refused `go` or `kit` — is answered on `ntfy_topic` titled
+`<command>` with `<command> refused: <reason>`, in hands' own words. A malformed
+`approve` or `deny` is answered only when its last word is the secret; one whose
+last word is a nonce is logged and not published. Nothing else is
+answered: a wrong or missing token, a malformed line not ending in the secret,
+and a message whose first word is no command, are logged (without the token, and
+without any word of the message that could be one) and ignored.
 
 **Job ids** (§39, H-059). `approve` and `deny` match their job id as
 `hands.api.match_job_id` does for the laptop's `approve`, `deny` and `cancel`:
