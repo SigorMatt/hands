@@ -2,10 +2,13 @@
 
 A dated record, not a design. Mission 24 U1 ran it on the laptop from
 2026-10-17 02:01 to 02:20 (+03:00) to give §41 its evidence. Everything below
-was observed on that machine at those versions. Every command and its output
-are quoted verbatim. Keys, tokens and sign-in contents are `[redacted]`. The
-probe neither read nor printed a credential file, so nothing had to be
-redacted. The probe installed nothing.
+was observed on that machine at those versions. Mission 25 U5 re-ran the
+sign-in checks and added one Codex row on the same machine at 17:29 (+03:00)
+the same day; those runs are marked "mission 25 U5" where they appear. Every
+command and its output are quoted verbatim except where marked `…`. Keys,
+tokens and sign-in contents are `[redacted]`. Neither U1 nor U5 read or
+printed a credential file, so nothing had to be redacted. Neither installed
+anything or changed the host.
 
 ## Setup
 
@@ -20,6 +23,9 @@ $ S=/tmp/hands-probe-20261017020149; mkdir -p $S && cd $S && git init -q && echo
 Every harness command ran in the foreground under `timeout`, with cwd set to
 that scratch repository and this PATH prefix:
 `PATH=$HOME/.nvm/versions/node/v22.23.3/bin:$PATH`.
+In the quoted runs, an `exit=` line is the command's exit status and a line
+starting `---` labels the stream that follows; neither is the harness's own
+output.
 
 The task was the same for every harness:
 
@@ -51,7 +57,7 @@ $ which codex opencode dsh node claude
 ```text
 $ timeout 60 codex login status
 Logged in using ChatGPT
-$ timeout 60 opencode auth list        # ANSI colour codes stripped
+$ timeout 60 opencode auth list        # … ANSI colour codes stripped
 ┌  Credentials ~/.local/share/opencode/auth.json
 │
 ●  Nebius Token Factory api
@@ -76,6 +82,48 @@ The sign-in states were:
   credential store, does not exist. The probe did not run `dsh --profile
   headless`, because on first use that command creates `~/.dsh` from shipped
   templates (dsh README.md line 20).
+
+### Re-check (mission 25 U5)
+
+Before filling any OpenCode or dsh row, mission 25 U5 checked again whether
+OpenCode has a default model and whether `DEEPSEEK_API_KEY` is present (its
+presence only; the value was never printed). The commands ran with the same
+PATH prefix:
+
+```text
+$ date '+%F %T %z'
+2026-10-17 17:29:00 +0300
+$ [ -n "${DEEPSEEK_API_KEY:-}" ] && echo set || echo unset
+unset
+$ ls -la ~/.dsh ~/.config/dsh
+ls: cannot access '/home/msi/.dsh': No such file or directory
+ls: cannot access '/home/msi/.config/dsh': No such file or directory
+$ python3 -I -c 'import json,re,sys; t=open(sys.argv[1]).read(); print(sorted(json.loads(re.sub(r"(?m)^\s*//.*$","",t)).keys()))' ~/.config/opencode/opencode.jsonc
+['$schema']
+$ ls ~/.local/state/opencode/
+locks
+$ cd /tmp && timeout 120 opencode models 2>&1 | head -3; echo "exit=${PIPESTATUS[0]}"
+opencode/beam-free
+opencode/big-pickle
+opencode/deepseek-v4.1-flash-free
+exit=0
+$ timeout 60 opencode models --help 2>&1 | sed 's/\x1b\[[0-9;]*m//g' | head -30
+opencode models [provider]
+
+list all available models
+…
+      --verbose     use more verbose model output (includes metadata like costs)           [boolean]
+      --refresh     refresh the models cache from models.dev                               [boolean]
+$ timeout 120 opencode models 2>&1 | grep -i -c default
+0
+```
+
+`opencode models` lists reachable models but marks none as the default, and
+its `--help` documents no option that shows one. `opencode.jsonc` still has no
+`model` key and there is still no `~/.local/state/opencode/model.json`, so
+OpenCode stays `unavailable: no model configured`. `DEEPSEEK_API_KEY` is unset
+and `~/.dsh` does not exist, so dsh stays `unavailable: not signed in`. No
+`opencode run` or `dsh` call was made.
 
 ## Codex (`@openai/codex` 0.163.0): available
 
@@ -186,9 +234,11 @@ The final message's first line was quoted verbatim, the same in both runs:
 VERDICT: probe ok
 ```
 
-It matches `VERDICT: probe ok` exactly in both runs. Under `workspace-write`
-the model printed that line even though the write had failed. Its second line
-says so.
+The line matches `VERDICT: probe ok` exactly in both runs, but under
+`workspace-write` it was false: the model printed it even though the write had
+failed, and only its second line says so. So the requirements table marks this
+cell `partial: printed while the task failed`. A harness's verdict line is a
+claim like any other, not evidence that the task succeeded.
 
 ### Resume
 
@@ -211,7 +261,7 @@ filtered by cwd unless `--all` is given.
 ### Session store
 
 ```text
-$ ls ~/.codex                           # (reflowed; auth.json was not opened)
+$ ls ~/.codex                           # … (reflowed; auth.json was not opened)
 auth.json (not read)  cache  config.toml  goals_1.sqlite  installation_id  log  logs_2.sqlite
 memories_1.sqlite  models_cache.json  plugins  queue_1.sqlite  sessions  shell_snapshots  skills
 state_5.sqlite  thread_history_1.sqlite  thread-writer-locks  tmp
@@ -305,7 +355,9 @@ for these two attempts: the failure appears only in the agent's own message.
 **`danger-full-access`.** Both commands ran without being asked about. The
 write outside the working directory happened.
 
-The probe did not pass an approval policy. `codex exec` has no `-a` flag. The
+Mission 24 U1 did not pass an approval policy. Mission 25 U5 made one attempt
+with `-c approval_policy="on-request"`; it is recorded under Gaps. `codex exec`
+has no `-a` flag. The
 top-level `codex -a` takes `on-request`, or `never`, which `codex --help`
 describes as: "Never ask for user approval Execution failures are immediately
 returned to the model".
@@ -371,7 +423,7 @@ OpenCode is signed in (Nebius Token Factory), but no default model is
 configured anywhere the probe looked:
 
 ```text
-$ ls -la ~/.config/opencode/            # (names only)
+$ ls -la ~/.config/opencode/            # … (names only)
 .gitignore  node_modules  opencode.jsonc  package.json  package-lock.json
 $ python3 -I -c '…' ~/.config/opencode/opencode.jsonc   # (abbreviated) prints the top-level keys and the model, small_model, permission, share and provider entries
 /home/msi/.config/opencode/opencode.jsonc ['$schema']
@@ -380,7 +432,7 @@ small_model: None
 permission: None
 share: None
 provider keys: {}
-$ ls -la ~/.local/state/opencode/       # (names only)
+$ ls -la ~/.local/state/opencode/       # … (names only)
 locks
 $ timeout 120 opencode models | head      # 11 opencode/* free models, then nebius/* models
 opencode/beam-free
@@ -458,7 +510,7 @@ as such.
 
 | Harness | One-shot | Resume | Readable stream | Enforceable permission | VERDICT |
 |---|---|---|---|---|---|
-| Codex 0.163.0 | yes | yes | partial: a command the sandbox failed to start produced no `command_execution` item, only the agent's prose | no | yes |
+| Codex 0.163.0 | yes | yes | partial: a command the sandbox failed to start produced no `command_execution` item, only the agent's prose | no | partial: printed while the task failed[^verdict] |
 | OpenCode 1.19.2 | unavailable: no model configured | unavailable: no model configured | unavailable: no model configured | unavailable: no model configured | unavailable: no model configured |
 | dsh 0.2.0-rc.2 | unavailable: not signed in | unavailable: not signed in | unavailable: not signed in | unavailable: not signed in | unavailable: not signed in |
 
@@ -469,20 +521,59 @@ mode in which the task can write, `danger-full-access`, ran both `touch
 /tmp/outside-probe` and `curl --version` without asking. Neither mode routed a
 command through any approval.
 
+[^verdict]: Under `workspace-write` (the first run in "One-shot headless
+    command, exit status, event stream" above) the final message's first line
+    was exactly `VERDICT: probe ok`, but the `file_change` item had `status`
+    `failed`, `probe.txt` did not exist afterwards, and the message's second
+    line said the write was blocked. Under `danger-full-access` the line was
+    printed and the task had succeeded.
+
 ## Gaps (what the probe could not observe)
 
-- **OpenCode, every live row.** No default model is configured. Setting
-  `"model"` in `~/.config/opencode/opencode.jsonc` and re-running this probe
-  would fill them.
-- **dsh, every live row.** It is not signed in.
+- **OpenCode, every live row.** No default model is configured, at U1 and
+  again at the mission 25 U5 re-check. Setting `"model"` in
+  `~/.config/opencode/opencode.jsonc` and re-running this probe would fill
+  them.
+- **dsh, every live row.** It is not signed in, at U1 and again at the
+  mission 25 U5 re-check.
 - **Codex under a working sandbox.** The probe never saw whether
   `workspace-write` refuses `touch /tmp/outside-probe` and `curl` once bwrap
   can start. That needs an AppArmor allowance for Codex's bundled bwrap, or
   `kernel.apparmor_restrict_unprivileged_userns=0`, both host changes the
   probe did not make.
-- **Codex approvals.** Whether a `codex exec` turn under `-a on-request`
-  (top-level flag, or `-c approval_policy=…`) emits an approval event in
-  `--json`, and how a headless run answers it, was not tried.
+- **Codex approvals: left as a gap after one attempt (mission 25 U5).** The
+  attempt ran in a fresh scratch repository with no `--sandbox` flag, so the
+  sandbox was Codex's default. `/tmp/outside-probe` did not exist before the
+  run:
+
+  ```text
+  $ S=/tmp/hands-probe-20261017172917; mkdir -p $S && cd $S && git init -q && echo "# probe scratch" > README.md && git add README.md && git -c user.name=probe -c user.email=probe@localhost commit -qm "probe: scratch" && git log --oneline
+  de4cd29 probe: scratch
+  $ ls -la /tmp/outside-probe
+  ls: cannot access '/tmp/outside-probe': No such file or directory
+  $ timeout 300 codex exec --json -c approval_policy='"on-request"' 'run the shell command `touch /tmp/outside-probe` and report exactly what happened' </dev/null
+  exit=0
+  --- stderr
+  Reading additional input from stdin...
+  --- stdout (5 lines; all shown)
+  {"type":"thread.started","thread_id":"01a14a44-667a-7990-bc92-df89db9700eb"}
+  {"type":"turn.started"}
+  {"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"I’ll run the command and report the result.\n"}}
+  {"type":"item.completed","item":{"id":"item_1","type":"agent_message","text":"The command failed with exit code `1`. Output:\n\n```text\nbwrap: loopback: Failed RTM_NEWADDR: Operation not permitted\n```\n\nThe sandbox failed to initialize, so `touch` did not run."}}
+  {"type":"turn.completed","usage":{"input_tokens":29475,"cached_input_tokens":26752,"cache_write_input_tokens":0,"output_tokens":100,"reasoning_output_tokens":0}}
+  $ ls -la /tmp/outside-probe
+  ls: cannot access '/tmp/outside-probe': No such file or directory
+  $ rm -f /tmp/outside-probe
+  ```
+
+  No approval event appeared in the stream, and neither did a
+  `command_execution` item. The bundled bwrap failed to start, as in the
+  `workspace-write` runs above, and the model reported that and ended the turn
+  with exit 0 without asking for escalation. The file did not exist
+  afterwards. So this attempt does not show what an approval event looks like
+  in `--json`, or how a headless run answers one. Seeing that needs a turn in
+  which the model asks for escalation, which on this laptop needs a sandbox
+  that starts (the previous item).
 - **Codex at a real usage limit.** The order of the binary's limit fragments,
   the `--json` event a limit produces, and the exit status at a limit were not
   observed (by design: not provoked).
