@@ -514,3 +514,129 @@ def test_a_failed_redactor_leaves_no_empty_file(planted: dict[str, Path]) -> Non
     assert "redactor broke" in strip_paths(done.stderr)
     assert "failed" in strip_paths(done.stderr)
     assert outputs == [], "a failed capture leaves no file"
+
+
+# ------------------------------------------- mission 25 U1 (REVIEW-24 blocker 1)
+
+
+def _real(name: str) -> str:
+    found = shutil.which(name)
+    assert found is not None, name
+    return found
+
+
+def test_a_hung_find_is_recorded_as_a_timeout_and_never_as_no_record(
+    planted: dict[str, Path],
+) -> None:
+    """REVIEW-24 blocker 1 (DESIGN §41): `find`, which looks for the newest job,
+    runs under `timeout -k 5` and through the path that writes `(failed: timed
+    out after <n>s: …)`. The fake ignores SIGTERM, so only the `-k 5` kill ends
+    it: without `-k 5` the run outlives its own 60 s bound; without the bound on
+    `find` it outlives it too; outside the recording path the capture says "no
+    job record", which is false."""
+    _exe(
+        planted["bin"] / "find",
+        "#!/bin/sh\n"
+        "trap '' TERM\n"
+        "sleep 300\n"
+        f'exec "{_real("find")}" "$@"\n',
+    )
+    done, outputs = capture(planted, HANDS_CAPTURE_TIMEOUT="1")
+    assert done.returncode == 0, done.stderr
+    assert len(outputs) == 1, outputs
+    text = outputs[0].read_text(encoding="utf-8")
+    assert "(failed: timed out after 1s: find " in strip_paths(text), text
+    assert "(no job record under" not in strip_paths(text), text
+    assert "(no record, or it names no transcript)" not in strip_paths(text), text
+    assert f"fake hands --project {PROJECT} pipeline" in strip_paths(text)
+    assert_redacted(text)
+
+
+def test_a_hung_record_read_is_recorded_as_a_timeout_and_never_as_no_record(
+    planted: dict[str, Path],
+) -> None:
+    """REVIEW-24 blocker 1 (DESIGN §41): python3's read of the job record (the one
+    whose program names `transcript_path`) is bounded and its timeout recorded;
+    the capture does not say the record names no transcript. The redactor, also
+    python3, runs as it is."""
+    _exe(
+        planted["bin"] / "python3",
+        "#!/bin/sh\n"
+        'case "$3" in *transcript_path*) sleep 300 ;; esac\n'
+        f'exec "{_real("python3")}" "$@"\n',
+    )
+    done, outputs = capture(planted, HANDS_CAPTURE_TIMEOUT="1")
+    assert done.returncode == 0, done.stderr
+    assert len(outputs) == 1, outputs
+    text = outputs[0].read_text(encoding="utf-8")
+    assert "(failed: timed out after 1s: python3" in strip_paths(text), text
+    assert "(no record, or it names no transcript)" not in strip_paths(text), text
+    assert "(no job record under" not in strip_paths(text), text
+    assert "Usage limit reached" in strip_paths(text), "the record and stream are captured"
+    assert "inbox tail" in strip_paths(text), "the capture goes on"
+    assert_redacted(text)
+
+
+def test_a_secret_straddling_the_cut_is_redacted_whole(
+    planted: dict[str, Path], tmp_path: Path
+) -> None:
+    """REVIEW-24 should-fix 1 (DESIGN §41): the redactor runs on the whole text and
+    the 4000-byte cut comes after, so a secret across byte 4000 leaves no prefix.
+    Cut first, the secret's first 12 bytes (and the key's first 12) would stay."""
+    lead = 4000 - 12
+    transcript = tmp_path / "transcript.jsonl"
+    transcript.write_text(
+        "x" * lead + SECRET + " tail\n" + "y" * (lead - 1) + " " + KEY + " tail\n", encoding="utf-8"
+    )
+    done, outputs = capture(planted)
+    assert done.returncode == 0, done.stderr
+    text = outputs[0].read_text(encoding="utf-8")
+    # The fake hands' `echo` mangles the secret's `\b`, so its own output keeps a
+    # prefix of it; the prefix asked about is the one on the cut line.
+    secret_prefix = "x" * lead + SECRET[:12]
+    key_prefix = "y" * (lead - 1) + " " + KEY[:12]
+    assert secret_prefix not in strip_paths(text), "a prefix of the secret is in the capture"
+    assert key_prefix not in strip_paths(text), "a prefix of the key is in the capture"
+    assert "x" * lead + "[redacted]" in strip_paths(text)
+    assert "y" * (lead - 1) + " [redacted]" in strip_paths(text)
+    uncut = "x" * lead + "[redacted] tail"
+    assert uncut not in strip_paths(text), "the line is still cut at 4000 bytes"
+    assert_redacted(text)
+
+
+def test_a_url_encoded_secret_is_redacted(planted: dict[str, Path], tmp_path: Path) -> None:
+    """DESIGN §40/§41: each secret is matched URL-encoded as well; no pattern covers
+    this line, so only the by-value URL-encoded form redacts it."""
+    from urllib.parse import quote
+
+    encoded = quote(SECRET, safe="")
+    assert encoded != SECRET
+    transcript = tmp_path / "transcript.jsonl"
+    transcript.write_text(
+        json.dumps({"type": "tool", "url": f"http://127.0.0.1:2586/x?q={encoded}&z=1"}) + "\n",
+        encoding="utf-8",
+    )
+    done, outputs = capture(planted)
+    assert done.returncode == 0, done.stderr
+    text = outputs[0].read_text(encoding="utf-8")
+    assert encoded not in strip_paths(text), "the URL-encoded secret is in the capture"
+    assert "q=[redacted]&z=1" in strip_paths(text)
+    assert_redacted(text)
+
+
+def test_the_notification_password_is_redacted_by_value_from_its_file(
+    planted: dict[str, Path], tmp_path: Path
+) -> None:
+    """DESIGN §40: ~/.hands/ntfy.password is read and its value redacted wherever
+    it appears — here behind no key a pattern knows, so only the by-value read of
+    that file redacts it (it is in no config)."""
+    transcript = tmp_path / "transcript.jsonl"
+    transcript.write_text(f"the word {PASSWORD} alone\n", encoding="utf-8")
+    config = (planted["home"] / ".hands" / f"{PROJECT}.toml").read_text()
+    assert PASSWORD not in strip_paths(config), "the password is in no config"
+    done, outputs = capture(planted)
+    assert done.returncode == 0, done.stderr
+    text = outputs[0].read_text(encoding="utf-8")
+    assert PASSWORD not in strip_paths(text), "the notification password is in the capture"
+    assert "the word [redacted] alone" in strip_paths(text)
+    assert_redacted(text)

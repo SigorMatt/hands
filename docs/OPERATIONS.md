@@ -227,11 +227,20 @@ It writes `~/quota-capture-<project>-<time>.txt`, mode 600, and nothing else:
 stream-json tail and its lines about a limit, the tail of the transcript the
 record names, the daemon journal's lines that name the job
 (`journalctl --user -u handsd@<project>`) and the inbox's tail. A command that
-fails is recorded with its exit status. Before anything is written it redacts
+fails is recorded with its exit status. Every command that reads (`hands`,
+`journalctl`, `find`, `cat`, `tail`, `grep` and python's read of the job
+record) runs under `timeout`, `HANDS_CAPTURE_TIMEOUT` seconds (default 30),
+its process group killed 5 s later; one that times out is recorded as
+`(failed: timed out after <n>s: <command>)` and the capture goes on. When the
+`find` for the newest job or the record read times out, that line stands in
+the file where "no job record" or "no transcript" would otherwise be, and
+neither of those is written. Before anything is written it redacts
 every project's command secret and notification token and the notification
 user's token and password where the laptop keeps them, each by value (as
 written, as JSON escapes it and URL-encoded), then keys and the
-credentials of authorization headers by pattern. Read the file before you
+credentials of authorization headers by pattern. Redaction runs on the whole
+collected text before any line is cut; only then is each line cut to 4000
+bytes, so a secret across the cut is removed whole. Read the file before you
 share it: a secret the script does not know of is not redacted.
 
 **Then, today.** Wait for the reset (the `limit` event's `reset_at`, or the
