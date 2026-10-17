@@ -209,6 +209,16 @@ reply with the verdict line. Blockers are failed gates, missing tests, design
 violations, or claims the disk contradicts; a claim that overreaches is a
 blocker even when the code is right. Should-fix items wait for you.
 
+Three rules of the protocol carry other projects' reviews (DESIGN §40). The
+reviewer starts with `git worktree prune`, removes each stale review
+worktree an earlier, aborted review left under `/tmp`, and ends by removing
+its own. Not every commit is a unit: `plan:` (read for what it says),
+`meta:`, `journal:` and `report:` (read for forbidden edits only, never
+reviewed as a unit), `review:` and merge commits get no sub-agent, and a
+human-supplied commit is checked by `git show --stat` alone (§17). And
+each per-commit sub-agent is told to run `./scripts/check` once, in the
+foreground, and report only when every command has finished.
+
 ## 8. Decisions files
 
 Answers to memos, scope calls, corrections: `decisions-YYYY-MM-DD.md`
@@ -637,6 +647,17 @@ The unit's shape is in `templates/BUILDER-N-PROMPT.md`: it names the files,
 their repository paths and the commit message; the human places them under
 `~/Downloads/<name>/`; the builder copies and commits them by path without
 opening them; and the review checks that commit by `git show --stat` alone.
+
+When no plan anticipated it — a sub-agent stops on a text the unit asks for
+— the refusal path takes over (DESIGN §40). The brief's sub-agent rules say
+that a sub-agent that cannot or will not produce what the unit asks reports
+`refused: <one line>` and stops, changing nothing; the orchestrator does not
+retry it, marks the unit `[b] refused` and continues with the units that do
+not depend on it, and the mission ends `VERDICT: mission N blocked <unit>`.
+Under `autonomous` that blocked verdict consults the architect role, whose
+rule 8 names the condition, a unit no agent will author: it replies
+`VERDICT: escalate ruling: human-supplied content`, files no kit, and names
+the human-supplied unit above that would carry the content.
 
 ## 18. Reading hands: `send`, `jobs`, `pipeline`, `progress`
 

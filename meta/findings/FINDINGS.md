@@ -2627,7 +2627,7 @@ line>`; the orchestrator marks the unit `[b] refused` and continues; the
 architect's escalation conditions gain "a unit no agent will author",
 answered `VERDICT: escalate ruling: human-supplied content`. Mission 24 U7.
 
-Status: open
+Status: resolved-by-doc (mission 24 U7 — templates/BUILDER-N-PROMPT.md's sub-agent rules carry the `refused: <one line>` sentence and its execution model the `[b] refused` rule; architect/CLAUDE.md rule 8 gains "a unit no agent will author", answered `VERDICT: escalate ruling: human-supplied content` with the human-supplied unit shape; docs/ARCHITECT-HANDBOOK.md §17 says the path. Tests: tests/test_kit.py)
 
 ## H-067 — worktrees of aborted review sessions are left registered
 
@@ -2642,7 +2642,7 @@ stale review worktrees of earlier reviews under `/tmp`, ends by removing its
 own; `hands doctor` warns on a worktree registered under a role's clone
 whose path is missing. Mission 24 U7, U8.
 
-Status: open
+Status: open — protocol half resolved-by-doc (mission 24 U7 — both protocols' reviewer starts with `git worktree prune`, removes stale review worktrees of earlier reviews under `/tmp`, and ends by removing its own; handbook §7 says so. Tests: tests/test_kit.py); the `hands doctor` half is mission 24 U8
 
 ## H-068 — the review protocol's skip list does not name `plan:`, `journal:` or `report:`
 
@@ -2656,7 +2656,7 @@ Direction. §40: `plan:` (read for what it says), `meta:`, `journal:` and
 `report:` (read for forbidden edits only, never reviewed as a unit),
 `review:` and merge commits. Mission 24 U7.
 
-Status: open
+Status: resolved-by-doc (mission 24 U7 — both protocols' skip list: `plan:` read for what it says, `meta:`/`journal:`/`report:` read for forbidden edits only, `review:` and merge commits skipped; handbook §7 says so. Tests: tests/test_kit.py)
 
 ## H-069 — a reviewer's sub-agent ran the gate twice, in the background, or returned early
 
@@ -2670,4 +2670,4 @@ Direction. §40: the protocol's sub-agent rules say "run `./scripts/check`
 once, in the foreground, and report only when every command has finished".
 Mission 24 U7.
 
-Status: open
+Status: resolved-by-doc (mission 24 U7 — both protocols' per-commit step 3 says "run `./scripts/check` once, in the foreground, and report only when every command has finished"; handbook §7 says so. Tests: tests/test_kit.py)

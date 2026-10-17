@@ -56,7 +56,8 @@ has no `pr=`.
   `meta/drafts/` (git-ignored) until the last unit.
 - Retry a failed unit once with the sub-agent's report attached; after two
   failures mark it `blocked` in `meta/plan.md` and continue with units that
-  do not depend on it.
+  do not depend on it. A sub-agent that reports `refused: <one line>` is
+  not retried: mark the unit `[b] refused` and continue likewise.
 - Never edit product code yourself. Never edit `DESIGN.md` (file a finding
   instead).
 - `./scripts/check` three times before every commit.
@@ -79,8 +80,10 @@ has no `pr=`.
     Branch); never edit meta/plan.md,
     meta/CHECKPOINT.md, or DESIGN.md; if the unit needs a design change,
     stop and write a memo to meta/findings/FINDINGS.md instead of
-    improvising; dispatch nothing in the background; report in ≤12 lines:
-    sha, files, tests added, what is NOT proven.
+    improvising; if you cannot or will not produce what the unit asks,
+    report `refused: <one line>` and stop, changing nothing; dispatch
+    nothing in the background; report in ≤12 lines: sha, files, tests
+    added, what is NOT proven.
 
 ## §R Recovery brief
 

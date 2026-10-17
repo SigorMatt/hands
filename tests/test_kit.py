@@ -997,9 +997,7 @@ PROTOCOL_36_SENTENCES = {
     "no-pr-records-nothing-reviewed": "`reviewed: none`",
     "commits-exclude-mains-history": "`git log <base>..origin/<branch> ^origin/main`",
     "merge-base-of-the-branch": "`git merge-base origin/main origin/<branch>`",
-    "skip-merge-commits": "skip `meta:` bookkeeping commits and merge commits",
     "sub-agents-one-at-a-time": "one at a time, never concurrently",
-    "one-check-per-sub-agent": "Runs `./scripts/check` once at that commit",
     "tests-only-commit-body-names-wrong-changes": (
         "A commit that changes only tests must name in its body each wrong change"
         " that would make them red"
@@ -2920,3 +2918,146 @@ def test_each_shipped_playbook_warns_nothing(name: str) -> None:
     else:
         text = template(name)
     assert orphaned_rule_warnings(parse_playbook(text, path=Path("PLAYBOOK.toml"))) == []
+
+
+# ------------------------- §40 (H-066..H-069): refusals, worktrees, skip list, gate
+
+#: §40 (H-066): the brief template's sub-agent rule and execution-model rule,
+#: worded as meta/BUILDER-24-PROMPT.md has them, flattened.
+BRIEF_40_SUB_AGENT_RULE = (
+    "if you cannot or will not produce what the unit asks, report `refused: <one"
+    " line>` and stop, changing nothing;"
+)
+BRIEF_40_EXECUTION_RULE = (
+    "A sub-agent that reports `refused: <one line>` is not retried: mark the unit"
+    " `[b] refused` and continue likewise."
+)
+
+
+def test_the_brief_templates_sub_agent_rules_say_refused() -> None:
+    """§40 (H-066): the verbatim sub-agent brief carries the `refused:` sentence."""
+    section = _brief_section(
+        "Sub-agent brief (give this to every unit sub-agent, verbatim, plus the unit)"
+    )
+    assert BRIEF_40_SUB_AGENT_RULE in strip_paths(section), section
+
+
+def test_the_brief_templates_execution_model_marks_a_refusal_b_refused() -> None:
+    """§40 (H-066): a refusal is not retried; the unit is `[b] refused`, the
+    mission continues with units that do not depend on it, and the verdict
+    vocabulary still has the blocked line the playbook matches."""
+    section = _brief_section("Execution model (binding)")
+    assert BRIEF_40_EXECUTION_RULE in strip_paths(section), section
+    retry = "Retry a failed unit once with the sub-agent's report attached"
+    assert section.index(retry) < section.index(BRIEF_40_EXECUTION_RULE)
+    assert "`VERDICT: mission N blocked <unit>`" in strip_paths(section)
+
+
+def test_the_roles_rule_8_escalates_a_unit_no_agent_will_author() -> None:
+    """§40 (H-066), §38: rule 8's conditions gain "a unit no agent will author",
+    answered `VERDICT: escalate ruling: human-supplied content` and naming the
+    human-supplied unit shape of the brief template."""
+    eight = _role_rule(8)
+    for said in (
+        "a unit no agent will author",
+        "`VERDICT: escalate ruling: human-supplied content`",
+        "human-supplied unit",
+        "`templates/BUILDER-N-PROMPT.md`",
+        "`~/Downloads/<name>/`",
+    ):
+        assert said in strip_paths(eight), f"rule 8 does not say {said!r}: {eight}"
+
+
+#: §40 (H-067, H-068, H-069): the sentences both protocol files carry, flattened.
+PROTOCOL_40_SENTENCES = {
+    "the-reviewer-starts-with-prune": "Before anything else, run `git worktree prune`",
+    "stale-review-worktrees-under-tmp-removed": (
+        "remove each stale review worktree an earlier review left under `/tmp`"
+    ),
+    "worktrees-removed-with-force": "`git worktree remove --force <path>`",
+    "the-review-ends-by-removing-its-own": (
+        "Last, remove every worktree this review added"
+    ),
+    "plan-read-for-what-it-says": (
+        "Every other `plan:` commit (the mission's U0 among them) is read the same"
+        " way, for what it says it does"
+    ),
+    "meta-journal-report-for-forbidden-edits-only": (
+        "A `meta:`, `journal:` or `report:` commit is read for forbidden edits only"
+        " and never reviewed as a unit"
+    ),
+    "a-file-outside-meta-is-forbidden": (
+        "a file it lists outside `meta/` is a forbidden edit"
+    ),
+    "review-and-merge-commits-skipped": "A `review:` commit and a merge commit are skipped",
+    "the-gate-once-in-the-foreground": (
+        "run `./scripts/check` once, in the foreground, and report only when every"
+        " command has finished"
+    ),
+}
+
+#: §36's skip list and gate step, superseded by §40.
+PROTOCOL_40_SUPERSEDED = (
+    "skip `meta:` bookkeeping commits and merge commits",
+    "Runs `./scripts/check` once at that commit",
+)
+
+
+def _protocol(name: str) -> str:
+    return flat((ROOT / name / "REVIEW-PROTOCOL.md").read_text(encoding="utf-8"))
+
+
+@pytest.mark.parametrize("key", sorted(PROTOCOL_40_SENTENCES))
+@pytest.mark.parametrize("name", ["templates", "meta"])
+def test_the_protocol_prunes_worktrees_skips_bookkeeping_and_runs_the_gate_once(
+    name: str, key: str
+) -> None:
+    """§40: both protocol files carry H-067's worktree hygiene, H-068's skip list
+    and H-069's gate sentence; §36's skip list and gate step are gone."""
+    text = _protocol(name)
+    said = PROTOCOL_40_SENTENCES[key]
+    assert said in strip_paths(text), f"{name}/REVIEW-PROTOCOL.md does not say {said!r}"
+    for old in PROTOCOL_40_SUPERSEDED:
+        assert old not in strip_paths(text), f"{name}/REVIEW-PROTOCOL.md still says {old!r}"
+
+
+@pytest.mark.parametrize("name", ["templates", "meta"])
+def test_the_protocol_prunes_first_and_removes_its_own_worktrees_last(name: str) -> None:
+    """§40 (H-067): the prune comes before the commits are found, and the removal
+    of the review's own worktrees after the merge, before the verdict line."""
+    text = strip_paths(_protocol(name))
+    prune = text.index(PROTOCOL_40_SENTENCES["the-reviewer-starts-with-prune"])
+    assert prune < text.index("## The commits under review")
+    own = text.index(PROTOCOL_40_SENTENCES["the-review-ends-by-removing-its-own"])
+    assert text.index("## The merge (with a PR)") < own
+    assert own < text.index("Your reply's first line is exactly")
+
+
+@pytest.mark.parametrize(
+    ("number", "said"),
+    [
+        (7, "`git worktree prune`"),
+        (7, "stale review worktree"),
+        (7, "ends by removing its own"),
+        (7, "`plan:` (read for what it says)"),
+        (7, "`meta:`, `journal:` and `report:` (read for forbidden edits only, never"
+            " reviewed as a unit)"),
+        (7, "`review:` and merge commits"),
+        (7, "run `./scripts/check` once, in the foreground, and report only when every"
+            " command has finished"),
+        (17, "`refused: <one line>`"),
+        (17, "`[b] refused`"),
+        (17, "`VERDICT: mission N blocked <unit>`"),
+        (17, "`autonomous`"),
+        (17, "a unit no agent will author"),
+        (17, "`VERDICT: escalate ruling: human-supplied content`"),
+    ],
+)
+def test_the_handbook_says_section_40s_rules(number: int, said: str) -> None:
+    """§40 "Documentation": the handbook's §7 says the worktree hygiene, the skip
+    list and the gate sentence; §17 says the refusal path."""
+    text = (ROOT / "docs" / "ARCHITECT-HANDBOOK.md").read_text(encoding="utf-8")
+    heads = re.findall(rf"^## {number}\. .*$", text, flags=re.M)
+    assert len(heads) == 1, number
+    section = flat(text.split(heads[0], 1)[1].split("\n## ", 1)[0])
+    assert said in strip_paths(section), f"handbook §{number} does not say {said!r}"

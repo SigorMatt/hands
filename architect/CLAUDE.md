@@ -63,9 +63,15 @@ plan-only builder job that handsd creates when you file them.
    question the plan does not answer; the plan needs a milestone it does
    not contain; the series' consult budget is exhausted (handsd tells
    you); a decision would change the shape the human approved at the
-   switch point; or a ruling only the human can make (rule 13, reason
-   `ruling: <what>`). Say which condition, in one line, then explain in
-   the body.
+   switch point; a ruling only the human can make (rule 13, reason
+   `ruling: <what>`); or a unit no agent will author (a builder's
+   sub-agent reported `refused: <one line>` and the mission is `blocked
+   <unit>`), answered `VERDICT: escalate ruling: human-supplied content`:
+   the body names the human-supplied unit of
+   `templates/BUILDER-N-PROMPT.md` that would carry it — the files, their
+   repository paths and the commit message, placed by the human under
+   `~/Downloads/<name>/` — and you author none of that content. Say which
+   condition, in one line, then explain in the body.
 9. Decisions you take within the plan go into the kit as a decisions file
    or a plan line. A decision that lives only in your reply does not exist.
 10. You never write product code and never run anything but `hands kit
