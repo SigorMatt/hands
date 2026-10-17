@@ -1,0 +1,69 @@
+{
+  "url": "https://api.github.com/repos/SigorMatt/hands/pulls/comments/4301354663",
+  "pull_request_review_id": 5556157142,
+  "id": 4301354663,
+  "node_id": "PRRC_kwDOUVwTn88AAAABAGF2pw",
+  "diff_hunk": "@@ -1393,6 +1405,119 @@ def run(\n     return 0\n \n \n+# ------------------------------------------ `hands kit apply <zip>` (§40, the human)\n+\n+\n+def is_kit_file_name(name: object) -> bool:\n+    \"\"\"§26's \"sanitized to a basename; `.zip` only\", as a refusal, not a rewrite.\n+\n+    Printable, no path separator of either platform, no leading dot (which also\n+    rules out `.`, `..` and a bare `.zip`), and a lowercase `.zip` after a\n+    non-empty stem. A name that fails is refused rather than cleaned up, so the\n+    name written is the name the sender chose. The phone's `kit` and `hands kit\n+    apply` (§40) judge a kit's file name by this one rule.\n+    \"\"\"\n+    return (\n+        isinstance(name, str)\n+        and name.isprintable()\n+        and \"/\" not in name\n+        and \"\\\\\" not in name\n+        and not name.startswith(\".\")\n+        and name.endswith(\".zip\")\n+        and len(name) > len(\".zip\")\n+    )\n+\n+\n+def place_kit(directory: Path, name: str, data: bytes) -> bool:\n+    \"\"\"§40: put `data` at `directory/name`, never replacing another file.\n+\n+    True when it was copied there; False when `directory/name` already holds\n+    exactly these bytes (the kit is already there — `hands kit apply` of a kit in\n+    `kit_dir`, or of the same kit again). Any other entry of that name refuses\n+    (`KitError`) and is left as it was. The bytes go to a hidden temp file in\n+    `directory`, flushed, then hard-linked to the name (`os.link`, which never\n+    replaces an existing entry, a dangling symlink included), and the temp file\n+    is removed in every case.\n+    \"\"\"\n+    target = directory / name\n+    handle, temp_name = tempfile.mkstemp(prefix=\".hands-kit-\", suffix=\".part\", dir=directory)\n+    temp = Path(temp_name)\n+    try:\n+        with os.fdopen(handle, \"wb\") as out:\n+            out.write(data)\n+            out.flush()\n+            os.fsync(out.fileno())\n+        try:\n+            os.link(temp, target)\n+        except FileExistsError:\n+            same = (\n+                not target.is_symlink()\n+                and target.is_file()\n+                and target.stat().st_size == len(data)\n+                and target.read_bytes() == data\n+            )\n+            if same:\n+                return False\n+            raise KitError(\n+                f\"[files] kit_dir already holds another file named {name!r}, and hands \"\n+                \"kit apply never overwrites one; nothing is filed (§40)\"\n+            ) from None\n+        return True\n+    finally:\n+        with contextlib.suppress(FileNotFoundError):\n+            temp.unlink()\n+\n+\n+def apply_run(\n+    kit: str,\n+    *,\n+    cap: int,\n+    send: Callable[[dict[str, Any]], dict[str, Any]],\n+    out: TextIO,\n+    as_json: bool,\n+) -> int:\n+    \"\"\"`hands kit apply <zip>` (§40): the phone's kit path without the phone.\n+\n+    The client reads the zip — a regular file named as the phone's `kit` names\n+    one (`is_kit_file_name`), at most `cap` bytes ([files] kit_max_mb) — and sends\n+    its name and bytes to handsd's `kit_apply`, which runs the check, copies the\n+    zip into `[files] kit_dir` and files the held apply (`origin: kit`). A refusal\n+    comes back as the daemon's error, the failing check's lines in it.\n+    \"\"\"\n+    path = Path(kit).expanduser()\n+    if not is_kit_file_name(path.name):\n+        raise KitError(\n+            f\"hands kit apply takes a .zip whose name is a printable basename not \"\n+            f\"starting with a dot; {path.name!r} is not one (§26, §40)\"\n+        )\n+    if not path.is_file():\n+        raise KitError(f\"hands kit apply: {path} is not a regular file\")\n+    size = path.stat().st_size\n+    if size > cap:\n+        raise KitError(\n+            f\"hands kit apply: {path} is {size} bytes, over [files] kit_max_mb ({cap} bytes)\"\n+        )\n+    data = path.read_bytes()\n+    answer = send({\"name\": path.name, \"zip\": base64.b64encode(data).decode(\"ascii\")})",
+  "path": "src/hands/kit.py",
+  "commit_id": "a4e3da66e119678523a33ee5180462027a5b12d8",
+  "original_commit_id": "a4e3da66e119678523a33ee5180462027a5b12d8",
+  "user": {
+    "login": "qodo-code-review[bot]",
+    "id": 151058649,
+    "node_id": "BOT_kgDOCQD42Q",
+    "avatar_url": "https://avatars.githubusercontent.com/in/484649?v=4",
+    "gravatar_id": "",
+    "url": "https://api.github.com/users/qodo-code-review%5Bbot%5D",
+    "html_url": "https://github.com/apps/qodo-code-review",
+    "followers_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/followers",
+    "following_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/following{/other_user}",
+    "gists_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/gists{/gist_id}",
+    "starred_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/starred{/owner}{/repo}",
+    "subscriptions_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/subscriptions",
+    "organizations_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/orgs",
+    "repos_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/repos",
+    "events_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/events{/privacy}",
+    "received_events_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/received_events",
+    "type": "Bot",
+    "user_view_type": "public",
+    "site_admin": false
+  },
+  "body": "<img src=\"https://img.shields.io/badge/Medium-634FD1?style=flat-square\" height=\"20px\" alt=\"Remediation recommended\">\n\n8\\. Kits over about 9.4 mib can't be applied from the laptop <code>🐞 Bug</code> <code>≡ Correctness</code>\n\n<pre>\n<b><i>apply_run</i></b> accepts zips up to <b><i>[files] kit_max_mb</i></b> (20 MiB by default) and base64-encodes the\nentire kit into one socket request, while <b><i>call</i></b> checks that request against the daemon’s 12.5 MiB\n<b><i>LINE_LIMIT</i></b>. A zip above roughly 9.4 MiB can therefore pass the kit-size check but be refused\nbefore reaching the daemon with an “over the daemon’s line room” message, even though the phone’s\n<b><i>kit</i></b> path accepts the same file.\n</pre>\n\n\n<details>\n<summary><strong>Agent Prompt</strong></summary>\n\n```\n## Issue description\n`hands kit apply` accepts zips up to `kit_max_mb`, but base64 encoding can push a valid kit above the socket request limit before the daemon receives it.\n\n## Fix Focus Areas\n- src/hands/kit.py[1495-1501]\n- src/hands/cli.py[914-921]\n- src/hands/cli.py[1443-1459]\n- src/hands/runner.py[142-151]\n\n## Recommended Fix\nEither provide a bounded transfer mechanism that supports the configured kit limit, such as passing the zip path to the daemon for reading under `allowed_roots`, or make the advertised and enforced kit cap consistent with the encoded request limit. For the latter, use `min(kit_max_mb * MiB, LINE_LIMIT * 3 // 4 - envelope)` as the effective cap and have refusals name both limits. Test a kit above the current socket threshold but below the default kit limit.\n```\n\n<code>ⓘ Copy this prompt and use it to remediate the issue with your preferred AI generation tools</code>\n</details>\n\n[Dismiss ↗](https://app.qodo.ai/findings/f516de7d-2a59-4222-a754-7f90c61871b1?action=dismiss&origin=git) | [View ↗](https://app.qodo.ai/findings/f516de7d-2a59-4222-a754-7f90c61871b1)",
+  "created_at": "2026-10-17T04:25:57Z",
+  "updated_at": "2026-10-17T04:25:57Z",
+  "html_url": "https://github.com/SigorMatt/hands/pull/5#discussion_r4301354663",
+  "pull_request_url": "https://api.github.com/repos/SigorMatt/hands/pulls/5",
+  "_links": {
+    "self": {
+      "href": "https://api.github.com/repos/SigorMatt/hands/pulls/comments/4301354663"
+    },
+    "html": {
+      "href": "https://github.com/SigorMatt/hands/pull/5#discussion_r4301354663"
+    },
+    "pull_request": {
+      "href": "https://api.github.com/repos/SigorMatt/hands/pulls/5"
+    }
+  },
+  "reactions": {
+    "url": "https://api.github.com/repos/SigorMatt/hands/pulls/comments/4301354663/reactions",
+    "total_count": 0,
+    "+1": 0,
+    "-1": 0,
+    "laugh": 0,
+    "hooray": 0,
+    "confused": 0,
+    "heart": 0,
+    "rocket": 0,
+    "eyes": 0
+  },
+  "start_line": null,
+  "original_start_line": 1495,
+  "start_side": "RIGHT",
+  "line": null,
+  "original_line": 1501,
+  "side": "RIGHT",
+  "author_association": "NONE",
+  "original_position": 165,
+  "position": 1,
+  "subject_type": "line"
+}

@@ -1,6 +1,6 @@
 # FINAL-REPORT-24 — M8a: the harness probe and the seam's shape; the day's findings; operations
 
-VERDICT: mission 24 finished pr=<pending>
+VERDICT: mission 24 finished pr=5
 
 Brief: meta/BUILDER-24-PROMPT.md. Design: DESIGN v3.23 §40 (with §2, §23,
 §33, §35, §38, §39). Review read: meta/reviews/REVIEW-23.md (`reviewed:
@@ -101,7 +101,21 @@ command (missions 25, 26; §41 is written from docs/HARNESS-PROBE.md).
   docstring corrected to `_decide`'s behaviour (docstring only). Files
   docs/INTEGRATION.md, docs/ARCHITECT-HANDBOOK.md, README.md,
   src/hands/phone.py, tests/test_docs.py. Green 3/3, 4625.
-- U10 (`report:`) — this report; the pull request; the hosted review.
+- U10 a4e3da6 (`report:`) — this report; PR #5 opened. Hosted-review fixes:
+  b940d6d (`kit, daemon:` — findings 8, 9: `hands kit apply` stages the zip
+  in `kit_dir` under a hidden `.hands-kit-*.part` name and sends only names,
+  so any kit the size check accepts can be applied; the kickoff exemption is
+  decided from the job record and pipeline state by
+  `PlaybookEngine.is_kickoff`, `Daemon.kickoffs` removed; a fake-claude
+  `FAKE:stdin` test proves claude reads the prompt the running record
+  keeps; green 3/3, 4629) and 9b351a8 (`ops, doctor:` — findings 2, 4, 5,
+  6, 7: every command the capture script reads runs under `timeout -k 5`
+  (`HANDS_CAPTURE_TIMEOUT`, default 30 s); the redactor decodes with
+  `errors="replace"` and a failed redaction removes the output file; an
+  OSError on a clone's `.git/worktrees` is a WARN row; the migration
+  runbook runs `hands migrate-spool` on a flat archive and decides restored
+  held builder jobs before `hands go`; green 3/3, 4636). Then this
+  commit: the `## Hosted review` table and the archive.
 
 ## 2. What the tests prove
 
@@ -171,9 +185,12 @@ command (missions 25, 26; §41 is written from docs/HARNESS-PROBE.md).
   moved transcript (U3).
 - The "is ambiguous" reason with the secret typed; other refusal reasons
   quoting typed text (U4).
-- A `hands go` job held across a daemon restart: the kickoff exemption is
-  an in-memory set, so after a restart it is treated as a send and gets the
-  journal sentence if the journal is dirty (U5).
+- A send whose text equals a kickoff line is treated as a kickoff (no
+  journal sentence), as the consult count already treated it (b940d6d). The
+  staged kit file left behind if the CLI is killed between writing it and
+  the daemon's answer; a symlinked or oversized staged file reaching the
+  daemon (b940d6d). The capture script's redactor has no timeout of its own
+  (9b351a8).
 - The engine's WARN line in a running handsd's log; the phone's kit path
   showing it (U6).
 - A reviewer following the new protocol rules; cleanup on a real aborted
@@ -231,4 +248,24 @@ command (missions 25, 26; §41 is written from docs/HARNESS-PROBE.md).
 
 ## Hosted review
 
-(pending)
+PR #5, `qodo-code-review[bot]`, read with `hands hosted-review 5`. Archive:
+meta/reviews/hosted/PR-5/ — fetch 1 (Code Review issue comment 6229613578
+updated 2026-10-17T04:25:55Z; header Bugs 6, Rule violations 2,
+Cross-repo conflicts 1, Skill insights 0; nine findings), fetch 2 (the same
+comment edited in place at 2026-10-17T05:26:44Z after 9b351a8; seven struck
+`✓ Resolved`, header Bugs 0; verdict "2 of 9 findings open", the two
+dismissed below). The wait before fetch 1 was three exits 3 ("the Code
+Review comment is not there yet"), which wrote nothing. Numbers are fetch
+1's.
+
+| # | Finding (title as the bot wrote it) | Disposition |
+|---|---|---|
+| 1 | Discotrade misses journal reminders | dismissed: `Spool.transition` updates the job object the runner then writes, so claude receives the prefaced prompt; the new fake-claude `FAKE:stdin` test `test_claude_reads_the_prompt_the_running_record_keeps` proves it (dirty and clean journal) and is red if the runner writes the unprefaced prompt (b940d6d) |
+| 2 | Quota capture can hang indefinitely | fixed in 9b351a8 |
+| 3 | Sub-agents alter protected metadata | dismissed: the U0 `plan:` commit f959c62 is the orchestrator's, which the brief makes the author of meta/plan.md and meta/CHECKPOINT.md; no sub-agent commit in this PR touches either (each unit commit's file list) |
+| 4 | Doctor fails on unreadable worktree data | fixed in 9b351a8 |
+| 5 | Old spool state is skipped after migration | fixed in 9b351a8 (the step was missing; the consequence differs: handsd refuses to start on the flat layout and names `hands migrate-spool`, tests/test_two_projects.py) |
+| 6 | Restored held jobs block the kickoff step | fixed in 9b351a8 |
+| 7 | Quota capture can abort and leave an empty file | fixed in 9b351a8 |
+| 8 | Kits over about 9.4 MiB can't be applied from the laptop | fixed in b940d6d |
+| 9 | A restarted kickoff no longer resets the consult count | fixed in b940d6d |

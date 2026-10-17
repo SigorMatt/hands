@@ -34,7 +34,7 @@ Base of the mission: de407f2 (`plan: mission 24 kit (DESIGN v3.23)`).
       src/hands/doctor.py, tests
 - [x] U9 6fc7e6e The docs — docs/INTEGRATION.md, docs/ARCHITECT-HANDBOOK.md §18,
       README.md, tests
-- [x] U10 (this commit) Final report, the pull request and the hosted review's findings —
+- [x] U10 a4e3da6 b940d6d 9b351a8 (this commit) Final report, the pull request and the hosted review's findings —
       meta/FINAL-REPORT-24.md, meta/reviews/hosted/PR-<n>/
 
 Review items (REVIEW-23 should-fix). 1 → H-064, 2 → H-065 (decided in §40,

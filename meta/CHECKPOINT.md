@@ -27,9 +27,10 @@ Done: U8 c6b70c1 — docs/OPERATIONS.md (added), scripts/capture-quota-stop.sh (
 
 Done: U9 6fc7e6e — INTEGRATION nvm PATH (replaces, unexpanded), go/kit apply, CLAUDE_CONFIG_DIR transcript, doctor worktrees, kit WARN, pointers; handbook §11 §18; README; phone.py docstring; green 3/3 (4625).
 
-In progress: U10 final report (report: commit), PR mission-24 -> main,
-hosted review wait (<=10 one-minute steps), fixes, ## Hosted review table,
-archive, tree back to main. Done means: PR open, table committed, on main.
+Done: U10 a4e3da6 (report:) PR #5 opened; fetch 1: 9 findings; b940d6d (8, 9; 1 disproved by test; green 3/3, 4629), 9b351a8 (2, 4, 5, 6, 7; green 3/3, 4636); fetch 2 after the in-place re-review: 2 of 9 open = 1 and 3 dismissed.
+
+U10 final report: commit (this commit): ## Hosted review table, archive PR-5/1..2, plan, checkpoint, journal.
+Mission 24 — FINISHED after this push; tree returns to main.
 
 Standing constraints: one foreground sub-agent per unit, commit and push every
 unit to `mission-24`, ./scripts/check green three consecutive runs before each

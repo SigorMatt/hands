@@ -1,0 +1,69 @@
+{
+  "url": "https://api.github.com/repos/SigorMatt/hands/pulls/comments/4301354672",
+  "pull_request_review_id": 5556157142,
+  "id": 4301354672,
+  "node_id": "PRRC_kwDOUVwTn88AAAABAGF2sA",
+  "diff_hunk": "@@ -635,7 +650,10 @@ async def run(self, job: Job) -> Job:\n             raise RunnerError(\n                 f\"job {job.id} became {current.state} before it started; nothing spawned\"\n             )\n-        job = self.spool.transition(current, \"running\", head_at_start=head_at_start)\n+        started: dict[str, Any] = {\"head_at_start\": head_at_start}\n+        if preface is not None:\n+            started[\"prompt\"] = f\"{preface}\\n\\n{current.prompt}\"\n+        job = self.spool.transition(current, \"running\", **started)",
+  "path": "src/hands/runner.py",
+  "commit_id": "a4e3da66e119678523a33ee5180462027a5b12d8",
+  "original_commit_id": "a4e3da66e119678523a33ee5180462027a5b12d8",
+  "user": {
+    "login": "qodo-code-review[bot]",
+    "id": 151058649,
+    "node_id": "BOT_kgDOCQD42Q",
+    "avatar_url": "https://avatars.githubusercontent.com/in/484649?v=4",
+    "gravatar_id": "",
+    "url": "https://api.github.com/users/qodo-code-review%5Bbot%5D",
+    "html_url": "https://github.com/apps/qodo-code-review",
+    "followers_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/followers",
+    "following_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/following{/other_user}",
+    "gists_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/gists{/gist_id}",
+    "starred_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/starred{/owner}{/repo}",
+    "subscriptions_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/subscriptions",
+    "organizations_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/orgs",
+    "repos_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/repos",
+    "events_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/events{/privacy}",
+    "received_events_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/received_events",
+    "type": "Bot",
+    "user_view_type": "public",
+    "site_admin": false
+  },
+  "body": "<img src=\"https://img.shields.io/badge/High-634FD1?style=flat-square\" height=\"20px\" alt=\"Action required\">\n\n1\\. Discotrade misses journal reminders <code>🔗 Cross-repo conflict</code> <code>≡ Correctness</code>\n\n<pre>\n<b><i>Runner.run()</i></b> records the new journal preface in the running job but still writes <b><i>job.prompt</i></b>,\nwithout the preface, to Claude. When a discotrade builder answer or CLI send starts while\n<b><i>meta/journal.md</i></b> is dirty, the builder misses the instruction to commit it before continuing the\nmission, despite the job record saying that instruction was delivered.\n</pre>\n\n\n<details>\n<summary><strong>Agent Prompt</strong></summary>\n\n```\n## Issue description\nThe running job records a journal preface that Claude never receives. This defeats the dirty-journal reminder for discotrade builder sessions.\n\n## Fix Focus Areas\n- src/hands/runner.py[617-618]\n- src/hands/runner.py[653-656]\n- src/hands/runner.py[693-701]\n\n## Recommended Fix\nPass the same prefaced prompt to `_write_prompt` that the running job records, and test the subprocess input as well as the job record.\n```\n\n<code>ⓘ Copy this prompt and use it to remediate the issue with your preferred AI generation tools</code>\n</details>\n\n[Dismiss ↗](https://app.qodo.ai/findings/eca7f0c4-a719-4cb3-a2ac-7fd0992eea47?action=dismiss&origin=git) | [View ↗](https://app.qodo.ai/findings/eca7f0c4-a719-4cb3-a2ac-7fd0992eea47)",
+  "created_at": "2026-10-17T04:25:57Z",
+  "updated_at": "2026-10-17T04:25:57Z",
+  "html_url": "https://github.com/SigorMatt/hands/pull/5#discussion_r4301354672",
+  "pull_request_url": "https://api.github.com/repos/SigorMatt/hands/pulls/5",
+  "_links": {
+    "self": {
+      "href": "https://api.github.com/repos/SigorMatt/hands/pulls/comments/4301354672"
+    },
+    "html": {
+      "href": "https://github.com/SigorMatt/hands/pull/5#discussion_r4301354672"
+    },
+    "pull_request": {
+      "href": "https://api.github.com/repos/SigorMatt/hands/pulls/5"
+    }
+  },
+  "reactions": {
+    "url": "https://api.github.com/repos/SigorMatt/hands/pulls/comments/4301354672/reactions",
+    "total_count": 0,
+    "+1": 0,
+    "-1": 0,
+    "laugh": 0,
+    "hooray": 0,
+    "confused": 0,
+    "heart": 0,
+    "rocket": 0,
+    "eyes": 0
+  },
+  "start_line": 653,
+  "original_start_line": 653,
+  "start_side": "RIGHT",
+  "line": 656,
+  "original_line": 656,
+  "side": "RIGHT",
+  "author_association": "NONE",
+  "original_position": 70,
+  "position": 70,
+  "subject_type": "line"
+}

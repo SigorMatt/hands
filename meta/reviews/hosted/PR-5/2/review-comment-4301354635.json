@@ -1,0 +1,69 @@
+{
+  "url": "https://api.github.com/repos/SigorMatt/hands/pulls/comments/4301354635",
+  "pull_request_review_id": 5556157142,
+  "id": 4301354635,
+  "node_id": "PRRC_kwDOUVwTn88AAAABAGF2iw",
+  "diff_hunk": "@@ -0,0 +1,229 @@\n+#!/usr/bin/env bash\n+# capture-quota-stop.sh <project> [<job>] — DESIGN §40, docs/OPERATIONS.md\n+# (\"A usage-limit stop\").\n+#\n+# Writes ~/quota-capture-<project>-<time>.txt, mode 600, with what the first real\n+# usage-limit stop looked like: `hands status`, `hands jobs -n 5`, `hands\n+# pipeline`, the newest job record of the project's spool (or the job named as the\n+# second argument), that job's stream-json tail and its lines about a limit, the\n+# tail of the transcript the record names, the daemon journal's lines that name\n+# the job, and the inbox's tail.\n+#\n+# Read-only: the one file it writes is that output, created new (never over an\n+# existing file). Nothing needs the daemon to be up: a command that fails is\n+# recorded in the file with its exit status, and the capture goes on.\n+#\n+# Redacted before anything reaches the file: every project's command secret\n+# (`[notify] cmd_secret` of each ~/.hands/*.toml and each ~/.hands/*.cmd_secret)\n+# and notification token (`ntfy_token`), and the notification user's token and\n+# password where this machine keeps them (~/.hands/ntfy.token,\n+# ~/.hands/ntfy.password), each matched as a fixed string — raw, as JSON writes\n+# it and URL-encoded — never as a regular expression built from the value; then\n+# keys and bearer tokens by pattern. Read the file before you send it anywhere:\n+# a secret this script does not know of is not redacted.\n+\n+set -u\n+umask 077\n+\n+usage() {\n+    echo \"usage: bash scripts/capture-quota-stop.sh <project> [<job>]\" >&2\n+    exit 2\n+}\n+\n+[ \"$#\" -ge 1 ] && [ \"$#\" -le 2 ] || usage\n+project=$1\n+job=${2:-}\n+case $project in\n+    '' | .* | */*) echo \"capture-quota-stop: bad project name: $project\" >&2; exit 2 ;;\n+esac\n+case $job in\n+    .* | */*) echo \"capture-quota-stop: bad job id: $job\" >&2; exit 2 ;;\n+esac\n+\n+hands_dir=\"$HOME/.hands\"\n+spool=\"$hands_dir/$project\"\n+out=\"$HOME/quota-capture-$project-$(date +%Y%m%d-%H%M%S).txt\"\n+if [ -e \"$out\" ] || [ -L \"$out\" ]; then\n+    echo \"capture-quota-stop: $out exists; run it again in a second\" >&2\n+    exit 1\n+fi\n+\n+CUT=4000  # the longest line kept: transcript and stream lines can be megabytes\n+\n+section() {\n+    printf '\\n== %s ==\\n' \"$1\"\n+}\n+\n+# Run a command; on a non-zero exit, say so in the capture and go on.\n+run() {\n+    \"$@\" 2>&1\n+    local status=$?\n+    [ \"$status\" -eq 0 ] || printf '(failed: exit %s: %s)\\n' \"$status\" \"$*\"\n+    return 0\n+}\n+\n+collect() {\n+    echo \"quota capture: project $project, $(date -Is), by scripts/capture-quota-stop.sh\"\n+    echo \"(read-only; secrets redacted by value and by pattern, see the script's header)\"\n+\n+    section \"hands --project $project status\"\n+    run hands --project \"$project\" status\n+    section \"hands --project $project jobs -n 5\"\n+    run hands --project \"$project\" jobs -n 5\n+    section \"hands --project $project pipeline\"\n+    run hands --project \"$project\" pipeline",
+  "path": "scripts/capture-quota-stop.sh",
+  "commit_id": "9b351a83de17e2909ab5f2d1a741f99f1019eaad",
+  "original_commit_id": "a4e3da66e119678523a33ee5180462027a5b12d8",
+  "user": {
+    "login": "qodo-code-review[bot]",
+    "id": 151058649,
+    "node_id": "BOT_kgDOCQD42Q",
+    "avatar_url": "https://avatars.githubusercontent.com/in/484649?v=4",
+    "gravatar_id": "",
+    "url": "https://api.github.com/users/qodo-code-review%5Bbot%5D",
+    "html_url": "https://github.com/apps/qodo-code-review",
+    "followers_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/followers",
+    "following_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/following{/other_user}",
+    "gists_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/gists{/gist_id}",
+    "starred_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/starred{/owner}{/repo}",
+    "subscriptions_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/subscriptions",
+    "organizations_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/orgs",
+    "repos_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/repos",
+    "events_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/events{/privacy}",
+    "received_events_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/received_events",
+    "type": "Bot",
+    "user_view_type": "public",
+    "site_admin": false
+  },
+  "body": "<img src=\"https://img.shields.io/badge/Medium-634FD1?style=flat-square\" height=\"20px\" alt=\"Remediation recommended\">\n\n2\\. Quota capture can hang indefinitely <code>📘 Rule violation</code> <code>☼ Reliability</code>\n\n<pre>\n<b><i>capture-quota-stop.sh</i></b> runs <b><i>hands</i></b> and <b><i>journalctl</i></b> directly without a timeout wrapper. A hung\ndaemon or journal query therefore leaves the foreground capture process waiting indefinitely instead\nof reaching its redaction and output steps.\n</pre>\n\n\n<details>\n<summary><strong>Agent Prompt</strong></summary>\n\n```\n## Issue description\nThe quota-capture script invokes external commands without explicit timeouts, so an unresponsive daemon or journal service can block the capture indefinitely.\n\n## Fix Focus Areas\n- scripts/capture-quota-stop.sh[69-74]\n- scripts/capture-quota-stop.sh[130-135]\n\n## Recommended Fix\nWrap every external `hands` and `journalctl` invocation in an explicit timeout, preserve each command's failure output in the capture, and continue collecting later sections after a timeout.\n```\n\n<code>ⓘ Copy this prompt and use it to remediate the issue with your preferred AI generation tools</code>\n</details>\n\n[Dismiss ↗](https://app.qodo.ai/findings/ffadbb4d-6938-49fa-b6a8-7bbd86db84d4?action=dismiss&origin=git) | [View ↗](https://app.qodo.ai/findings/ffadbb4d-6938-49fa-b6a8-7bbd86db84d4)",
+  "created_at": "2026-10-17T04:25:56Z",
+  "updated_at": "2026-10-17T04:25:57Z",
+  "html_url": "https://github.com/SigorMatt/hands/pull/5#discussion_r4301354635",
+  "pull_request_url": "https://api.github.com/repos/SigorMatt/hands/pulls/5",
+  "_links": {
+    "self": {
+      "href": "https://api.github.com/repos/SigorMatt/hands/pulls/comments/4301354635"
+    },
+    "html": {
+      "href": "https://github.com/SigorMatt/hands/pull/5#discussion_r4301354635"
+    },
+    "pull_request": {
+      "href": "https://api.github.com/repos/SigorMatt/hands/pulls/5"
+    }
+  },
+  "reactions": {
+    "url": "https://api.github.com/repos/SigorMatt/hands/pulls/comments/4301354635/reactions",
+    "total_count": 0,
+    "+1": 0,
+    "-1": 0,
+    "laugh": 0,
+    "hooray": 0,
+    "confused": 0,
+    "heart": 0,
+    "rocket": 0,
+    "eyes": 0
+  },
+  "start_line": 95,
+  "original_start_line": 69,
+  "start_side": "RIGHT",
+  "line": 100,
+  "original_line": 74,
+  "side": "RIGHT",
+  "author_association": "NONE",
+  "original_position": 74,
+  "position": 100,
+  "subject_type": "line"
+}
