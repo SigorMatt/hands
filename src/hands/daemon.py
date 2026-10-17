@@ -189,11 +189,6 @@ class Daemon:
             role: asyncio.Queue() for role in self._roles
         }
         self._running: dict[str, str | None] = dict.fromkeys(self._roles)
-        #: §39, §40: the ids of the builder kickoffs `Api.kickoff` filed (`hands go`,
-        #: the phone's `go`), which `wants_journal_sentence` leaves out. In memory:
-        #: a `hands go` job carried over a daemon restart is a cli builder job like a
-        #: send, and gets the sentence if the journal is dirty when it starts.
-        self.kickoffs: set[str] = set()
         #: job id → the undecided `cancel` gate of §8, for `roles.<role>.cancel_gated`.
         #: It lives here and not on the job record because a cancel gate is a gate on
         #: the *request*, not on the job: the job keeps running, and the runner owns
@@ -711,11 +706,14 @@ class Daemon:
     def wants_journal_sentence(self, job: Job) -> bool:
         """§39 (H-060): is `job` on the resume path — an `answer` from the phone or a
         cli send (`keep` or `clear`) to the builder — which is told to commit a dirty
-        `meta/journal.md` first? A kickoff (`kickoffs`) is not."""
+        `meta/journal.md` first? A kickoff is not: `PlaybookEngine.is_kickoff`, decided
+        from the record and the persisted pipeline state (PR #5 hosted review, finding
+        9), after `on_job_start` has loaded the playbook, so a held `hands go` released
+        by a restarted daemon is still left out."""
         return (
             job.role == "builder"
             and (job.origin == "cli" or is_builder_answer(job))
-            and job.id not in self.kickoffs
+            and not self.playbook.is_kickoff(job)
         )
 
     async def _journal_sentence(self, job: Job) -> str | None:

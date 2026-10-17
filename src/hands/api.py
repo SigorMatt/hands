@@ -46,7 +46,10 @@ from hands.kit import (
     check_kit,
     home_shown,
     is_kit_file_name,
+    is_staged_name,
+    kit_directory,
     place_kit,
+    read_staged,
 )
 from hands.notify import NotifyError, send_test
 from hands.playbook import PlaybookError, load_playbook, playbook_path
@@ -60,7 +63,6 @@ from hands.spool import (
     TERMINAL_STATES,
     Event,
     Job,
-    PathEscape,
     Spool,
     SpoolError,
     is_architect_reply,
@@ -68,7 +70,6 @@ from hands.spool import (
     kits_filed_during,
     new_kit_id,
     resolve_kinds,
-    resolve_under_roots,
 )
 
 #: §31: the origin of the jobs the engine files, a consultation among them.
@@ -319,7 +320,6 @@ class Api:
         reply: bool = False,
         ungated: bool = False,
         attached: list[dict[str, Any]] | None = None,
-        kickoff: bool = False,
     ) -> dict[str, Any]:
         if role not in self.config.roles:
             known = ", ".join(sorted(self.config.roles))
@@ -372,11 +372,6 @@ class Api:
             playbook_sha256=playbook_sha256,
             kit_id=kit_id,
         )
-        if kickoff:
-            # §39 (H-060), §40: a kickoff is not the resume path, so the dispatch
-            # puts no journal sentence before it (`Daemon.wants_journal_sentence`).
-            # Recorded before anything is awaited, so before the worker can run it.
-            self.daemon.kickoffs.add(job.id)
         # §10's stop → resume cycle is not closed here: a `cli` send un-pauses the
         # pipeline when its job *starts* (`PlaybookEngine.on_job_start`), because a
         # send that is held at §8's gate or waiting in the queue has not yet
@@ -493,8 +488,7 @@ class Api:
             raise ApiError(busy)
         try:
             return await self._send(
-                role="builder", context="clear", prompt=book.kickoff, origin=origin,
-                kickoff=True,
+                role="builder", context="clear", prompt=book.kickoff, origin=origin
             )
         except ApiError as exc:
             raise ApiError(f"the send was refused ({exc})") from exc
@@ -708,51 +702,55 @@ class Api:
             shutil.rmtree(directory, ignore_errors=True)
             raise
 
-    async def kit_apply(self, *, name: str, zip: str) -> dict[str, Any]:
+    async def kit_apply(self, *, name: str, staged: str) -> dict[str, Any]:
         """§40: the daemon half of `hands kit apply <zip>` — the phone's kit path
         without the phone. Returns `{"job", "zip", "copied", "sha256",
         "commit_message", "default_why"}`.
 
         `name` is the zip's file name (judged as the phone's `kit` judges one,
-        `is_kit_file_name`) and `zip` the base64 of its bytes, at most `[files]
-        kit_max_mb`. The kit is checked as `hands kit check` checks it (`check_kit`,
-        against the builder's cwd and this daemon's config, as `kit_file` does), on
-        a copy under its own name in a scratch directory; a failing kit is refused
-        with the check's output and nothing is copied or filed. A passing kit is
-        copied into `[files] kit_dir` (inside `[files] allowed_roots`, as the phone
-        requires) under its own name (`place_kit`): unless the same bytes are
-        already there, and never over another file. Then, exactly as the phone's
-        kit path after the fetch: `apply_from_zip` on the copied file, named `~/…`
-        when it is under `$HOME`, and `file_apply` with `origin: kit` and a
-        `kit_id` handsd mints — a held builder job, its hold published as any hold
-        is, released by `hands approve`.
+        `is_kit_file_name`) and `staged` the hidden basename the client wrote its
+        bytes under in `[files] kit_dir` (`is_staged_name`, `kit.stage_kit`): the
+        bytes never travel over the socket, so a kit at `[files] kit_max_mb` fits
+        the line room (PR #5 hosted review, finding 8). The staged file is read
+        (a regular file, not through a symlink, at most kit_max_mb) and removed
+        whatever follows. The kit is checked as `hands kit check` checks it
+        (`check_kit`, against the builder's cwd and this daemon's config, as
+        `kit_file` does), on a copy under its own name in a scratch directory; a
+        failing kit is refused with the check's output and nothing is copied or
+        filed. A passing kit is copied into `[files] kit_dir` (inside `[files]
+        allowed_roots`, as the phone requires) under its own name (`place_kit`):
+        unless the same bytes are already there, and never over another file.
+        Then, exactly as the phone's kit path after the fetch: `apply_from_zip` on
+        the copied file, named `~/…` when it is under `$HOME`, and `file_apply`
+        with `origin: kit` and a `kit_id` handsd mints — a held builder job, its
+        hold published as any hold is, released by `hands approve`.
         """
         if not is_kit_file_name(name):
             raise ApiError(
                 "kit_apply: the name must be a printable .zip basename not starting "
                 "with a dot (§26, §40)"
             )
-        if not isinstance(zip, str):
-            raise ApiError("kit_apply: the zip is base64 text")
-        try:
-            data = base64.b64decode(zip, validate=True)
-        except (binascii.Error, ValueError) as exc:
-            raise ApiError("kit_apply: the zip is not valid base64") from exc
+        if not is_staged_name(staged):
+            raise ApiError(
+                "kit_apply: staged must be the hidden .hands-kit-*.part basename hands "
+                "kit apply wrote in [files] kit_dir (§40)"
+            )
         files_config = self.config.files
         cap = files_config.kit_max_mb * _MIB
-        if len(data) > cap:
-            raise ApiError(
-                f"kit_apply: the zip is {len(data)} bytes, over [files] kit_max_mb = "
-                f"{files_config.kit_max_mb} ({cap} bytes)"
-            )
         if "builder" not in self.config.roles:
             raise ApiError("kit_apply: this project configures no builder to apply a kit")
         try:
-            directory = resolve_under_roots(files_config.kit_dir, files_config.allowed_roots)
-        except PathEscape as exc:
-            raise ApiError("kit_apply: [files] kit_dir is outside [files] allowed_roots") from exc
-        if not directory.is_dir():
-            raise ApiError("kit_apply: [files] kit_dir is not a directory")
+            directory = kit_directory(files_config)
+        except KitError as exc:
+            raise ApiError(f"kit_apply: {exc}") from exc
+        source = directory / staged
+        try:
+            data = await asyncio.to_thread(read_staged, source, cap)
+        except KitError as exc:
+            raise ApiError(f"kit_apply: {exc}") from exc
+        finally:
+            with contextlib.suppress(FileNotFoundError):
+                source.unlink()
         builder = self.config.role("builder").cwd
         try:
             report = await asyncio.to_thread(self._check_bytes, name, data, builder)

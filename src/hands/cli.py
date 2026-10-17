@@ -474,8 +474,8 @@ def build_parser() -> argparse.ArgumentParser:
     kit_file.add_argument(
         "kit", help="the kit: a directory kits/<name> under $HANDS_KITS, laid out as the repository"
     )
-    # §40: the phone's kit path without the phone. The client reads the zip; handsd
-    # (`kit_apply`) checks it, copies it into [files] kit_dir and files the apply.
+    # §40: the phone's kit path without the phone. The client reads the zip and stages
+    # it in [files] kit_dir; handsd (`kit_apply`) checks it, names it and files the apply.
     kit_apply = kit_sub.add_parser(
         "apply",
         parents=[common],
@@ -909,12 +909,13 @@ def main(
         # transcript.
         if command == "log" and not as_json:
             return _pages(socket_path, args.job, args.offset, project=project, out=out)
-        # §40: `hands kit apply <zip>` — the bytes read here, the check, the copy
-        # into [files] kit_dir and the held apply are the daemon's (`kit_apply`).
+        # §40: `hands kit apply <zip>` — the bytes read and staged in [files] kit_dir
+        # here (never sent over the socket: PR #5 hosted review, finding 8); the
+        # check, the copy to the kit's name and the held apply are the daemon's.
         if command == "kit" and args.kit_command == "apply":
             return kit_mod.apply_run(
                 args.kit,
-                cap=config.files.kit_max_mb * 1024 * 1024,
+                files=config.files,
                 send=lambda params: call(socket_path, "kit_apply", params, project=project),
                 out=out,
                 as_json=as_json,

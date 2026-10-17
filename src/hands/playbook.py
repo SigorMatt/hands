@@ -2566,6 +2566,25 @@ class PlaybookEngine:
             and not is_architect_reply(record)  # §33: a reply is not a consultation
         )
 
+    def kickoff_prompts(self, book: Playbook | None) -> set[str]:
+        """§28: every `[series] kickoff` value seen (`PipelineState.kickoffs`, kept in
+        `pipeline.json`), plus `book`'s, stripped — what makes a builder job a kickoff."""
+        kickoffs = set(self.state.kickoffs)
+        if book is not None and book.kickoff:
+            kickoffs.add(book.kickoff.strip())
+        return kickoffs
+
+    def is_kickoff(self, job: Job) -> bool:
+        """§28, §39, §40: is `job` a builder kickoff — decided from its record (its
+        stored prompt is a kickoff value seen) and the persisted pipeline state, never
+        from a daemon's memory, so a `hands go` job held or queued across a restart is
+        still one (PR #5 hosted review, finding 9). The test `consults_used` applies."""
+        return (
+            job.role == "builder"
+            and job.resumed_from is None
+            and job.prompt.strip() in self.kickoff_prompts(self.playbook)
+        )
+
     def consults_used(self, book: Playbook | None) -> int:
         """§27, §28: the consultations of this mission — driver jobs (a §6 resume of
         one is not another) after the later of the last builder job whose prompt is
@@ -2577,9 +2596,7 @@ class PlaybookEngine:
         With none of them, every driver job in the spool counts: the safe direction
         is to stop sooner."""
         jobs = self.spool.list_jobs()
-        kickoffs = set(self.state.kickoffs)
-        if book is not None and book.kickoff:
-            kickoffs.add(book.kickoff.strip())
+        kickoffs = self.kickoff_prompts(book)
         start = 0
         for index, record in enumerate(jobs):
             if record.role != "builder" or record.resumed_from is not None:

@@ -8,14 +8,18 @@ the builder is `tests/fake_claude.py`. Nothing here touches the network.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
+import time
 from pathlib import Path
 
 import pytest
 
 from conftest import commit_file, strip_paths
 from hands import kit as kit_mod
+from hands.config import load_config
 from hands.daemon import Daemon
+from hands.runner import LINE_LIMIT
 from harness import (
     PROJECT,
     UNCHECKED_KIT,
@@ -108,6 +112,55 @@ def test_go_carries_no_journal_sentence_when_the_journal_is_dirty(
         assert record["state"] == "done" and record["prompt"] == KICKOFF, record
 
     drive(body)
+
+
+def test_a_held_go_carried_over_a_restart_is_still_a_kickoff(
+    tmp_home: Path, workdir: Path, downloads: Path
+) -> None:
+    """PR #5 hosted review, finding 9: a `hands go` job held (here by a §8 gate
+    pattern) when the daemon stops, and released by a fresh daemon while
+    `meta/journal.md` is dirty, still runs the kickoff alone (no journal sentence:
+    nothing in the exemption lives only in the old daemon's memory), and still
+    resets the consultation count (§28), so an earlier driver job is not counted."""
+    files = (
+        f'\n[files]\nallowed_roots = ["{workdir}", "{downloads}"]\n'
+        f'kit_dir = "{downloads}"\n\n[gates]\npatterns = ["go ran"]\n'
+    )
+    (tmp_home / ".hands" / f"{PROJECT}.toml").write_text(
+        config_body(tmp_home, workdir, extra=files)
+    )
+    with_playbook(workdir)
+    commit_file(workdir, "meta/journal.md", "a line\n")
+
+    async def scenario() -> None:
+        first = Daemon(load_config(PROJECT))
+        await first.start()
+        try:
+            earlier = first.spool.create_job(
+                role="driver", context="clear", prompt="an earlier consultation",
+                origin="playbook",
+            )  # fmt: skip
+            first.spool.transition(earlier, "running")
+            first.spool.transition(earlier, "done", verdict="VERDICT: resolved a")
+            time.sleep(0.01)  # job ids are ordered by their millisecond stamp
+            job = await ok("go")
+            assert (await ok("show", job["id"]))["state"] == "held"
+        finally:
+            await first.stop()
+        (workdir / "meta" / "journal.md").write_text("a line\nthe consult line\n")
+        second = Daemon(load_config(PROJECT))
+        await second.start()
+        try:
+            code, _out, err = await cli("approve", job["id"], "--json")
+            assert code == 0, err
+            record = await ok("wait", job["id"])
+            assert record["state"] == "done" and record["prompt"] == KICKOFF, record
+            engine = second.playbook
+            assert engine.consults_used(engine.playbook) == 0
+        finally:
+            await second.stop()
+
+    asyncio.run(asyncio.wait_for(scenario(), 60))
 
 
 def test_go_is_refused_while_a_builder_job_is_held(project: str, workdir: Path) -> None:
@@ -226,5 +279,36 @@ def test_kit_apply_refuses_to_overwrite_another_file_in_kit_dir(
         assert (downloads / "m24.zip").read_bytes() == b"another file"
         assert (await ok("jobs"))["jobs"] == []
         assert sorted(p.name for p in downloads.iterdir()) == ["m24.zip"]
+
+    drive(body)
+
+
+def test_kit_apply_files_a_kit_larger_than_the_daemons_line_room(
+    tmp_home: Path, workdir: Path, downloads: Path, tmp_path: Path
+) -> None:
+    """PR #5 hosted review, finding 8: a kit the size check accepts ([files]
+    kit_max_mb) is filed whatever the socket's line room (`runner.LINE_LIMIT`): its
+    bytes never travel in the request. A stored 10 MiB member makes the zip larger
+    than the base64 a line could carry (LINE_LIMIT * 3 / 4)."""
+    files = (
+        f'\n[files]\nallowed_roots = ["{workdir}", "{downloads}"]\n'
+        f'kit_dir = "{downloads}"\nkit_max_mb = 12\n'
+    )
+    (tmp_home / ".hands" / f"{PROJECT}.toml").write_text(
+        config_body(tmp_home, workdir, extra=files)
+    )
+    big = {**passing_kit(), "docs/large-notes.md": "a line of notes\n" * (10 * 1024 * 64)}
+    kit = a_kit(tmp_path / "elsewhere" / "m24-large.zip", big)
+    assert kit.stat().st_size * 4 // 3 > LINE_LIMIT
+    assert kit.stat().st_size <= 12 * 1024 * 1024
+    assert kit_mod.check_kit(kit, workdir).ok
+
+    async def body(daemon: Daemon) -> None:
+        answer = await ok("kit", "apply", str(kit))
+        record = await ok("show", answer["job"]["id"])
+        assert (record["state"], record["origin"]) == ("held", "kit")
+        assert (downloads / "m24-large.zip").read_bytes() == kit.read_bytes()
+        assert answer["copied"] is True
+        assert sorted(p.name for p in downloads.iterdir()) == ["m24-large.zip"]
 
     drive(body)

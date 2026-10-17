@@ -116,7 +116,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any, TextIO
 
 import hands.config as config_mod
-from hands.config import CLONE_ENV, KITS_ENV, Config
+from hands.config import CLONE_ENV, KITS_ENV, Config, FilesConfig
 from hands.playbook import (
     DRIVER_VERDICTS,
     GIT_ENV_CLEARED,
@@ -127,6 +127,7 @@ from hands.playbook import (
     orphaned_rule_warnings,
     parse_playbook,
 )
+from hands.spool import PathEscape, resolve_under_roots
 
 __all__ = [
     "APPLY_EXCEPTION",
@@ -151,7 +152,11 @@ __all__ = [
     "final_reply_literals",
     "home_shown",
     "is_kit_file_name",
+    "is_staged_name",
+    "kit_directory",
     "place_kit",
+    "read_staged",
+    "stage_kit",
     "kit_dir_under_kits",
     "kickoff_line",
     "kit_md_message",
@@ -1428,6 +1433,74 @@ def is_kit_file_name(name: object) -> bool:
     )
 
 
+#: §40: the hidden name a kit's bytes are written under in `[files] kit_dir`
+#: before they are named (`stage_kit`): `.hands-kit-<random>.part`.
+STAGE_PREFIX = ".hands-kit-"
+STAGE_SUFFIX = ".part"
+_MIB = 1024 * 1024
+
+
+def is_staged_name(name: object) -> bool:
+    """Is `name` a basename `stage_kit` writes — hidden, `.hands-kit-…part`?"""
+    return (
+        isinstance(name, str)
+        and name.isprintable()
+        and "/" not in name
+        and "\\" not in name
+        and name.startswith(STAGE_PREFIX)
+        and name.endswith(STAGE_SUFFIX)
+        and len(name) > len(STAGE_PREFIX) + len(STAGE_SUFFIX)
+    )
+
+
+def kit_directory(files: FilesConfig) -> Path:
+    """`[files] kit_dir`, resolved, refused (`KitError`) outside `[files]
+    allowed_roots` or when it is not a directory — the phone's rule (§26)."""
+    try:
+        directory = resolve_under_roots(files.kit_dir, files.allowed_roots)
+    except PathEscape as exc:
+        raise KitError("[files] kit_dir is outside [files] allowed_roots") from exc
+    if not directory.is_dir():
+        raise KitError("[files] kit_dir is not a directory")
+    return directory
+
+
+def stage_kit(directory: Path, data: bytes) -> Path:
+    """Write `data` to a new hidden `.hands-kit-<random>.part` in `directory`,
+    flushed, and return its path. The caller removes it."""
+    handle, temp_name = tempfile.mkstemp(prefix=STAGE_PREFIX, suffix=STAGE_SUFFIX, dir=directory)
+    temp = Path(temp_name)
+    try:
+        with os.fdopen(handle, "wb") as out:
+            out.write(data)
+            out.flush()
+            os.fsync(out.fileno())
+    except BaseException:
+        with contextlib.suppress(FileNotFoundError):
+            temp.unlink()
+        raise
+    return temp
+
+
+def read_staged(path: Path, cap: int) -> bytes:
+    """The bytes of a staged kit (`stage_kit`): a regular file, never through a
+    symlink (`O_NOFOLLOW`), at most `cap` bytes, else `KitError`."""
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    except FileNotFoundError:
+        raise KitError(f"no staged kit {path.name!r} in [files] kit_dir") from None
+    except OSError as exc:
+        raise KitError(f"the staged kit {path.name!r} cannot be opened ({exc.strerror})") from exc
+    with os.fdopen(fd, "rb") as handle:
+        info = os.fstat(handle.fileno())
+        if not stat.S_ISREG(info.st_mode):
+            raise KitError(f"the staged kit {path.name!r} is not a regular file")
+        data = handle.read(cap + 1)
+    if len(data) > cap:
+        raise KitError(f"the staged kit is over [files] kit_max_mb ({cap} bytes)")
+    return data
+
+
 def place_kit(directory: Path, name: str, data: bytes) -> bool:
     """§40: put `data` at `directory/name`, never replacing another file.
 
@@ -1435,18 +1508,13 @@ def place_kit(directory: Path, name: str, data: bytes) -> bool:
     exactly these bytes (the kit is already there — `hands kit apply` of a kit in
     `kit_dir`, or of the same kit again). Any other entry of that name refuses
     (`KitError`) and is left as it was. The bytes go to a hidden temp file in
-    `directory`, flushed, then hard-linked to the name (`os.link`, which never
-    replaces an existing entry, a dangling symlink included), and the temp file
-    is removed in every case.
+    `directory` (`stage_kit`), then hard-linked to the name (`os.link`, which
+    never replaces an existing entry, a dangling symlink included), and the temp
+    file is removed in every case.
     """
     target = directory / name
-    handle, temp_name = tempfile.mkstemp(prefix=".hands-kit-", suffix=".part", dir=directory)
-    temp = Path(temp_name)
+    temp = stage_kit(directory, data)
     try:
-        with os.fdopen(handle, "wb") as out:
-            out.write(data)
-            out.flush()
-            os.fsync(out.fileno())
         try:
             os.link(temp, target)
         except FileExistsError:
@@ -1471,7 +1539,7 @@ def place_kit(directory: Path, name: str, data: bytes) -> bool:
 def apply_run(
     kit: str,
     *,
-    cap: int,
+    files: FilesConfig,
     send: Callable[[dict[str, Any]], dict[str, Any]],
     out: TextIO,
     as_json: bool,
@@ -1479,11 +1547,17 @@ def apply_run(
     """`hands kit apply <zip>` (§40): the phone's kit path without the phone.
 
     The client reads the zip — a regular file named as the phone's `kit` names
-    one (`is_kit_file_name`), at most `cap` bytes ([files] kit_max_mb) — and sends
-    its name and bytes to handsd's `kit_apply`, which runs the check, copies the
-    zip into `[files] kit_dir` and files the held apply (`origin: kit`). A refusal
-    comes back as the daemon's error, the failing check's lines in it.
+    one (`is_kit_file_name`), at most [files] kit_max_mb — and writes its bytes
+    under a hidden staging name in `[files] kit_dir` (`stage_kit`; the directory
+    confined to `[files] allowed_roots`, `kit_directory`). The request names the
+    kit and the staged file, never carries the bytes, so any kit the size check
+    accepts fits the socket's line room (PR #5 hosted review, finding 8).
+    handsd's `kit_apply` reads the staged file, removes it, runs the check, copies
+    the zip to its own name in `kit_dir` and files the held apply (`origin: kit`).
+    The staged file is removed here too, whatever the answer. A refusal comes back
+    as the daemon's error, the failing check's lines in it.
     """
+    cap = files.kit_max_mb * _MIB
     path = Path(kit).expanduser()
     if not is_kit_file_name(path.name):
         raise KitError(
@@ -1497,8 +1571,22 @@ def apply_run(
         raise KitError(
             f"hands kit apply: {path} is {size} bytes, over [files] kit_max_mb ({cap} bytes)"
         )
+    try:
+        directory = kit_directory(files)
+    except KitError as exc:
+        raise KitError(f"hands kit apply: {exc}") from exc
     data = path.read_bytes()
-    answer = send({"name": path.name, "zip": base64.b64encode(data).decode("ascii")})
+    if len(data) > cap:
+        raise KitError(
+            f"hands kit apply: {path} is {len(data)} bytes, over [files] kit_max_mb "
+            f"({cap} bytes)"
+        )
+    staged = stage_kit(directory, data)
+    try:
+        answer = send({"name": path.name, "staged": staged.name})
+    finally:
+        with contextlib.suppress(FileNotFoundError):
+            staged.unlink()
     if as_json:
         print(json.dumps(answer, sort_keys=True), file=out)
         return 0

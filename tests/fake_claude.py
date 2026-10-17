@@ -44,6 +44,8 @@ backslash, so a multi-line result fits on one line of a test:
                            argument the event carries no subtype at all
     FAKE:env <NAME>        result is the value of $NAME as this process saw it,
                            or UNSET:<NAME> (proves what the runner passed)
+    FAKE:stdin             result is the prompt exactly as read from stdin
+                           (proves what the runner wrote, not what it recorded)
     FAKE:error <msg>       emit an error-subtype `result` (is_error true)
     FAKE:exit <code>       exit with this code (default 0)
     FAKE:turns <n>         num_turns of the result event
@@ -433,10 +435,12 @@ def _reply() -> tuple[str | None, dict[str, object]]:
     return (None if entry is None else str(entry)), {}
 
 
-def _result(one) -> tuple[str, dict[str, object]]:  # noqa: ANN001
+def _result(one, prompt: str) -> tuple[str, dict[str, object]]:  # noqa: ANN001
     """The result text, and the scripted reply entry it came from (`{}` if none).
 
     `FAKE:cat <path>` proves a file was on disk *before* claude was spawned."""
+    if one("stdin") is not None:
+        return prompt, {}
     name = one("env")
     if name is not None:
         return os.environ.get(name, f"UNSET:{name}"), {}
@@ -576,7 +580,7 @@ def main(argv: list[str]) -> int:
         emit(subtyped({**common, "is_error": True, "errors": [one("error", "") or ""]},
                       "error_during_execution"))
         return exit_code or 1
-    text, entry = _result(one)
+    text, entry = _result(one, prompt)
     if entry.get("no_turns") is True:
         common.pop("num_turns", None)
     command = entry.get("exec")

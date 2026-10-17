@@ -3140,6 +3140,31 @@ def test_the_journal_sentence_is_decided_when_the_send_is_dispatched(
     phone_drive(body)
 
 
+@pytest.mark.parametrize("dirty", [True, False], ids=["dirty", "clean"])
+def test_claude_reads_the_prompt_the_running_record_keeps(
+    project: str, workdir: Path, dirty: bool
+) -> None:
+    """PR #5 hosted review, finding 1: what claude reads on stdin (the fake's
+    `FAKE:stdin` answers it back) is the record's prompt — the journal sentence and
+    a blank line before the sender's text exactly when the dispatch decided it."""
+    journal(workdir, dirty=dirty)
+    text = "FAKE:stdin"
+
+    async def body(daemon: Daemon, fake: FakeNtfy) -> None:
+        await builder_asked(daemon)
+        daemon.spool.append_event("consult.done", {"job": CONSULTATION})
+        sent = await ok("send", "--role", "builder", "--context", "keep", text)
+        record = await ok("wait", sent["id"])
+        assert record["state"] == "done", record
+        assert record["result"] == record["prompt"], record
+        if dirty:
+            assert_reminded(record["result"], text)
+        else:
+            assert record["result"] == text
+
+    phone_drive(body)
+
+
 def test_answer_is_refused_when_the_builder_has_no_resumable_session(
     project: str, caplog: pytest.LogCaptureFixture
 ) -> None:
