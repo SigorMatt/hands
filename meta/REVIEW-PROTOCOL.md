@@ -8,9 +8,13 @@ from a job: a job that resumed a mission starts mid-mission.
 Before anything else, run `git worktree prune` in your clone, then `git
 worktree list`, and remove each stale review worktree an earlier review left
 under `/tmp` with `git worktree remove --force <path>`: an aborted review
-leaves its worktrees registered. Every worktree this review adds, yours and
-each sub-agent's, goes under `/tmp`, and the review ends by removing them
-(below).
+leaves its worktrees registered. A worktree is stale when it is registered
+under the clone and its path no longer exists, or when it is a review
+worktree under `/tmp` that is not this review's and is older than the
+current aux job's start; a worktree of a review running concurrently, or one
+a human made, is never stale, and you leave it. Every worktree this review
+adds, yours and each sub-agent's, goes under `/tmp`, and the review ends by
+removing them (below).
 
 ## The commits under review (DESIGN §35, §36)
 

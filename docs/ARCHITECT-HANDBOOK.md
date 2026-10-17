@@ -212,7 +212,11 @@ blocker even when the code is right. Should-fix items wait for you.
 Three rules of the protocol carry other projects' reviews (DESIGN §40). The
 reviewer starts with `git worktree prune`, removes each stale review
 worktree an earlier, aborted review left under `/tmp`, and ends by removing
-its own. Not every commit is a unit: `plan:` (read for what it says),
+its own (DESIGN §41). A worktree is stale when it is registered under the
+clone and its path no longer exists, or when it is a review worktree under
+`/tmp` that is not this review's and is older than the current aux job's
+start; a worktree of a review running concurrently, or one a human made, is
+never stale. Not every commit is a unit: `plan:` (read for what it says),
 `meta:`, `journal:` and `report:` (read for forbidden edits only, never
 reviewed as a unit), `review:` and merge commits get no sub-agent, and a
 human-supplied commit is checked by `git show --stat` alone (§17). And

@@ -2910,6 +2910,32 @@ def test_the_repos_playbook_in_force_warns_too(tmp_path: Path, repo: Path) -> No
 
 
 @pytest.mark.parametrize(
+    ("book", "said"),
+    [
+        (PLAYBOOK.replace("BUILDER-11-PROMPT.md and", "BUILDER-12-PROMPT.md and"), "BUILDER-12"),
+        (re.sub(r"kickoff = .*\n", "", PLAYBOOK), "[series] kickoff"),
+    ],
+    ids=["kickoff-differs", "no-kickoff"],
+)
+def test_the_warning_prints_when_the_playbook_line_fails_too(
+    tmp_path: Path, repo: Path, book: str, said: str
+) -> None:
+    """§41 "Smaller rulings" (REVIEW-24 should-fix 4): the WARN for a done rule
+    without its orphaned rule prints whether or not the `playbook` line passes.
+    Making the warning conditional on `playbook_check.ok` turns this red."""
+    kit = write_tree(tmp_path / "k", {**good_kit(), "PLAYBOOK.toml": book + AUX_ORPHANED})
+    code, out, _ = run_check(kit, repo)
+    assert said in strip_paths(assert_failed_only(code, out, "playbook"))
+    warns = warn_lines(out)
+    assert len(warns) == 1, out
+    assert warns[0].startswith("WARN playbook: "), out
+    assert "builder.orphaned" in strip_paths(warns[0]), out
+    answer = json.loads(run_check(kit, repo, "--json")[1])
+    assert answer["ok"] is False
+    assert answer["warnings"] == [warns[0].removeprefix("WARN playbook: ")]
+
+
+@pytest.mark.parametrize(
     "name", ["PLAYBOOK-missions.toml", "PLAYBOOK-runs.toml", "this repository's PLAYBOOK.toml"]
 )
 def test_each_shipped_playbook_warns_nothing(name: str) -> None:
@@ -3031,6 +3057,49 @@ def test_the_protocol_prunes_first_and_removes_its_own_worktrees_last(name: str)
     own = text.index(PROTOCOL_40_SENTENCES["the-review-ends-by-removing-its-own"])
     assert text.index("## The merge (with a PR)") < own
     assert own < text.index("Your reply's first line is exactly")
+
+
+#: §41 "Smaller rulings" (REVIEW-24 should-fix 5): what "stale" means, as both
+#: protocol files and the handbook's §7 say it, flattened.
+STALE_DEFINITION = (
+    "A worktree is stale when it is registered under the clone and its path no longer"
+    " exists, or when it is a review worktree under `/tmp` that is not this review's"
+    " and is older than the current aux job's start",
+    "a worktree of a review running concurrently, or one a human made, is never stale",
+)
+
+
+def _paragraph(text: str, opening: str) -> str:
+    """The one blank-line-separated paragraph of `text` that starts with `opening`, flattened."""
+    found = [flat(p) for p in re.split(r"\n\s*\n", text) if flat(p).startswith(opening)]
+    assert len(found) == 1, (opening, found)
+    return found[0]
+
+
+@pytest.mark.parametrize("name", ["templates", "meta"])
+def test_the_protocol_defines_stale_and_pins_each_worktree_command_where_it_occurs(
+    name: str,
+) -> None:
+    """§41: the opening paragraph defines stale and removes stale worktrees with
+    `git worktree remove --force`; the closing paragraph removes the review's own
+    with `git worktree remove --force` and then runs `git worktree prune`.
+    Deleting any one of the three commands, or the definition, turns this red."""
+    raw = (ROOT / name / "REVIEW-PROTOCOL.md").read_text(encoding="utf-8")
+    opening = _paragraph(raw, "Before anything else, run `git worktree prune`")
+    assert "under `/tmp` with `git worktree remove --force <path>`" in strip_paths(opening), opening
+    for said in STALE_DEFINITION:
+        assert said in strip_paths(opening), f"{name}: the opening paragraph does not say {said!r}"
+    closing = _paragraph(raw, "Last, remove every worktree this review added")
+    assert "`git worktree remove --force <path>` for each" in strip_paths(closing), closing
+    assert "then `git worktree prune`" in strip_paths(closing), closing
+
+
+def test_the_handbook_section_7_defines_stale() -> None:
+    """§41 "Documentation": the handbook's §7 carries the definition."""
+    text = (ROOT / "docs" / "ARCHITECT-HANDBOOK.md").read_text(encoding="utf-8")
+    section = flat(text.split("\n## 7. ", 1)[1].split("\n## ", 1)[0])
+    for said in STALE_DEFINITION:
+        assert said in strip_paths(section), f"handbook §7 does not say {said!r}"
 
 
 @pytest.mark.parametrize(
