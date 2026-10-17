@@ -1817,7 +1817,10 @@ def _worktrees_check(config: Config) -> Check:
     worktree's path is that file's directory. Read from the files, so no `git` runs
     and a clone git cannot open still gets a row. An entry with no readable gitdir
     file is one `git worktree prune` removes too, so it is named as well. A clone
-    whose `.git` is a file (itself a linked worktree) is not looked into.
+    whose `.git` is a file (itself a linked worktree) is not looked into. A clone
+    whose `.git/worktrees` cannot be listed (unreadable, or gone while it is read)
+    is named with the error, as a warning; the other rows are still reported (PR #5
+    hosted finding 4).
     """
     clones: dict[Path, list[str]] = {}
     for role in config.roles.values():
@@ -1828,29 +1831,20 @@ def _worktrees_check(config: Config) -> Check:
         return Check("worktrees", OK, "no role's cwd is a git repository; nothing to read")
     lines: list[str] = []
     dangling: list[str] = []
+    unreadable: list[str] = []
     for clone, roles in clones.items():
         where = f"{clone} ({', '.join(roles)})"
         admin = clone / ".git" / "worktrees"
         if (clone / ".git").is_file():
             lines.append(f"{where}: .git is a file; not looked into")
             continue
-        entries = sorted(admin.iterdir()) if admin.is_dir() else []
-        missing: list[str] = []
-        for entry in entries:
-            if not entry.is_dir():
-                continue
-            locked = " (locked: `git worktree unlock` it first)" if (
-                entry / "locked"
-            ).exists() else ""
-            try:
-                raw = (entry / "gitdir").read_text(encoding="utf-8").strip()
-            except (OSError, UnicodeDecodeError):
-                missing.append(f"{entry.name}: no readable {entry / 'gitdir'}{locked}")
-                continue
-            gitfile = Path(os.path.normpath(entry / raw))  # an absolute `raw` wins the join
-            path = gitfile.parent if gitfile.name == ".git" else gitfile
-            if not path.exists():
-                missing.append(f"{entry.name}: {path} is missing{locked}")
+        try:
+            entries = sorted(admin.iterdir()) if admin.is_dir() else []
+            missing = _dangling_entries(entries)
+        except OSError as exc:
+            unreadable.append(where)
+            lines.append(f"{where}: {admin} cannot be read ({exc.strerror or exc})")
+            continue
         if missing:
             dangling.append(where)
             lines.append(f"{where}: {len(missing)} registered worktree(s) whose path is gone")
@@ -1858,15 +1852,39 @@ def _worktrees_check(config: Config) -> Check:
             lines.append(f"  remedy: git -C {clone} worktree prune")
         else:
             lines.append(f"{where}: {len(entries)} linked worktree(s), every path present")
+    heads: list[str] = []
     if dangling:
-        return Check(
-            "worktrees",
-            WARN,
+        heads.append(
             "a worktree registered under a role's clone has no directory any more (an "
-            "aborted review's, H-067); `git worktree prune` drops the entry\n"
-            + "\n".join(lines),
+            "aborted review's, H-067); `git worktree prune` drops the entry"
         )
+    if unreadable:
+        heads.append("a role's clone has a .git/worktrees that cannot be read")
+    if heads:
+        return Check("worktrees", WARN, "\n".join([*heads, *lines]))
     return Check("worktrees", OK, "\n".join(lines))
+
+
+def _dangling_entries(entries: list[Path]) -> list[str]:
+    """The entries of a clone's `.git/worktrees` that `git worktree prune` removes:
+    one with no readable gitdir file, or whose worktree's path is gone."""
+    missing: list[str] = []
+    for entry in entries:
+        if not entry.is_dir():
+            continue
+        locked = " (locked: `git worktree unlock` it first)" if (
+            entry / "locked"
+        ).exists() else ""
+        try:
+            raw = (entry / "gitdir").read_text(encoding="utf-8").strip()
+        except (OSError, UnicodeDecodeError):
+            missing.append(f"{entry.name}: no readable {entry / 'gitdir'}{locked}")
+            continue
+        gitfile = Path(os.path.normpath(entry / raw))  # an absolute `raw` wins the join
+        path = gitfile.parent if gitfile.name == ".git" else gitfile
+        if not path.exists():
+            missing.append(f"{entry.name}: {path} is missing{locked}")
+    return missing
 
 
 def _roots_check(config: Config) -> Check:

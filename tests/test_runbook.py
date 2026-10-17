@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import stat
 import subprocess
 from pathlib import Path
@@ -197,6 +198,50 @@ def test_the_runbook_names_the_capture_script_and_its_output() -> None:
     assert "`hands go`" in strip_paths(body)
 
 
+def _new_machine_steps() -> dict[int, str]:
+    """The planned migration's numbered steps on the new machine, each flattened."""
+    body = section(doc(), "### A planned migration").split("On the new machine", 1)[1]
+    steps = re.split(r"(?m)^(\d+)\. ", body)[1:]
+    return {int(n): flat(text) for n, text in zip(steps[::2], steps[1::2], strict=True)}
+
+
+def test_the_migration_runs_migrate_spool_on_a_flat_archive_before_handsd_starts() -> None:
+    """PR #5 hosted finding 5: an archive holding the flat spool of §29 is moved
+    with `hands migrate-spool` after it is unpacked and before handsd starts
+    (which refuses that layout: tests/test_two_projects.py). Each item of
+    `FLAT_ITEMS` is named."""
+    steps = _new_machine_steps()
+    unpack = next(n for n, text in steps.items() if "hands-move.tgz" in text)
+    start = next(n for n, text in steps.items() if "systemctl --user start handsd@" in text)
+    assert unpack < start
+    text = steps[unpack]
+    assert "run `hands migrate-spool` before any handsd starts" in strip_paths(text), text
+    assert "handsd refuses to start on the flat layout" in strip_paths(text), text
+    for item in FLAT_ITEMS:
+        assert f"`{item}" in text, f"step {unpack} does not name {item!r}"
+
+
+def test_the_migration_decides_the_restored_builder_jobs_before_hands_go() -> None:
+    """PR #5 hosted finding 6: `hands go` is refused while a builder job is held
+    (`Api.builder_busy`); the runbook has the human list the builder's jobs and
+    decide a held one with approve or deny before the kickoff, after handsd starts."""
+    steps = _new_machine_steps()
+    start = next(n for n, text in steps.items() if "systemctl --user start handsd@" in text)
+    decide = next(n for n, text in steps.items() if "restored jobs" in text)
+    kickoff = next(n for n, text in steps.items() if "kickoff, `hands go`" in text)
+    assert start < decide < kickoff, (start, decide, kickoff)
+    text = steps[decide]
+    for said in (
+        "`hands jobs --role builder -n 5`",
+        "`hands go` is refused while a builder job is running, queued or held",
+        "`hands approve <job>`",
+        '`hands deny <job> --reason "<reason>"`',
+        "`hands cancel` refuses a held job",
+    ):
+        assert said in strip_paths(text), f"step {decide} lacks {said!r}: {text}"
+    assert "with no builder job running, queued or held" in strip_paths(steps[kickoff])
+
+
 @pytest.mark.parametrize("shape", sorted(TOKEN_SHAPES))
 def test_the_runbook_contains_nothing_shaped_like_a_credential(shape: str) -> None:
     found = re.findall(TOKEN_SHAPES[shape], doc())
@@ -291,24 +336,28 @@ def planted(tmp_path: Path) -> dict[str, Path]:
         "#!/bin/sh\n"
         'if [ -n "$FAKE_HANDS_DOWN" ]; then echo "hands: handsd is not answering" >&2; '
         "exit 1; fi\n"
+        # A hung daemon: a child that outlives the shell unless its group is killed.
+        'if [ -n "$FAKE_HANDS_HANG" ]; then sleep 300; echo late; fi\n'
         f"echo \"fake hands $*\"; echo '{SECRET} {BEARER}'\n",
     )
     _exe(
         bin_dir / "journalctl",
         "#!/bin/sh\n"
+        'if [ -n "$FAKE_JOURNAL_HANG" ]; then sleep 300; fi\n'
         f"echo 'Oct 17 handsd[1]: job {NEW_JOB} limited {BEARER} {SECRET}'\n"
         "echo 'Oct 17 handsd[1]: an unrelated line'\n",
     )
     return {"home": home, "bin": bin_dir, "spool": spool}
 
 
-def capture(planted: dict[str, Path], *args: str, down: bool = False) -> tuple[
-    subprocess.CompletedProcess[str], list[Path]
-]:
+def capture(
+    planted: dict[str, Path], *args: str, down: bool = False, **extra: str
+) -> tuple[subprocess.CompletedProcess[str], list[Path]]:
     env = {
         "HOME": str(planted["home"]),
         "PATH": f"{planted['bin']}{os.pathsep}{os.environ['PATH']}",
         "LANG": "C.UTF-8",
+        **extra,
     }
     if down:
         env["FAKE_HANDS_DOWN"] = "1"
@@ -404,3 +453,64 @@ def test_the_capture_refuses_a_job_id_that_is_a_path_and_writes_nothing(
     done, outputs = capture(planted, bad)
     assert done.returncode == 2
     assert outputs == []
+
+
+def test_a_hung_hands_and_journalctl_are_bounded_and_recorded_as_failures(
+    planted: dict[str, Path],
+) -> None:
+    """PR #5 hosted finding 2: every command that waits on another process runs
+    under `timeout` (HANDS_CAPTURE_TIMEOUT seconds); a timeout is recorded in the
+    file as a failure and the capture goes on to the spool, the redaction and the
+    file. The fakes sleep 300 s; the run's own bound is 60 s."""
+    done, outputs = capture(
+        planted, HANDS_CAPTURE_TIMEOUT="1", FAKE_HANDS_HANG="1", FAKE_JOURNAL_HANG="1"
+    )
+    assert done.returncode == 0, done.stderr
+    assert len(outputs) == 1, outputs
+    text = outputs[0].read_text(encoding="utf-8")
+    for command in ("status", "jobs -n 5", "pipeline"):
+        said = f"(failed: timed out after 1s: hands --project {PROJECT} {command})"
+        assert said in strip_paths(text), f"the capture lacks {said!r}:\n{text}"
+    assert "(failed: timed out after 1s: journalctl" in strip_paths(text), text
+    assert "late" not in strip_paths(text), "the hung command's group is killed"
+    assert "Usage limit reached" in strip_paths(text), "the spool is captured all the same"
+    assert_redacted(text)
+
+
+def test_a_line_cut_inside_a_multibyte_character_is_still_captured_and_redacted(
+    planted: dict[str, Path], tmp_path: Path
+) -> None:
+    """PR #5 hosted finding 7: `cut -c` cuts bytes, so a 4000th byte inside a UTF-8
+    character leaves half of it; the redactor decodes with errors="replace" and
+    the planted secrets on that line and the others are still redacted."""
+    long_line = "a" * 3999 + "\u00e9" * 10 + "\n"
+    assert len(long_line[:4000].encode("utf-8")) > 4000  # byte 4000 is inside the é
+    transcript = tmp_path / "transcript.jsonl"
+    transcript.write_text(
+        f"key {KEY} secret {SECRET}\n" + long_line, encoding="utf-8"
+    )
+    done, outputs = capture(planted)
+    assert done.returncode == 0, done.stderr
+    assert len(outputs) == 1, outputs
+    text = outputs[0].read_bytes().decode("utf-8")  # the file is valid UTF-8
+    assert "a" * 3999 + "\ufffd" in text, "the cut line is kept, its half character replaced"
+    assert_redacted(text)
+
+
+def test_a_failed_redactor_leaves_no_empty_file(planted: dict[str, Path]) -> None:
+    """PR #5 hosted finding 7: when the redactor fails, the capture says so and
+    removes the file it created — no empty file is left behind silently. The fake
+    `python3` fails only for the redactor (the program that holds PATTERNS)."""
+    real = shutil.which("python3")
+    assert real is not None
+    _exe(
+        planted["bin"] / "python3",
+        "#!/bin/sh\n"
+        'case "$3" in *PATTERNS*) echo "redactor broke" >&2; exit 3 ;; esac\n'
+        f'exec "{real}" "$@"\n',
+    )
+    done, outputs = capture(planted)
+    assert done.returncode == 1, done
+    assert "redactor broke" in strip_paths(done.stderr)
+    assert "failed" in strip_paths(done.stderr)
+    assert outputs == [], "a failed capture leaves no file"

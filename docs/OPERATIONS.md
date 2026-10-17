@@ -315,7 +315,13 @@ On the new machine, in this order:
 5. `uv tool install ~/git/hands` (after `git clone` of hands into
    `~/git/hands`), then `hands --version`.
 6. `tar -C ~ -xzpf ~/hands-move.tgz`; `stat -c '%a %n' ~/.hands/*.toml
-   ~/.hands/*.cmd_secret` should say 600 for each.
+   ~/.hands/*.cmd_secret` should say 600 for each. An archive from a hands
+   older than per-project spools (§29) holds the flat spool: `jobs/`,
+   `roles/`, `inbox.jsonl`, `inbox.acks.jsonl` or `pipeline.json` directly
+   under `~/.hands/`. Then run `hands migrate-spool` before any handsd starts:
+   handsd refuses to start on the flat layout, and names that command. It
+   moves the flat spool to `~/.hands/hands/`; rename the project's config to
+   `hands.toml`, or move the directory to the project's name, as it says.
 7. Each builder clone: `git clone -- <url> ~/git/<project>`, on the branch
    the series is on.
 8. The units: `install -Dm644 ~/git/hands/systemd/handsd@.service
@@ -326,7 +332,15 @@ On the new machine, in this order:
    prints `ntfy 200`.
 10. `systemctl --user start handsd@<project>`; the start notification reaches
     the phone and names any held job, republished with fresh buttons.
-11. One kickoff: `hands go`, or `go <secret>` from the phone, which proves the
+11. The builder's restored jobs, before any kickoff: `hands jobs --role
+    builder -n 5`. `hands go` is refused while a builder job is running,
+    queued or held, as the phone's `go` is. A held one (a kit's apply, or a
+    send §8's gate held) is decided with `hands approve <job>` or `hands deny
+    <job> --reason "<reason>"`; `hands cancel` refuses a held job. A running
+    or queued one is the series carrying on (an orphaned builder the playbook
+    resumed): it needs no kickoff.
+12. Then, with no builder job running, queued or held: one
+    kickoff, `hands go`, or `go <secret>` from the phone, which proves the
     phone's path as well. The first job of each role is `clear`, since the
     sessions stayed behind.
 

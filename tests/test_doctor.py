@@ -3314,3 +3314,54 @@ def test_doctor_reads_a_relative_gitdir_and_a_missing_gitdir_file(
     (tmp_path / "rel-wt" / ".git").write_text("gitdir: x\n")
     _code, found = checks()
     assert "rel-wt" not in strip_paths(found["worktrees"]["detail"])
+
+
+def test_doctor_reports_an_unreadable_worktrees_dir_as_a_warning_and_every_other_row(
+    tmp_home: Path, tmp_path: Path, fake_mode: None
+) -> None:
+    """PR #5 hosted finding 4: an OSError on `.git/worktrees` itself — here a mode
+    000 directory — is a WARN row naming the clone, not a doctor that stops; the
+    rows after it are still reported."""
+    if os.geteuid() == 0:
+        pytest.skip("root reads a mode 000 directory")
+    work = tmp_path / "work"
+    admin = work / ".git" / "worktrees"
+    (admin / "rel").mkdir(parents=True)
+    write_config(tmp_home, tmp_path)
+    admin.chmod(0)
+    try:
+        code, found = checks()
+    finally:
+        admin.chmod(0o755)
+    row = found["worktrees"]
+    assert row["status"] == "warn", row
+    assert f"{work.resolve()} (builder, aux)" in row["detail"], row
+    assert "cannot be read" in strip_paths(row["detail"]), row
+    assert {"daemon", "allowed roots"} <= set(found), sorted(found)
+    assert code == 0, "an unreadable worktrees directory is a warning, not a failure"
+
+
+def test_doctor_reports_a_worktrees_dir_that_vanishes_during_the_check_as_a_warning(
+    tmp_home: Path, tmp_path: Path, fake_mode: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """PR #5 hosted finding 4: `.git/worktrees` present when looked at, gone when
+    listed (a `git worktree prune` in between) is a WARN row naming the clone."""
+    work = tmp_path / "work"
+    (work / ".git" / "worktrees").mkdir(parents=True)
+    write_config(tmp_home, tmp_path)
+    real = Path.iterdir
+
+    def vanishing(self: Path) -> Any:
+        if self.name == "worktrees" and self.parent.name == ".git":
+            raise FileNotFoundError(2, "No such file or directory", str(self))
+        return real(self)
+
+    monkeypatch.setattr(Path, "iterdir", vanishing)
+    code, found = checks()
+    row = found["worktrees"]
+    assert row["status"] == "warn", row
+    assert f"{work.resolve()} (builder, aux)" in row["detail"], row
+    assert "cannot be read" in strip_paths(row["detail"]), row
+    assert "No such file or directory" in strip_paths(row["detail"]), row
+    assert {"daemon"} <= set(found), sorted(found)
+    assert code == 0

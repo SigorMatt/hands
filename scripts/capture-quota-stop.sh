@@ -10,8 +10,13 @@
 # the job, and the inbox's tail.
 #
 # Read-only: the one file it writes is that output, created new (never over an
-# existing file). Nothing needs the daemon to be up: a command that fails is
-# recorded in the file with its exit status, and the capture goes on.
+# existing file), and removed again if the redaction fails, so a failed capture
+# leaves no file. Nothing needs the daemon to be up: a command that fails is
+# recorded in the file with its exit status, and the capture goes on. Each command
+# that reads (hands, journalctl, find, cat, tail, grep, python3's read of the
+# record) runs under `timeout`, HANDS_CAPTURE_TIMEOUT seconds (default 30), its
+# process group killed 5 s after; one that times out is recorded in the file as
+# `(failed: timed out after <n>s: <command>)` and the capture goes on.
 #
 # Redacted before anything reaches the file: every project's command secret
 # (`[notify] cmd_secret` of each ~/.hands/*.toml and each ~/.hands/*.cmd_secret)
@@ -40,6 +45,11 @@ case $job in
     .* | */*) echo "capture-quota-stop: bad job id: $job" >&2; exit 2 ;;
 esac
 
+T=${HANDS_CAPTURE_TIMEOUT:-30}
+case $T in
+    '' | *[!0-9]* | 0) echo "capture-quota-stop: HANDS_CAPTURE_TIMEOUT is not a whole number of seconds: $T" >&2; exit 2 ;;
+esac
+
 hands_dir="$HOME/.hands"
 spool="$hands_dir/$project"
 out="$HOME/quota-capture-$project-$(date +%Y%m%d-%H%M%S).txt"
@@ -54,11 +64,27 @@ section() {
     printf '\n== %s ==\n' "$1"
 }
 
-# Run a command; on a non-zero exit, say so in the capture and go on.
+# A command under `timeout`, its process group killed if it outlives T seconds.
+bounded() {
+    timeout -k 5 "$T" "$@"
+}
+
+# Say in the capture why a command failed: `failed <status> <ok status> <command…>`.
+# 124 and 137 are `timeout`'s: the command was stopped.
+failed() {
+    local status=$1 ok=$2
+    shift 2
+    case $status in
+        0 | "$ok") ;;
+        124 | 137) printf '(failed: timed out after %ss: %s)\n' "$T" "$*" ;;
+        *) printf '(failed: exit %s: %s)\n' "$status" "$*" ;;
+    esac
+}
+
+# Run a command, bounded; on a non-zero exit, say so in the capture and go on.
 run() {
-    "$@" 2>&1
-    local status=$?
-    [ "$status" -eq 0 ] || printf '(failed: exit %s: %s)\n' "$status" "$*"
+    bounded "$@" 2>&1
+    failed "$?" 0 "$@"
     return 0
 }
 
@@ -76,7 +102,7 @@ collect() {
     if [ -z "$job" ]; then
         if [ -d "$spool/jobs" ]; then
             # Job ids are fixed-width base36 milliseconds, so the newest sorts last.
-            job=$(find "$spool/jobs" -maxdepth 1 -name '*.json' -printf '%f\n' 2>/dev/null \
+            job=$(bounded find "$spool/jobs" -maxdepth 1 -name '*.json' -printf '%f\n' 2>/dev/null \
                 | sort | tail -n 1)
             job=${job%.json}
         fi
@@ -98,21 +124,23 @@ collect() {
     stream="$spool/jobs/$job.stream.jsonl"
     section "stream-json tail, last 40 lines: $stream"
     if [ -f "$stream" ]; then
-        tail -n 40 "$stream" | cut -c1-"$CUT"
+        run tail -n 40 "$stream" | cut -c1-"$CUT"
     else
         echo "(no such file)"
     fi
     section "stream-json lines about a limit (limit, quota, rate, reset, retry, 429, overloaded)"
     if [ -f "$stream" ]; then
-        grep -n -i -E 'limit|quota|rate|reset|retry|429|overloaded' "$stream" | tail -n 60 \
-            | cut -c1-"$CUT"
+        {
+            bounded grep -n -i -E 'limit|quota|rate|reset|retry|429|overloaded' "$stream" 2>&1
+            failed "$?" 1 grep "$stream"  # 1: no line matched
+        } | tail -n 60 | cut -c1-"$CUT"
     else
         echo "(no such file)"
     fi
 
     transcript=""
     if [ -f "$record" ]; then
-        transcript=$(python3 -I -c '
+        transcript=$(bounded python3 -I -c '
 import json, sys
 try:
     print(json.load(open(sys.argv[1], encoding="utf-8")).get("transcript_path") or "")
@@ -122,21 +150,23 @@ except Exception:
     fi
     section "transcript tail, last 40 lines: ${transcript:-(no record, or it names no transcript)}"
     if [ -n "$transcript" ] && [ -f "$transcript" ]; then
-        tail -n 40 "$transcript" | cut -c1-"$CUT"
+        run tail -n 40 "$transcript" | cut -c1-"$CUT"
     elif [ -n "$transcript" ]; then
         echo "(no such file)"
     fi
 
     section "journalctl --user -u handsd@$project, lines naming $job"
-    journal=$(journalctl --user -u "handsd@$project" --no-pager -o short-iso 2>&1)
+    journal=$(bounded journalctl --user -u "handsd@$project" --no-pager -o short-iso 2>&1)
     status=$?
     printf '%s\n' "$journal" | grep -F -- "$job" | tail -n 100 | cut -c1-"$CUT"
-    [ "$status" -eq 0 ] || printf '(failed: exit %s: journalctl)\n%s\n' "$status" \
-        "$(printf '%s\n' "$journal" | tail -n 3)"
+    if [ "$status" -ne 0 ]; then
+        failed "$status" 0 journalctl --user -u "handsd@$project"
+        printf '%s\n' "$journal" | tail -n 3 | cut -c1-"$CUT"
+    fi
 
     section "inbox tail, last 30 events: $spool/inbox.jsonl"
     if [ -f "$spool/inbox.jsonl" ]; then
-        tail -n 30 "$spool/inbox.jsonl" | cut -c1-"$CUT"
+        run tail -n 30 "$spool/inbox.jsonl" | cut -c1-"$CUT"
     else
         echo "(no such file)"
     fi
@@ -145,7 +175,9 @@ except Exception:
 
 # The redactor reads the secrets itself, so no value is ever on a command line or
 # in the environment, and replaces each as a fixed string (str.replace), longest
-# first; the patterns come after.
+# first; the patterns come after. `cut -c` cuts bytes, so a line may end inside a
+# UTF-8 character: the input is decoded with errors="replace" (U+FFFD for the
+# half character) and written as UTF-8 whatever the locale.
 REDACT='
 import json, re, sys, tomllib
 from pathlib import Path
@@ -213,17 +245,23 @@ PATTERNS = [
      r"[\"\x27]?\s*[:=]\s*[\"\x27]?)[^\s\"\x27,;}]{6,}", r"\1[redacted]"),
 ]
 
-text = sys.stdin.read()
+text = sys.stdin.buffer.read().decode("utf-8", errors="replace")
 for form in sorted(forms, key=len, reverse=True):
     text = text.replace(form, "[redacted]")
 for pattern, replacement in PATTERNS:
     text = re.sub(pattern, replacement, text)
-sys.stdout.write(text)
+sys.stdout.buffer.write(text.encode("utf-8"))
 '
 
+# Created here, new (noclobber), so the file removed on a failure is this run's.
 set -o noclobber
-collect | python3 -I -c "$REDACT" "$hands_dir" > "$out" || {
-    echo "capture-quota-stop: writing $out failed" >&2
+: > "$out" || {
+    echo "capture-quota-stop: cannot create $out" >&2
+    exit 1
+}
+collect | python3 -I -c "$REDACT" "$hands_dir" >> "$out" || {
+    rm -f -- "$out"
+    echo "capture-quota-stop: the redaction failed; $out removed, nothing captured" >&2
     exit 1
 }
 echo "wrote $out"
