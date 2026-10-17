@@ -762,10 +762,12 @@ Publish a command to `cmd_topic` from the ntfy app. The last word is the token
   `reply` and an `answer` answer as above. A command carrying the right secret
   (or, for `approve` and `deny`, the job's nonce) that handsd refuses — no such
   job, a job that is not held, a builder with a job held, no resumable
-  session, a malformed line — is published on `ntfy_topic` titled
-  `<command>` with `<command> refused: <reason>`. Only a wrong or missing
-  secret or nonce, and a message whose first word is no command, stay silent:
-  each is logged in handsd's journal (`journalctl --user -u
+  session — is published on `ntfy_topic` titled `<command>` with `<command>
+  refused: <reason>`. A malformed `approve` or `deny` is answered only when
+  its last word is the secret; one whose last word is a nonce is logged and
+  not published. Only a wrong or missing secret or nonce, a malformed line
+  not ending in the secret, and a message whose first word is no command,
+  stay silent: each is logged in handsd's journal (`journalctl --user -u
   handsd@<project>`) and ignored. If a command seems to do nothing, look there.
   The log never contains the token.
 - **Job ids are lenient** (§39, H-059). The id in `approve`, `deny` and `hands

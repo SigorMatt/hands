@@ -2779,6 +2779,25 @@ def test_the_role_escalates_a_ruling_with_a_drafted_owner_file() -> None:
     assert "the draft of the file in your reply's body" not in strip_paths(thirteen)
 
 
+def test_the_roles_rule_2_reads_the_paths_the_prompt_names() -> None:
+    """§39 (H-051 ruling), review 23 should-fix 8: rule 2 tells the role that the
+    consultation prompt names the installed handbook and templates by absolute path,
+    to Read those paths as the prompt gives them, that `cat` works under them and
+    that `hands handbook` prints them. Reverting architect/CLAUDE.md to its text
+    before mission 23 U7 (2b4df10~1) turns this red."""
+    two = _role_rule(2)
+    assert strip_paths(two).startswith("Read the handbook of the hands that runs you"), two
+    for said in (
+        "`$HANDS_DOCS/docs/ARCHITECT-HANDBOOK.md`",
+        "`$HANDS_DOCS/templates/` are your forms",
+        "The consultation prompt names both by absolute path",
+        "Read those paths, as the prompt gives them, with the Read tool",
+        "(`cat` works under them too, and `hands handbook` prints them)",
+        "a `docs/` or `templates/` in the clone is the project's, not hands'",
+    ):
+        assert said in strip_paths(two), f"rule 2 does not say {said!r}: {two}"
+
+
 def test_the_filled_templates_with_an_owner_file_pass_six_of_six(tmp_path: Path) -> None:
     """§38's gate for U8: a kit built from the templates with placeholders filled —
     the brief with its new §R and Units text, the playbook, the protocol, and an owner

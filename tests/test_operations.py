@@ -92,6 +92,24 @@ def test_go_sends_the_kickoff_to_the_builder_with_origin_cli(
     drive(body)
 
 
+def test_go_carries_no_journal_sentence_when_the_journal_is_dirty(
+    project: str, workdir: Path
+) -> None:
+    """§39 (H-060) names an `answer` and a cli send as the resume path; `hands go`
+    is the phone's `go` (§40), so the sentence decided at dispatch (review 23
+    should-fix 6) is not put before its kickoff."""
+    with_playbook(workdir)
+    commit_file(workdir, "meta/journal.md", "a line\n")
+    (workdir / "meta" / "journal.md").write_text("a line\nthe consult line\n")
+
+    async def body(daemon: Daemon) -> None:
+        job = await ok("go")
+        record = await ok("wait", job["id"])
+        assert record["state"] == "done" and record["prompt"] == KICKOFF, record
+
+    drive(body)
+
+
 def test_go_is_refused_while_a_builder_job_is_held(project: str, workdir: Path) -> None:
     """§40: refused while a builder job is held, with the phone's reason (§27)."""
     with_playbook(workdir)

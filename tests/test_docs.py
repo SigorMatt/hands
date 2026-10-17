@@ -2657,3 +2657,17 @@ def test_the_playbook_doc_says_the_shipped_playbooks_resume_an_orphaned_review()
         "This repository's `PLAYBOOK.toml` and both templates also carry `aux.orphaned` → "
         "`resume`" in text
     )
+
+
+def test_the_integration_doc_says_a_malformed_decision_is_answered_only_with_the_secret() -> (
+    None
+):
+    """Review 23 should-fix 7: as `PhoneChannel._decide` does, a malformed `approve`
+    or `deny` is answered only when its last word is the secret; with a nonce it is
+    logged and not published. The doc no longer says a nonce makes it answered."""
+    text = flattened((ROOT / "docs" / "INTEGRATION.md").read_text(encoding="utf-8"))
+    assert (
+        "A malformed `approve` or `deny` is answered only when its last word is the "
+        "secret; one whose last word is a nonce is logged and not published." in text
+    )
+    assert "a builder with a job held, no resumable session, a malformed line — is" not in text

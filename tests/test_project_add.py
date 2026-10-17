@@ -299,7 +299,7 @@ def fake_git(tmp_path: Path, fake_systemctl: Path) -> Path:
     """A `git` ahead of the real one on PATH (fake_systemctl's fakebin) that logs its
     argv one call per line and then runs the real git, except that a `clone` whose
     argv names `hands-architect` exits 128 when `fail-architect` exists beside the
-    log. Returns the log."""
+    log, and a `remote set-url` exits 2 when `fail-set-url` does. Returns the log."""
     real = shutil.which("git")
     assert real is not None
     log = tmp_path / "git.log"
@@ -309,6 +309,10 @@ def fake_git(tmp_path: Path, fake_systemctl: Path) -> Path:
         f'echo "$*" >> {log}\n'
         f'if [ "$1" = clone ] && [ -e {tmp_path / "fail-architect"} ]; then\n'
         '  case "$*" in *hands-architect*) echo "fatal: refused" >&2; exit 128;; esac\n'
+        "fi\n"
+        f'if [ "$3" = remote ] && [ "$4" = set-url ] && [ -e {tmp_path / "fail-set-url"} ]; '
+        "then\n"
+        '  echo "error: could not set the url" >&2; exit 2\n'
         "fi\n"
         f'exec {real} "$@"\n'
     )
@@ -408,3 +412,37 @@ def test_the_clone_puts_double_dash_before_the_url(
     assert len(clones) == 2, clones
     for argv in clones:
         assert "--" in argv and argv.index("--") == argv.index(str(bare_repo)) - 1, argv
+
+
+def test_the_dry_run_names_the_double_dash_before_the_url(
+    tmp_home: Path, fake_systemctl: Path, bare_repo: Path
+) -> None:
+    """§39 (review 23 should-fix 9): the dry run says each role's clone is
+    `git clone -- <url>`, as the run does."""
+    code, out, err = _run(["project", "add", "demo", "--repo", str(bare_repo), "--dry-run"])
+    assert code == 0, err
+    said = f"(git clone -- {bare_repo}; push URL "
+    assert out.count(said) == 2, out
+
+
+def test_a_failed_push_url_step_is_a_failed_clone(
+    tmp_home: Path, fake_git: Path, bare_repo: Path, tmp_path: Path
+) -> None:
+    """§39 (review 23 should-fix 9): a clone whose `remote set-url --push` fails
+    counts as a failed clone — the command says the clone failed, removes what it
+    created, enables no unit, and a re-run then succeeds."""
+    (tmp_path / "fail-set-url").touch()
+    before = _tree(tmp_home)
+    code, out, _ = _run(["project", "add", "demo", "--repo", str(bare_repo)])
+    assert code == 1, out
+    assert f"the clone of {bare_repo} failed; removed:" in out, out
+    assert _tree(tmp_home) == before
+    removed = _removed(out)
+    assert str(tmp_home / "hands-driver") in removed, removed
+    assert not (tmp_path / "systemctl.log").exists(), "a failed clone enables no unit"
+    set_urls = [ln for ln in fake_git.read_text().splitlines() if " remote set-url " in ln]
+    assert len(set_urls) == 1, set_urls  # the driver's, which stopped the command
+
+    (tmp_path / "fail-set-url").unlink()
+    code, out, err = _run(["project", "add", "demo", "--repo", str(bare_repo)])
+    assert code == 0, err + out

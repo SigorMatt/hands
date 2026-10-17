@@ -1164,6 +1164,13 @@ def test_progress_names_the_running_job_the_branch_three_commits_and_the_checkpo
     async def body(daemon: Daemon, fake: FakeNtfy) -> None:
         busy = await ok("send", "--role", "builder", "--context", "clear", "FAKE:block")
         assert (await running_job())["id"] == busy["id"]
+
+        async def started() -> bool:
+            # The worker names the job running before the runner stamps its record
+            # (§39's journal sentence is decided in between, off the event loop).
+            return (await ok("show", busy["id"]))["started"] is not None
+
+        await poll(started, "the running job's record to be stamped")
         await say(daemon, fake, f"progress {SECRET}")
         await daemon.notifier.drain()
         (answer,) = progress_answers(daemon)
@@ -3091,6 +3098,44 @@ def test_the_journal_reminder_runs_off_the_event_loop(project: str, workdir: Pat
         assert_reminded((await ok("wait", sent["id"]))["prompt"], text)
         assert len(threads) >= 2, threads  # builder_asked's own send is a cli send too
         assert all(thread != loop_thread for thread in threads), (loop_thread, threads)
+
+    phone_drive(body)
+
+
+@pytest.mark.parametrize("dirty_at_enqueue", [True, False], ids=["dirty-then-committed",
+                                                                  "clean-then-dirty"])
+def test_the_journal_sentence_is_decided_when_the_send_is_dispatched(
+    project: str, workdir: Path, dirty_at_enqueue: bool
+) -> None:
+    """Review 23 should-fix 6: §39's commit-the-journal sentence is decided when the
+    job is dispatched, not when it is enqueued. A held cli send to the builder is
+    stored, and its hold published, with the human's prompt alone; it carries the
+    sentence only if `meta/journal.md` is dirty when the approved job starts."""
+    journal(workdir, dirty=dirty_at_enqueue)
+    text = "FAKE:result VERDICT: mission 23 finished"
+
+    async def body(daemon: Daemon, fake: FakeNtfy) -> None:
+        await builder_asked(daemon)
+        daemon.spool.append_event("consult.done", {"job": CONSULTATION})
+        sent = await ok("send", "--role", "builder", "--context", "keep", "--gate", "hold", text)
+        assert sent["state"] == "held" and sent["prompt"] == text, sent
+        assert (await ok("show", sent["id"]))["prompt"] == text
+        await daemon.notifier.drain()
+        for item in daemon.notifier.post.sent:
+            assert JOURNAL_SAID not in strip_paths(json.dumps(item, default=str)), item
+        if dirty_at_enqueue:
+            commit_file(workdir, "meta/journal.md",
+                        (workdir / "meta" / "journal.md").read_text(encoding="utf-8"))
+        else:
+            with (workdir / "meta" / "journal.md").open("a", encoding="utf-8") as handle:
+                handle.write(f"2026-10-15  consult {CONSULTATION} (architect done)\n")
+        await ok("approve", sent["id"])
+        record = await ok("wait", sent["id"])
+        assert record["state"] == "done", record
+        if dirty_at_enqueue:
+            assert record["prompt"] == text
+        else:
+            assert_reminded(record["prompt"], text)
 
     phone_drive(body)
 

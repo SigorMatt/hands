@@ -604,13 +604,18 @@ class Runner:
         event = self._session_ready.setdefault(job_id, asyncio.Event())
         await asyncio.wait_for(event.wait(), timeout)
 
-    async def run(self, job: Job) -> Job:
-        """Run one `queued` job to a terminal state and return the finished record."""
+    async def run(self, job: Job, *, preface: str | None = None) -> Job:
+        """Run one `queued` job to a terminal state and return the finished record.
+
+        `preface`, when given, is put before the prompt, then a blank line, in the
+        record moved to `running` and in what claude reads (§39's journal sentence,
+        decided by the daemon at dispatch)."""
         if job.state != "queued":
             raise RunnerError(f"job {job.id} is {job.state}; only a queued job can be run")
         role = self.config.role(job.role)
 
-        size = len(job.prompt.encode("utf-8"))
+        delivered = job.prompt if preface is None else f"{preface}\n\n{job.prompt}"
+        size = len(delivered.encode("utf-8"))
         if size > MAX_PROMPT_BYTES:
             raise RunnerError(
                 f"prompt is {size} bytes, over the {MAX_PROMPT_BYTES} byte cap of §2; "
@@ -645,7 +650,10 @@ class Runner:
             raise RunnerError(
                 f"job {job.id} became {current.state} before it started; nothing spawned"
             )
-        job = self.spool.transition(current, "running", head_at_start=head_at_start)
+        started: dict[str, Any] = {"head_at_start": head_at_start}
+        if preface is not None:
+            started["prompt"] = f"{preface}\n\n{current.prompt}"
+        job = self.spool.transition(current, "running", **started)
         if advance_error is not None:
             return await self._finish(
                 job, role, "failed", _Parsed(), None, advance_error,
