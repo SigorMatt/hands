@@ -89,7 +89,7 @@ phone.
 
 `send`, `wait`, `result`, `jobs`, `show`, `open`, `log`, `cancel`, `put`,
 `get`, `ls`, `tail`, `inbox`, `pipeline`, `approve`, `deny`, `pause`,
-`resume`, `status`, `notify`, `who`, `doctor`, `kit check`. Every one takes `--json` (that is what the driver
+`resume`, `status`, `notify`, `who`, `doctor`, `kit check`, `go`, `kit apply`. Every one takes `--json` (that is what the driver
 reads) and `--project`. `hands --help` is the reference; `handsd --help` is the
 daemon's.
 
@@ -97,6 +97,14 @@ daemon's.
 checks a kit against a repository (paths, playbook, brief, verdict regexes,
 wording) and, only when every check passes, prints the apply prompt. The
 architect runs it before emitting a kit (`docs/ARCHITECT-HANDBOOK.md` §11).
+
+`hands go` and `hands kit apply <zip>` are the phone's `go` and `kit` from a
+terminal: `go` sends the playbook's `[series] kickoff` line to the builder as a
+`clear` send with `origin: cli`, refused while a builder job is running, queued
+or held; `kit apply` runs the kit check, refuses a failing kit with the check's
+output, copies the zip into `[files] kit_dir` under its own name (never over
+another file) and files the apply prompt as a held builder job (`origin: kit`),
+which `hands approve <job>` releases.
 
 `hands project add <name> --repo <url> [--dry-run]` sets a new project up on
 this laptop (config, topics, secret, role directories, `handsd@<name>`), and

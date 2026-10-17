@@ -96,6 +96,7 @@ The checks, in order (docs/ARCHITECT-HANDBOOK.md §11 says the same):
 from __future__ import annotations
 
 import base64
+import contextlib
 import hashlib
 import io
 import itertools
@@ -148,6 +149,8 @@ __all__ = [
     "file_run",
     "final_reply_literals",
     "home_shown",
+    "is_kit_file_name",
+    "place_kit",
     "kit_dir_under_kits",
     "kickoff_line",
     "kit_md_message",
@@ -157,6 +160,7 @@ __all__ = [
     "plan_apply",
     "review_literals",
     "run",
+    "apply_run",
 ]
 
 #: DESIGN §10: `PLAYBOOK.toml` next to `WORKPLAN.md`, or agile-skills' `meta/PLAYBOOK.toml`.
@@ -1390,6 +1394,119 @@ def run(
     print(f"commit message: {report.commit_message}", file=out)
     print(report.kit_md_note, file=out)
     print(f"kit check: pass ({len(report.checks)} of {len(report.checks)} checks)", file=out)
+    return 0
+
+
+# ------------------------------------------ `hands kit apply <zip>` (§40, the human)
+
+
+def is_kit_file_name(name: object) -> bool:
+    """§26's "sanitized to a basename; `.zip` only", as a refusal, not a rewrite.
+
+    Printable, no path separator of either platform, no leading dot (which also
+    rules out `.`, `..` and a bare `.zip`), and a lowercase `.zip` after a
+    non-empty stem. A name that fails is refused rather than cleaned up, so the
+    name written is the name the sender chose. The phone's `kit` and `hands kit
+    apply` (§40) judge a kit's file name by this one rule.
+    """
+    return (
+        isinstance(name, str)
+        and name.isprintable()
+        and "/" not in name
+        and "\\" not in name
+        and not name.startswith(".")
+        and name.endswith(".zip")
+        and len(name) > len(".zip")
+    )
+
+
+def place_kit(directory: Path, name: str, data: bytes) -> bool:
+    """§40: put `data` at `directory/name`, never replacing another file.
+
+    True when it was copied there; False when `directory/name` already holds
+    exactly these bytes (the kit is already there — `hands kit apply` of a kit in
+    `kit_dir`, or of the same kit again). Any other entry of that name refuses
+    (`KitError`) and is left as it was. The bytes go to a hidden temp file in
+    `directory`, flushed, then hard-linked to the name (`os.link`, which never
+    replaces an existing entry, a dangling symlink included), and the temp file
+    is removed in every case.
+    """
+    target = directory / name
+    handle, temp_name = tempfile.mkstemp(prefix=".hands-kit-", suffix=".part", dir=directory)
+    temp = Path(temp_name)
+    try:
+        with os.fdopen(handle, "wb") as out:
+            out.write(data)
+            out.flush()
+            os.fsync(out.fileno())
+        try:
+            os.link(temp, target)
+        except FileExistsError:
+            same = (
+                not target.is_symlink()
+                and target.is_file()
+                and target.stat().st_size == len(data)
+                and target.read_bytes() == data
+            )
+            if same:
+                return False
+            raise KitError(
+                f"[files] kit_dir already holds another file named {name!r}, and hands "
+                "kit apply never overwrites one; nothing is filed (§40)"
+            ) from None
+        return True
+    finally:
+        with contextlib.suppress(FileNotFoundError):
+            temp.unlink()
+
+
+def apply_run(
+    kit: str,
+    *,
+    cap: int,
+    send: Callable[[dict[str, Any]], dict[str, Any]],
+    out: TextIO,
+    as_json: bool,
+) -> int:
+    """`hands kit apply <zip>` (§40): the phone's kit path without the phone.
+
+    The client reads the zip — a regular file named as the phone's `kit` names
+    one (`is_kit_file_name`), at most `cap` bytes ([files] kit_max_mb) — and sends
+    its name and bytes to handsd's `kit_apply`, which runs the check, copies the
+    zip into `[files] kit_dir` and files the held apply (`origin: kit`). A refusal
+    comes back as the daemon's error, the failing check's lines in it.
+    """
+    path = Path(kit).expanduser()
+    if not is_kit_file_name(path.name):
+        raise KitError(
+            f"hands kit apply takes a .zip whose name is a printable basename not "
+            f"starting with a dot; {path.name!r} is not one (§26, §40)"
+        )
+    if not path.is_file():
+        raise KitError(f"hands kit apply: {path} is not a regular file")
+    size = path.stat().st_size
+    if size > cap:
+        raise KitError(
+            f"hands kit apply: {path} is {size} bytes, over [files] kit_max_mb ({cap} bytes)"
+        )
+    data = path.read_bytes()
+    answer = send({"name": path.name, "zip": base64.b64encode(data).decode("ascii")})
+    if as_json:
+        print(json.dumps(answer, sort_keys=True), file=out)
+        return 0
+    job = answer["job"]
+    where = "copied to" if answer.get("copied") else "already at"
+    print(f"kit apply: {path.name} {where} {answer.get('zip')} (sha256 {answer.get('sha256')})",
+          file=out)
+    print(f"commit message: {answer.get('commit_message')}", file=out)
+    if answer.get("default_why"):
+        print(f"the commit message is the default: {answer['default_why']}", file=out)
+    print(
+        f"kit apply: filed {job['id']} as a {job['state']} builder job "
+        f"(gate: {job.get('gate', {}).get('reason')}, origin: kit, kit_id: {job.get('kit_id')})",
+        file=out,
+    )
+    print(f"release it with `hands approve {job['id']}` (or the phone's buttons)", file=out)
     return 0
 
 

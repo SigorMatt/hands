@@ -28,6 +28,7 @@ import httpx
 import pytest
 
 from conftest import commit_file, strip_paths
+from hands import api as api_mod
 from hands import daemon as daemon_mod
 from hands import phone as phone_mod
 from hands.config import ConfigError, load_config
@@ -1043,7 +1044,7 @@ def test_go_checks_the_builder_again_after_the_playbook_load(
 
     async def body(daemon: Daemon, fake: FakeNtfy) -> None:
         loop = asyncio.get_running_loop()
-        real = phone_mod.load_playbook
+        real = api_mod.load_playbook
 
         def loading(*args: Any, **kwargs: Any) -> Any:
             sent = threading.Event()
@@ -1059,7 +1060,7 @@ def test_go_checks_the_builder_again_after_the_playbook_load(
             assert sent.wait(TIMEOUT)
             return real(*args, **kwargs)
 
-        monkeypatch.setattr(phone_mod, "load_playbook", loading)
+        monkeypatch.setattr(api_mod, "load_playbook", loading)  # §40: `Api.kickoff` reads it
         await say(daemon, fake, f"go {SECRET}")
         assert len(filed) == 1
         await ok("wait", filed[0])

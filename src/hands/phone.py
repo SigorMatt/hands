@@ -171,11 +171,10 @@ from typing import IO, TYPE_CHECKING
 from urllib.parse import quote
 
 from hands import notify as notify_mod
-from hands.api import ApiError, attachment_sentence, match_job_id
-from hands.kit import KitError, apply_from_zip, home_shown
+from hands.api import KIT_ORIGIN, ApiError, attachment_sentence, match_job_id
+from hands.kit import KitError, apply_from_zip, home_shown, is_kit_file_name
 from hands.notify import PAIR_SPACING_S
-from hands.playbook import PlaybookError, load_playbook, playbook_path
-from hands.spool import Job, PathEscape, new_kit_id, resolve_under_roots
+from hands.spool import ANSWER_ORIGIN, Job, PathEscape, new_kit_id, resolve_under_roots
 
 if TYPE_CHECKING:  # pragma: no cover
     import httpx
@@ -449,37 +448,15 @@ class PhoneChannel:
     async def _go(self) -> None:
         """§26, §27: the series' kickoff line to the builder, `clear`, `origin: phone`.
 
-        Refused while the builder has a job running, queued or held (§27). The
-        builder is checked first, with nothing awaited before it, and again after
-        the playbook is read: the read runs in a thread, and a `hands send` can
-        land meanwhile (review 10 should-fix 1). `Api.send` awaits nothing before
-        its enqueue, so the second check and the job it allows are one step of the
-        event loop. The playbook is read from the builder's cwd now, by the same
-        loader the engine uses (only the committed file loads, §10) — not taken
-        from the engine's last load, which happens only when a job starts — and a
-        read never files a stop.
+        §40: the one code path `hands go` takes too (`Api.kickoff`), with this
+        route's origin: refused while the builder has a job running, queued or held
+        — checked before the playbook is read and again after it — with no
+        playbook, and with no `[series] kickoff`; the refusal is `kickoff`'s reason.
         """
-        busy = self._builder_busy()
-        if busy is not None:
-            return await self._refuse("go", busy)
-        config = self.daemon.config
         try:
-            book = await asyncio.to_thread(
-                load_playbook, playbook_path(config), cwd=config.role("builder").cwd
-            )
-        except PlaybookError as exc:
-            return await self._refuse("go", f"no playbook is loaded: it cannot be loaded ({exc})")
-        if book is None:
-            return await self._refuse("go", "no playbook is loaded")
-        if book.kickoff is None:
-            return await self._refuse("go", "the playbook has no [series] kickoff")
-        busy = self._builder_busy()
-        if busy is not None:
-            return await self._refuse("go", busy)
-        try:
-            job = await self.daemon.api.go_builder(book.kickoff)
+            job = await self.daemon.api.kickoff(ANSWER_ORIGIN)
         except ApiError as exc:
-            return await self._refuse("go", f"the send was refused ({exc})")
+            return await self._refuse("go", str(exc))
         log.info("phone: go filed builder job %s (%s)", job["id"], job["state"])
         await self.daemon.notifier.answer(GO_TITLE, f"go: builder job {job['id']} {job['state']}")
         return None
@@ -577,7 +554,7 @@ class PhoneChannel:
         if not isinstance(attachment, dict):
             return "the message carries no attachment"
         name = attachment.get("name")
-        if not _is_kit_name(name):
+        if not is_kit_file_name(name):
             return "the attachment name is not a .zip basename"
         assert isinstance(name, str)
         files = self.daemon.config.files
@@ -613,22 +590,6 @@ class PhoneChannel:
         except _KitRefused as exc:
             return str(exc)
         return directory, written, total, digest
-
-    def _builder_busy(self) -> str | None:
-        """Why the builder cannot take a `go` now — a job running, queued or held — or None."""
-        builder = self.daemon.status()["roles"]["builder"]
-        if builder["running"]:
-            return f"the builder has a job running ({builder['running']['id']})"
-        if builder["queued"]:
-            return f"the builder has a job queued ({', '.join(builder['queued'])})"
-        held = [
-            job.id
-            for job in self.daemon.spool.list_jobs()
-            if job.role == "builder" and job.state == "held"
-        ]
-        if held:
-            return f"the builder has a job held ({', '.join(held)})"
-        return None
 
     async def _kit(self, attachment: object) -> None:
         """§26: the message's attachment, fetched into `[files] kit_dir`.
@@ -672,9 +633,10 @@ class PhoneChannel:
         except KitError as exc:
             return await self._refuse_kit(f"the apply was not filed: {exc}")
         try:
-            # §31, §32: the one path `hands kit file` takes too (`Api.file_apply`),
+            # §31, §32, §40: the one path `hands kit file` and `hands kit apply` take
+            # too (`Api.file_apply`),
             # with this route's origin, and a `kit_id` handsd mints here.
-            job = await self.daemon.api.file_apply(plan, "kit", new_kit_id())
+            job = await self.daemon.api.file_apply(plan, KIT_ORIGIN, new_kit_id())
         except ApiError as exc:
             return await self._refuse_kit(
                 f"the apply was not filed: the send was refused ({exc})"
@@ -872,25 +834,6 @@ def _port(url: httpx.URL) -> int | None:
     if port is not None:
         return int(port)
     return {"http": 80, "https": 443}.get(url.scheme)
-
-
-def _is_kit_name(name: object) -> bool:
-    """§26's "sanitized to a basename; `.zip` only", as a refusal, not a rewrite.
-
-    Printable, no path separator of either platform, no leading dot (which also
-    rules out `.`, `..` and a bare `.zip`), and a lowercase `.zip` after a
-    non-empty stem. A name that fails is refused rather than cleaned up, so the
-    name written is the name the sender chose.
-    """
-    return (
-        isinstance(name, str)
-        and name.isprintable()
-        and "/" not in name
-        and "\\" not in name
-        and not name.startswith(".")
-        and name.endswith(KIT_SUFFIX)
-        and len(name) > len(KIT_SUFFIX)
-    )
 
 
 async def fetch_kit(

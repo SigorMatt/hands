@@ -69,7 +69,8 @@ def test_every_hands_command_named_in_the_docs_exists() -> None:
         for word in named:
             if word in NOT_COMMANDS:
                 continue
-            assert word in Api.COMMANDS or word in CLIENT_COMMANDS, (
+            # §40: `go` is a daemon method outside §4's table (`Api.OPERATIONS`).
+            assert word in Api.COMMANDS or word in CLIENT_COMMANDS or word in Api.OPERATIONS, (
                 f"{where} names `hands {word}`, which does not exist"
             )
 

@@ -324,6 +324,13 @@ def build_parser() -> argparse.ArgumentParser:
         )
         gate.add_argument("--quote", help="the human's instruction, verbatim")
 
+    # §40: the phone's `go` from the laptop — a daemon method outside §4's table.
+    command(
+        "go",
+        "send the playbook's [series] kickoff line to the builder as a clear send, "
+        "origin cli; refused while a builder job is running, queued or held, as the "
+        "phone's go is (§26, §40)",
+    )
     command("pause", "pause the playbook engine")
     command("resume", "unpause the playbook engine")
     command("status", "daemon, roles, running jobs, monitor state")
@@ -431,7 +438,7 @@ def build_parser() -> argparse.ArgumentParser:
         "kit file: build the zip of a kit directory under $HANDS_KITS, check it and file "
         "its held apply (§31, §32)",
     )
-    kit_sub = kit.add_subparsers(dest="kit_command", metavar="check|file", required=True)
+    kit_sub = kit.add_subparsers(dest="kit_command", metavar="check|file|apply", required=True)
     kit_check = kit_sub.add_parser(
         "check",
         parents=[common],
@@ -467,6 +474,19 @@ def build_parser() -> argparse.ArgumentParser:
     kit_file.add_argument(
         "kit", help="the kit: a directory kits/<name> under $HANDS_KITS, laid out as the repository"
     )
+    # §40: the phone's kit path without the phone. The client reads the zip; handsd
+    # (`kit_apply`) checks it, copies it into [files] kit_dir and files the apply.
+    kit_apply = kit_sub.add_parser(
+        "apply",
+        parents=[common],
+        help="check a kit zip, copy it into [files] kit_dir and file its held apply (§40)",
+        description="have handsd check a kit zip as `hands kit check` does (against the "
+        "builder's repository), refuse a failing kit with the check's output, copy the "
+        "zip into [files] kit_dir under its own name (unless the same bytes are already "
+        "there; never over another file) and file the apply prompt as a held builder job "
+        "with origin kit, as the phone's kit does; `hands approve <job>` releases it",
+    )
+    kit_apply.add_argument("kit", help="the kit: a .zip file")
     return parser
 
 
@@ -718,7 +738,7 @@ def _render(command: str, result: Any) -> str:
     if command == "wait" and isinstance(result, dict) and "kind" in result:
         return _event_line(result)  # `wait --for` answers with an event, not a job
     if command in (
-        "result", "show", "wait", "send", "cancel", "approve", "deny"
+        "result", "show", "wait", "send", "cancel", "approve", "deny", "go"
     ) and isinstance(result, dict):
         return _job_block(result)
     if command in ("put", "get") and isinstance(result, dict):
@@ -889,6 +909,16 @@ def main(
         # transcript.
         if command == "log" and not as_json:
             return _pages(socket_path, args.job, args.offset, project=project, out=out)
+        # §40: `hands kit apply <zip>` — the bytes read here, the check, the copy
+        # into [files] kit_dir and the held apply are the daemon's (`kit_apply`).
+        if command == "kit" and args.kit_command == "apply":
+            return kit_mod.apply_run(
+                args.kit,
+                cap=config.files.kit_max_mb * 1024 * 1024,
+                send=lambda params: call(socket_path, "kit_apply", params, project=project),
+                out=out,
+                as_json=as_json,
+            )
         # §31, §32: `hands kit file <dir>` — the zip built and checked in the client,
         # the apply filed by the daemon's `kit_file`, which checks it again (§33),
         # mints the `kit_id` and takes `Api.send`'s path, so the job takes §8's path
@@ -908,7 +938,8 @@ def main(
                 f"tail -n takes 1 or more, not {args.n}; "
                 f"the answer is capped at {MAX_TAIL_ENTRIES} entries (§4)"
             )
-        params = {
+        # §40: `go` takes no params, and is not a row of §4's table that `_PARAMS` pins.
+        params = {} if command == "go" else {
             key: value for key, value in _PARAMS[command](args).items() if value is not None
         }
         result = call(socket_path, command, params, project=project)
