@@ -31,6 +31,7 @@ DOCS = [
     ROOT / "docs" / "INTEGRATION.md",
     ROOT / "docs" / "PLAYBOOK.md",
     ROOT / "docs" / "ARCHITECT-HANDBOOK.md",  # mission 19 U4: §9 now shows commands
+    ROOT / "docs" / "OPERATIONS.md",  # mission 24 U8: the runbook (§40)
     ROOT / "driver" / "CLAUDE.md",
     ROOT / "driver" / "README.md",
 ]

@@ -2642,7 +2642,7 @@ stale review worktrees of earlier reviews under `/tmp`, ends by removing its
 own; `hands doctor` warns on a worktree registered under a role's clone
 whose path is missing. Mission 24 U7, U8.
 
-Status: open — protocol half resolved-by-doc (mission 24 U7 — both protocols' reviewer starts with `git worktree prune`, removes stale review worktrees of earlier reviews under `/tmp`, and ends by removing its own; handbook §7 says so. Tests: tests/test_kit.py); the `hands doctor` half is mission 24 U8
+Status: resolved — protocol half resolved-by-doc (mission 24 U7, 649417d — both protocols' reviewer starts with `git worktree prune`, removes stale review worktrees of earlier reviews under `/tmp`, and ends by removing its own; handbook §7 says so. Tests: tests/test_kit.py); doctor half resolved-by-code (mission 24 U8 — `hands doctor`'s `worktrees` row reads each role clone's `.git/worktrees/*/gitdir` and warns on a registered worktree whose path is missing, naming `git worktree prune`. Tests: tests/test_doctor.py)
 
 ## H-068 — the review protocol's skip list does not name `plan:`, `journal:` or `report:`
 
