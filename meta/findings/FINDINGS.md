@@ -2673,3 +2673,54 @@ once, in the foreground, and report only when every command has finished".
 Mission 24 U7.
 
 Status: resolved-by-doc (mission 24 U7 — both protocols' per-commit step 3 says "run `./scripts/check` once, in the foreground, and report only when every command has finished"; handbook §7 says so. Tests: tests/test_kit.py)
+
+## H-070 — per-commit reports run past the review protocol's twelve lines
+
+Severity: low · Component: templates/REVIEW-PROTOCOL.md,
+meta/REVIEW-PROTOCOL.md; DESIGN §42
+Filed by: mission 26 orchestrator, U0 (2026-10-18), carried from another
+project's ledger.
+Evidence: discotrade, its HF-013, its review 18, 2026-10-17.
+
+Direction. §42: a count nothing enforces is not a rule; both review
+protocols drop the twelve lines and say what a report holds — the sha, a
+verdict per point, what is not proven, and for the hosted-review sub-agent
+every finding verbatim. The brief template keeps its twelve lines.
+
+Status: decided (DESIGN §42), scheduled for mission 27
+
+## H-071 — the architect's guard refused read-only commands a consultation needed
+
+Severity: low · Component: src/hands/guard (the Bash guard),
+architect/CLAUDE.md, the architect's settings allow-list; DESIGN §42, §30
+Filed by: mission 26 orchestrator, U0 (2026-10-18), carried from another
+project's ledger.
+Evidence: discotrade, its HF-014, its consultations 22 and 23.
+
+Direction. §42: the guard refused every command holding `#`, `{` or a
+backslash, and the options `ls -R`, `git ls-tree --name-only`, `git status
+--short` and `git log --date=<format>`. The characters stay refused (§30);
+a content search goes through the Grep and Read tools, and
+`architect/CLAUDE.md` rule 10 will say so. The four options are read-only
+and will be admitted in the guard's option sets for both guarded modes and
+in the architect's settings allow-list, each pinned with its neighbours
+still refused.
+
+Status: decided (DESIGN §42), scheduled for mission 27
+
+## H-072 — a gate run on a shared machine ran past the timeouts
+
+Severity: low · Component: docs/INTEGRATION.md, briefs; DESIGN §42, §36
+Filed by: mission 26 orchestrator, U0 (2026-10-18), carried from another
+project's ledger.
+Evidence: discotrade, its HF-006, the 2026-10-17 update.
+
+Direction. §42: a gate run on a shared machine took 1281 s, past a brief's
+20-minute timeout and hands' 15-minute default (`BASH_MAX_TIMEOUT_MS`,
+§36). A project whose gate runs longer raises `BASH_DEFAULT_TIMEOUT_MS` and
+`BASH_MAX_TIMEOUT_MS` in its `[roles.builder.env]` and `[roles.aux.env]`,
+and its briefs name a timeout no longer than that; docs/INTEGRATION.md
+states the raise and the installed CLI's ceiling if it has one. hands'
+default is unchanged; hands' own briefs name 15 minutes (900000 ms).
+
+Status: decided (DESIGN §42), closed by U4
