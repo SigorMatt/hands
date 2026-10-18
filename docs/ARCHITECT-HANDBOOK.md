@@ -628,22 +628,34 @@ as §17 does: "discotrade mission 13 U4 and its ruling O-21, 2026-10-15".
 
 ## 16. Re-firing a consultation after a stop
 
-The architect role is started by a `consult` rule only. A direct send to it,
-`hands send --role architect`, is refused by design (H-032), and the phone's
-`reply` is a conversation, not a consultation: no verdict is read from it and
-it files no kit (§12). To re-fire a consultation after a stop, have the aux
-role recite a review-shaped reply:
+The architect role is started by a `consult` rule or by the `consult` command,
+both through the engine (DESIGN §42). A direct send to it, `hands send --role
+architect`, is refused by design (H-032), and the phone's `reply` is a
+conversation, not a consultation: no verdict is read from it and it files no
+kit (§12). To have the role consult after a ruling or a stop, in role mode:
 
-    hands send --role aux --context clear --prompt-file ./refire.txt
+    consult <secret> <reason>              (from the phone; a .md may be attached)
+    hands consult [--file <path>] [<reason>]   (at the laptop)
 
-where the prompt asks the aux to reply with the last review's `VERDICT: review
-mission N blockers=<k> should-fix=<m>` line and its `## Blockers` and
-`## Should-fix` sections, verbatim, and nothing else. Its `aux.done` meets the
-playbook's consult rule as a review's would, a `cli` send un-pauses a stopped
-pipeline when it starts, and the consultation counts against `[limits]
-max_architect_consults`. A blocked mission needs no recital when the playbook
-carries the role-mode rule on the builder's blocked verdict (docs/PLAYBOOK.md,
-"The architect's consultation").
+The engine starts one architect job of origin `playbook` whose prompt is the
+architect's consult prompt — the roadmap's next unmet milestone, the series'
+escalation conditions, what the human decided since the last consultation, the
+handbook and templates paths — with the review's sections replaced by "The
+human's reason for this consultation", holding the reason verbatim (the text,
+then the attached or named `.md` file's text: a plain `.md` name, at most 256
+KiB, UTF-8). Its first line is `hands consult: consult on job none (role
+human)`. The secret is the approval: nothing is held. The command un-pauses a
+stopped pipeline, the consultation counts against `[limits]
+max_architect_consults`, its verdict is read as a review's consultation's is
+(`next kit`, `series complete`, `escalate`) and its kit is filed and applied as
+any. It is refused, and the refusal published titled `consult`, outside role
+mode, while any architect, builder or aux job is running, queued or held or a
+`next kit` wait is open, with an empty reason, with the budget spent, and over
+the prompt cap. Commit an owner file first, as a decisions kit, when the
+consultation is to answer a ruling. Reciting a review-shaped reply through the
+aux role is retired: `consult` replaces it. A blocked mission needs neither
+when the playbook carries the role-mode rule on the builder's blocked verdict
+(docs/PLAYBOOK.md, "The architect's consultation").
 
 ## 17. Human-supplied content
 

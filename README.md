@@ -93,7 +93,7 @@ phone.
 
 `send`, `wait`, `result`, `jobs`, `show`, `open`, `log`, `cancel`, `put`,
 `get`, `ls`, `tail`, `inbox`, `pipeline`, `approve`, `deny`, `pause`,
-`resume`, `status`, `notify`, `who`, `doctor`, `kit check`, `go`, `kit apply`. Every one takes `--json` (that is what the driver
+`resume`, `status`, `notify`, `who`, `doctor`, `kit check`, `go`, `kit apply`, `consult`. Every one takes `--json` (that is what the driver
 reads) and `--project`. `hands --help` is the reference; `handsd --help` is the
 daemon's.
 
@@ -149,9 +149,9 @@ Off unless configured in `[notify]`; `docs/INTEGRATION.md` has the setup.
   Tailscale, the documented default for role mode, and says what of it has run
   on a real server.
 - **The command channel**: with `cmd_topic` and `cmd_secret` set, handsd takes
-  ten commands from your phone: `approve`, `deny`, `pause`, `resume`, `status`,
-  `progress`, `go`, `kit`, `reply` and `answer`, and a held job's notification
-  carries Approve/Deny buttons. A decision taken that way is
+  eleven commands from your phone: `approve`, `deny`, `pause`, `resume`, `status`,
+  `progress`, `go`, `kit`, `reply`, `answer` and `consult`, and a held job's
+  notification carries Approve/Deny buttons. A decision taken that way is
   recorded `decided_by: phone`.
 - **`go <secret>`** on `cmd_topic` sends the playbook's `[series] kickoff` line
   to the builder as a `clear` send, `origin: phone`. It is the only way to start
@@ -172,6 +172,13 @@ Off unless configured in `[notify]`; `docs/INTEGRATION.md` has the setup.
   the builder's job and its age, the branch and its last three commits, and the
   checkpoint's unit in progress. **`answer <secret> <text>`** sends the text to
   the builder's last session as a `keep` send.
+- **`consult <secret> <reason>`** on `cmd_topic` (a `.md` file may be attached),
+  or `hands consult [--file <path>] [<reason>]` at the laptop, has the engine
+  start one architect consultation in role mode whose prompt carries your reason
+  in place of a review: origin `playbook`, counted against `[limits]
+  max_architect_consults`, read for its verdict like any consultation, and it
+  un-pauses a stopped pipeline. Refused while any role has a job running,
+  queued or held; a refusal is published titled `consult`.
 - **The who view**: `hands who` prints one screen of this daemon's jobs and
   every other `claude` session on the machine; `handswho` pushes it to
   `who_topic` when it changes.

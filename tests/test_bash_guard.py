@@ -1734,6 +1734,39 @@ def test_architect_mode_refuses_the_authority_subcommands_by_name(sub: str) -> N
     assert reason is not None and sub in reason, (sub, reason)
 
 
+# §42: a consultation the human started names `role human` on its first line, so the
+# runner sets HANDS_CONSULT_ROLE=human; architect mode refuses every send whatever
+# that variable says, and still admits its read set. Neither guarded role admits
+# `hands consult`.
+HUMAN_ARCHITECT = {**ARCHITECT, "consult_role": "human"}
+CONSULT_COMMANDS = ["hands consult", "hands consult why", "hands consult --file ./kits/a.md why",
+                    "hands --project p consult why", "hands status && hands consult why"]
+
+
+@pytest.mark.parametrize("cmd", [
+    "hands send --role human --context keep hi",
+    "hands send --role builder --context keep hi",
+    "hands send --role architect --context keep hi",
+    "hands send --role aux --context clear hi",
+    *CONSULT_COMMANDS,
+])
+def test_architect_mode_with_a_human_consultation_refuses_every_send(cmd: str) -> None:
+    assert guard.check(cmd, **HUMAN_ARCHITECT) is not None, cmd
+
+
+@pytest.mark.parametrize("cmd", [cmd for cmd, allowed in ARCHITECT_MODE if allowed])
+def test_architect_mode_with_a_human_consultation_admits_its_read_set(cmd: str) -> None:
+    assert guard.check(cmd, **HUMAN_ARCHITECT) is None, cmd
+
+
+@pytest.mark.parametrize("cmd", CONSULT_COMMANDS)
+def test_neither_guarded_role_admits_hands_consult(cmd: str) -> None:
+    """§42: "Neither guarded role's guard admits `hands consult`" — the driver role
+    (with the consultation's role) and the architect role."""
+    assert guard.check(cmd, role="driver", consult_role="builder", clone=CLONE) is not None
+    assert guard.check(cmd, **ARCHITECT) is not None, cmd
+
+
 def test_architect_mode_refuses_every_push_and_every_git_write() -> None:
     for cmd in ("git -C ./repo push", "git push origin main", "git -C ./repo commit -m x",
                 "git -C ./repo add -A", "git remote set-url origin x",

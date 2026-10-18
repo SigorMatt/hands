@@ -4,9 +4,9 @@
        ▲                                                   │
        └──────────── one JSON line per message ────────────┘
 
-The daemon subscribes to `[notify] cmd_topic` with a long-poll and accepts ten
-commands, each ending in its token but `reply` and `answer`, whose secret is their
-second word:
+The daemon subscribes to `[notify] cmd_topic` with a long-poll and accepts eleven
+commands, each ending in its token but `reply`, `answer` and `consult`, whose secret
+is their second word:
 
     approve <job> <secret|nonce>
     deny <job> [reason words…] <secret|nonce>
@@ -18,6 +18,7 @@ second word:
     kit <secret>        (a message that carries an ntfy attachment)
     reply <secret> <text>
     answer <secret> <text>   (the message may carry an ntfy attachment)
+    consult <secret> <text>  (the message may carry an ntfy attachment)
 
 **`reply`** (§33) sends `<text>` — the rest of the message after the whitespace
 that follows the secret, unchanged — to the architect's last session as one
@@ -47,6 +48,26 @@ checked by the `kit` rules below (a `.zip` basename, `kit_max_mb`, the url,
 unzipped or applied: the delivered text ends with one sentence naming the file's
 path (`attachment_sentence`), and the job record's `files_written` keeps its
 sha256. The text and the attachment's name and hash are filed as `answer.sent`.
+
+**`consult`** (§42) has the engine start one architect consultation whose prompt
+carries, in place of a review, the human's reason: the text after the secret,
+parsed as `answer`'s is, and the attached file's text after it. It is a request to
+the engine, not a send: the job is an architect job of origin `playbook`, counted
+against `[limits] max_architect_consults` and read for its verdict like every
+consultation, never held by §8's gate (the secret is the approval), and it
+un-pauses a stopped pipeline once every refusal has passed (`Api.start_consult`,
+the one path `hands consult` takes too, `requested_by: cli`). Its prompt's first
+line is `hands consult: consult on job none (role human)`. It is refused, and the
+refusal published titled `consult`, outside role mode (`[series] architect =
+"role"` and `[roles.architect]`), while any architect, builder or aux job is
+running, queued or held or a `next kit` wait is open, when the reason is empty,
+when the budget is spent, and over `MAX_PROMPT_BYTES`. The attachment is checked
+as a kit's is — the url, `kit_dir` inside `allowed_roots`, the reported size, the
+capped download ending at exactly that size — under its own rules: a `.md`
+basename (the kit's name rule with `.md` for `.zip`) and at most 256 KiB; it is
+fetched into `kit_dir` under its name or the first free `<stem>-<n>.md`, and read
+as UTF-8. A refused or undecodable attachment refuses the command. Neither the
+reason nor any word of it is logged; `consult.sent` carries its sha256.
 
 **`progress`** (§38) publishes on `ntfy_topic`, titled `progress`, what `status`
 does not say: the builder's running job and its age, or the last ended builder
@@ -173,8 +194,24 @@ from typing import IO, TYPE_CHECKING
 from urllib.parse import quote
 
 from hands import notify as notify_mod
-from hands.api import KIT_ORIGIN, ApiError, attachment_sentence, match_job_id
-from hands.kit import KitError, apply_from_zip, home_shown, is_kit_file_name
+from hands.api import (
+    CONSULT_FILE_MAX_BYTES,
+    KIT_ORIGIN,
+    ApiError,
+    attachment_sentence,
+    consult_file_problem,
+    consult_file_text,
+    consult_reason,
+    match_job_id,
+)
+from hands.kit import (
+    CONSULT_FILE_SUFFIX,
+    KIT_FILE_SUFFIX,
+    KitError,
+    apply_from_zip,
+    home_shown,
+    is_kit_file_name,
+)
 from hands.notify import PAIR_SPACING_S
 from hands.spool import ANSWER_ORIGIN, Job, PathEscape, new_kit_id, resolve_under_roots
 
@@ -184,9 +221,10 @@ if TYPE_CHECKING:  # pragma: no cover
     from hands.daemon import Daemon
 
 __all__ = [
-    "ANSWER_TITLE", "ARCHITECT_TITLE", "BACKOFF_S", "BUILDER_TITLE", "GO_TITLE", "KIT_TITLE",
-    "NONCE_BYTES", "PROGRESS_TITLE", "REPLY_TITLE", "STATUS_TITLE", "PhoneChannel", "answer_reply",
-    "attachment_sentence", "parse_answer", "parse_reply", "reply_answer", "status_summary",
+    "ANSWER_TITLE", "ARCHITECT_TITLE", "BACKOFF_S", "BUILDER_TITLE", "CONSULT_TITLE", "GO_TITLE",
+    "KIT_TITLE", "NONCE_BYTES", "PROGRESS_TITLE", "REPLY_TITLE", "STATUS_TITLE", "PhoneChannel",
+    "answer_reply", "attachment_sentence", "parse_answer", "parse_consult", "parse_reply",
+    "reply_answer", "status_summary",
 ]  # fmt: skip
 
 log = logging.getLogger("hands.phone")
@@ -213,6 +251,9 @@ ANSWER_TITLE = "hands: answer"
 BUILDER_TITLE = "builder"
 #: §38: "`progress` publishes, titled `progress`".
 PROGRESS_TITLE = "progress"
+#: §42: the channel's answer to an accepted `consult` (the job); a refusal is
+#: published titled `consult` (§39, H-058).
+CONSULT_TITLE = "hands: consult"
 
 #: §26's size cap is in MB; hands reads that as MiB.
 MIB = 1024 * 1024
@@ -222,7 +263,11 @@ KIT_TIMEOUT_S = 30.0
 KIT_DEADLINE_S = 300.0
 #: The temp file a kit is streamed into, in `kit_dir` itself (a hidden name).
 KIT_TEMP_PREFIX = ".hands-kit-"
-KIT_SUFFIX = ".zip"
+KIT_SUFFIX = KIT_FILE_SUFFIX
+
+#: §42: which rules `_fetch` judges an attachment by — a kit's, or a `consult`'s.
+KIT_RULE = "kit"
+CONSULT_RULE = "consult"
 
 _SECRET_ONLY = ("pause", "resume", "status", "progress", "go", "kit")
 #: §33: `reply <secret> <text>`. The secret is the second word, not the last, and the
@@ -234,6 +279,10 @@ _REPLY_RE = re.compile(r"\A\s*reply\s+(?P<token>\S+)\s+(?P<text>.*)\Z", re.IGNOR
 #: because an empty answer with the secret is refused out loud, not ignored.
 _ANSWER_RE = re.compile(
     r"\A\s*answer\s+(?P<token>\S+)(?:\s+(?P<text>.*))?\Z", re.IGNORECASE | re.DOTALL
+)
+#: §42: `consult <secret> <text>`, split as `answer` is.
+_CONSULT_RE = re.compile(
+    r"\A\s*consult\s+(?P<token>\S+)(?:\s+(?P<text>.*))?\Z", re.IGNORECASE | re.DOTALL
 )
 _DECISIONS = {"approve": "approved", "deny": "denied"}
 
@@ -374,6 +423,8 @@ class PhoneChannel:
             return await self._reply_command(text)
         if verb == "answer":
             return await self._answer_command(text, attachment)
+        if verb == "consult":
+            return await self._consult_command(text, attachment)
         if verb in _SECRET_ONLY:
             if not self._is_secret(token):
                 return self._ignore(f"{verb}: bad secret")
@@ -529,6 +580,50 @@ class PhoneChannel:
         )
         return None
 
+    async def _consult_command(self, text: str, attachment: object) -> None:
+        """§42: `consult <secret> <text>` — the engine starts one architect
+        consultation carrying the reason in place of a review (`Api.start_consult`,
+        `requested_by: phone`).
+
+        Neither the text nor the attached file's text is logged. A token that is not
+        the secret is ignored like any command; once the secret is accepted every
+        refusal is published titled `consult` (§39, H-058). The refusals are asked
+        before the attachment is fetched, so a refused consult never reaches its
+        server, and again by `Api.start_consult` next to the enqueue, after the
+        fetch's awaits.
+        """
+        parsed = parse_consult(text)
+        if parsed is None:
+            return self._ignore("consult takes the secret and a text")
+        token, said = parsed
+        if not self._is_secret(token):
+            return self._ignore("consult: bad secret")
+        api = self.daemon.api
+        why = await api.consult_refusal(said if attachment is None else None)
+        if why is not None:
+            return await self._refuse("consult", why)
+        attached: str | None = None
+        if attachment is not None:
+            fetched = await self._fetch(attachment, rule=CONSULT_RULE)
+            if isinstance(fetched, str):
+                return await self._refuse("consult", fetched)
+            directory, written, _total, _digest = fetched
+            try:
+                data = await asyncio.to_thread((directory / written).read_bytes)
+                attached = consult_file_text(data, "the attachment")
+            except (OSError, ValueError) as exc:
+                problem = str(exc) if isinstance(exc, ValueError) else type(exc).__name__
+                return await self._refuse("consult", problem)
+        try:
+            job = await api.start_consult(consult_reason(said, attached), requested_by="phone")
+        except ApiError as exc:
+            return await self._refuse("consult", str(exc))
+        log.info("phone: consult started architect job %s (%s)", job["id"], job["state"])
+        await self.daemon.notifier.answer(
+            CONSULT_TITLE, f"consult: architect job {job['id']} {job['state']}"
+        )
+        return None
+
     async def _refuse_answer(self, why: str) -> None:
         self._ignore(f"answer: {why}")
         await self.daemon.notifier.answer(ANSWER_TITLE, f"answer refused: {why}")
@@ -544,10 +639,13 @@ class PhoneChannel:
         return {"path": str(directory / written), "name": written, "sha256": digest,
                 "bytes": total}
 
-    async def _fetch(self, attachment: object) -> tuple[Path, str, int, str] | str:
+    async def _fetch(
+        self, attachment: object, *, rule: str = KIT_RULE
+    ) -> tuple[Path, str, int, str] | str:
         """§26: the message's attachment, fetched into `[files] kit_dir` — `kit_dir`,
         the name written, the bytes and the sha256 — or why it was not (`kit` and,
-        §36, `answer`).
+        §36, `answer`, under the kit's rules; §42, `consult`, under `CONSULT_RULE`'s:
+        a `.md` basename and `CONSULT_FILE_MAX_BYTES`, the rest the kit's).
 
         Every check that needs no network runs first, so a refused attachment never
         reaches its server. A refusal names the check, never the attachment's name
@@ -556,19 +654,27 @@ class PhoneChannel:
         if not isinstance(attachment, dict):
             return "the message carries no attachment"
         name = attachment.get("name")
-        if not is_kit_file_name(name):
-            return "the attachment name is not a .zip basename"
-        assert isinstance(name, str)
-        files = self.daemon.config.files
         size = attachment.get("size")
-        if isinstance(size, bool) or not isinstance(size, int) or size < 0:
-            return "the attachment reports no size in bytes"
-        cap = files.kit_max_mb * MIB
-        if size > cap:
-            return (
-                f"the attachment is {size} bytes, over [files] kit_max_mb = "
-                f"{files.kit_max_mb} ({cap} bytes)"
+        files = self.daemon.config.files
+        if rule == CONSULT_RULE:
+            problem = consult_file_problem(name, size, "the attachment")
+            if problem is not None:
+                return problem
+            cap, cap_name, suffix = (
+                CONSULT_FILE_MAX_BYTES, "§42's cap", CONSULT_FILE_SUFFIX,
             )
+        else:
+            if not is_kit_file_name(name):
+                return "the attachment name is not a .zip basename"
+            if isinstance(size, bool) or not isinstance(size, int) or size < 0:
+                return "the attachment reports no size in bytes"
+            cap, cap_name, suffix = files.kit_max_mb * MIB, "[files] kit_max_mb", KIT_SUFFIX
+            if size > cap:
+                return (
+                    f"the attachment is {size} bytes, over [files] kit_max_mb = "
+                    f"{files.kit_max_mb} ({cap} bytes)"
+                )
+        assert isinstance(name, str) and isinstance(size, int)
         url = attachment.get("url")
         problem = url_problem(url)
         if problem is not None:
@@ -588,6 +694,8 @@ class PhoneChannel:
                 cap=cap,
                 expected=size,
                 token=attachment_token(url, self.notify.ntfy_url, self.notify.ntfy_token),
+                suffix=suffix,
+                cap_name=cap_name,
             )
         except _KitRefused as exc:
             return str(exc)
@@ -723,6 +831,17 @@ def parse_reply(text: str) -> tuple[str, str] | None:
     return match.group("token"), match.group("text")
 
 
+def parse_consult(text: str) -> tuple[str, str] | None:
+    """§42: the token and the text of `consult <token> <text>`, or None when there is
+    no token; split as `parse_answer` splits, an empty or whitespace-only text read
+    as `""` (refused once the secret is accepted, unless a file carries the reason)."""
+    match = _CONSULT_RE.match(text)
+    if match is None:
+        return None
+    said = match.group("text") or ""
+    return match.group("token"), said if said.strip() else ""
+
+
 def parse_answer(text: str) -> tuple[str, str] | None:
     """§36: the token and the text of `answer <token> <text>`, or None when there is
     no token. Split as `parse_reply` splits; a text that is empty, or whitespace only,
@@ -846,8 +965,14 @@ async def fetch_kit(
     cap: int,
     expected: int,
     token: str | None = None,
+    suffix: str = KIT_SUFFIX,
+    cap_name: str = "[files] kit_max_mb",
 ) -> tuple[str, int, str]:
     """Stream `url` into `directory` under `name` (or its first free suffix).
+
+    §42: `suffix` is the extension the name rule in force ends in — `.zip` for a
+    kit, `.md` for a `consult`'s file — and the first free name keeps it;
+    `cap_name` names the cap in the refusal.
 
     Answers the name written, the bytes and the sha256. The body is streamed on
     the event loop into a temp file in `directory`; the fsync and the link run in
@@ -878,7 +1003,7 @@ async def fetch_kit(
                                 total += len(chunk)
                                 if total > cap:
                                     raise _KitRefused(
-                                        f"the download passed [files] kit_max_mb ({cap} bytes)"
+                                        f"the download passed {cap_name} ({cap} bytes)"
                                     )
                                 digest.update(chunk)
                                 out.write(chunk)
@@ -891,7 +1016,7 @@ async def fetch_kit(
                     f"the download is {total} bytes, not the {expected} the attachment reported"
                 )
             await asyncio.to_thread(_flush, out)
-        written = await asyncio.to_thread(_link_first_free, temp, directory, name)
+        written = await asyncio.to_thread(_link_first_free, temp, directory, name, suffix)
     except OSError as exc:
         raise _KitRefused(f"the kit could not be written ({type(exc).__name__})") from exc
     finally:
@@ -905,16 +1030,17 @@ def _flush(out: IO[bytes]) -> None:
     os.fsync(out.fileno())
 
 
-def _link_first_free(temp: Path, directory: Path, name: str) -> str:
-    """Link `temp` to `name`, else `<stem>-1.zip`, `<stem>-2.zip`, …; never replace.
+def _link_first_free(temp: Path, directory: Path, name: str, suffix: str = KIT_SUFFIX) -> str:
+    """Link `temp` to `name`, else `<stem>-1<suffix>`, `<stem>-2<suffix>`, …; never
+    replace. `suffix` is the name rule's extension (§42: `.zip`, or `.md`).
 
     `os.link` fails with `FileExistsError` when the new name exists (a dangling
     symlink included), so an existing file is never overwritten, even by a
     writer racing this one: the check and the create are one system call.
     """
-    stem = name[: -len(KIT_SUFFIX)]
+    stem = name[: -len(suffix)]
     for n in itertools.count():
-        candidate = name if n == 0 else f"{stem}-{n}{KIT_SUFFIX}"
+        candidate = name if n == 0 else f"{stem}-{n}{suffix}"
         try:
             os.link(temp, directory / candidate)
         except FileExistsError:

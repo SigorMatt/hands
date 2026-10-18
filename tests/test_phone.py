@@ -3663,3 +3663,232 @@ def test_cancel_at_the_laptop_takes_a_lenient_id(project: str) -> None:
         assert out["id"] == sent["id"]
 
     phone_drive(body)
+
+
+# ---------------------------------------------------------- consult (§42)
+
+#: §42: the first line of a consultation the human started.
+HUMAN_HEAD = "hands consult: consult on job none (role human)"
+
+#: A role-mode series (§31): the architect role, autonomous, consulted on reviews.
+ROLE_BOOK = """version = 1
+
+[series]
+name = "m17"
+kickoff = "Read meta/BRIEF.md and execute it."
+architect = "role"
+autonomous = true
+
+[limits]
+max_architect_consults = 12
+
+[[rule]]
+on = "aux.done"
+verdict = '^VERDICT: review mission (?P<n>\\\\d+)'
+then = "consult"
+role = "architect"
+"""
+
+#: The human's reason; the fake architect's reply rides in it.
+CONSULT_TEXT = "The owner ruled O-3.\n\n  Write the next kit.\nFAKE:result VERDICT: series complete"
+
+
+@pytest.fixture
+def consult_project(tmp_home: Path, workdir: Path, downloads: Path) -> str:
+    """The channel on, `[roles.architect]`, `kit_dir` inside the roots, and a
+    committed role-mode playbook and roadmap in the builder's cwd."""
+    files = (
+        f'\n[files]\nallowed_roots = ["{workdir}", "{downloads}"]\n'
+        f'kit_dir = "{downloads}"\nkit_max_mb = 1\n'
+    )
+    (tmp_home / ".hands" / f"{PROJECT}.toml").write_text(
+        config_body(tmp_home, workdir, extra=architect_table(tmp_home) + NOTIFY + files)
+    )
+    commit_file(workdir, "meta/ROADMAP.md", "# ROADMAP\n\n- **M5 next** — gate.\n")
+    commit_file(workdir, "PLAYBOOK.toml", ROLE_BOOK)
+    return PROJECT
+
+
+def consult_refusals(daemon: Daemon) -> list[str]:
+    return refusals(daemon, "consult")
+
+
+async def drained(daemon: Daemon) -> None:
+    await daemon.notifier.drain()
+
+
+def assert_consult_refused(daemon: Daemon, why: str) -> None:
+    (said,) = consult_refusals(daemon)
+    assert said.startswith("consult refused: "), said
+    assert why in strip_paths(said), said
+    assert not [job for job in daemon.spool.list_jobs() if job.role == "architect"]
+    assert titled(daemon, phone_mod.CONSULT_TITLE) == []
+
+
+def test_a_phone_consult_starts_one_architect_job_of_origin_playbook_with_the_reason(
+    consult_project: str, workdir: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """§42: `consult <secret> <text>` in role mode starts one architect job of origin
+    `playbook` (never `phone`: not a reply), whose prompt holds the reason verbatim
+    and no review section; it un-pauses the stopped pipeline; `consult.sent` names
+    the phone; the reason is never logged; the accepted job is answered."""
+    caplog.set_level(logging.DEBUG)
+
+    async def body(daemon: Daemon, fake: FakeNtfy) -> None:
+        await ok("pause")
+        await say(daemon, fake, f"consult {SECRET} {CONSULT_TEXT}")
+        (row,) = (await ok("jobs"))["jobs"]
+        record = await ok("wait", row["id"])
+        assert (record["role"], record["origin"], record["context"]) == (
+            "architect", "playbook", "clear",
+        )
+        assert record["gate"] is None  # the secret is the approval
+        assert record["prompt"].splitlines()[0] == HUMAN_HEAD
+        assert f"----- BEGIN REASON -----\n{CONSULT_TEXT}\n----- END REASON -----" in (
+            record["prompt"]
+        )
+        assert "BEGIN REVIEW" not in strip_paths(record["prompt"])
+        assert record["verdict"] == "VERDICT: series complete"
+        kinds = [event.kind for event in daemon.spool.events()]
+        assert kinds.index("pipeline.resumed") < kinds.index("consult.sent"), kinds
+        (sent,) = [e.payload for e in daemon.spool.events() if e.kind == "consult.sent"]
+        assert sent["requested_by"] == "phone" and sent["role"] == "human"
+        assert sent["about"] is None and sent["rule"] is None
+        assert sent["reason_sha256"] == hashlib.sha256(CONSULT_TEXT.encode()).hexdigest()
+        await drained(daemon)
+        (accepted,) = titled(daemon, phone_mod.CONSULT_TITLE)
+        assert accepted["message"] == f"consult: architect job {row['id']} queued"
+        assert consult_refusals(daemon) == []
+
+    phone_drive(body)
+    assert SECRET not in strip_paths(caplog.text)
+    assert "O-3" not in strip_paths(caplog.text), "the reason was logged"
+
+
+def test_a_phone_consults_md_attachment_lands_in_kit_dir_and_follows_the_reason(
+    consult_project: str, downloads: Path, kit_server: KitServer
+) -> None:
+    """§42: the attachment is fetched into `kit_dir` under its `.md` name — the first
+    free `<stem>-<n>.md` when that exists, the original untouched — read as UTF-8,
+    and its text follows the reason after one blank line."""
+    notes = b"## Ruling\n\nO-3 stands.\n"
+    (downloads / "notes.md").write_text("an older file\n", encoding="utf-8")
+
+    async def body(daemon: Daemon, fake: FakeNtfy) -> None:
+        attachment = kit_server.attach("notes.md", notes)
+        await say(daemon, fake, f"consult {SECRET} {CONSULT_TEXT}", attachment=attachment)
+        assert (downloads / "notes.md").read_text(encoding="utf-8") == "an older file\n"
+        assert (downloads / "notes-1.md").read_bytes() == notes
+        (row,) = (await ok("jobs"))["jobs"]
+        record = await ok("wait", row["id"])
+        reason = f"{CONSULT_TEXT}\n\n{notes.decode()}"
+        assert f"----- BEGIN REASON -----\n{reason}\n----- END REASON -----" in (
+            record["prompt"]
+        )
+        await drained(daemon)
+        assert consult_refusals(daemon) == []
+
+    phone_drive(body)
+
+
+@pytest.mark.parametrize(
+    ("name", "body_bytes", "size", "why"),
+    [
+        ("notes.txt", b"x", None, "the attachment is not a .md basename"),
+        ("notes.zip", b"x", None, "the attachment is not a .md basename"),
+        (".md", b"x", None, "the attachment is not a .md basename"),
+        ("big.md", b"x", 256 * 1024 + 1, "over the 262144-byte cap of §42"),
+        ("latin.md", "café".encode("latin-1"), None, "the attachment is not UTF-8 text"),
+    ],
+    ids=["txt", "zip", "no-stem", "too-big", "latin-1"],
+)
+def test_a_phone_consult_with_an_attachment_outside_the_rules_is_refused(
+    consult_project: str, kit_server: KitServer, name: str, body_bytes: bytes,
+    size: int | None, why: str
+) -> None:
+    async def body(daemon: Daemon, fake: FakeNtfy) -> None:
+        extra = {} if size is None else {"size": size}
+        attachment = kit_server.attach(name, body_bytes, **extra)
+        await say(daemon, fake, f"consult {SECRET} {CONSULT_TEXT}", attachment=attachment)
+        await drained(daemon)
+        assert_consult_refused(daemon, why)
+        if "UTF-8" not in why:
+            assert kit_server.hits == [], "a refused attachment reached its server"
+
+    phone_drive(body)
+
+
+def test_a_phone_consult_with_an_empty_reason_is_refused(consult_project: str) -> None:
+    async def body(daemon: Daemon, fake: FakeNtfy) -> None:
+        await say(daemon, fake, f"consult {SECRET}")
+        await say(daemon, fake, f"consult {SECRET}    ")
+        await drained(daemon)
+        said = consult_refusals(daemon)
+        assert len(said) == 2, said
+        for one in said:
+            assert "the reason is empty" in strip_paths(one), said
+        assert (await ok("jobs"))["jobs"] == []
+
+    phone_drive(body)
+
+
+def test_a_phone_consult_is_refused_while_a_builder_job_is_held_and_with_a_spent_budget(
+    consult_project: str, workdir: Path
+) -> None:
+    async def body(daemon: Daemon, fake: FakeNtfy) -> None:
+        busy = await ok("send", "--role", "builder", "--context", "clear", "--gate", "h", "x")
+        await say(daemon, fake, f"consult {SECRET} {CONSULT_TEXT}")
+        await drained(daemon)
+        assert_consult_refused(daemon, f"the builder has a job held ({busy['id']})")
+        await ok("deny", busy["id"])
+
+    phone_drive(body)
+    commit_file(workdir, "PLAYBOOK.toml",
+                ROLE_BOOK.replace("max_architect_consults = 12", "max_architect_consults = 0"))
+
+    async def spent(daemon: Daemon, fake: FakeNtfy) -> None:
+        await say(daemon, fake, f"consult {SECRET} {CONSULT_TEXT}")
+        await drained(daemon)
+        (said,) = consult_refusals(daemon)
+        assert "max_architect_consults is 0" in strip_paths(said), said
+        assert "budget-exhausted" in strip_paths(said), said
+
+    phone_drive(spent)
+
+
+def test_a_phone_consult_is_refused_outside_role_mode(
+    consult_project: str, workdir: Path
+) -> None:
+    commit_file(workdir, "PLAYBOOK.toml", 'version = 1\n[series]\nname = "m17"\n')
+
+    async def body(daemon: Daemon, fake: FakeNtfy) -> None:
+        await say(daemon, fake, f"consult {SECRET} {CONSULT_TEXT}")
+        await drained(daemon)
+        assert_consult_refused(daemon, '[series] architect = "role"')
+
+    phone_drive(body)
+
+
+def test_a_phone_consult_with_a_wrong_or_missing_secret_is_ignored(
+    consult_project: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level(logging.DEBUG)
+
+    async def body(daemon: Daemon, fake: FakeNtfy) -> None:
+        await say(daemon, fake, f"consult wrong-secret {CONSULT_TEXT}")
+        await say(daemon, fake, "consult")
+        await drained(daemon)
+        assert [item for item in daemon.notifier.post.sent
+                if item["title"] in (as_published("consult"),
+                                     as_published(phone_mod.CONSULT_TITLE))] == []
+        assert (await ok("jobs"))["jobs"] == []
+
+    phone_drive(body)
+    assert "O-3" not in strip_paths(caplog.text)
+
+
+def test_consult_parsing_keeps_the_text_verbatim() -> None:
+    assert phone_mod.parse_consult(f"consult {SECRET} a\n\n  b ") == (SECRET, "a\n\n  b ")
+    assert phone_mod.parse_consult(f"Consult {SECRET}") == (SECRET, "")
+    assert phone_mod.parse_consult(f"consult {SECRET}   ") == (SECRET, "")
+    assert phone_mod.parse_consult("consult") is None

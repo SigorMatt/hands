@@ -226,7 +226,10 @@ def test_the_handbook_carries_section_38s_new_sections_in_order() -> None:
         (NEW_SECTIONS[1], "`plan: decisions <date> (owner)`"),
         (NEW_SECTIONS[2], "name, commit, date, review number, finding id"),
         (NEW_SECTIONS[3], "refused by design"),
-        (NEW_SECTIONS[3], "hands send --role aux --context clear"),
+        (NEW_SECTIONS[3], "consult <secret> <reason>"),
+        (NEW_SECTIONS[3], "hands consult [--file <path>] [<reason>]"),
+        (NEW_SECTIONS[3], "hands consult: consult on job none (role human)"),
+        (NEW_SECTIONS[3], "Reciting a review-shaped reply through the aux role is retired"),
         (NEW_SECTIONS[4], "`~/Downloads/<name>/`"),
         (NEW_SECTIONS[4], "`git show --stat`"),
         (NEW_SECTIONS[5], "newest first"),
@@ -237,6 +240,13 @@ def test_the_handbook_carries_section_38s_new_sections_in_order() -> None:
 )
 def test_each_new_handbook_section_says_its_rule(heading: str, said: str) -> None:
     assert said in strip_paths(_section(heading)), (heading, said)
+
+
+def test_section_16_retires_the_recital() -> None:
+    """§42: "The handbook's §16 describes `consult` and retires the recital" — no
+    aux send reciting a review is offered any more."""
+    assert "hands send --role aux --context clear" not in strip_paths(_section(NEW_SECTIONS[3]))
+    assert "refire.txt" not in strip_paths(_section(NEW_SECTIONS[3]))
 
 
 def test_the_handbooks_reading_claims_are_the_codes(tmp_home: Path) -> None:

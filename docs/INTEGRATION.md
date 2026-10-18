@@ -659,7 +659,7 @@ is stamped before anything the resumed job goes on to publish. An exhausted
 ### The command channel: approve from the phone
 
 With `[notify] cmd_topic` set, handsd subscribes to that topic — an outbound
-long poll to ntfy, nothing listening on this machine — and takes ten commands
+long poll to ntfy, nothing listening on this machine — and takes eleven commands
 from it. Set it up once:
 
     python3 -c 'import secrets; print("hands-<project>-cmd-" + secrets.token_urlsafe(16))'
@@ -679,7 +679,7 @@ to start. So does a secret with a blank inside it, and a `cmd_topic` equal to
 `ntfy_topic`.
 
 Publish a command to `cmd_topic` from the ntfy app. The last word is the token
-(but for `reply` and `answer`, whose second word is the secret):
+(but for `reply`, `answer` and `consult`, whose second word is the secret):
 
     approve <job> <secret>
     deny <job> [reason words] <secret>
@@ -691,6 +691,7 @@ Publish a command to `cmd_topic` from the ntfy app. The last word is the token
     kit <secret>                  (with a .zip attached to the message)
     reply <secret> <text>
     answer <secret> <text>        (a .zip may be attached to the message)
+    consult <secret> <text>       (a .md may be attached to the message)
 
 - `approve` and `deny` decide a **held** job, exactly as `hands approve|deny`
   does, and the job record says `decided_by: phone`. `pause` and `resume` are
@@ -789,6 +790,25 @@ Publish a command to `cmd_topic` from the ntfy app. The last word is the token
   `hands send --role builder --context keep` and every committed
   `meta/decisions/*-owner.md`) since its last one, under "Decided by the human
   since your last consultation".
+- `consult` asks the engine for one architect consultation (DESIGN §42), in
+  role mode only. `consult <secret> <text>` starts an architect job of origin
+  `playbook` whose prompt is the architect's consult prompt with your reason —
+  the text, then an attached `.md` file's text — in place of the review's
+  sections, under "The human's reason for this consultation"; its first line is
+  `hands consult: consult on job none (role human)`. It counts against
+  `[limits] max_architect_consults`, its verdict is read as any
+  consultation's, its kit is filed and applied as any, and it un-pauses a
+  stopped pipeline. The secret is the approval: nothing is held. handsd answers
+  titled `hands: consult` with the job id; the inbox's `consult.sent` names the
+  phone and carries the reason's sha256, never the reason. It is refused, and
+  the refusal published titled `consult`, without `[series] architect = "role"`
+  or `[roles.architect]`, while an architect, builder or aux job is running,
+  queued or held or a `next kit` wait is open, when the reason is empty, when
+  the budget is spent, and when the prompt passes the 10 MB cap. The attachment
+  is judged as a kit's is, but by its own name rule (a plain `.md` name) and a
+  256 KiB cap, fetched into `kit_dir` (the first free `<stem>-<n>.md` when the
+  name is taken) and read as UTF-8. `hands consult [--file <path>] [<text>]` is
+  the same at the laptop.
 - **The buttons.** With the channel on, a held job's notification has Approve
   and Deny buttons. Each publishes `approve <job> <nonce>` or `deny <job>
   <nonce>` to `cmd_topic`. The nonce is 32 random bytes minted for that one job

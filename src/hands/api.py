@@ -45,6 +45,7 @@ from hands.kit import (
     apply_params,
     check_kit,
     home_shown,
+    is_consult_file_name,
     is_kit_file_name,
     kit_directory,
     place_kit,
@@ -53,8 +54,8 @@ from hands.kit import (
     staged_path,
 )
 from hands.notify import NotifyError, send_test
-from hands.playbook import PlaybookError, load_playbook, playbook_path
-from hands.runner import KeepRefused
+from hands.playbook import ConsultRefused, PlaybookError, load_playbook, playbook_path
+from hands.runner import MAX_PROMPT_BYTES, KeepRefused
 from hands.spool import (
     ANSWER_ORIGIN,
     ARCHITECT_ORIGIN,
@@ -89,7 +90,11 @@ __all__ = [
     "Api",
     "ApiError",
     "Timeout",
+    "CONSULT_FILE_MAX_BYTES",
     "attachment_sentence",
+    "consult_file_problem",
+    "consult_file_text",
+    "consult_reason",
     "job_summary",
     "match_job_id",
     "tail_entries",
@@ -122,6 +127,42 @@ _TAIL_CHUNK = 64 * 1024
 # implementation-defined server-error range, which is where these live.
 HANDS_ERROR = -32001  # a refusal hands is sure about (bad role, full queue, …)
 TIMEOUT = -32003  # `wait --timeout` expired
+
+
+#: §42: the most bytes the file a `consult` carries may hold (256 KiB).
+CONSULT_FILE_MAX_BYTES = 256 * 1024
+
+
+def consult_file_problem(name: object, size: object, what: str) -> str | None:
+    """§42: why the file a `consult` carries is refused by its name or its size —
+    `what` names it in the reason (`the attachment`, `--file <path>`) — or None.
+    The name rule is `hands.kit.is_consult_file_name`; the size at most
+    `CONSULT_FILE_MAX_BYTES`. The phone asks with the size the attachment reports,
+    before it fetches; the CLI with the size of the file it names."""
+    if not is_consult_file_name(name):
+        return f"{what} is not a .md basename (§42)"
+    if isinstance(size, bool) or not isinstance(size, int) or size < 0:
+        return f"{what} reports no size in bytes"
+    if size > CONSULT_FILE_MAX_BYTES:
+        return f"{what} is {size} bytes, over the {CONSULT_FILE_MAX_BYTES}-byte cap of §42"
+    return None
+
+
+def consult_file_text(data: bytes, what: str) -> str:
+    """§42: the file a `consult` carries, "read as UTF-8"; `ValueError` naming
+    `what` when it is not."""
+    try:
+        return data.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise ValueError(f"{what} is not UTF-8 text (§42)") from exc
+
+
+def consult_reason(text: str, attached: str | None) -> str:
+    """§42: the human's reason — the text, and the attached file's text after it,
+    separated by one blank line; either alone when the other is empty. Verbatim:
+    nothing is stripped from either."""
+    parts = [part for part in (text, attached) if part is not None and part.strip()]
+    return "\n\n".join(parts)
 
 
 def attachment_sentence(path: Path) -> str:
@@ -246,7 +287,8 @@ class Api:
     #: §40: "every phone command has a laptop form" — the commands that were
     #: phone-only and gained one in mission 24. Not rows of §4's table, so not in
     #: `COMMANDS`; `method()` answers them.
-    OPERATIONS: tuple[str, ...] = ("go",)
+    #: §42: `consult` joins them — `hands consult`, the phone's `consult` at the laptop.
+    OPERATIONS: tuple[str, ...] = ("go", "consult")
 
     def method(self, name: str) -> Any:
         """The bound coroutine for a command name, or None if there is no such command."""
@@ -493,6 +535,83 @@ class Api:
             )
         except ApiError as exc:
             raise ApiError(f"the send was refused ({exc})") from exc
+
+    # ---------------------------------------------------------- consult (§42)
+
+    async def consult(self, *, reason: str) -> dict[str, Any]:
+        """§42: `hands consult [--file <path>] [<text>]` — the phone's `consult` at the
+        laptop, through the socket, `requested_by: cli`. The client reads the file
+        under the name and size rules and sends the reason it makes
+        (`consult_reason`); the refusals are the phone's. Returns the job."""
+        return await self.start_consult(reason, requested_by="cli")
+
+    async def consult_refusal(self, reason: str | None) -> str | None:
+        """§42: why a consultation the human asks for is refused now, or None.
+
+        In §42's order: the playbook in force does not set `[series] architect =
+        "role"`, or the project configures no `[roles.architect]`; an architect job
+        is running, queued or held, or a consultation's `next kit` wait is open; a
+        builder or aux job is running, queued or held; the reason is empty
+        (`reason=None` skips this one: the phone asks before it fetches the
+        attachment, which may carry the whole reason); the budget is spent. The
+        committed playbook is loaded first, as a job's start loads it; nothing is
+        awaited after that, so `start_consult`'s enqueue follows these checks in one step
+        of the event loop."""
+        engine = self.daemon.playbook
+        await engine.reload()
+        why = engine.consult_mode_refusal()
+        if why is not None:
+            return why
+        why = self._role_busy(ARCHITECT_ROLE)
+        if why is not None:
+            return why
+        waiting = engine.kit_wait()
+        if waiting is not None:
+            consultation, name = waiting
+            return (
+                f"the engine waits for kit {name!r} of consultation {consultation} "
+                "([series] kit_wait_s), and the consultation is open until it ends (§32, §42)"
+            )
+        for role in ("builder", "aux"):
+            if role in self.config.roles:
+                why = self._role_busy(role)
+                if why is not None:
+                    return f"{why}: a consultation decides what a stopped series does next"
+        if reason is not None and not reason.strip():
+            return "the reason is empty (§42)"
+        return engine.consult_budget_refusal()
+
+    async def start_consult(self, reason: str, *, requested_by: str) -> dict[str, Any]:
+        """§42: the one path both routes take — the phone's `consult` (`requested_by:
+        phone`) and `hands consult` (`cli`). Every refusal is `consult_refusal`'s or
+        the engine's (`ConsultRefused`: the prompt over `MAX_PROMPT_BYTES`), as
+        `ApiError`; then the engine un-pauses a stopped pipeline and starts the
+        architect job (`PlaybookEngine.consult_human`). Not reachable from a socket
+        client but as `consult`, which passes `cli`."""
+        why = await self.consult_refusal(reason)
+        if why is not None:
+            raise ApiError(why)
+        try:
+            job = await self.daemon.playbook.consult_human(
+                reason, requested_by=requested_by, cap=MAX_PROMPT_BYTES
+            )
+        except ConsultRefused as exc:
+            raise ApiError(str(exc)) from exc
+        return job.to_dict()
+
+    def _role_busy(self, role: str) -> str | None:
+        """Why `role` has work now — a job running, queued or held — or None."""
+        running = self.daemon.running(role)
+        if running is not None:
+            return f"the {role} has a job running ({running})"
+        queued = self.daemon.status()["roles"][role]["queued"]
+        if queued:
+            return f"the {role} has a job queued ({', '.join(queued)})"
+        held = [job.id for job in self.spool.list_jobs()
+                if job.role == role and job.state == "held"]
+        if held:
+            return f"the {role} has a job held ({', '.join(held)})"
+        return None
 
     def builder_busy(self) -> str | None:
         """Why the builder cannot take a `go` now — a job running, queued or held — or None."""

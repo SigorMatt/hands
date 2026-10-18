@@ -1425,14 +1425,33 @@ def is_kit_file_name(name: object) -> bool:
     name written is the name the sender chose. The phone's `kit` and `hands kit
     apply` (§40) judge a kit's file name by this one rule.
     """
+    return is_basename_with_suffix(name, KIT_FILE_SUFFIX)
+
+
+#: §26: the one extension a kit's file name may end in.
+KIT_FILE_SUFFIX = ".zip"
+#: §42: the one extension the file a `consult` carries may end in.
+CONSULT_FILE_SUFFIX = ".md"
+
+
+def is_consult_file_name(name: object) -> bool:
+    """§42: the name rule of the file a `consult` carries (the phone's attachment,
+    `hands consult --file`) — the kit's rule (`is_kit_file_name`) with a lowercase
+    `.md` in place of `.zip`."""
+    return is_basename_with_suffix(name, CONSULT_FILE_SUFFIX)
+
+
+def is_basename_with_suffix(name: object, suffix: str) -> bool:
+    """A printable basename with no `/` or `\\`, no leading dot and a non-empty stem,
+    ending in `suffix` exactly (lowercase): §26's rule, and §42's with `.md`."""
     return (
         isinstance(name, str)
         and name.isprintable()
         and "/" not in name
         and "\\" not in name
         and not name.startswith(".")
-        and name.endswith(".zip")
-        and len(name) > len(".zip")
+        and name.endswith(suffix)
+        and len(name) > len(suffix)
     )
 
 

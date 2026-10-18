@@ -614,7 +614,7 @@ def test_answer_is_documented_in_the_command_channel_and_the_phone_module() -> N
     channel = integration.split("### The command channel: approve from the phone", 1)[1]
     channel = flattened(channel.split("\n### ", 1)[0])
     assert "answer <secret> <text>" in channel
-    assert "takes ten commands" in channel
+    assert "takes eleven commands" in channel  # §42: `consult` is the eleventh
     for said in ("`origin: phone`", f"titled `{BUILDER_TITLE}`", f"`{ANSWER_TITLE}`",
                  '--context keep "<text>"', "never held by the gate patterns",
                  "`answer.sent`", "no resumable session", "sha256",
@@ -639,17 +639,18 @@ def test_progress_is_documented_in_the_command_channel_the_playbook_doc_and_the_
     playbook_doc = flattened((ROOT / "docs" / "PLAYBOOK.md").read_text(encoding="utf-8"))
     assert "`progress <secret>`" in playbook_doc
     assert "progress <secret>" in (phone.__doc__ or "")
-    assert "accepts ten" in flattened(phone.__doc__ or "")
+    assert "accepts eleven" in flattened(phone.__doc__ or "")
 
 
-#: §39 (REVIEW-22 should-fix 6): the ten phone commands, in the phone module's order.
+#: §39 (REVIEW-22 should-fix 6): the phone commands, in the phone module's order;
+#: §42 adds `consult`, the eleventh.
 PHONE_COMMANDS = ("approve", "deny", "pause", "resume", "status", "progress", "go", "kit",
-                  "reply", "answer")
+                  "reply", "answer", "consult")
 
 
-def test_the_readme_phone_command_list_names_all_ten_commands() -> None:
-    """§39: README's command-channel bullet names each of the ten phone commands,
-    and says ten; the phone module's own list has the same ten."""
+def test_the_readme_phone_command_list_names_all_eleven_commands() -> None:
+    """§39: README's command-channel bullet names each of the eleven phone commands,
+    and says eleven; the phone module's own list has the same eleven."""
     from hands import phone
 
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
@@ -657,11 +658,35 @@ def test_the_readme_phone_command_list_names_all_ten_commands() -> None:
     bullet = flattened(bullet)
     for name in PHONE_COMMANDS:
         assert f"`{name}`" in bullet, f"README's command list omits `{name}`"
-    assert "ten commands" in bullet
+    assert "eleven commands" in bullet
     listed = (phone.__doc__ or "").split("second word:", 1)[1].split("**`reply`**", 1)[0]
     assert tuple(line.split()[0] for line in listed.splitlines() if line.strip()) == (
         PHONE_COMMANDS
     )
+
+
+def test_consult_is_documented_in_the_channel_the_readme_the_handbook_and_the_module() -> None:
+    """§42: `consult <secret> <text>` is in the command channel's list and its own
+    bullet in INTEGRATION, in README with its laptop twin, in the handbook's §16,
+    in the phone module's list, and `architect/CLAUDE.md` carries its rule."""
+    from hands import phone
+    from hands.phone import CONSULT_TITLE
+
+    integration = (ROOT / "docs" / "INTEGRATION.md").read_text(encoding="utf-8")
+    channel = integration.split("### The command channel: approve from the phone", 1)[1]
+    channel = flattened(channel.split("\n### ", 1)[0])
+    assert "consult <secret> <text>" in channel
+    for said in ("origin `playbook`", f"`{CONSULT_TITLE}`", "titled `consult`",
+                 "max_architect_consults", "`hands consult [--file <path>] [<text>]`",
+                 "The human's reason for this consultation", "256 KiB"):
+        assert flattened(said) in channel, f"the command channel does not say {said!r}"
+    readme = flattened((ROOT / "README.md").read_text(encoding="utf-8"))
+    assert "`consult <secret> <reason>`" in readme
+    assert "`hands consult [--file <path>] [<reason>]`" in readme
+    assert "consult <secret> <text>" in (phone.__doc__ or "")
+    rules = flattened((ROOT / "architect" / "CLAUDE.md").read_text(encoding="utf-8"))
+    assert "names `role human`" in rules and "routes 4 and 5" in rules
+    assert "sends the builder a `keep` that names it" not in rules
 
 
 def test_the_readme_names_kit_check_go_and_the_kit_transport() -> None:
