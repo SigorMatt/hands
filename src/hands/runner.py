@@ -608,8 +608,9 @@ class Runner:
         """Run one `queued` job to a terminal state and return the finished record.
 
         `preface`, when given, is put before the prompt, then a blank line, in the
-        record moved to `running` and in what claude reads (§39's journal sentence,
-        decided by the daemon at dispatch)."""
+        record moved to `running` and in what claude reads (§39's journal sentence
+        and §43's owner sentence, decided by the daemon at dispatch); the cap counts
+        it."""
         if job.state != "queued":
             raise RunnerError(f"job {job.id} is {job.state}; only a queued job can be run")
         role = self.config.role(job.role)

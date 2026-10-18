@@ -90,8 +90,15 @@ async def poll(check: Callable[[], Awaitable[Any]], what: str) -> Any:
 
 
 async def running_job(role: str = "builder") -> Any:
+    """The role's running job, once its record is `running`. The worker names the
+    job (`status`) before the dispatch's awaits — the playbook load, the worker
+    threads deciding the journal and owner sentences (§39, §43) — and before the
+    runner moves the record to `running`; a caller asking about a running job
+    must not act inside that window."""
+
     async def check() -> Any:
-        return (await ok("status"))["roles"][role]["running"]
+        row = (await ok("status"))["roles"][role]["running"]
+        return row if row is not None and row["state"] == "running" else None
 
     return await poll(check, f"a running job on {role}")
 

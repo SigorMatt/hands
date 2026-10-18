@@ -52,6 +52,7 @@ from hands.spool import (
     Event,
     Job,
     Spool,
+    SpoolError,
     flat_layout,
     is_architect_reply,
     is_builder_answer,
@@ -661,7 +662,7 @@ class Daemon:
         try:
             # §10: the playbook is the file in the builder's repo as it is *now*.
             await self.playbook.on_job_start(job)
-            preface = await self._journal_sentence(job)
+            preface = await self.dispatch_preface(job)
             log.info("job %s (%s) starting", job_id, role)
             finished = await self.runner.run(job, preface=preface)
             log.info("job %s (%s) %s", job_id, role, finished.state)
@@ -715,6 +716,42 @@ class Daemon:
             and (job.origin == "cli" or is_builder_answer(job))
             and not self.playbook.is_kickoff(job)
         )
+
+    async def dispatch_preface(self, job: Job) -> str | None:
+        """§39, §43: what goes before `job`'s prompt as it is dispatched — the journal
+        sentence, then the owner sentence, joined by a blank line — or None. Both
+        are decided now, each in a worker thread; the runner puts the result and a
+        blank line before the prompt and its cap (§2, §41) counts all of it."""
+        sentences = [await self._journal_sentence(job), await self._owner_sentence(job)]
+        said = [sentence for sentence in sentences if sentence is not None]
+        return "\n\n".join(said) if said else None
+
+    def is_apply(self, job: Job) -> bool:
+        """§43: is `job` an apply — a job with a `kit_id`, or a resume of one? A
+        resume carries no `kit_id` (§6, §10), so `resumed_from` is followed back to
+        the chain's first job, which is asked. A record the chain names that cannot
+        be read ends the walk at the last one read."""
+        current, seen = job, {job.id}
+        while current.resumed_from is not None and current.resumed_from not in seen:
+            seen.add(current.resumed_from)
+            try:
+                current = self.spool.load_job(current.resumed_from)
+            except SpoolError:
+                break
+        return current.kit_id is not None
+
+    def _owner_sentence_now(self, job: Job) -> str | None:
+        if job.role != "builder" or self.is_apply(job):
+            return None
+        return self.playbook.owner_reminder()
+
+    async def _owner_sentence(self, job: Job) -> str | None:
+        """§43 (H-073): the owner sentence for a builder job being dispatched, every
+        builder job but an apply, decided now and never at enqueue, in a worker
+        thread (the chain walk and the git queries block)."""
+        if job.role != "builder":
+            return None
+        return await asyncio.to_thread(self._owner_sentence_now, job)
 
     async def _journal_sentence(self, job: Job) -> str | None:
         """§39 (H-060), review 23 should-fix 6: the journal sentence for a job being

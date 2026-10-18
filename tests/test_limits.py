@@ -26,6 +26,7 @@ from hands.limits import (
     to_iso,
 )
 from hands.notify import PAIR_SPACING_S
+from hands.playbook import JOURNAL_REMINDER, OWNER_REMINDER
 from hands.spool import Job, Spool
 
 EAST = ZoneInfo("America/New_York")
@@ -296,6 +297,26 @@ def test_a_limited_builder_without_a_resume_line_is_sent_its_own_prompt_again(
         assert resume.context == "clear"
         assert resume.resumed_from == limited.id
         assert resume.origin == "limit"
+
+    run(scenario)
+
+
+def test_a_limited_builder_that_carried_hands_sentences_is_resumed_with_the_senders_prompt(
+    harness: Harness,
+) -> None:
+    """§43 (§6): the limit resume re-sends what the sender sent, without the journal
+    and owner sentences the dispatch put in the stored record; the resume's own
+    dispatch decides them again."""
+    journal = JOURNAL_REMINDER.format(journal="meta/journal.md", consultation="J-1")
+    owner = OWNER_REMINDER.format(files="meta/decisions/a-owner.md")
+
+    async def scenario() -> None:
+        await harness.limit(
+            prompt=f"{journal}\n\n{owner}\n\nRead meta/BUILDER-2-PROMPT.md",
+            notice="Usage limit reached, resets at 3pm",
+        )
+        (resume,) = harness.resumes()
+        assert resume.prompt == "Read meta/BUILDER-2-PROMPT.md"
 
     run(scenario)
 

@@ -13,6 +13,7 @@ import contextlib
 import hashlib
 import json
 import os
+import threading
 import time
 from pathlib import Path
 from typing import Any
@@ -24,7 +25,9 @@ from hands import kit as kit_mod
 from hands.api import HANDS_ERROR
 from hands.config import load_config
 from hands.daemon import INTERNAL_ERROR, Daemon
-from hands.runner import LINE_LIMIT
+from hands.playbook import JOURNAL_REMINDER, OWNER_REMINDER
+from hands.runner import LINE_LIMIT, MAX_PROMPT_BYTES
+from hands.spool import new_kit_id
 from harness import (
     PROJECT,
     UNCHECKED_KIT,
@@ -285,6 +288,157 @@ def test_kit_apply_of_a_decisions_kit_files_the_held_apply(
         )
         assert answer["commit_message"] == DECISIONS_MESSAGE
         assert record["gate"]["reason"] == "apply decisions"
+
+    drive(body)
+
+
+# ------------------------------------- §43 (H-073): the owner file on every builder job
+
+OWNER_FILE = "meta/decisions/2026-10-18-owner.md"
+#: §39's journal sentence as the dispatch writes it with no `consult.done` yet.
+JOURNAL_SENTENCE = JOURNAL_REMINDER.format(journal="meta/journal.md", consultation="consultation")
+
+
+def owner_said(*files: str) -> str:
+    return OWNER_REMINDER.format(files=", ".join(files))
+
+
+def dirty_journal(workdir: Path) -> None:
+    commit_file(workdir, "meta/journal.md", "a line\n")
+    (workdir / "meta" / "journal.md").write_text("a line\nthe consult line\n")
+
+
+def test_a_kickoff_after_a_decisions_kit_apply_names_the_owner_file(
+    project: str, workdir: Path, downloads: Path, tmp_path: Path
+) -> None:
+    """§43 (H-073): route 4 without the brief's §R. The decisions kit's apply is
+    dispatched with no sentence although its owner file is committed (an apply
+    changes nothing but the kit's files); the `go` after it carries §43's sentence
+    naming the file, decided in a worker thread; the stored record keeps it, `hands
+    jobs --grep` finds it there, the summary line does not show it, and the job is
+    still a kickoff. Once the checkpoint is committed past it, a `go` carries none."""
+    with_playbook(workdir)
+    commit_file(workdir, "meta/CHECKPOINT.md", "# CHECKPOINT\n")
+    kit = a_kit(tmp_path / "elsewhere" / "decisions.zip", DECISIONS_KIT)
+    report = kit_mod.check_kit(kit, workdir)
+    assert report.ok and report.apply_prompt
+
+    async def body(daemon: Daemon) -> None:
+        loop_thread = threading.get_ident()
+        threads: list[int] = []
+        real = daemon.playbook.owner_reminder
+
+        def recorded() -> str | None:
+            threads.append(threading.get_ident())
+            return real()
+
+        daemon.playbook.owner_reminder = recorded  # type: ignore[method-assign]
+        answer = await ok("kit", "apply", str(kit))
+        apply_id = answer["job"]["id"]
+        # The apply's own commit, as the builder makes it (the fake applies nothing).
+        commit_file(workdir, OWNER_FILE, DECISIONS_KIT[OWNER_FILE])
+        code, _out, err = await cli("approve", apply_id, "--json")
+        assert code == 0, err
+        applied = await ok("wait", apply_id)
+        assert applied["state"] == "done" and applied["prompt"] == report.apply_prompt, applied
+        job = await ok("go")
+        record = await ok("wait", job["id"])
+        assert record["state"] == "done", record
+        assert record["prompt"] == f"{owner_said(OWNER_FILE)}\n\n{KICKOFF}", record
+        assert threads and all(thread != loop_thread for thread in threads), threads
+        assert daemon.playbook.is_kickoff(daemon.spool.load_job(job["id"]))
+        (row,) = [r for r in (await ok("jobs"))["jobs"] if r["id"] == job["id"]]
+        assert row["prompt_line"] == KICKOFF, row
+        found = await ok("jobs", "--grep", "an owner file was committed")
+        assert [r["id"] for r in found["jobs"]] == [job["id"]]
+        commit_file(workdir, "meta/CHECKPOINT.md", "# CHECKPOINT\n\nO-1 carried out.\n")
+        again = await ok("go")
+        assert (await ok("wait", again["id"]))["prompt"] == KICKOFF
+
+    drive(body)
+
+
+def test_the_journal_and_owner_sentences_come_together_in_that_order(
+    project: str, workdir: Path
+) -> None:
+    """§43: a cli send to the builder with a dirty journal and two owner files with
+    no checkpoint update since carries the journal sentence, then the owner sentence
+    naming both oldest first, each with its blank line, then the sender's text —
+    what claude reads (`FAKE:stdin`) and what the record keeps."""
+    commit_file(workdir, "meta/CHECKPOINT.md", "# CHECKPOINT\n")
+    commit_file(workdir, "meta/decisions/b-owner.md", "first\n")
+    commit_file(workdir, "meta/decisions/a-owner.md", "second\n")
+    dirty_journal(workdir)
+
+    async def body(daemon: Daemon) -> None:
+        sent = await ok("send", "--role", "builder", "--context", "clear", "FAKE:stdin")
+        record = await ok("wait", sent["id"])
+        owner = owner_said("meta/decisions/b-owner.md", "meta/decisions/a-owner.md")
+        assert record["prompt"] == f"{JOURNAL_SENTENCE}\n\n{owner}\n\nFAKE:stdin", record
+        assert record["result"] == record["prompt"]
+        (row,) = [r for r in (await ok("jobs"))["jobs"] if r["id"] == sent["id"]]
+        assert row["prompt_line"] == "FAKE:stdin", row
+
+    drive(body)
+
+
+@pytest.mark.parametrize("pending", [True, False], ids=["owner-pending", "carried-out"])
+def test_the_prompt_cap_counts_both_sentences(
+    project: str, workdir: Path, pending: bool
+) -> None:
+    """§43 (§41, §2): a builder send that fits the cap with the journal sentence
+    alone is refused with the cap's reason when the owner sentence is due too, and
+    sent with the journal sentence when it is not."""
+    commit_file(workdir, "meta/CHECKPOINT.md", "# CHECKPOINT\n")
+    commit_file(workdir, OWNER_FILE, "ruling\n")
+    if not pending:
+        commit_file(workdir, "meta/CHECKPOINT.md", "# CHECKPOINT\n\ndone\n")
+    dirty_journal(workdir)
+    text = "x" * (MAX_PROMPT_BYTES - len(JOURNAL_SENTENCE.encode("utf-8")) - 2)
+
+    async def body(daemon: Daemon) -> None:
+        sent = await ok("send", "--role", "builder", "--context", "clear", text)
+        record = await ok("wait", sent["id"])
+        reasons = [e.payload.get("reason") for e in daemon.spool.events()
+                   if e.kind == "job.killed" and e.payload.get("job") == sent["id"]]
+        if pending:
+            assert record["state"] == "killed" and record["started"] is None, record["state"]
+            (reason,) = reasons
+            assert f"over the {MAX_PROMPT_BYTES} byte cap of §2" in strip_paths(reason)
+        else:
+            assert record["state"] == "done" and reasons == [], record["state"]
+            assert record["prompt"] == f"{JOURNAL_SENTENCE}\n\n{text}"
+
+    drive(body)
+
+
+def test_an_apply_and_its_resumes_never_carry_the_owner_sentence(
+    project: str, workdir: Path
+) -> None:
+    """§43: an apply — a job with a `kit_id`, or a resume of one, found by following
+    `resumed_from` to the chain's first job (a limited apply's resume, and an
+    orphaned resume of that) — gets no owner sentence at dispatch; a resume of a
+    job with no `kit_id` gets it while it is true, and not once the checkpoint is
+    committed past the owner file."""
+    commit_file(workdir, "meta/CHECKPOINT.md", "# CHECKPOINT\n")
+    commit_file(workdir, OWNER_FILE, "ruling\n")
+
+    async def body(daemon: Daemon) -> None:
+        spool = daemon.spool
+
+        def held(**fields: Any) -> Any:
+            return spool.create_job(role="builder", context="clear", state="held", **fields)
+
+        apply = held(prompt="Apply the kit", origin="kit", kit_id=new_kit_id())
+        limited = held(prompt="Apply the kit", origin="limit", resumed_from=apply.id)
+        orphaned = held(prompt="Apply the kit", origin="playbook", resumed_from=limited.id)
+        for job in (apply, limited, orphaned):
+            assert await daemon.dispatch_preface(job) is None, job
+        plain = held(prompt="work", origin="playbook")
+        resume = held(prompt="work", origin="limit", resumed_from=plain.id)
+        assert await daemon.dispatch_preface(resume) == owner_said(OWNER_FILE)
+        commit_file(workdir, "meta/CHECKPOINT.md", "# CHECKPOINT\n\ndone\n")
+        assert await daemon.dispatch_preface(resume) is None
 
     drive(body)
 

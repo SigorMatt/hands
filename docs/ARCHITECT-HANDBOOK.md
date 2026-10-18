@@ -111,7 +111,12 @@ A ruling in the middle of a mission arrives as a decisions kit (§3): its
 apply commits `plan: decisions <date> (owner)`, and the template's §R tells
 the resumed builder to carry out that owner file's "For the builder" steps
 first when the checkpoint does not record them as done, record them, and
-continue.
+continue. hands names the owner file itself as well (DESIGN §43): every
+builder job but an apply is dispatched with one sentence before its prompt
+naming each owner file committed with no update of `meta/CHECKPOINT.md`
+since, oldest first, until the builder commits the checkpoint after it — so
+a decisions kit and `go` works whatever brief the mission runs from, one
+written before §R gained its sentence among them.
 
 **Runs** (spanweave form). The plan is `WORKPLAN.md` on the series
 branch: §0 standing rules (sub-agent brief, cold review protocol, recovery
@@ -696,7 +701,12 @@ A ruling is a question only the human (the owner) can answer. End to end:
    builder starts from the checkpoint, and if a `plan: decisions <date>
    (owner)` commit is on the branch after the checkpoint's last update and the
    checkpoint does not record its "For the builder" steps as done, it carries
-   them out first, records them in the checkpoint, and continues. After an
+   them out first, records them in the checkpoint, and continues. hands does
+   not rely on §R alone: at the dispatch of every builder job but an apply it
+   puts one sentence before the prompt naming each owner file that has had no
+   checkpoint update since it was last committed, oldest first (DESIGN §43),
+   after the journal sentence when both are due; it stops once the builder
+   commits the checkpoint. After an
    `answer`, a `keep` send that follows `VERDICT: question` is the answer: the
    builder carries it out and continues the mission from `meta/CHECKPOINT.md`.
    Either way the reply ends with one of the brief's `VERDICT:` lines, always,
@@ -849,8 +859,11 @@ The routes:
    `meta/decisions/<date>-owner.md` and a `KIT.md` whose first line is `plan:
    decisions <date> (owner)`, checked by `hands kit check` like any kit and
    sent by route 3 (§3), then `go <secret>`: the builder starts from the
-   checkpoint, and the brief's §R makes it carry out the newest owner file's
-   "For the builder" steps first (§14). When the builder's last job is the one
+   checkpoint, and hands itself names the owner file before the builder's
+   prompt (DESIGN §43: every builder job but an apply, while no checkpoint
+   update follows the file's commit), so it carries out its "For the builder"
+   steps first whatever brief the mission runs from; the brief's §R says so
+   too (§14). When the builder's last job is the one
    that asked (`VERDICT: question`), `answer <secret> <text>` with the zip
    attached is the shorter route. At the laptop: `hands kit apply <zip>`,
    `hands approve <job>`, then `hands go`.

@@ -139,6 +139,11 @@ __all__ = [
     "render",
     "run_number",
     "series_roles_problem",
+    "CHECKPOINT",
+    "JOURNAL_REMINDER",
+    "OWNER_REMINDER",
+    "owner_files_pending",
+    "sent_prompt",
 ]
 
 log = logging.getLogger("hands.playbook")
@@ -911,6 +916,89 @@ JOURNAL_REMINDER = (
     "what follows.]"
 )
 _JOURNAL_REMINDER_RE = re.compile(r"\A\[hands: meta/journal\.md is uncommitted [^\n]*\]\n\n")
+#: §43 (H-073): the checkpoint whose update after an owner file means its steps are
+#: recorded, under the builder's cwd.
+CHECKPOINT = Path("meta") / "CHECKPOINT.md"
+#: §43 (H-073): the one sentence put before every builder job but an apply while an
+#: owner file has had no checkpoint update since it was last committed, word for
+#: word; `{files}` are the root-relative paths joined by `, `, oldest first.
+OWNER_REMINDER = (
+    "[hands: an owner file was committed after the last update of meta/CHECKPOINT.md: "
+    "{files}. Carry out the \"For the builder\" steps of each, oldest first, record them "
+    "in the checkpoint and commit it, then do what follows.]"
+)
+_OWNER_REMINDER_RE = re.compile(
+    r"\A\[hands: an owner file was committed after the last update of "
+    r"meta/CHECKPOINT\.md: .*? then do what follows\.\]\n\n",
+    re.DOTALL,
+)
+
+
+def sent_prompt(prompt: str) -> str:
+    """§43: what the sender sent — a stored prompt without hands' leading sentences,
+    the journal sentence (§39) and the owner sentence (§43), in either order, each
+    with its blank line, each once, and nothing else stripped. Every reader asking
+    what a job was sent reads its prompt through this: the kickoff test, the
+    consult count, a resume's prompt, §36's listing and the job summary line."""
+    left = [_JOURNAL_REMINDER_RE, _OWNER_REMINDER_RE]
+    while True:
+        for pattern in left:
+            found = pattern.match(prompt)
+            if found is not None:
+                prompt = prompt[found.end():]
+                left.remove(pattern)
+                break
+        else:
+            return prompt
+
+
+def owner_files_pending(cwd: Path) -> list[str] | None:
+    """§43 (H-073): the owner files under `cwd` with no checkpoint update since they
+    were last committed, root-relative, oldest first; None when git cannot answer.
+
+    The candidates are the files tracked at HEAD that are `meta/decisions/<name>-
+    owner.md` with `<name>` one non-empty path component, under `cwd` (§38's
+    reading). For each, `A` is the newest commit that touched it, and it is named
+    when no commit of `A..HEAD` touched `meta/CHECKPOINT.md` — asked per file, so a
+    checkpoint update on a side branch merged into HEAD counts. With the checkpoint
+    not tracked at HEAD, nothing is named. Oldest first is the committer time of
+    `A`, then its count of ancestors (an ancestor always has fewer), then the path.
+    """
+    try:
+        if not _git(cwd, "ls-tree", "--name-only", "HEAD", "--", CHECKPOINT.as_posix()).strip():
+            return []
+        where = _git(cwd, "rev-parse", "--show-prefix").strip()
+        tree = _git(
+            cwd, "ls-tree", "-r", "-z", "--full-name", "--name-only", "HEAD", "--",
+            f"{DECISIONS_DIR.as_posix()}/",
+        )
+        directory = PurePosixPath(where or ".") / DECISIONS_DIR.as_posix()
+        named: list[tuple[int, int, str]] = []
+        for name in tree.split("\0"):
+            path = PurePosixPath(name)
+            if not (
+                name
+                and path.parent == directory
+                and path.name.endswith(OWNER_SUFFIX)
+                and len(path.name) > len(OWNER_SUFFIX)
+            ):
+                continue
+            last = _git(
+                cwd, "log", "-1", "--format=%H %ct", "HEAD", "--", f":(top,literal){name}"
+            ).split()
+            if len(last) != 2:
+                continue
+            sha, when = last
+            after = _git(
+                cwd, "log", "-1", "--format=%H", f"{sha}..HEAD", "--", CHECKPOINT.as_posix()
+            )
+            if after.strip():
+                continue
+            depth = _git(cwd, "rev-list", "--count", sha).strip()
+            named.append((int(when), int(depth), name))
+    except (PlaybookError, ValueError):
+        return None
+    return [name for _when, _depth, name in sorted(named)]
 
 
 #: §39: the sample verdict lines an architect consult on `builder.done` is judged by.
@@ -2336,17 +2424,20 @@ class PlaybookEngine:
             return
 
         role = self.config.role(job.role)
+        # §43: what the sender sent, without hands' sentences; the resume's own
+        # dispatch decides them again.
+        sent = sent_prompt(job.prompt)
         if is_builder_answer(job):
             # §39 (review 22 should-fix 3): a phone `answer` is re-sent as what it was,
             # its text to the builder's session as a `keep`, never as a clear.
-            prompt, context = job.prompt, "keep"
+            prompt, context = sent, "keep"
         elif job.role == "builder":  # §10/§6: the resume line when configured, else the
-            prompt, context = role.resume_prompt(job.prompt), "clear"  # same prompt (H-008)
+            prompt, context = role.resume_prompt(sent), "clear"  # same prompt (H-008)
         elif job.state == "orphaned":
             # §39 (H-057): an orphaned review's prompt goes to a fresh context.
-            prompt, context = job.prompt, "clear"
+            prompt, context = sent, "clear"
         else:
-            prompt, context = job.prompt, job.context
+            prompt, context = sent, job.context
         try:
             resumed = await self.enqueue(
                 role=job.role,
@@ -2661,8 +2752,8 @@ class PlaybookEngine:
                 said = "`hands send --role builder --context keep`"
             else:
                 continue
-            # §39 (H-060): the journal sentence is hands', not the human's words.
-            words = _JOURNAL_REMINDER_RE.sub("", record.prompt, count=1)
+            # §39 (H-060), §43: hands' sentences are hands', not the human's words.
+            words = sent_prompt(record.prompt)
             blocks.append(f"[{said}: builder job {record.id}, {record.created}]\n{words}")
         blocks.extend(_owner_decisions(self.config.role("builder").cwd, since))
         return "\n\n".join(blocks)
@@ -2693,6 +2784,16 @@ class PlaybookEngine:
         return JOURNAL_REMINDER.format(
             journal=JOURNAL.as_posix(), consultation=" ".join(consultation.split())
         )
+
+    def owner_reminder(self) -> str | None:
+        """§43 (H-073): the sentence naming the owner files with no checkpoint
+        update since in the builder's cwd (`owner_files_pending`), or None when
+        there are none or git cannot answer. Blocking: the daemon runs it in a
+        worker thread at dispatch."""
+        files = owner_files_pending(self.config.role("builder").cwd)
+        if not files:
+            return None
+        return OWNER_REMINDER.format(files=", ".join(files))
 
     def architect_consults_used(self) -> int:
         """§31: the architect consultations of this *series* — architect jobs (a §6
@@ -2735,7 +2836,7 @@ class PlaybookEngine:
         return (
             job.role == "builder"
             and job.resumed_from is None
-            and job.prompt.strip() in self.kickoff_prompts(self.playbook)
+            and sent_prompt(job.prompt).strip() in self.kickoff_prompts(self.playbook)
         )
 
     def consults_used(self, book: Playbook | None) -> int:
@@ -2754,7 +2855,7 @@ class PlaybookEngine:
         for index, record in enumerate(jobs):
             if record.role != "builder" or record.resumed_from is not None:
                 continue
-            if record.prompt.strip() in kickoffs or (
+            if sent_prompt(record.prompt).strip() in kickoffs or (
                 record.origin == KIT_ORIGIN and record.started is not None
             ):
                 start = index + 1

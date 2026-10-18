@@ -49,7 +49,9 @@ from hands.playbook import (
     ESCALATE_ON,
     EVENTS,
     JOB_PLACEHOLDERS,
+    JOURNAL_REMINDER,
     LIMIT_KEYS,
+    OWNER_REMINDER,
     ROADMAP,
     Milestones,
     PipelineState,
@@ -61,9 +63,11 @@ from hands.playbook import (
     load_playbook,
     next_milestone,
     orphaned_rule_warnings,
+    owner_files_pending,
     parse_playbook,
     playbook_path,
     render,
+    sent_prompt,
 )
 from hands.spool import Job, Spool, new_kit_id, now_iso
 from harness import (
@@ -6370,3 +6374,173 @@ def test_a_playbook_without_done_rules_warns_nothing(tmp_path: Path) -> None:
     """The warning is for a `<role>.done` rule without its `<role>.orphaned` one only."""
     body = 'version = 1\n\n[[rule]]\non = "monitor.tripwire"\nthen = "stop"\n'
     assert orphaned_rule_warnings(parse_playbook(body, path=tmp_path / "PLAYBOOK.toml")) == []
+
+
+# ---- §43 (H-073): the owner file on every builder job
+
+#: §43's sentence, word for word, with `{files}` for the paths joined by `, `.
+OWNER_SAID = (
+    "[hands: an owner file was committed after the last update of meta/CHECKPOINT.md: "
+    "{files}. Carry out the \"For the builder\" steps of each, oldest first, record them "
+    "in the checkpoint and commit it, then do what follows.]"
+)
+
+
+def test_the_owner_sentence_is_section_43s_text_word_for_word() -> None:
+    assert OWNER_REMINDER == OWNER_SAID
+    design = " ".join(DESIGN.read_text(encoding="utf-8").split())
+    assert OWNER_SAID.format(files="<files>") in design
+
+
+def test_owner_files_with_no_checkpoint_update_since_are_named_oldest_first(
+    tmp_home: Path, workdir: Path
+) -> None:
+    """§43: each tracked `meta/decisions/<name>-owner.md` whose last commit no
+    checkpoint commit follows is named, in the order of those commits, oldest first
+    (here not the paths' order); a nested `a/b-owner.md` and a file deleted at HEAD
+    are not; once `meta/CHECKPOINT.md` is committed after them, there is no sentence."""
+    engine, _ = engine_for(tmp_home, workdir)
+    commit_file(workdir, "meta/CHECKPOINT.md", "# CHECKPOINT\n")
+    commit_file(workdir, "meta/decisions/gone-owner.md", "deleted below\n")
+    commit_file(workdir, "meta/decisions/zz-owner.md", "the OLDER ruling\n")
+    commit_file(workdir, "meta/decisions/a/b-owner.md", "nested, not an owner file\n")
+    commit_file(workdir, "meta/decisions/aa-owner.md", "the NEWER ruling\n")
+    _git_in(workdir, "rm", "-q", "meta/decisions/gone-owner.md")
+    _git_in(workdir, "commit", "-q", "-m", "drop gone")
+    assert engine.owner_reminder() == OWNER_SAID.format(
+        files="meta/decisions/zz-owner.md, meta/decisions/aa-owner.md"
+    )
+    commit_file(workdir, "meta/CHECKPOINT.md", "# CHECKPOINT\n\nO-1 done.\n")
+    assert engine.owner_reminder() is None
+    commit_file(workdir, "meta/decisions/zz-owner.md", "an EDIT is a new ruling\n")
+    assert engine.owner_reminder() == OWNER_SAID.format(files="meta/decisions/zz-owner.md")
+
+
+def test_an_owner_file_committed_with_the_checkpoint_is_still_named(
+    tmp_home: Path, workdir: Path
+) -> None:
+    """§43: `A..HEAD` leaves `A` out, so a commit that changes an owner file and the
+    checkpoint together names the file until a later checkpoint commit."""
+    engine, _ = engine_for(tmp_home, workdir)
+    (workdir / "meta" / "decisions").mkdir(parents=True)
+    (workdir / "meta" / "CHECKPOINT.md").write_text("# CHECKPOINT\n")
+    (workdir / "meta" / "decisions" / "x-owner.md").write_text("ruling\n")
+    _git_in(workdir, "add", "meta")
+    _git_in(workdir, "commit", "-q", "-m", "both")
+    assert engine.owner_reminder() == OWNER_SAID.format(files="meta/decisions/x-owner.md")
+
+
+def test_no_tracked_checkpoint_gives_no_owner_sentence(
+    tmp_home: Path, workdir: Path, tmp_path: Path
+) -> None:
+    """§43: with `meta/CHECKPOINT.md` not tracked at HEAD there is no sentence, and a
+    git failure (a cwd that is no repository) gives none either."""
+    engine, _ = engine_for(tmp_home, workdir)
+    commit_file(workdir, "meta/decisions/x-owner.md", "ruling\n")
+    (workdir / "meta" / "CHECKPOINT.md").write_text("written, never committed\n")
+    assert engine.owner_reminder() is None
+    elsewhere = tmp_path / "plain"
+    elsewhere.mkdir()
+    assert owner_files_pending(elsewhere) is None
+
+
+def test_an_owner_file_carried_out_on_a_merged_side_branch_is_not_named(
+    tmp_home: Path, workdir: Path
+) -> None:
+    """§43: asked per file, so an owner file whose checkpoint update was committed on
+    a side branch merged into HEAD is not named, although the newest checkpoint
+    commit on HEAD's first-parent line is older than the owner file's."""
+    engine, _ = engine_for(tmp_home, workdir)
+    commit_file(workdir, "meta/CHECKPOINT.md", "# CHECKPOINT\n")
+    commit_file(workdir, "meta/decisions/x-owner.md", "ruling\n")
+    main = subprocess.run(
+        ["git", "-C", str(workdir), "rev-parse", "--abbrev-ref", "HEAD"],
+        check=True, capture_output=True, text=True,
+    ).stdout.strip()
+    _git_in(workdir, "checkout", "-q", "-b", "side")
+    commit_file(workdir, "meta/CHECKPOINT.md", "# CHECKPOINT\n\nO-1 done.\n")
+    _git_in(workdir, "checkout", "-q", main)
+    commit_file(workdir, "notes.txt", "unrelated\n")
+    assert engine.owner_reminder() == OWNER_SAID.format(files="meta/decisions/x-owner.md")
+    _git_in(workdir, "merge", "-q", "--no-ff", "-m", "merge side", "side")
+    assert engine.owner_reminder() is None
+
+
+def test_hands_sentences_are_stripped_in_either_order_and_nothing_else() -> None:
+    """§43: one helper strips the journal sentence and the owner sentence, in either
+    order, each with its blank line, once each — and nothing else."""
+    journal = JOURNAL_REMINDER.format(journal="meta/journal.md", consultation="J-1")
+    owner = OWNER_SAID.format(files="meta/decisions/a-owner.md, meta/decisions/b-owner.md")
+    text = "Take option B.\n\nmore"
+    assert sent_prompt(f"{journal}\n\n{owner}\n\n{text}") == text
+    assert sent_prompt(f"{owner}\n\n{journal}\n\n{text}") == text
+    assert sent_prompt(f"{owner}\n\n{text}") == text
+    assert sent_prompt(f"{journal}\n\n{text}") == text
+    assert sent_prompt(text) == text
+    assert sent_prompt(f"{owner}\n\n{owner}\n\n{text}") == f"{owner}\n\n{text}"
+    assert sent_prompt(f"{owner}\n{text}") == f"{owner}\n{text}"  # no blank line
+    assert sent_prompt(f"x {owner}\n\n{text}") == f"x {owner}\n\n{text}"  # not leading
+
+
+def test_neither_sentence_is_listed_as_the_humans_words(
+    tmp_home: Path, workdir: Path
+) -> None:
+    """§43 (§36): the listing of the human's sends in a consult prompt reads a stored
+    prompt without hands' sentences."""
+    engine, _ = architect_engine(tmp_home, workdir)
+    journal = JOURNAL_REMINDER.format(journal="meta/journal.md", consultation="J-1")
+    owner = OWNER_SAID.format(files="meta/decisions/a-owner.md")
+    _human_job(engine.spool, role="builder", context="keep", origin="phone",
+               prompt=f"{journal}\n\n{owner}\n\nTake option B.")
+    _human_job(engine.spool, role="builder", context="keep", origin="cli",
+               prompt=f"{owner}\n\nTake option C.")
+    said = strip_paths(engine.human_decisions())
+    assert "]\nTake option B." in strip_paths(said), said
+    assert "]\nTake option C." in strip_paths(said), said
+    assert "an owner file was committed" not in strip_paths(said), said
+    assert "is uncommitted" not in strip_paths(said), said
+
+
+def test_a_kickoff_that_carried_the_sentences_is_still_a_kickoff(
+    tmp_home: Path, workdir: Path
+) -> None:
+    """§43: a kickoff whose stored prompt carries hands' sentences still is one
+    (`is_kickoff`) and still anchors `consults_used`, so a driver job before it is
+    not counted and one after it is."""
+    engine, _ = engine_for(tmp_home, workdir, 'version = 1\n[series]\nkickoff = "GO"\n')
+    run(engine.on_job_start(finished(engine.spool, role="driver", origin="playbook")))
+    time.sleep(0.003)
+    owner = OWNER_SAID.format(files="meta/decisions/a-owner.md")
+    journal = JOURNAL_REMINDER.format(journal="meta/journal.md", consultation="J-1")
+    kickoff = engine.spool.create_job(
+        role="builder", context="clear", prompt=f"{journal}\n\n{owner}\n\nGO", origin="cli"
+    )
+    assert engine.is_kickoff(kickoff)
+    assert engine.consults_used(engine.playbook) == 0
+    time.sleep(0.003)
+    finished(engine.spool, role="driver", origin="playbook")
+    assert engine.consults_used(engine.playbook) == 1
+
+
+@pytest.mark.parametrize("answer", [True, False], ids=["answer", "kickoff"])
+def test_a_resume_rule_resends_the_senders_prompt_without_hands_sentences(
+    tmp_home: Path, workdir: Path, answer: bool
+) -> None:
+    """§43 (§10): an orphaned builder job that carried the sentences — an `answer`
+    with the journal sentence among them — is re-sent with the sender's prompt
+    alone; the dispatch of the resume decides its own sentences again."""
+    engine, recorder = engine_for(tmp_home, workdir)
+    owner = OWNER_SAID.format(files="meta/decisions/a-owner.md")
+    journal = JOURNAL_REMINDER.format(journal="meta/journal.md", consultation="J-1")
+    origin, context = ("phone", "keep") if answer else ("cli", "clear")
+    job = engine.spool.create_job(
+        role="builder", context=context, origin=origin,
+        prompt=f"{journal}\n\n{owner}\n\nthe sender's words",
+    )  # fmt: skip
+    engine.spool.transition(job, "running")
+    job = engine.spool.transition(job, "orphaned")
+    run(engine.on_job_start(job))
+    run(engine.on_job(job))
+    assert [(e["prompt"], e["context"]) for e in recorder.enqueued] == [
+        ("the sender's words", context)
+    ]

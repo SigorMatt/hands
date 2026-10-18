@@ -2767,7 +2767,7 @@ question`, or a `keep` send naming it), or whether the instruction paste
 due after this release asks each project's chat to add the sentence to its
 brief in flight. Not fixed in mission 26: the routes are §42's text.
 
-Status: decided (DESIGN §43), scheduled for U2
+Status: resolved (mission 27 U2, this commit — DESIGN §43: every builder job but an apply (a job with a `kit_id`, or a resume of one found through `resumed_from`) is dispatched with §43's owner sentence, after the journal sentence, naming the owner files with no `meta/CHECKPOINT.md` update since, oldest first, decided in a worker thread and counted by the prompt cap; one helper (`sent_prompt`) strips hands' sentences for `is_kickoff`, `consults_used`, the limit resume, the playbook `resume` action, §36's listing and the job summary line; the handbook's §4, §14 and §19 route 4 say hands names the owner file itself. Tests: tests/test_playbook.py, tests/test_operations.py, tests/test_limits.py)
 
 ## H-074 — a long gate backgrounded with no sanctioned wait, and the variable that stops it refused by hands' own hook
 
