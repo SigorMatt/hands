@@ -9,21 +9,21 @@ review, and returns the tree to `main`. `[x]` = done and pushed, `[b]` =
 blocked (two failures) or refused.
 
 - [x] U0 Plan, branch and findings (`plan:`) — this file, meta/CHECKPOINT.md,
-      meta/journal.md, meta/findings/FINDINGS.md (H-070, H-071, H-072) (this commit)
-- [ ] U1 `consult` from the phone and the laptop (§42; §31, §33, §38,
+      meta/journal.md, meta/findings/FINDINGS.md (H-070, H-071, H-072) 5c1c9c3
+- [x] U1 b956e2a `consult` from the phone and the laptop (§42; §31, §33, §38,
       H-058) — src/hands/phone.py, src/hands/api.py, src/hands/playbook.py,
       src/hands/daemon.py (if dispatch needs it), src/hands/cli.py,
       architect/CLAUDE.md, docs/ARCHITECT-HANDBOOK.md §16, README.md, tests
-- [ ] U2 `digest` (§42) — src/hands/digest.py, src/hands/cli.py,
+- [x] U2 d222109 `digest` (§42) — src/hands/digest.py, src/hands/cli.py,
       src/hands/phone.py, README.md, tests
-- [ ] U3 The decisions kit and the owner file on a resume (§42; route 4) —
+- [x] U3 592fc6e The decisions kit and the owner file on a resume (§42; route 4) —
       src/hands/kit.py, src/hands/api.py, templates/BUILDER-N-PROMPT.md,
       docs/ARCHITECT-HANDBOOK.md §3, §4, §11, tests
-- [ ] U4 The handbook, the instruction and the runbooks (§42; H-072) —
+- [x] U4 79eb270 The handbook, the instruction and the runbooks (§42; H-072) —
       docs/ARCHITECT-HANDBOOK.md §10, §13, §14, §18, §19,
       docs/ARCHITECT-INSTRUCTION.md, docs/OPERATIONS.md,
       docs/INTEGRATION.md, README.md, tests; closes H-072
-- [ ] U5 Final report, the pull request and the hosted review's findings —
+- [ ] U5 (this commit) Final report, the pull request and the hosted review's findings —
       meta/FINAL-REPORT-26.md (drafted under meta/drafts/),
       meta/reviews/hosted/PR-<pr>/
 
