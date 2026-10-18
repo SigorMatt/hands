@@ -8,8 +8,10 @@ chat). Missions 10 and 11 change it (kit check, the closed loop, the driver
 role), and each Project onboarded in M5–M7 needs its own pasted copy, with
 the Purpose block filled, pasted into the Project's instructions field and
 verified by asking the new Project "What are your Parameters?" (discotrade
-ran two days without one, noticed 2026-10-13). **INSTRUCTION PASTE DUE after
-the mission-26 release** (DESIGN §42: the new opening paragraph, rules 3, 9,
+ran two days without one, noticed 2026-10-13). **INSTRUCTION PASTE after
+the mission-26 release** — handed over at its install on 2026-10-18, and no
+paste is due after mission 27, which does not change the instruction
+(DESIGN §43) — (DESIGN §42: the new opening paragraph, rules 3, 9,
 12 and 14 reworded, rule 15) for every Project, hands and discotrade; in
 discotrade's it replaces the interim rule 15, and its interim operations
 document is retired.
@@ -21,7 +23,8 @@ easier to address bugs.
 
 **Reordered 2026-10-18 (01:33: project separation first, all planned work
 that does not serve it waits; 03:08–03:12: the rest; 11:41: the
-local-model harness numbered 28, M9 moved to 29).** Mission 26 = the
+local-model harness numbered 28, M9 moved to 29; this numbering is
+superseded at 18:52 by the next paragraph).** Mission 26 = the
 project separation; mission 27 = M8b, the harness seam with Codex;
 mission 28 = M8b's second mission, a harness for a local model (OpenCode
 first; dsh when it is ready); mission 29 = M9; then M5b, a project
@@ -37,6 +40,18 @@ by interim documents in its Project; the hands Project chat sees it only
 as HF reports and when a release install restarts its daemon. The kit for
 mission 26 issued 2026-10-17 23:25 (separation and credential profiles
 together) was never sent; this kit replaces it.
+
+**Renumbered 2026-10-18 18:52 (DESIGN §43; kept one mission at 19:22).**
+Mission 27 = the separation follow-up, operations and safety fixes (the
+owner file named on every builder job, background tasks off where the
+role's hook allows it, a playbook change kept for the owner, H-070,
+H-071, the DESIGN wording of H-027, H-034 and H-039, review 25's
+should-fix 1, review 26's should-fix 1 and 2), one mission of about
+seven units; mission 28 = M8b, the harness seam with Codex (+ review
+25's should-fix 3); mission 29 = M8b's second mission, a local-model
+harness, OpenCode first; mission 30 = M9 (+ review 25's should-fix 2).
+This supersedes the 11:41 numbering in the paragraph above (27 the seam,
+28 the local harness, 29 M9); the order after M9 is unchanged.
 
 Milestones are gated by a clean cold review of the mission that closes them,
 then an install (`uv tool install --force`) and a driver-kit refresh.
@@ -217,7 +232,8 @@ then an install (`uv tool install --force`) and a driver-kit refresh.
   594b8ee; installed on both daemons 2026-10-17 20:40). M8a CLOSED.
   Renumbered 2026-10-18 (DESIGN §42): the separation is mission 26, M8b
   missions 27 (the seam with Codex) and 28 (a local-model harness), M9
-  mission 29.
+  mission 29; and at 18:52 (DESIGN §43): the separation follow-up 27, the
+  seam 28, the local-model harness 29, M9 30.
 - **The project separation** — mission 26 (designed 2026-10-17 18:45–20:27;
   made first and whole 2026-10-18 01:33, DESIGN §42). Each project's own
   Claude Project chat operates it from its pasted instruction (rule 15) and
@@ -235,10 +251,35 @@ then an install (`uv tool install --force`) and a driver-kit refresh.
   and H-071 decided for mission 27. Gate: `consult` used once from the
   phone on a role-mode project; both Projects' instructions re-pasted and
   discotrade's interim documents retired; one notification answered by a
-  project's own chat from the operator table.
-- **M8b The harness seam** — mission 27 with Codex (DESIGN §43, written
+  project's own chat from the operator table. DONE 2026-10-18 (review 26:
+  blockers=0, should-fix=2, carried to mission 27; PR #6 merged by the
+  review, f16d6d1; installed on both daemons 19:34, and the hand-over to
+  each Project's chat given). The gate's three live
+  parts are the human's, after the hand-over, and are declared met from
+  the branch and the notifications, never from memory.
+- **The separation follow-up** — mission 27 (split out 2026-10-18 18:52,
+  kept one mission at 19:22; DESIGN §43). What the separation's first day
+  showed a project's operation needs from hands: the owner file named
+  before every builder job but an apply, so route 4 works whatever the
+  brief (H-073); the role hook admitting an omitted sub-agent flag under
+  `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS`, the wheel shipping the hook,
+  doctor's warn on a copy that is not the installed hands' copy, the
+  variable set by default only where the role's copy is that copy, and
+  the wait rule (H-074, from another project's HF-015 and HF-016); a
+  role-filed kit that carries the playbook held for the human (H-075);
+  H-070 and H-071; the DESIGN wording of H-027, H-034 and H-039; review
+  25's should-fix 1; review 26's should-fix 1 (H-076) and 2. Gate, after
+  its install: a decisions kit applied and `go` on a project whose brief
+  predates the mission-26 template, with the ruling carried out; a
+  builder under the default starts a sub-agent through the hook, and a
+  real command past its timeout ends with a timeout result, neither
+  backgrounded nor waited on with a `sleep`; doctor reports the variable
+  and why; a project with the old hook keeps working, with the warn and
+  without the variable; a role-filed kit carrying the playbook held for
+  the human.
+- **M8b The harness seam** — mission 28 with Codex (DESIGN §44, written
   from docs/HARNESS-PROBE.md); a harness for a local model (OpenCode or dsh,
-  or both) is mission 28, M8b's second, kept separate under the
+  or both) is mission 29, M8b's second, kept separate under the
   small-missions rule, OpenCode first; its gate is written by its kit. Re-checked by the aux 2026-10-18
   03:28, correcting the probe's `unavailable` rows of 2026-10-17: OpenCode
   1.19.2 is signed in (Nebius Token Factory; its credential is a file
@@ -255,9 +296,10 @@ then an install (`uv tool install --force`) and a driver-kit refresh.
   guarded roles (driver, architect) stay on Claude Code until a harness
   guard has been reviewed; the harness-neutral guard and transcript
   reader; the templates' Task-tool and worktree wording made neutral;
-  doctor rows per harness; a privacy note. Mission 27 also carries review
-  25's should-fix 1 and 3, H-070, H-071 and the DESIGN wording of H-027,
-  H-034 and H-039. The optional polish round (on `aux.done` with
+  doctor rows per harness; a privacy note. Mission 28 also carries review
+  25's should-fix 3 (since 2026-10-18 18:52; should-fix 1, H-070, H-071
+  and the DESIGN wording of H-027, H-034 and H-039 went to mission 27,
+  DESIGN §43). The optional polish round (on `aux.done` with
   `blockers=0 should-fix>0`, one bounded builder job on the same branch,
   a re-review of the delta, then the merge; off by default) is its own
   small mission when wanted. Gate: one hands mission built by a builder on
@@ -272,7 +314,8 @@ then an install (`uv tool install --force`) and a driver-kit refresh.
     the review and the pull-request checks, not by its verdict line
     (DESIGN §41).
 - **M9 A machine is replaceable** — decided 2026-10-16 (DESIGN §40), mission
-  29 (renumbered 2026-10-18 by DESIGN §42; it also carries review 25's
+  30 (renumbered 2026-10-18 by DESIGN §42, and to 30 at 18:52 by §43; it
+  also carries review 25's
   should-fix 2, and splits into two missions if it grows past one review's
   size), before M5b: `hands export` (everything but secrets, env tables
   redacted by name, a printed secrets checklist) and `hands import` (through

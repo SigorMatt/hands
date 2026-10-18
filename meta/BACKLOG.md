@@ -115,9 +115,9 @@ item names the mission it is scheduled for; unscheduled items say so.
    proxy are the checklist; its four integration tiers name the level a
    harness must reach (their Tier 3). Cited, never imported.
 
-## Order (2026-10-18: 01:33 project separation first; 03:08–03:12 the rest; small missions) — 26 the separation; 27 M8b the harness seam with Codex (+ review 25's should-fix 1 and 3, H-070, H-071, the DESIGN wording of H-027, H-034, H-039); 28 M8b's second mission, a local-model harness (OpenCode first; numbered 11:41); 29 M9 (+ review 25's should-fix 2); then M5b, a project from scratch (after 26), agile-skills migrated (after M9). Supersedes 2026-10-17 20:27's order. The 2026-10-17 23:25 kit for mission 26 (separation and profiles together) was never sent.
+## Order (2026-10-18: 01:33 project separation first; 03:08–03:12 the rest; small missions; renumbered 18:52, kept one mission at 19:22, DESIGN §43) — 26 the separation (DONE); 27 the separation follow-up, operations and safety fixes (+ review 25's should-fix 1, H-070, H-071, the DESIGN wording of H-027, H-034, H-039, review 26's should-fix 1 and 2); 28 M8b the harness seam with Codex (+ review 25's should-fix 3); 29 M8b's second mission, a local-model harness (OpenCode first); 30 M9 (+ review 25's should-fix 2); then M5b, a project from scratch (after 26), agile-skills migrated (after M9). Supersedes 2026-10-18 11:41's numbering (27 the seam, 28 the local harness, 29 M9) and 2026-10-17 20:27's order. The 2026-10-17 23:25 kit for mission 26 (separation and profiles together) was never sent.
 
-## Mission 26 (the project separation; kit issued 2026-10-18) — a project operated from its own chat and the phone. Spec: DESIGN v3.25 §42.
+## Mission 26 — DONE 2026-10-18 (the project separation; review 26: blockers=0, should-fix=2, carried to mission 27; PR #6 merged by the review, f16d6d1; installed on both daemons 19:34). A project operated from its own chat and the phone. Spec: DESIGN v3.25 §42.
 
 1. U0 the branch `mission-26`; H-070 (a report's twelve lines) and H-071
    (the architect guard on read-only commands), decided for mission 27;
@@ -141,7 +141,39 @@ item names the mission it is scheduled for; unscheduled items say so.
    discotrade); OPERATIONS' no-phone rows; INTEGRATION's H-072. U5 the PR
    and its hosted review.
 
-## Mission 27 (M8b, the harness seam with Codex; renumbered several times — 25, then 26, then 27 in 2026-10-17 20:27's order — and mission 27 since 2026-10-18 03:08) — DESIGN §43 from docs/HARNESS-PROBE.md.
+## Mission 27 (the separation follow-up, operations and safety fixes; split out 2026-10-18 18:52, kept one mission at 19:22) — Spec: DESIGN v3.26 §43.
+
+1. U0 the branch `mission-27`; H-074 (from another project's HF-015 and
+   HF-016; evidence only), H-075 and H-076 filed; the correction line under
+   FINAL-REPORT-25 §3 (review 25's should-fix 1).
+2. U1 the base: the copies of the DESIGN wording §43 writes (H-027 §12
+   rule 6 and §14's units; H-034 §10's example and its fixture, doc copy
+   and tests; H-039 §34's start fold); the intermittent test (H-076,
+   review 26's should-fix 1); review 26's untested `consult` refusals.
+3. U2 the owner file named before every builder job but an apply (H-073),
+   hands' sentences stripped wherever a stored prompt is read.
+4. U3 H-074 rules 1–5: the hook admits an omitted sub-agent flag under
+   `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS` (`1`/`true`/`yes`/`on`); the
+   wheel ships the hook; doctor warns on a copy that is not the installed
+   hands' copy (decided 2026-10-18 21:0x); the variable set for builder
+   and aux only where the role's copy is that copy (decided 21:0x); the
+   env table decides over it either way.
+5. U4 the review protocols' report contents and the gate's timeout
+   (H-070), the wait rule (H-074 rule 6), the guard's four read-only
+   options and rule 10 (H-071).
+6. U5 a role-filed kit that carries the playbook is held for the human
+   (H-075); the role-mode kickoff that never changes.
+7. U6 the operator table's missing rows (review 26's should-fix 2) and a
+   test that reads the stop reasons and published lines from the code.
+   U7 the PR and its hosted review.
+8. Gate, after its install: a decisions kit and `go` on a project whose
+   brief predates the mission-26 template, the ruling carried out; a
+   builder under the default starts a sub-agent through the hook and a
+   real command past its timeout ends with a timeout result; a project
+   with the old hook keeps working, with the warn and without the
+   variable; a role-filed kit carrying the playbook held for the human.
+
+## Mission 28 (M8b, the harness seam with Codex; renumbered several times — 25, then 26, then 27 in 2026-10-17 20:27's order and at 2026-10-18 03:08 — and mission 28 since 2026-10-18 18:52) — DESIGN §44 from docs/HARNESS-PROBE.md.
 
 1. The seam: a per-harness runner or hands as an ACP client (the prior, if
    commands route through permission requests; the adapter
@@ -152,23 +184,16 @@ item names the mission it is scheduled for; unscheduled items say so.
    on Claude Code until a harness guard is reviewed.
 2. The harness-neutral guard and transcript reader; the templates'
    Task-tool and worktree wording; doctor rows per harness; a privacy note.
-3. Review 25's should-fix 1 (the correction line under FINAL-REPORT-25 §3)
-   and 3 (the probe record's approval flag in the form that ran, and its
-   stray line break).
-4. H-070: both protocols drop the twelve-line count and say what a report
-   holds. H-071: the guard admits `ls -R`, `git ls-tree --name-only`, `git
-   status --short`, `git log --date=<format>`; rule 10 names Grep and Read
-   for content searches.
-5. The DESIGN wording of H-027 (§12 rule 6's quoting sentence; §14's
-   templated unit names), H-034 (§10's example: `monitor.task_killed` →
-   `notify`; its fixture, doc copy and tests follow) and H-039 (§34's start
-   fold holds back everything but `job.held`), written by the kit.
-6. Gate: one hands mission built by a builder on Codex and reviewed clean.
+3. Review 25's should-fix 3 (the probe record's approval flag in the form
+   that ran, and its stray line break). Its should-fix 1, H-070, H-071 and
+   the DESIGN wording of H-027, H-034 and H-039 went to mission 27
+   (2026-10-18 18:52, DESIGN §43).
+4. Gate: one hands mission built by a builder on Codex and reviewed clean.
    Split further if the kit grows past one review's size (small missions).
 
-## Mission 28 (M8b's second mission; numbered 2026-10-18 11:41) — a harness for a local model (OpenCode or dsh, or both), OpenCode first. Re-checked 2026-10-18 03:28 by the aux: OpenCode 1.19.2 signed in (Nebius Token Factory, a credential file under `$HOME`, a default model set, a headless JSON one-shot answered); dsh unreachable by any hands job (its key is exported only for interactive shells; no `~/.dsh` credentials file) until the human writes one, with its session-log extension and telemetry disabled (DESIGN §40). Its own small mission, after mission 27.
+## Mission 29 (M8b's second mission; numbered 28 on 2026-10-18 11:41, 29 since 18:52) — a harness for a local model (OpenCode or dsh, or both), OpenCode first. Re-checked 2026-10-18 03:28 by the aux: OpenCode 1.19.2 signed in (Nebius Token Factory, a credential file under `$HOME`, a default model set, a headless JSON one-shot answered); dsh unreachable by any hands job (its key is exported only for interactive shells; no `~/.dsh` credentials file) until the human writes one, with its session-log extension and telemetry disabled (DESIGN §40). Its own small mission, after mission 28.
 
-## Mission 29 (M9, "a machine is replaceable"; 26, then 27, then 28 in 2026-10-17 20:27's order and at 2026-10-18 03:08; mission 29 since 2026-10-18 11:41) — `hands export` / `hands import`, `hands upgrade [--accept-builder]`, `hands project refresh <p>` (replacing the laptop's merge script for architect/CLAUDE.md), the spool inventory, ntfy by MagicDNS name, docs/OPERATIONS.md updated; review 25's should-fix 2 (after a failed `find`, the capture script still writes the inbox tail; pinned by the hanging-`find` test); gate: the VM rehearsal. Split into two missions if it grows past one review's size. Then M5b (discotrade-v2 on Codex), a project from scratch (any time after mission 26 is installed), agile-skills migrated (M7, after M9).
+## Mission 30 (M9, "a machine is replaceable"; 26, then 27, then 28 in 2026-10-17 20:27's order and at 2026-10-18 03:08; 29 at 11:41; mission 30 since 2026-10-18 18:52) — `hands export` / `hands import`, `hands upgrade [--accept-builder]`, `hands project refresh <p>` (replacing the laptop's merge script for architect/CLAUDE.md), the spool inventory, ntfy by MagicDNS name, docs/OPERATIONS.md updated; review 25's should-fix 2 (after a failed `find`, the capture script still writes the inbox tail; pinned by the hanging-`find` test); gate: the VM rehearsal. Split into two missions if it grows past one review's size. Then M5b (discotrade-v2 on Codex), a project from scratch (any time after mission 26 is installed), agile-skills migrated (M7, after M9).
 
 ## Backlog: Claude credential profiles (moved out of mission 26 on 2026-10-18; built when a usage limit actually hits) — DESIGN §42 "Decided and kept on disk for later missions".
 

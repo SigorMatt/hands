@@ -1,4 +1,4 @@
-# hands — DESIGN v3.25
+# hands — DESIGN v3.26
 
 Machinery that replaces the human relay between the planning brain and the two
 Claude Code roles (builder, aux) on the Ubuntu laptop, and that keeps a series
@@ -434,7 +434,8 @@ allowed: `{n+1}`), and job fields: `{job.id}`, `{job.head_at_start}`,
 
     [[rule]]
     on = "monitor.task_killed"
-    then = "stop"
+    then = "notify"
+    message = "A task inside a role job was killed"
 
     [[rule]]
     on = "monitor.orphan_processes"
@@ -536,8 +537,9 @@ playbook path):
      explicitly approves that job id; quote it.
   6. Prompts the architect wrote arrive as files (the human places the
      kit under `~/Downloads`); send them with `hands send --prompt-file`.
-     Prompts you compose yourself are short and go in quotes; the guard
-     treats quoted text as text. You cannot create files, so never plan
+     Prompts you compose yourself are short and go in quotes; quoting
+     makes no character safe: one from the guard's refused set is refused
+     inside quotes too. You cannot create files, so never plan
      on writing a prompt file yourself; if a prompt needs to be a file and
      is not one, say so and stop.
   7. Verify milestone claims against the remote before reporting them.
@@ -640,7 +642,7 @@ commands). `handsd --project spanweave`.
         daemon.py  api.py  runner.py  spool.py  monitor.py  playbook.py
         notify.py  cli.py  config.py
         remote/                      # optional face (§9), empty until wanted
-      systemd/handsd.service         # user unit
+      systemd/handsd@.service  systemd/handswho@.service  # user units, per project
       driver/CLAUDE.md  driver/settings.json  driver/README.md
       docs/ARCHITECT-INSTRUCTION.md  docs/INTEGRATION.md  docs/PLAYBOOK.md
       meta/                          # hands' own missions, checkpoint, ledger,
@@ -891,8 +893,9 @@ Mission 8, the detectors:
   then the scope is killed. Cgroup membership survives double forks; the
   process-group fallback does not, and `hands doctor` says which is in
   force.
-- The example playbook maps `monitor.task_killed` and
-  `monitor.orphan_processes` to `stop`.
+- The example playbook maps `monitor.orphan_processes` to `stop` (§32:
+  `monitor.task_killed` maps to `notify`, since the detector cannot tell
+  a reap from a `TaskStop`).
 
 Mission 8, the phone channel (§8, §11):
 - `[notify]` config section: `ntfy_url`, `ntfy_topic` (events, as today),
@@ -917,7 +920,8 @@ driver directories `driver:<project>`; a hierarchy of daemon → jobs →
 processes and session → processes; session states debounced over two
 scans; the human's own sessions shown but never fingerprinted; pushes on
 change and on a `status`/`who`/`check`/`?` command on `who_cmd_topic`;
-ships as an optional user unit `handswho.service`, off unless enabled;
+ships as an optional user unit `handswho@.service` (per project, §29), off
+unless enabled;
 `hands doctor` reports notifications, the command channel and who as
 on/off, never as errors.
 
@@ -1462,8 +1466,8 @@ Mission 17, talking to the architect (backlog; ROADMAP M4c):
 ## 34. Changes from v3.16 (mission 17 review)
 
 The start fold (review 17 blocker 1, should-fix 6): the daemon's start fold
-holds back only what it may safely fold: heartbeats and `pipeline.resumed`
-of the jobs it re-admits. A `job.held` is never folded: it is published at
+holds back everything the jobs it re-admits publish, except a `job.held`
+(H-039; worded so in §43). A `job.held` is never folded: it is published at
 once, with its buttons, whether the job was held before or during the
 start; the start notification lists it by title only. A `stop` inside the
 fold window flushes the fold first and cancels nothing that was already
@@ -2988,3 +2992,408 @@ Its new rule 15, after rule 14:
         of the whole machine — installs, restarts of every project, the
         Claude accounts, a migration — are the hands Project's: say so, and
         give nothing to send for them unless this is that Project.
+
+## 43. Changes from v3.25 (mission 26 review; the separation follow-up: operations and safety fixes)
+
+REVIEW-26 (`reviewed: d3c4f15`, `blockers=0 should-fix=2`; the hosted
+review's seven findings, two open at the end, one filed as H-073 and one
+dismissed against §42) merged PR #6 itself (f16d6d1) on 2026-10-18 at
+19:00, and the build was installed on both daemons at 19:34; the restart
+orphaned another project's builder, which was resumed from its checkpoint
+(§38, H-047). That evening the release's hand-over (the instruction paste
+and a fresh chat) was given to each project's chat. This
+section holds what the separation's first day showed a project's operation
+needs from hands: the owner file read on every builder job, background
+tasks turned off where the role's hook allows it, a playbook change kept
+for the owner, H-070 and H-071 built, the DESIGN wording three findings
+asked for, and review 26's two should-fix items. Evidence from another
+project is cited by its HF ids, commits, dates and job ids only.
+
+**Roadmap (decided 2026-10-18 18:52 and 19:22).** On 2026-10-18 at 18:52
+the human split the next mission. Mission 27 is the separation follow-up,
+this section: operations and safety fixes. Mission 28 is M8b, the harness
+seam with Codex (§40, §41, §42's "Codex runs unconfined"), and it carries
+review 25's should-fix 3 because it re-probes Codex. Mission 29 is M8b's
+second mission, a harness for a local model, OpenCode first. Mission 30 is
+M9 and carries review 25's should-fix 2. This supersedes §42's numbering
+(27 the seam, 28 the local harness, 29 M9; set 2026-10-18 at 11:41). Review
+25's should-fix 1, H-070, H-071 and the DESIGN wording of H-027, H-034 and
+H-039, which §42 gave to the seam mission, are this mission's. At 19:22 the
+human kept mission 27 as one mission of about seven units, two themes —
+operating a project, and the safety of a role's session — and did not split
+it. The standing rule of §42 holds: small missions, one theme each, sized
+for review. Everything after M9 is as §42 orders it.
+
+**The owner file on every builder job (H-073).** Route 4 (§42) sends an
+owner file as a decisions kit and then `go`; the builder carries out the
+file's "For the builder" steps because the brief's §R says so. A brief
+written before the mission-26 template has no such sentence, so the builder
+would resume from its checkpoint, the ruling committed and never carried
+out (H-073, filed by mission 26 U5 from PR #6's hosted review; decided by
+the human 2026-10-18 13:26). hands makes route 4 independent of the brief,
+by the dispatch-time mechanism §39 built for a dirty journal (H-060):
+
+- When a builder job is dispatched, hands asks the builder's repository,
+  in a worker thread as §39's journal check does, which owner files have
+  had no checkpoint update since they were last committed. The candidates
+  are the files tracked at `HEAD` that match the engine's owner-file glob,
+  `meta/decisions/<name>-owner.md` with `<name>` one non-empty path
+  component (paths relative to the repository root, as §38 reads the owner
+  files); a nested `meta/decisions/a/b-owner.md` is not one, nor is a file
+  deleted at `HEAD`. For each, `A` is the newest commit that touched it
+  (`git log -1 --format=%H -- <file>`), and the file is named when no commit
+  in `A..HEAD` touched `meta/CHECKPOINT.md` (`git log -1 --format=%H A..HEAD
+  -- meta/CHECKPOINT.md` prints nothing). The files are named in the order
+  of their `A`, oldest first. This is asked per file, not from one newest
+  checkpoint commit, so that after a merge an owner file carried out on the
+  merged side, its checkpoint update with it, is not named again; any
+  query with the same answer will do. Two outcomes follow and are meant: a
+  later commit that changes an owner file (an edit, or a rename to a new
+  path) is a new ruling, named again until a checkpoint update follows it;
+  and a commit that changes an owner file and the checkpoint together
+  names the file, because `A..HEAD` leaves `A` out — the checkpoint update
+  that records the steps comes in a later commit, as the builder's does
+  after a decisions kit, which commits owner files only. With
+  `meta/CHECKPOINT.md` not tracked
+  at `HEAD`, or no file named, there is no sentence. A git failure gives no
+  sentence either; the job runs as it would without one.
+- With any, one sentence goes before the prompt:
+
+      [hands: an owner file was committed after the last update of meta/CHECKPOINT.md: <files>. Carry out the "For the builder" steps of each, oldest first, record them in the checkpoint and commit it, then do what follows.]
+
+  where `<files>` are the paths, root-relative, joined by `, `. Once the
+  builder records the steps and commits the checkpoint, a checkpoint update
+  follows each file and the sentence stops. It is decided from git alone,
+  and hands keeps no state for it.
+- It is decided at dispatch, never at enqueue, as §39's journal sentence
+  is, for every builder job — a kickoff (`go` from the phone or the
+  laptop, the engine's kickoff after an apply), a resume (after a limit or
+  an orphaned job, and a playbook `resume`), a cli send, an `answer` —
+  except an apply, which must change nothing but the kit's files: a job
+  with a `kit_id`, or a resume of one. A resume carries no `kit_id` (§6's
+  limit resume and §10's `resume` action enqueue without it), so the test
+  follows `resumed_from` back to the first job of the chain and asks it
+  whether it has a `kit_id`. When both
+  sentences apply, the journal sentence comes first, then this one, each
+  followed by a blank line, and the prompt cap (§2's `MAX_PROMPT_BYTES`,
+  §41) counts both: a job over it is refused with the cap's reason, as
+  today.
+- What a stored prompt says it was sent with. The runner writes the
+  sentences into the record it moves to `running` (§39), so every reader of
+  a stored builder prompt that asks what the job was sent reads it through
+  one helper that strips hands' leading sentences — the journal sentence
+  and this one, in any order, each followed by a blank line — and nothing
+  else. The kickoff test (`is_kickoff`, and `consults_used`'s search for the
+  last kickoff), a resume's prompt (§6's limit resume and §10's `resume`
+  action, its `answer` branch among them, which re-send the job's prompt),
+  §36's listing of the human's sends in a consult prompt, and the one-line
+  summary of a job that `hands jobs` and `status` show read it that way.
+  Without that, a kickoff that carried the sentence would no longer count
+  as a kickoff for the consultation budget, and a resumed job would carry a
+  sentence that is no longer true, then get it a second time (the journal
+  sentence already does, on a resumed `answer`). `hands jobs --grep`
+  searches the stored record as it is, hands' sentences included: it
+  searches what was delivered.
+- The brief template's §R sentence (§42) stays, for the builder's own
+  reading of the checkpoint. The handbook's §4, §14 (the resume step) and
+  §19's route 4 add that hands itself names the owner file before the
+  builder's prompt, so a decisions kit and `go` is route 4 on every
+  project, whatever brief its mission runs from.
+
+**Background tasks off where the role's hook allows it (H-074; another
+project's HF-015 and HF-016).** HF-015 (2026-10-18): a builder's long gate
+reached its timeout, the harness moved the command to the background, and
+nothing hands ships gave the builder a sanctioned way to wait for it.
+HF-016 (the same day): to stop the backgrounding, that project set
+`CLAUDE_CODE_DISABLE_BACKGROUND_TASKS` on the hands chat's advice, and its
+builder could not start a sub-agent, because hands' own hook refused every
+call (one stop; the variable was removed again). The facts, read from the
+binary of Claude Code 2.1.300 on
+2026-10-18 (its strings; nothing run) and confirmed for the `Agent` schema
+by that project's probe under 2.1.302:
+
+- The refusal of a `sleep` is Claude Code's own guard, not hands' hook: a
+  Bash command whose first statement is `sleep N` with N of 25 seconds or
+  more, alone or followed by other commands, is refused, with advice to use
+  Monitor or `run_in_background` and not to chain shorter sleeps.
+- For a command moved to the background, the harness advises: keep working
+  if there is other work; if waiting is all that is left, wait with one
+  foreground shell command that blocks until the output file shows what is
+  needed, rather than checking on it repeatedly. Its result reaches the
+  agent only if it finishes before the agent ends its turn.
+- `BASH_MAX_TIMEOUT_MS` has no upper ceiling (§42, H-072), and the
+  effective timeout of a call is the smaller of the timeout it passes and
+  `BASH_MAX_TIMEOUT_MS`.
+- `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS` counts as set only when its value,
+  trimmed, is `1`, `true`, `yes` or `on`, in any case. Set, it makes the
+  harness's background check true: a command that reaches its timeout is
+  not moved to the background and ends at its timeout; the `sleep` guard is
+  off (it runs only while background tasks are enabled); a sub-agent always
+  launches in the foreground; continuing one with `SendMessage` runs inline
+  (which closes the hole H-014 left open, a call the hook cannot see); and
+  the `Agent` tool's schema has no `run_in_background`, so a flag the model
+  passes is stripped before the hook sees it.
+- `.claude/hooks/no_background.py` refuses a sub-agent call whose flag is
+  omitted or null (§23, H-014: omitted is the background default), so under
+  the variable every sub-agent call is refused. A hook command's
+  environment is the session's, so the hook can read the variable.
+- A driven repository commits its own copy of the hook (docs/INTEGRATION.md;
+  that project's copy is its commit 3fbed1d, 2026-10-11, the same bytes as
+  hands' main), so a fixed hook reaches a project only when that project
+  commits it.
+
+The rules, in the order they are built:
+
+1. **The hook admits an omitted flag under the variable.** `no_background.py`
+   admits an `Agent` or `Task` call whose `run_in_background` is omitted or
+   null when `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS` in its own environment
+   is, trimmed and in any case, `1`, `true`, `yes` or `on` — Claude Code's
+   set, nothing wider, so the hook never admits what the CLI would still
+   background. `true` and every non-boolean value stay refused under the
+   variable as without it; without the variable nothing changes. Its Bash
+   advice drops "up to 20 minutes" (§42 lifted that ceiling) and says the
+   timeout the call passes is bounded by `BASH_MAX_TIMEOUT_MS`. `main` reads
+   the variable once and passes its state to the sub-agent check as an
+   argument; the check never reads the environment itself, so each
+   `--selftest` case names the state it runs under, the table runs both,
+   and `--selftest` gives the same answer in a session with the variable
+   and in one without it.
+2. **The wheel ships the hook.** `pyproject.toml` force-includes
+   `.claude/hooks/no_background.py` as `hands/shipped/no_background.py`, as
+   it does the guard (§34). "The installed hands' copy" is that file, or,
+   for a hands run from its source tree, the repository's own
+   `.claude/hooks/no_background.py` beside it, in that order (§34's
+   `SHIPPED_GUARDS` order). A copy compared with itself proves nothing:
+   when the copy found is the role's own file (the same realpath, as when
+   handsd runs from the very clone the builder works in), there is no
+   installed hands' copy for that role, and rules 3 and 4 treat it so.
+3. **Doctor warns on a copy that is not the installed hands' copy** (the
+   human's decision, 2026-10-18 21:0x: keep the warn). For the builder and
+   the aux, `hands doctor`'s role row compares `<cwd>/.claude/hooks/
+   no_background.py` with the installed hands' copy by sha256. A copy that
+   differs, or is absent, makes the row a WARN — never a FAIL — naming both
+   files and both sha256 values, and saying that the project's repository
+   commits its own copy, which is copied from the installed one at a stop
+   with no job running, then `python3 -I <hook> --selftest`. When the
+   installed hands' copy cannot be found, the row says so and warns.
+4. **The default is conditional** (the human's decision, 2026-10-18 21:0x).
+   hands sets `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1` in a builder or aux
+   job's environment only when that role's cwd carries a
+   `no_background.py` that admits the omitted flag, which rule 3's
+   comparison decides: the role's copy is the installed hands' copy.
+   Otherwise hands leaves the variable unset, and doctor warns (rule 3).
+   Why conditional: a default that reached a project before its chat
+   committed the fixed hook would bring HF-016 back at the install; this
+   way a project with the old hook keeps working, with the warn and
+   without the variable. It is decided when the job is dispatched, as the
+   runner builds the job's environment, never at enqueue; the driver and
+   the architect are never given it by default.
+5. **The role's env table decides over the default, either way.** A
+   `[roles.builder.env]` or `[roles.aux.env]` that names the variable sets
+   it to its value, whatever the hook (so `0` turns it off, since only
+   `1`/`true`/`yes`/`on` count as on). Reading taken: a value handsd itself
+   inherited is not passed to any role's job — a builder or aux job carries
+   the variable only from its env table or from rule 4, a driver or
+   architect job only from its env table — so a variable in the daemon's
+   own environment cannot bring HF-016 back past the hook check.
+   Doctor's builder and aux rows print the variable as the job will carry
+   it: its value and source (`set by [roles.<r>.env]`, `hands' default: the
+   hook admits an omitted sub-agent flag`) or `unset` with the reason; a
+   table that sets it on over a copy that is not the installed hands' copy
+   is a WARN naming HF-016's effect (every sub-agent call refused).
+6. **The wait rule, where the harness can still background.** Written into
+   the brief template's sub-agent brief, both review protocols (their
+   hosted-review and per-commit sub-agents) and the handbook's §7, and into
+   this repository's briefs: (a) prevent — a project whose gate can run
+   past its role's `BASH_MAX_TIMEOUT_MS` raises `BASH_DEFAULT_TIMEOUT_MS`
+   and `BASH_MAX_TIMEOUT_MS` above its worst case (§42, H-072), and its
+   briefs name that timeout; (b) a long command ends with an exit marker,
+   `./scripts/check; echo "check-exit=$?"`, so its end shows in its output;
+   (c) if a run is moved to the background anyway, wait with one foreground
+   command that blocks until the output file shows the marker — `until grep
+   -q '^check-exit=' <file>; do sleep 5; done`, with an explicit timeout —
+   never a `sleep` of 25 seconds or more as a command's first statement,
+   never Monitor or a background task, and never end the turn before the
+   run has finished. In the brief template the timeout is a placeholder the
+   brief fills (`<the gate's timeout, in ms>`), as the template's other
+   blanks are; this repository's briefs and protocol write 15 minutes
+   (900000 ms).
+
+docs/INTEGRATION.md's §21 paragraph says all six, and that a release which
+changes the hook is copied into each project's repository by that project.
+The suite passes with the variable set in the gate's own environment and
+without it: once this release is installed, this repository's own builder
+runs its gate under the default.
+
+**A playbook change is the owner's (H-075).** Under `[series] architect =
+"role"` with `autonomous = true` the engine approves every apply of a kit
+the architect role filed (`decided_by: playbook`), judging its provenance
+(`kit_apply_problem`, §32–§34) and never its content. A kit that carries
+the playbook in force would be approved too, so the role could raise its
+own `max_architect_consults`, drop a stop rule or change the kickoff, and
+the human would never see it. The human's approval of the switch-point
+playbook (§31) covers the applies made under it, not a rewrite of it
+(found 2026-10-18 while checking another project's budget raise; scheduled
+by the human 17:24).
+
+- The engine does not approve an architect-filed apply whose stored kit
+  carries `PLAYBOOK.toml` or `meta/PLAYBOOK.toml` (the paths `hands kit
+  check` reads, §26), whatever its bytes. The check is the engine's
+  approval's, made in `_release_kit` after `kit_apply_problem` has accepted
+  the apply and `_kit_bytes_unchanged` has verified the stored zip, so the
+  entries read are those of the bytes the check passed on; never inside
+  `kit_apply_problem`: that function says whether
+  an apply is one hands filed from the role's kit, and the `next kit` wait
+  (`_kit_filed_for`), `defer_hold` and the `job.held` path all ask it, so a
+  playbook-carrying kit stays a filed kit to all of them. The apply stays
+  held and is published with its Approve and Deny buttons, as every hold
+  the engine does not approve is (§36). The gate's reason stays `apply
+  <name>` (`kit_apply_problem` reads it); the published notification's
+  reason reads `apply <name>: the kit carries <path>, the playbook in
+  force; a change of the playbook is the owner's (§43)`, passed to the
+  daemon's hold seam (`publish_hold`) as a parameter. It reads so wherever
+  the engine publishes such a hold it does not approve, a paused pipeline's
+  among them (where `_release_kit` publishes the hold before any other
+  check). The consultation
+  itself ends as it would (`next kit <name>` naming that kit is no
+  escalation); only the approval is the human's.
+- Once the human approves it, the engine's kickoff-after-apply does not fire
+  (it is for applies the engine approved, `_engine_applied_kit`, §32); the
+  playbook's own `kit applied` rule fires, and the human sends `go`. A
+  denial takes the path a denial takes today. The missions playbook
+  template's comment on that rule ("under an autonomous architect series
+  this rule does not fire") says it fires for an apply the human approved.
+  This repository's own `PLAYBOOK.toml` is not edited by the mission: a
+  change of the playbook in force is the owner's, which is this section's
+  point.
+- `hands kit check` prints a `WARN playbook:` line for a kit that carries
+  a playbook when the repository's playbook in force before the apply, or
+  the kit's own, sets `architect = "role"` with `autonomous = true`: filed
+  by the role, its apply waits for the human (the engine judges under the
+  playbook in force when the kit is filed, so a kit that switches a series
+  back to phone mode is held too).
+- A change of the budget, a rule or the kickoff is the owner's: a direct
+  `plan:` commit by the human between jobs, or an apply the human
+  approves. For the role it is an escalation, rule 8's "a decision would
+  change the shape the human approved at the switch point":
+  `architect/CLAUDE.md` rule 3 no longer lists `PLAYBOOK.toml` among a
+  kit's entries and rule 8 says a change of the playbook is that shape.
+  The handbook's §3 (the kit's entries), §6, §12 and §19 say so.
+- The consequence, stated in the role-mode templates and the handbook's
+  §12: a series in role mode needs a kickoff line that never changes, such
+  as this repository's `Read the builder prompt with the highest mission
+  number in the meta directory and execute the mission below its
+  divider.`, because a kickoff that names the mission would need
+  a playbook in every kit, and every kit would wait for the human.
+
+**H-070 and H-071, built (decided in §42).** Both review protocols drop
+the twelve-line count and say what a report holds: the sha, a verdict per
+point and what is not proven; for the hosted-review sub-agent, every
+finding verbatim with its verdict on the builder's disposition. The brief
+template keeps its twelve lines. The protocols' "one run at a time fits
+inside the 20-minute cap" becomes "inside the gate's timeout": in this
+repository's protocol, 15 minutes (900000 ms), the timeout hands' briefs
+name since §42; in the template, the timeout the project's briefs name
+(hands' default 15 minutes). The guard admits `ls -R`, `git ls-tree
+--name-only`, `git status --short` and `git log --date=<format>`, in its
+option sets for both guarded modes, each pinned with its neighbours still
+refused (`ls -r`, `git ls-tree --name-status`, `git status --porcelain`, a
+`--date` with no value); `architect/settings.json`'s allow-list gains `git
+-C ./repo status`; `architect/CLAUDE.md` rule 10 says a search of content
+goes through the Grep and Read tools, which the Bash guard does not judge.
+The characters stay refused (§30).
+
+**The intermittent test (H-076; review 26 should-fix 1).**
+`tests/test_operations.py::test_kit_apply_refuses_a_staged_name_with_dot_dot`
+failed twice in mission 26, both times at its U1 commit (b956e2a), and was
+green alone, with its file and at every other commit; it dates from mission
+24 (2f9e219). A gate that can go red on an unchanged tree is a gate nobody
+can read. The mission files H-076, finds the race and fixes it, or, if no
+cause can be found, pins it: the test's run repeated in a loop under the
+conditions of the suite, with the result in the finding. Either way the
+finding says what was found. Two more tests failed under load in the
+architect's sandbox on 2026-10-18 (run as uid 0, at f16d6d1 and with this
+section's kit applied) and passed alone:
+`tests/test_library.py::test_open_refuses_a_running_job` and
+`tests/test_gates.py::test_cancel_is_gated_by_default_and_approval_performs_it`.
+They are leads for the same search, not findings of their own until the
+laptop shows them.
+
+**The operator table follows the code (review 26 should-fix 2).** §42
+asked for every stop and published line the engine, the limit manager and
+the daemon write themselves; two had no row: the playbook-load stop "the
+playbook is not the committed copy, so no rule can be trusted to fire: …"
+and the phone's follow-up to a received kit "apply <name>: <why>; the
+commit message is the default '<message>'". Both get rows, and so does the
+hold this section adds. A test lists the stop reasons and published lines
+from the code itself — every string or f-string passed as a stop's reason
+or a publish's title or message in the engine, the limit manager, the
+daemon and the phone — and requires each in a row of §19, so a line added
+without a row turns the test red. The receivers that count: the engine's
+and the limit manager's `stop`, the daemon's `_limit_stop`, and the
+notifier's `notify` and `answer` and the engine's `_notify`; a `.stop`
+on another object (`self.monitors.stop(job_id)`) is no pipeline stop. A
+reason that arrives as a parameter is read at the callers that pass it,
+and a helper whose returned string becomes a reason (`_architect_stop`
+and its like) is read by its `return` statements. How each is read: an f-string is its
+text with each placeholder written `<…>`, as the table writes a
+placeholder, and matched on its literal pieces in order, so the
+escalation's `f"{event}: the architect escalated: {reason} — …"` is
+matched on "the architect escalated:" and what follows it; a reason
+passed through a name is traced to the literals
+assigned to that name in the same function, or listed as an exemption
+naming where its literals are; a title passed as a constant
+(`NOTIFY_KINDS[...]`, a module constant) is read as the constant's value.
+An exemption list is allowed, each entry with its reason. The test is not
+green by construction: removing one row turns it red, shown for three rows
+— a literal reason, an f-string that begins with a placeholder, and a
+reason passed through a name. handswho's pushes stay out: it is its own
+process.
+
+**The DESIGN wording, written here (H-027, H-034, H-039).** §12 rule 6's
+quoting sentence reads "quoting makes no character safe: one from the
+guard's refused set is refused inside quotes too", as `driver/CLAUDE.md`
+rule 6 has said since mission 14. §14's layout names the templated units,
+`systemd/handsd@.service` and `systemd/handswho@.service`, and §24's
+optional who unit is `handswho@.service`. §10's example maps
+`monitor.task_killed` to `notify` with a message, as this repository's
+playbook and both templates have since mission 16 (§32), and §24 says the
+example maps `monitor.orphan_processes` to `stop`. §34's start fold reads
+as the code has done since mission 18: it holds back everything a
+re-admitted job publishes except a `job.held`, which is published at once
+with its buttons. The copies follow: `tests/fixtures/playbook_example.toml`
+and the verbatim block in `docs/PLAYBOOK.md` take §10's example, the test
+that lists the example's rules and the sentence under the verbatim copy
+say `notify`, and `docs/PLAYBOOK.md`'s H-034 sentence and its pin go. The
+three findings are resolved by this text.
+
+**Review 25's should-fix 1.** A dated correction line under
+`meta/FINAL-REPORT-25.md` §3's NOT PROVEN line on the U4 warning test:
+REVIEW-25 found that both parametrized cases, kickoff differs and no
+kickoff, went red under the `playbook_check.ok` mutation, so both pin it.
+
+**Review 26's NOT PROVEN items and observations, weighed.** A test for
+`consult` refused while an architect job is queued, and one for a refusal
+caused by a state change while a phone `consult`'s attachment downloads.
+A refused `consult` on an idle project with a dirty playbook stops the
+pipeline through §10's load, which is the right stop (the playbook in force
+is not the committed copy, whatever command found it); a test pins it.
+After a failed enqueue the inbox keeps a `pipeline.resumed` while the
+pipeline is paused again: the inbox is a log of what happened, in order,
+and `hands pipeline` is the state; it stands. `digest`'s mission field
+takes the first digit run after `Mission:`, which is the checkpoint's own
+first line in every brief hands ships; it stands.
+
+**Documentation.** The handbook: §4, §14 and §19's route 4 (hands names
+the owner file itself), §6 (the playbook change is the owner's), §7 (the
+wait rule; the protocols' report contents), §12 (the role-mode kickoff
+that never changes; the hold of a kit that carries the playbook), §19 (the
+rows above). docs/INTEGRATION.md: §21's paragraph on the hook, the
+variable, the default and the copy. `architect/CLAUDE.md`: rules 3, 8 and
+10. The templates: the brief template's sub-agent brief (the wait rule) and
+its kickoff note for role mode, both review protocols, the missions
+playbook template's architect block (the kickoff note). README.md where it
+names the hook's rule. **No instruction paste is due** after this release:
+`docs/ARCHITECT-INSTRUCTION.md` does not change. The hand-over to each
+project's chat names the fixed hook and the doctor warn, and that project
+commits the installed copy when its chat decides to.
