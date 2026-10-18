@@ -740,7 +740,10 @@ any. It is refused, and the refusal published titled `consult`, outside role
 mode, while any architect, builder or aux job is running, queued or held or a
 `next kit` wait is open, with an empty reason, with the budget spent, and over
 the prompt cap. Commit an owner file first, as a decisions kit, when the
-consultation is to answer a ruling. Reciting a review-shaped reply through the
+consultation is to answer a ruling: send it by `kit <secret>` and Approve it without `go`
+(a `go` starts a builder job, and the consult is refused while it runs), and
+send the `consult` once its apply has ended (at the laptop `hands kit apply
+<zip>`, `hands approve <job>`, then `hands consult`). Reciting a review-shaped reply through the
 aux role is retired: `consult` replaces it. A blocked mission needs neither
 when the playbook carries the role-mode rule on the builder's blocked verdict
 (docs/PLAYBOOK.md, "The architect's consultation").
@@ -855,8 +858,13 @@ The routes:
    architect escalation, whatever its reason — a ruling, a change of shape, an
    unanswered blocker, a missing milestone, human-supplied content — or a
    blocked mission under a playbook without the blocked→consult rule): any
-   owner file first, as route 4's kit; then `consult <secret> <reason>` (§16);
-   at the laptop `hands consult`.
+   owner file first, as route 4's decisions kit — `kit <secret>` with the zip
+   attached, Approve — but without `go <secret>`: a `go` starts a builder job,
+   and `consult` is refused while a builder job is queued, running or held
+   (the apply is one, until it ends). Then, once the apply has ended (its `Kit
+   applied` row), `consult <secret> <reason>` (§16). At the laptop: `hands kit
+   apply <zip>`, `hands approve <job>`, then `hands consult`, without `hands
+   go`.
 6. **A stop the project's chat reads before deciding** (a failed job, an
    orphaned consultation, an unrecognised verdict, `max_resumes` reached,
    processes left behind, a tripwire, a review a restart killed under a
@@ -887,7 +895,7 @@ its consequences.
 | `hands: the pipeline stopped` — Mission <n> reviewed clean; next mission is the architect's | the project's chat — route 3 | the next mission's kit: `kit <secret>` with the zip, Approve, `go <secret>` | `hands kit apply <zip>`, `hands approve <job>`, `hands go` |
 | `hands: the pipeline stopped` — Mission <n> review has blockers | the project's chat — route 3 | a mission that closes the blockers first, by route 3 | `hands kit apply <zip>`, `hands approve <job>`, `hands go` |
 | `hands: the pipeline stopped` — Run <n> review has blockers | the project's chat — route 3 | a run that closes the blockers first, by route 3 | `hands kit apply <zip>`, `hands approve <job>`, `hands go` |
-| `hands: the pipeline stopped` — Mission <n> blocked; see the builder's reply | the project's chat — route 4 | `progress <secret>`; the owner file as a decisions kit: `kit <secret>` with the zip, Approve, `go <secret>`; in role mode under a playbook without the blocked→consult rule, then `consult <secret> <reason>` (route 5) | `hands kit apply <zip>`, `hands approve <job>`, `hands go` (or `hands consult`) |
+| `hands: the pipeline stopped` — Mission <n> blocked; see the builder's reply | the project's chat — route 4 | `progress <secret>`; the owner file as a decisions kit: `kit <secret>` with the zip, Approve, then `go <secret>`. In role mode under a playbook without the blocked→consult rule, instead: `kit <secret>` with the zip, Approve without `go <secret>`, and once the apply has ended `consult <secret> <reason>` (route 5) | `hands kit apply <zip>`, `hands approve <job>`, `hands go`; for route 5 instead `hands kit apply <zip>`, `hands approve <job>`, then `hands consult` without `hands go` |
 | `hands: the pipeline stopped` — Run <n> blocked | the project's chat — route 4 | as for a blocked mission | as for a blocked mission |
 | `hands: the pipeline stopped` — The builder has a question | the project's chat — route 4 | the decisions kit: `kit <secret>` with the zip, Approve, `go <secret>`; or, the shorter route, `answer <secret> <text>` with the zip attached | `hands kit apply <zip>`, `hands approve <job>`, `hands go`; or `hands send --role builder --context keep "<text>"` |
 | `hands: the pipeline stopped` — The builder needs a decision | the project's chat — route 4 | as for "The builder has a question" | as for "The builder has a question" |
@@ -905,7 +913,7 @@ its consequences.
 | nothing arrives, or a `digest` line reads `daemon down` | the hands Project — route 8 | `digest <secret>` on another project's `cmd_topic` | `hands digest` |
 | `hands: the pipeline stopped` — paused by human | nobody — route 1 | `resume <secret>` when it should go on | `hands resume` |
 | `hands: the pipeline stopped` — builder.limited: the playbook has no rule for it, and §10 stops for anything it did not pre-plan | the human alone — route 7 | after the capture, `resume <secret>` | `bash scripts/capture-quota-stop.sh <project>` from the hands repository, then `hands resume` |
-| `hands: the pipeline stopped` — limits.max_resumes reached: <role> has been resumed <k> time(s) with no `done` in between and is limited again | the human alone — route 7 | after the capture, `resume <secret>` | `bash scripts/capture-quota-stop.sh <project>`, then `hands resume` |
+| `hands: the pipeline stopped` — limits.max_resumes reached: <role> has been resumed <k> time(s) with no `done` in between and is limited again | the project's chat — route 6 | `progress <secret>`, `status <secret>`. No resume is scheduled for the role and none is re-armed at a restart, so `resume` would only clear the pause; the role's resume count is cleared only by a `done`, so a job limited again before one stops at once. After the limit's reset: for the builder `go <secret>` (it starts from the checkpoint), or route 3, 4 or 5; for the aux, the aux prompt that re-sends the review. The capture is worth keeping for the hands Project (route 7's) | `bash scripts/capture-quota-stop.sh <project>` from the hands repository for the hands Project; `hands jobs --role <role> -n 3`, `hands status`; after the limit's reset `hands go` for the builder, or for the aux the aux prompt: `hands --project <project> send --role aux --context clear "<the playbook's review prompt, <n> filled>"` |
 | `hands: the pipeline stopped` — could not resume <role> after its limit: <error> | the project's chat — route 6 | `status <secret>`; an HF report | `hands jobs --role <role> -n 1` |
 | `hands: the pipeline stopped` — <event>: <role> has already been resumed <k> time(s) with no `done` in between and [limits] max_resumes is <m> | the project's chat — route 6 | `progress <secret>`, `status <secret>`; then `go <secret>` or route 3 | `hands jobs --role <role> -n 3`, then `hands go` |
 | `hands: the pipeline stopped` — <event>: the playbook has no rule for it, and §10 stops for anything it did not pre-plan (any other event) | the project's chat — route 6 | `progress <secret>`; then a kit whose playbook has the rule (route 3), or `go <secret>` | `hands pipeline`, then route 3 or `hands go` |
@@ -921,8 +929,8 @@ its consequences.
 | `hands: the pipeline stopped` — <event>: rule <i> is a consult and this project configures no [roles.<role>] | the project's chat — route 6 | a kit without the consult rule (route 3), or the aux prompt that adds the role | aux prompt: add the `[roles.<role>]` table docs/INTEGRATION.md gives to `~/.hands/<project>.toml`, then `systemctl --user restart handsd@<project>` between jobs |
 | `hands: the pipeline stopped` — <event>: rule <i> would start consultation <k> of this series and [limits] max_architect_consults is <b> (§31): the series' consult budget is exhausted (budget-exhausted) | the project's chat — route 3 | the next kit by route 3, its playbook restating the budget if the series goes on in role mode | route 3 |
 | `hands: the pipeline stopped` — <event>: rule <i> would start consultation <k> of this mission and [limits] max_consults is <b> (§27) | the project's chat — route 6 | `progress <secret>`; then route 3 or 4 | route 3 or 4 |
-| `hands: the pipeline stopped` — <event>: the architect escalated: <reason> — session <id>; continue it in the architect's directory with `claude --resume <id>` (§31) | the project's chat — route 5 | any owner file first (route 4's kit), then `consult <secret> <reason>` | `hands kit apply <zip>`, `hands approve <job>`, then `hands consult` |
-| `hands: the pipeline stopped` — <event>: the architect's consultation <job> ends escalate (§33): <why>; … | the project's chat — route 5 | as for "the architect escalated" | as for "the architect escalated" |
+| `hands: the pipeline stopped` — <event>: the architect escalated: <reason> — session <id>; continue it in the architect's directory with `claude --resume <id>` (§31) | the project's chat — route 5 | any owner file first as a decisions kit: `kit <secret>` with the zip, Approve without `go <secret>`; once the apply has ended, `consult <secret> <reason>` | `hands kit apply <zip>`, `hands approve <job>`, then `hands consult` without `hands go` |
+| `hands: the pipeline stopped` — <event>: the architect's consultation <job> ends escalate (§33): <why>; … | the project's chat — route 5 | as for "the architect escalated": any owner file as a decisions kit, Approve without `go <secret>`; once the apply has ended, `consult <secret> <reason>` | as for "the architect escalated": `hands kit apply <zip>`, `hands approve <job>`, then `hands consult` without `hands go` |
 | `hands: the pipeline stopped` — <event>: the architect replied series complete: the roadmap's gates are met and there is no next kit, so the pipeline stops (§31) | the project's chat — route 3 | the next series' kit by route 3, or nothing | route 3 |
 | `hands: the pipeline stopped` — <event>: the consultation's architect job ended <state>, and a consultation that does not end in a verdict stops (§31) | the project's chat — route 6 | `status <secret>`; then `consult <secret> <reason>` (route 5) | `hands jobs --role architect -n 1`, then `hands consult` |
 | `hands: the pipeline stopped` — <event>: the architect's reply has no VERDICT: line, or the architect's verdict '<verdict>' is none of … | the project's chat — route 6 | `status <secret>`; then `consult <secret> <reason>` (route 5) or route 3 | `hands jobs --role architect -n 1`, then `hands consult` or route 3 |

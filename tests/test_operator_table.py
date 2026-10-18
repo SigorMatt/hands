@@ -198,6 +198,80 @@ def test_route_4_is_the_decisions_kit_then_go_with_answer_the_shorter_route() ->
         assert said in strip_paths(route_4), f"route 4 does not say {said!r}"
 
 
+def test_route_5_sends_the_decisions_kit_without_go_then_consult() -> None:
+    """PR #6 hosted review finding 4: route 4 ends with `go`, which starts a builder
+    job, and `consult` is refused while one is queued, running or held — so route 5
+    sends the owner file as route 4's decisions kit without the `go`, and consults
+    once the apply has ended."""
+    body = flat(handbook_section(SECTION_19))
+    route_5 = body.split("5. **", 1)[1].split("6. **", 1)[0]
+    for said in (
+        "route 4's decisions kit",
+        "`kit <secret>` with the zip attached, Approve",
+        "without `go <secret>`",
+        "a builder job is queued, running or held",
+        "once the apply has ended",
+        "`consult <secret> <reason>`",
+        "`hands kit apply <zip>`, `hands approve <job>`, then `hands consult`",
+        "without `hands go`",
+    ):
+        assert said in strip_paths(route_5), f"route 5 does not say {said!r}"
+    assert "as route 4's kit; then" not in strip_paths(route_5)
+    assert "`go <secret>`" not in strip_paths(route_5.replace("without `go <secret>`", ""))
+    assert "`hands go`" not in strip_paths(route_5.replace("without `hands go`", ""))
+
+
+def test_the_rows_on_route_5_send_no_go() -> None:
+    """Finding 4: a row routed to route 5 gives no `go` before its `consult`."""
+    rows = [row for row in table_rows(handbook_section(SECTION_19))[1:]
+            if "route 5" in row[1]]
+    assert len(rows) >= 2, rows
+    for row in rows:
+        phone, laptop = row[2], row[3]
+        assert "`go <secret>`" not in strip_paths(phone.replace("without `go <secret>`", "")), row
+        assert "`hands go`" not in strip_paths(laptop.replace("without `hands go`", "")), row
+        assert "consult" in strip_paths(phone) and "`hands consult`" in strip_paths(laptop), row
+
+
+def test_the_blocked_mission_row_consults_without_go() -> None:
+    """Finding 4: the blocked mission row's route-5 branch, under a playbook without
+    the blocked→consult rule, Approves the decisions kit without `go` and consults."""
+    rows = table_rows(handbook_section(SECTION_19))[1:]
+    row = next(row for row in rows if "Mission <n> blocked" in row[0])
+    phone, laptop = row[2], row[3]
+    for said in ("Approve without `go <secret>`", "once the apply has ended",
+                 "`consult <secret> <reason>` (route 5)"):
+        assert said in strip_paths(phone), f"the blocked row does not say {said!r}"
+    assert "`hands kit apply <zip>`, `hands approve <job>`, then `hands consult` " \
+        "without `hands go`" in strip_paths(laptop), row
+    assert "Approve, `go <secret>`; in role mode" not in strip_paths(phone), row
+    assert "`hands go` (or `hands consult`)" not in strip_paths(laptop), row
+
+
+def test_section_16_commits_the_owner_file_without_go() -> None:
+    body = flat(handbook_section("## 16. Re-firing a consultation after a stop"))
+    assert "Approve it without `go`" in strip_paths(body), body
+    assert "once its apply has ended" in strip_paths(body), body
+
+
+def test_the_max_resumes_reached_row_is_route_6_and_restarts_with_go() -> None:
+    """PR #6 hosted review finding 3: at `limits.max_resumes reached` the limit
+    manager schedules no resume (src/hands/limits.py `on_limited`), so `resume`
+    only clears the pause; the row is §42's route 6, and work restarts with a new
+    job — `go` for the builder, the review prompt for the aux — after the reset."""
+    rows = table_rows(handbook_section(SECTION_19))[1:]
+    row = next(row for row in rows if "limits.max_resumes reached:" in row[0])
+    who, phone, laptop = row[1], row[2], row[3]
+    assert who == "the project's chat — route 6", row
+    for said in ("`progress <secret>`", "`status <secret>`", "`go <secret>`",
+                 "No resume is scheduled", "after the limit's reset", "aux prompt",
+                 "capture-quota-stop.sh"):
+        assert said in strip_paths(phone + " " + laptop), f"the row does not say {said!r}"
+    assert "`hands go`" in strip_paths(laptop), row
+    assert "`resume <secret>`" not in strip_paths(phone), row
+    assert "`hands resume`" not in strip_paths(laptop), row
+
+
 def test_the_digest_row_says_what_each_field_means() -> None:
     rows = table_rows(handbook_section(SECTION_19))[1:]
     row = next(row for row in rows if row[0].startswith("`digest`"))
