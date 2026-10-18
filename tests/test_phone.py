@@ -1289,6 +1289,61 @@ def test_progress_with_a_wrong_or_missing_secret_or_a_nonce_is_refused(
     assert SECRET not in strip_paths(caplog.text)
 
 
+# ------------------------------------------------------------ digest (§42)
+
+#: A second project on the machine, whose daemon is not running.
+OTHER_SECRET = "Other-PHONE-s3cret-fedcba9876543210"
+
+
+def test_digest_publishes_the_machines_lines_titled_digest_on_ntfy_topic(
+    project: str, tmp_home: Path, tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """§42: `digest <secret>` on this project's `cmd_topic` publishes on its
+    `ntfy_topic`, titled `digest`, the lines `hands digest` prints — every project's
+    on the machine, this one's daemon `up` (it answers `status` while it publishes)
+    and the other's `down`, with both projects' secrets redacted. A wrong token, or a
+    word after the secret, publishes no digest."""
+    from hands.digest import DIGEST_TITLE, digest_lines
+    from hands.spool import Spool
+
+    caplog.set_level(logging.DEBUG)
+    other = tmp_path / "other-work"
+    other.mkdir()
+    (tmp_home / ".hands" / "other.toml").write_text(
+        f'[server]\nsocket = "{tmp_home}/.hands/other/handsd.sock"\n'
+        f'[roles.builder]\ncwd = "{other}"\n'
+        f'[notify]\nntfy_url = "{NTFY}"\nntfy_topic = "o-events"\ncmd_topic = "o-cmd"\n'
+        f'cmd_secret = "{OTHER_SECRET}"\n'
+    )
+    Spool(tmp_home / ".hands" / "other").append_event(
+        "stop", {"reason": f"stopped near {SECRET} and {OTHER_SECRET}"}
+    )
+
+    async def body(daemon: Daemon, fake: FakeNtfy) -> None:
+        for text in ("digest", "digest not-the-secret", f"digest now {SECRET}"):
+            await say(daemon, fake, text)
+        await say(daemon, fake, f"digest {SECRET}")
+        await daemon.notifier.drain()
+        assert DIGEST_TITLE == "digest"
+        # §39 (H-058): the one carrying the secret and a word after it is refused,
+        # titled `digest`; the wrong tokens are not answered.
+        refusal, answer = titled(daemon, DIGEST_TITLE)
+        assert refusal["message"] == "digest refused: it takes only the secret"
+        assert answer["url"] == f"{NTFY}/{EVENTS_TOPIC}"
+        lines = answer["message"].splitlines()
+        assert [line.split(" | ")[:2] for line in lines] == [
+            [PROJECT, "daemon up"], ["other", "daemon down"]
+        ]
+        assert lines[1].endswith("stopped near [redacted] and [redacted]")
+        expected = await asyncio.to_thread(digest_lines, tmp_home / ".hands")
+        assert lines == expected
+        assert (await ok("jobs"))["jobs"] == []  # read-only: it starts no job
+
+    phone_drive(body)
+    for value in (SECRET, OTHER_SECRET):
+        assert value not in strip_paths(caplog.text)
+
+
 # ------------------------------------------------------------ reply (§33)
 
 #: The architect's session, as its consultation's `init` event records it.

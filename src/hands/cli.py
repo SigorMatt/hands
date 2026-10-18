@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import Any, TextIO
 
 from hands import __version__, doctor
+from hands import digest as digest_mod
 from hands import hosted as hosted_mod
 from hands import kit as kit_mod
 from hands import notify as notify_mod
@@ -382,6 +383,14 @@ def build_parser() -> argparse.ArgumentParser:
         f"move the flat spool ({', '.join(FLAT_ITEMS)} directly under ~/.hands) to "
         "~/.hands/hands/ and record the move in its inbox (§29); refused while a daemon "
         "answers, or when ~/.hands/hands exists",
+    )
+    # §42: answered by the client with no daemon, over every config on the machine.
+    command(
+        "digest",
+        "print one line per project configured in ~/.hands, in name order: its daemon "
+        "(up or down), pipeline, mission, builder, consultations and last stop, with "
+        "every project's cmd_secret and ntfy_token redacted; a config that does not "
+        "load is named by its file only (§42). Read-only; needs no daemon",
     )
     # §38 (HF-002): answered by the client with no daemon and no config, like
     # `kit check`: where this hands' own handbook and templates are.
@@ -865,6 +874,10 @@ def main(
             )
         if command == "migrate-spool":
             return _migrate_spool(out=out, err=err, as_json=as_json)
+        if command == "digest":
+            lines = digest_mod.digest_lines()
+            print(json.dumps({"lines": lines}) if as_json else "\n".join(lines), file=out)
+            return 0
         if command == "handbook":
             return _handbook(args.templates, out=out, err=err, as_json=as_json)
         if command == "hosted-review":

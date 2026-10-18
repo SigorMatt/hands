@@ -4,7 +4,7 @@
        ▲                                                   │
        └──────────── one JSON line per message ────────────┘
 
-The daemon subscribes to `[notify] cmd_topic` with a long-poll and accepts eleven
+The daemon subscribes to `[notify] cmd_topic` with a long-poll and accepts twelve
 commands, each ending in its token but `reply`, `answer` and `consult`, whose secret
 is their second word:
 
@@ -19,6 +19,7 @@ is their second word:
     reply <secret> <text>
     answer <secret> <text>   (the message may carry an ntfy attachment)
     consult <secret> <text>  (the message may carry an ntfy attachment)
+    digest <secret>
 
 **`reply`** (§33) sends `<text>` — the rest of the message after the whitespace
 that follows the secret, unchanged — to the architect's last session as one
@@ -68,6 +69,14 @@ basename (the kit's name rule with `.md` for `.zip`) and at most 256 KiB; it is
 fetched into `kit_dir` under its name or the first free `<stem>-<n>.md`, and read
 as UTF-8. A refused or undecodable attachment refuses the command. Neither the
 reason nor any word of it is logged; `consult.sent` carries its sha256.
+
+**`digest`** (§42) publishes on `ntfy_topic`, titled `digest`, the lines `hands
+digest` prints (`hands.digest.digest_lines`): one per project configured beside
+this daemon's config, in name order — its daemon, pipeline, mission, builder,
+consultations and last stop — each redacted of every loadable project's
+`cmd_secret` and `ntfy_token` before any field is cut, and a config that does not
+load named by its file only. It is read-only and starts no job; it runs in a thread,
+so this daemon's own socket answers the probe that reads it `up`.
 
 **`progress`** (§38) publishes on `ntfy_topic`, titled `progress`, what `status`
 does not say: the builder's running job and its age, or the last ended builder
@@ -140,7 +149,7 @@ nothing. It is dropped when the job is decided by any route (the daemon calls
 mints a fresh nonce for every job still held (§25; `Daemon._publish_held`) and
 publishes each job's held notification again with those buttons (§34, reversing
 §31's no-re-send); the `handsd started` notification names each by title. `pause`, `resume`,
-`status`, `progress` and `go` take the secret only. The secret is compared with
+`status`, `progress`, `go` and `digest` take the secret only. The secret is compared with
 `hmac.compare_digest` and never published: a notification carries only nonces.
 
 **What is answered.** `status` publishes a short summary to `ntfy_topic`,
@@ -204,6 +213,7 @@ from hands.api import (
     consult_reason,
     match_job_id,
 )
+from hands.digest import DIGEST_TITLE, digest_lines
 from hands.kit import (
     CONSULT_FILE_SUFFIX,
     KIT_FILE_SUFFIX,
@@ -269,7 +279,7 @@ KIT_SUFFIX = KIT_FILE_SUFFIX
 KIT_RULE = "kit"
 CONSULT_RULE = "consult"
 
-_SECRET_ONLY = ("pause", "resume", "status", "progress", "go", "kit")
+_SECRET_ONLY = ("pause", "resume", "status", "progress", "go", "kit", "digest")
 #: §33: `reply <secret> <text>`. The secret is the second word, not the last, and the
 #: text is the rest of the message as typed: whitespace before `reply`, the run
 #: between `reply` and the secret, and the run between the secret and the text are
@@ -442,6 +452,8 @@ class PhoneChannel:
                 elif verb == "progress":  # §38: read-only; it starts no job
                     report = await self.daemon.api.progress_report()
                     await self.daemon.notifier.answer(PROGRESS_TITLE, report)
+                elif verb == "digest":  # §42: every project's line; read-only
+                    await self.daemon.notifier.answer(DIGEST_TITLE, await self._digest())
                 else:
                     await self.daemon.notifier.answer(STATUS_TITLE, status_summary(self.daemon))
             except ApiError as exc:
@@ -623,6 +635,12 @@ class PhoneChannel:
             CONSULT_TITLE, f"consult: architect job {job['id']} {job['state']}"
         )
         return None
+
+    async def _digest(self) -> str:
+        """§42: `hands digest`'s lines for every config beside this daemon's own,
+        in a thread — the probe of this daemon's socket is answered by this loop."""
+        base = self.daemon.config.path.parent
+        return "\n".join(await asyncio.to_thread(digest_lines, base))
 
     async def _refuse_answer(self, why: str) -> None:
         self._ignore(f"answer: {why}")

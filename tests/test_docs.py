@@ -41,7 +41,8 @@ EXAMPLE = ROOT / "tests" / "fixtures" / "playbook_example.toml"
 #: Words that follow `hands ` in a command without naming a command of §4.
 NOT_COMMANDS = {"--help", "--version", "--project", "--json", "--socket", "<command>"}
 #: Commands of §4 the CLI answers itself, with no daemon method (`kit check`, §26).
-CLIENT_COMMANDS = {"kit", "migrate-spool", "handbook", "project", "hosted-review"}  # §29, §38, §39
+CLIENT_COMMANDS = {"kit", "migrate-spool", "handbook", "project", "hosted-review",
+                   "digest"}  # §29, §38, §39, §42
 #: `hands <command>`, where `hands` is the program and not the tail of a path
 #: (`git clone …/hands repo`) — hence the lookbehind.
 COMMAND_RE = re.compile(r"(?<![\w/.~-])hands (?:--\w+ [\w<>-]+ )?([a-z-]+|--[a-z-]+)")
@@ -614,7 +615,7 @@ def test_answer_is_documented_in_the_command_channel_and_the_phone_module() -> N
     channel = integration.split("### The command channel: approve from the phone", 1)[1]
     channel = flattened(channel.split("\n### ", 1)[0])
     assert "answer <secret> <text>" in channel
-    assert "takes eleven commands" in channel  # §42: `consult` is the eleventh
+    assert "takes twelve commands" in channel  # §42: `consult` and `digest` make twelve
     for said in ("`origin: phone`", f"titled `{BUILDER_TITLE}`", f"`{ANSWER_TITLE}`",
                  '--context keep "<text>"', "never held by the gate patterns",
                  "`answer.sent`", "no resumable session", "sha256",
@@ -639,18 +640,18 @@ def test_progress_is_documented_in_the_command_channel_the_playbook_doc_and_the_
     playbook_doc = flattened((ROOT / "docs" / "PLAYBOOK.md").read_text(encoding="utf-8"))
     assert "`progress <secret>`" in playbook_doc
     assert "progress <secret>" in (phone.__doc__ or "")
-    assert "accepts eleven" in flattened(phone.__doc__ or "")
+    assert "accepts twelve" in flattened(phone.__doc__ or "")
 
 
 #: §39 (REVIEW-22 should-fix 6): the phone commands, in the phone module's order;
-#: §42 adds `consult`, the eleventh.
+#: §42 adds `consult`, the eleventh, and `digest`, the twelfth.
 PHONE_COMMANDS = ("approve", "deny", "pause", "resume", "status", "progress", "go", "kit",
-                  "reply", "answer", "consult")
+                  "reply", "answer", "consult", "digest")
 
 
-def test_the_readme_phone_command_list_names_all_eleven_commands() -> None:
-    """§39: README's command-channel bullet names each of the eleven phone commands,
-    and says eleven; the phone module's own list has the same eleven."""
+def test_the_readme_phone_command_list_names_all_twelve_commands() -> None:
+    """§39: README's command-channel bullet names each of the twelve phone commands,
+    and says twelve; the phone module's own list has the same twelve."""
     from hands import phone
 
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
@@ -658,7 +659,7 @@ def test_the_readme_phone_command_list_names_all_eleven_commands() -> None:
     bullet = flattened(bullet)
     for name in PHONE_COMMANDS:
         assert f"`{name}`" in bullet, f"README's command list omits `{name}`"
-    assert "eleven commands" in bullet
+    assert "twelve commands" in bullet
     listed = (phone.__doc__ or "").split("second word:", 1)[1].split("**`reply`**", 1)[0]
     assert tuple(line.split()[0] for line in listed.splitlines() if line.strip()) == (
         PHONE_COMMANDS
@@ -687,6 +688,32 @@ def test_consult_is_documented_in_the_channel_the_readme_the_handbook_and_the_mo
     rules = flattened((ROOT / "architect" / "CLAUDE.md").read_text(encoding="utf-8"))
     assert "names `role human`" in rules and "routes 4 and 5" in rules
     assert "sends the builder a `keep` that names it" not in rules
+
+
+def test_digest_is_documented_in_the_channel_the_readme_the_module_and_the_help() -> None:
+    """§42: `digest <secret>` is in the command channel's list and its own bullet in
+    INTEGRATION, `hands digest` in README's command surface and its own bullet, in
+    the phone module's list, and `hands digest --help` says what it prints."""
+    from hands import phone
+    from hands.cli import build_parser
+    from hands.digest import DIGEST_TITLE
+
+    integration = (ROOT / "docs" / "INTEGRATION.md").read_text(encoding="utf-8")
+    channel = integration.split("### The command channel: approve from the phone", 1)[1]
+    channel = flattened(channel.split("\n### ", 1)[0])
+    assert "digest <secret>" in channel
+    for said in (f"titled `{DIGEST_TITLE}`", "within two seconds", "cut to 60 characters",
+                 "cut to 100 characters", "before any field is cut", "naming its file only",
+                 "`architect <used>/<budget>`", "`no stop`", "needs no daemon"):
+        assert flattened(said) in channel, f"the command channel does not say {said!r}"
+    readme = flattened((ROOT / "README.md").read_text(encoding="utf-8"))
+    assert "`consult`, `digest`. Every one takes `--json`" in readme
+    assert "**`hands digest`**" in readme and "**`digest <secret>`**" in readme
+    assert "digest <secret>" in (phone.__doc__ or "")
+    sub = next(a for a in build_parser()._actions if a.dest == "command")
+    helped = flattened(sub.choices["digest"].description)  # type: ignore[attr-defined]
+    for said in ("one line per project", "redacted", "does not load", "needs no daemon"):
+        assert said in helped, said
 
 
 def test_the_readme_names_kit_check_go_and_the_kit_transport() -> None:

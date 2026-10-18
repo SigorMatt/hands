@@ -659,7 +659,7 @@ is stamped before anything the resumed job goes on to publish. An exhausted
 ### The command channel: approve from the phone
 
 With `[notify] cmd_topic` set, handsd subscribes to that topic — an outbound
-long poll to ntfy, nothing listening on this machine — and takes eleven commands
+long poll to ntfy, nothing listening on this machine — and takes twelve commands
 from it. Set it up once:
 
     python3 -c 'import secrets; print("hands-<project>-cmd-" + secrets.token_urlsafe(16))'
@@ -692,6 +692,7 @@ Publish a command to `cmd_topic` from the ntfy app. The last word is the token
     reply <secret> <text>
     answer <secret> <text>        (a .zip may be attached to the message)
     consult <secret> <text>       (a .md may be attached to the message)
+    digest <secret>
 
 - `approve` and `deny` decide a **held** job, exactly as `hands approve|deny`
   does, and the job record says `decided_by: phone`. `pause` and `resume` are
@@ -809,6 +810,19 @@ Publish a command to `cmd_topic` from the ntfy app. The last word is the token
   256 KiB cap, fetched into `kit_dir` (the first free `<stem>-<n>.md` when the
   name is taken) and read as UTF-8. `hands consult [--file <path>] [<text>]` is
   the same at the laptop.
+- `digest` (DESIGN §42) answers on `ntfy_topic`, titled `digest`, with the
+  lines `hands digest` prints at the laptop: one per project configured on the
+  machine (every `~/.hands/<project>.toml`, in name order) — the project; its
+  daemon, `up` when its socket answers `status` within two seconds, else `down`;
+  its pipeline, `running` or `paused`; the mission number from the first
+  `Mission:` line of the builder's `meta/CHECKPOINT.md`, else `-`; the builder,
+  `running <job> <age>` or `idle`, with the newest builder job's verdict line cut
+  to 60 characters; `architect <used>/<budget>` in role mode, else `driver
+  <used>/<budget>`; and the last stop's time and the first line of its reason cut
+  to 100 characters, or `no stop`. Every project's `cmd_secret` and `ntfy_token`
+  is redacted (`[redacted]`) before any field is cut. A config that does not load
+  is one line naming its file only, never the loader's message. It is read-only:
+  it starts no job, and `hands digest` needs no daemon.
 - **The buttons.** With the channel on, a held job's notification has Approve
   and Deny buttons. Each publishes `approve <job> <nonce>` or `deny <job>
   <nonce>` to `cmd_topic`. The nonce is 32 random bytes minted for that one job
@@ -819,7 +833,7 @@ Publish a command to `cmd_topic` from the ntfy app. The last word is the token
   buttons (§34), and names each by title in its `handsd started` notification.
   `hands approve <job>` / `hands deny <job>`, or `approve <job> <secret>` on
   `cmd_topic`, decide a held job all the same. `pause`, `resume`,
-  `status`, `progress` and `go` take the secret only, never a nonce. With
+  `status`, `progress`, `go` and `digest` take the secret only, never a nonce. With
   `ntfy_token` set each button also carries the bearer, so a token-protected
   server accepts the press (§38; "Self-hosted ntfy over Tailscale").
 - **A command with the right secret is always answered; nothing else is**

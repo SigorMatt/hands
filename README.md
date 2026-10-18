@@ -93,7 +93,7 @@ phone.
 
 `send`, `wait`, `result`, `jobs`, `show`, `open`, `log`, `cancel`, `put`,
 `get`, `ls`, `tail`, `inbox`, `pipeline`, `approve`, `deny`, `pause`,
-`resume`, `status`, `notify`, `who`, `doctor`, `kit check`, `go`, `kit apply`, `consult`. Every one takes `--json` (that is what the driver
+`resume`, `status`, `notify`, `who`, `doctor`, `kit check`, `go`, `kit apply`, `consult`, `digest`. Every one takes `--json` (that is what the driver
 reads) and `--project`. `hands --help` is the reference; `handsd --help` is the
 daemon's.
 
@@ -149,8 +149,8 @@ Off unless configured in `[notify]`; `docs/INTEGRATION.md` has the setup.
   Tailscale, the documented default for role mode, and says what of it has run
   on a real server.
 - **The command channel**: with `cmd_topic` and `cmd_secret` set, handsd takes
-  eleven commands from your phone: `approve`, `deny`, `pause`, `resume`, `status`,
-  `progress`, `go`, `kit`, `reply`, `answer` and `consult`, and a held job's
+  twelve commands from your phone: `approve`, `deny`, `pause`, `resume`, `status`,
+  `progress`, `go`, `kit`, `reply`, `answer`, `consult` and `digest`, and a held job's
   notification carries Approve/Deny buttons. A decision taken that way is
   recorded `decided_by: phone`.
 - **`go <secret>`** on `cmd_topic` sends the playbook's `[series] kickoff` line
@@ -179,6 +179,13 @@ Off unless configured in `[notify]`; `docs/INTEGRATION.md` has the setup.
   max_architect_consults`, read for its verdict like any consultation, and it
   un-pauses a stopped pipeline. Refused while any role has a job running,
   queued or held; a refusal is published titled `consult`.
+- **`hands digest`** prints one line per project configured in `~/.hands`, in
+  name order: its daemon (`up` or `down`), pipeline, mission, builder and its
+  newest verdict, consultations used of the budget, and last stop. It needs no
+  daemon and writes nothing; every project's `cmd_secret` and `ntfy_token` is
+  redacted before a field is cut, and a config that does not load is named by its
+  file only. **`digest <secret>`** on any project's `cmd_topic` publishes the same
+  lines on that project's `ntfy_topic`, titled `digest`.
 - **The who view**: `hands who` prints one screen of this daemon's jobs and
   every other `claude` session on the machine; `handswho` pushes it to
   `who_topic` when it changes.

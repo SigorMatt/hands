@@ -1767,6 +1767,21 @@ def test_neither_guarded_role_admits_hands_consult(cmd: str) -> None:
     assert guard.check(cmd, **ARCHITECT) is not None, cmd
 
 
+DIGEST_COMMANDS = ["hands digest", "hands digest --json", "hands --project p digest",
+                   "hands status && hands digest", "hands status; hands digest"]
+
+
+@pytest.mark.parametrize("cmd", DIGEST_COMMANDS)
+def test_neither_guarded_role_admits_hands_digest(cmd: str) -> None:
+    """§42: "Neither guarded role's guard admits `hands digest`" — it reads every
+    project's spool on the machine, so the driver role (in either consultation's
+    role) and the architect role refuse it."""
+    for consult_role in ("builder", "aux"):
+        assert guard.check(cmd, role="driver", consult_role=consult_role, clone=CLONE) is not None
+    assert guard.check(cmd, **ARCHITECT) is not None, cmd
+    assert guard.check(cmd, **HUMAN_ARCHITECT) is not None, cmd
+
+
 def test_architect_mode_refuses_every_push_and_every_git_write() -> None:
     for cmd in ("git -C ./repo push", "git push origin main", "git -C ./repo commit -m x",
                 "git -C ./repo add -A", "git remote set-url origin x",
