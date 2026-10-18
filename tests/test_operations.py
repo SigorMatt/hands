@@ -255,6 +255,40 @@ def test_kit_apply_of_a_passing_kit_files_a_held_apply_naming_the_copied_zip(
     drive(body)
 
 
+DECISIONS_MESSAGE = "plan: decisions 2026-10-18 (owner)"
+DECISIONS_KIT = {
+    "meta/decisions/2026-10-18-owner.md": "# Owner decisions\n\n## For the builder\n\nO-1.\n",
+    "KIT.md": DECISIONS_MESSAGE + "\n",
+}
+
+
+def test_kit_apply_of_a_decisions_kit_files_the_held_apply(
+    project: str, workdir: Path, downloads: Path, tmp_path: Path
+) -> None:
+    """§42 route 4 at the laptop: `hands kit apply` takes a decisions kit (one owner
+    file and its `KIT.md`, no brief) as `hands kit check` passes it, and files its
+    plan-only apply, committed under `plan: decisions <date> (owner)`, held."""
+    with_playbook(workdir)
+    kit = a_kit(tmp_path / "elsewhere" / "decisions.zip", DECISIONS_KIT)
+    report = kit_mod.check_kit(kit, workdir)
+    assert report.ok and report.decisions and report.apply_prompt
+
+    async def body(daemon: Daemon) -> None:
+        answer = await ok("kit", "apply", str(kit))
+        record = await ok("show", answer["job"]["id"])
+        assert (record["role"], record["origin"], record["state"]) == (
+            "builder", "kit", "held",
+        )
+        assert record["prompt"] == report.apply_prompt
+        assert "adds KIT.md and meta/decisions/2026-10-18-owner.md" in strip_paths(
+            record["prompt"]
+        )
+        assert answer["commit_message"] == DECISIONS_MESSAGE
+        assert record["gate"]["reason"] == "apply decisions"
+
+    drive(body)
+
+
 def test_kit_apply_of_a_kit_already_in_kit_dir_files_it_in_place(
     project: str, workdir: Path, downloads: Path
 ) -> None:

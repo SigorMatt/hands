@@ -82,6 +82,18 @@ placed by hand is applied by a gated send of the same prompt. The architect
 role (§12) stages the same entries as a directory and files it with `hands kit
 file kits/<name>`, which builds the zip.
 
+A **decisions kit** carries a ruling the builder needs in the middle of a
+mission (DESIGN §42): a zip holding only the owner file
+`meta/decisions/<date>-owner.md` (or several, each
+`meta/decisions/<name>-owner.md` with `<name>` one path component) and a
+`KIT.md` whose first line is `plan: decisions <date> (owner)`, so the apply
+commits under the message the brief's §R looks for. It has no brief and no
+playbook; directory entries, as a recursive zip writes them, are allowed.
+The human sends it like any kit (`kit <secret>` with the zip, or `hands kit
+apply <zip>` at the laptop), approves the apply, then `go <secret>`. The architect
+role does not file one: `hands kit file` refuses it, because an owner file
+is the human's word.
+
 ## 4. The two plan forms
 
 **Missions** (agile-skills form; what hands is built with). The plan is a
@@ -95,6 +107,11 @@ State lives in `meta/CHECKPOINT.md` (unit in progress), `meta/plan.md`
 (the ledger), `meta/reviews/REVIEW-N.md`, `meta/FINAL-REPORT-N.md`. The
 builder resumes from the checkpoint, so a limit or a termination costs
 nothing but time. The template is `templates/BUILDER-N-PROMPT.md`.
+A ruling in the middle of a mission arrives as a decisions kit (§3): its
+apply commits `plan: decisions <date> (owner)`, and the template's §R tells
+the resumed builder to carry out that owner file's "For the builder" steps
+first when the checkpoint does not record them as done, record them, and
+continue.
 
 **Runs** (spanweave form). The plan is `WORKPLAN.md` on the series
 branch: §0 standing rules (sub-agent brief, cold review protocol, recovery
@@ -432,6 +449,21 @@ it with the default `kit_dir`; with another `kit_dir` handsd's prompt differs
 in that location. Third, `kit check: pass (6 of 6 checks)`. A failing kit gets
 no apply prompt. The exit status is 0 only when all six checks pass, and 1
 otherwise. `--json` prints the same report as one object.
+
+A decisions kit (§3; DESIGN §42) is recognised before the checks run: every
+file entry is `KIT.md` or an owner file `meta/decisions/<name>-owner.md`
+(`<name>` one non-empty path component; directory entries aside, and an
+entry the path rules refuse counts as another entry), with at least one
+owner file, and `KIT.md`'s first line passes the rules above and reads
+`plan: decisions <date> (owner)`. Then `brief` says it is a decisions kit
+and needs no brief, `verdicts` that it carries no vocabulary and the
+playbook in force is unchanged, and `wording` that it holds no brief;
+`paths`, `playbook` (the repo's is in force) and `protocol` run as for any
+kit, and a passing one ends `kit check: pass (6 of 6 checks)` with the
+plan-only apply prompt. `--json` says `"decisions": true`. A kit with any
+other entry, such as a `README.md` or a `PLAYBOOK.toml`, is judged as every
+other kit, and without a brief it fails. `hands kit apply` takes a decisions
+kit the same way; `hands kit file` refuses one with a reason, nothing filed.
 
 ## 12. Onboarding a project
 

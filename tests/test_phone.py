@@ -2571,6 +2571,40 @@ def test_a_kit_files_a_held_builder_apply_whose_prompt_is_kit_checks_byte_for_by
     phone_drive(body)
 
 
+def test_a_decisions_kit_from_the_phone_files_the_apply_kit_check_passes(
+    kit_project: str,
+    workdir: Path,
+    downloads: Path,
+    kit_server: KitServer,
+    tmp_path: Path,
+) -> None:
+    """§42 route 4: the phone's `kit` path files a decisions kit's apply — the
+    same prompt `hands kit check` passes it with, committed under `plan: decisions
+    <date> (owner)` — as a held builder job of origin `kit`."""
+    message = "plan: decisions 2026-10-18 (owner)"
+    owner = "meta/decisions/2026-10-18-owner.md"
+    body_zip = kit_zip([(owner, "# Owner decisions\n\n## For the builder\n\nO-1.\n"),
+                        ("KIT.md", message + "\n")])  # fmt: skip
+    # kit check needs a playbook in force; this repository has the builder's tree.
+    checked = tmp_path / "checked"
+    checked.mkdir()
+    (checked / "PLAYBOOK.toml").write_text('version = 1\n[series]\nkickoff = "go"\n')
+
+    async def body(daemon: Daemon, fake: FakeNtfy) -> None:
+        (row,) = await kit_jobs(daemon, fake, kit_server.attach("decisions.zip", body_zip))
+        record = await ok("show", row["id"])
+        assert (record["state"], record["role"], record["origin"]) == ("held", "builder", "kit")
+        assert record["gate"]["reason"] == "apply decisions"
+        report = kit_mod.check_kit(downloads / "decisions.zip", checked)
+        assert report.ok and report.decisions, [c.line() for c in report.checks]
+        assert record["prompt"] == report.apply_prompt
+        assert f"adds KIT.md and {owner}" in strip_paths(record["prompt"])
+        assert f"'{message}'" in strip_paths(record["prompt"])
+        assert kit_refusals(daemon) == []
+
+    phone_drive(body)
+
+
 @pytest.mark.parametrize(
     "entries,why",
     [

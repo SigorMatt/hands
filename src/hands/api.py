@@ -132,6 +132,15 @@ TIMEOUT = -32003  # `wait --timeout` expired
 #: §42: the most bytes the file a `consult` carries may hold (256 KiB).
 CONSULT_FILE_MAX_BYTES = 256 * 1024
 
+#: §42 "The decisions kit": `kit_file`'s refusal of one. The architect role files
+#: kits; an owner file is the human's, sent by the phone's `kit` or `hands kit apply`.
+DECISIONS_REFUSAL = (
+    "kit_file: kit {name!r} is a decisions kit (§42): an owner file is the human's "
+    "word, and one the architect role filed would be listed to the next consultation "
+    "as decided by the human and carried out by the brief's §R; nothing is filed — "
+    "the human sends a decisions kit by the phone's `kit` or `hands kit apply`"
+)
+
 
 def consult_file_problem(name: object, size: object, what: str) -> str | None:
     """§42: why the file a `consult` carries is refused by its name or its size —
@@ -717,7 +726,8 @@ class Api:
         passing kit gets the record `kit.json` naming the consultation and the
         passing check, is listed with the phone's `apply_from_zip` against the
         builder's cwd, and is filed as the held apply with `origin: architect`. A
-        refusal files nothing and keeps nothing.
+        refusal files nothing and keeps nothing. §42: a decisions kit passes the
+        check and is refused (`DECISIONS_REFUSAL`): an owner file is the human's.
 
         §34: calls are serialized per consultation under a lock, and a call that
         gets the lock after its consultation has filed a kit (`kits_filed_during`) is
@@ -800,6 +810,8 @@ class Api:
                 )
             if not report.ok:
                 raise ApiError(_check_refusal(name, builder, report))
+            if report.decisions:
+                raise ApiError(DECISIONS_REFUSAL.format(name=name))
             plan = await asyncio.to_thread(apply_from_zip, path, builder, home_shown(path))
             await asyncio.to_thread(
                 self.spool.record_kit,
