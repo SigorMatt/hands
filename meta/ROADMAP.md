@@ -8,7 +8,35 @@ chat). Missions 10 and 11 change it (kit check, the closed loop, the driver
 role), and each Project onboarded in M5–M7 needs its own pasted copy, with
 the Purpose block filled, pasted into the Project's instructions field and
 verified by asking the new Project "What are your Parameters?" (discotrade
-ran two days without one, noticed 2026-10-13).
+ran two days without one, noticed 2026-10-13). **INSTRUCTION PASTE DUE after
+the mission-26 release** (DESIGN §42: the new opening paragraph, rules 3, 9,
+12 and 14 reworded, rule 15) for every Project, hands and discotrade; in
+discotrade's it replaces the interim rule 15, and its interim operations
+document is retired.
+
+**Small missions (decided 2026-10-18 03:12).** One theme a mission, sized for
+review: not split into micro-missions, but never large just because it can
+be; a large theme is split into consecutive missions. Easier to review,
+easier to address bugs.
+
+**Reordered 2026-10-18 (01:33: project separation first, all planned work
+that does not serve it waits; 03:08–03:12: the rest; 11:41: the
+local-model harness numbered 28, M9 moved to 29).** Mission 26 = the
+project separation; mission 27 = M8b, the harness seam with Codex;
+mission 28 = M8b's second mission, a harness for a local model (OpenCode
+first; dsh when it is ready); mission 29 = M9; then M5b, a project
+started from scratch (after
+mission 26 is installed), and agile-skills as the migration of an
+in-progress project (M7 redefined; after M9). Moved to the backlog: Claude
+credential profiles (until a usage limit actually hits) and M6 spanweave.
+The AppArmor host decision of 2026-10-17 21:21 is superseded: Codex runs
+unconfined, as Claude Code does. This supersedes the order of 2026-10-17
+20:27 (26 = the separation with credential profiles, 27 = the seam, 28 =
+M9). Since 2026-10-18 01:45 discotrade has been operated from its own chat
+by interim documents in its Project; the hands Project chat sees it only
+as HF reports and when a release install restarts its daemon. The kit for
+mission 26 issued 2026-10-17 23:25 (separation and credential profiles
+together) was never sent; this kit replaces it.
 
 Milestones are gated by a clean cold review of the mission that closes them,
 then an install (`uv tool install --force`) and a driver-kit refresh.
@@ -184,15 +212,69 @@ then an install (`uv tool install --force`) and a driver-kit refresh.
   restriction blocks its bundled bubblewrap) and that its verdict line can
   be printed while the task failed — the host decision is the human's.
   Mission 25 (closer, DESIGN §41): review 24, the probe record corrected and
-  its unavailable rows filled where a sign-in exists. Mission 26
-  (+ closer) = M8b (DESIGN §42, written from the probe record): the seam,
-  the implementations the probe approved, the credential profiles with the
-  `quota` classification and resume on the next profile, doctor rows per
-  harness and per profile, the polish round. Gate: one hands mission built
-  by a builder on the second backend and reviewed clean, and one quota
-  stop resumed on the next profile.
+  its unavailable rows re-checked — DONE 2026-10-17 (review 25: blockers=0,
+  should-fix=3, carried to missions 27 and 29; the review merged PR #5:
+  594b8ee; installed on both daemons 2026-10-17 20:40). M8a CLOSED.
+  Renumbered 2026-10-18 (DESIGN §42): the separation is mission 26, M8b
+  missions 27 (the seam with Codex) and 28 (a local-model harness), M9
+  mission 29.
+- **The project separation** — mission 26 (designed 2026-10-17 18:45–20:27;
+  made first and whole 2026-10-18 01:33, DESIGN §42). Each project's own
+  Claude Project chat operates it from its pasted instruction (rule 15) and
+  the installed handbook's operator table (§19), with phone commands; the
+  laptop aux runs self-contained prompts for every project; the hands
+  Project keeps hands' missions and machine-wide operations, takes each
+  project's HF reports (`HF-<n>-report.md`, evidence only) into its kits,
+  and checks every new playbook's hands-facing parts (a first plan kit and
+  each series switch point, never a mission kit). `consult <secret>` (and
+  `hands consult`), started by the engine, replaces the aux recital; a
+  ruling travels as a decisions kit (`kit` + `go`, the brief's §R reading
+  the newest owner file); `digest` (and `hands digest`) gives one line per
+  project. The handbook gains the second onboarding shape (an existing,
+  hand-relayed project reshaped into mission form). H-072 closed; H-070
+  and H-071 decided for mission 27. Gate: `consult` used once from the
+  phone on a role-mode project; both Projects' instructions re-pasted and
+  discotrade's interim documents retired; one notification answered by a
+  project's own chat from the operator table.
+- **M8b The harness seam** — mission 27 with Codex (DESIGN §43, written
+  from docs/HARNESS-PROBE.md); a harness for a local model (OpenCode or dsh,
+  or both) is mission 28, M8b's second, kept separate under the
+  small-missions rule, OpenCode first; its gate is written by its kit. Re-checked by the aux 2026-10-18
+  03:28, correcting the probe's `unavailable` rows of 2026-10-17: OpenCode
+  1.19.2 is signed in (Nebius Token Factory; its credential is a file
+  under `$HOME`, so a job `handsd` starts sees it; a default model is set;
+  `opencode run --format json` answered a one-shot with exit 0); dsh
+  0.2.0-rc.2 has no key any hands job can reach — `DEEPSEEK_API_KEY` is
+  exported only for interactive shells and dsh has no credentials file
+  (`~/.dsh` absent) — so a credentials file under dsh's home is the
+  human's step before dsh runs a role, its session-log extension and
+  telemetry disabled first (DESIGN §40). A per-harness headless runner, or hands as an ACP client receiving
+  the permission requests; `[roles.<role>] harness`; an opaque per-role
+  harness profile (a directory, a PATH prefix, environment); the four
+  requirements per harness; roles move reviewer → builder first, the
+  guarded roles (driver, architect) stay on Claude Code until a harness
+  guard has been reviewed; the harness-neutral guard and transcript
+  reader; the templates' Task-tool and worktree wording made neutral;
+  doctor rows per harness; a privacy note. Mission 27 also carries review
+  25's should-fix 1 and 3, H-070, H-071 and the DESIGN wording of H-027,
+  H-034 and H-039. The optional polish round (on `aux.done` with
+  `blockers=0 should-fix>0`, one bounded builder job on the same branch,
+  a re-review of the delta, then the merge; off by default) is its own
+  small mission when wanted. Gate: one hands mission built by a builder on
+  Codex and reviewed clean.
+  - **Codex runs unconfined (decided 2026-10-18 03:08, superseding the
+    host decision of 2026-10-17 21:21).** Codex runs on this machine as
+    Claude Code does — its `danger-full-access` mode, as Claude Code runs
+    the unguarded roles with its permission bypass; the machine is the
+    sandbox and git is the record. No AppArmor profile for its bundled
+    bubblewrap is made (the narrow profile chosen 2026-10-17 21:21 is
+    dropped), and no doctor row checks one. A role on Codex is graded by
+    the review and the pull-request checks, not by its verdict line
+    (DESIGN §41).
 - **M9 A machine is replaceable** — decided 2026-10-16 (DESIGN §40), mission
-  27 (renumbered by the mission-25 closer), before M5b: `hands export` (everything but secrets, env tables
+  29 (renumbered 2026-10-18 by DESIGN §42; it also carries review 25's
+  should-fix 2, and splits into two missions if it grows past one review's
+  size), before M5b: `hands export` (everything but secrets, env tables
   redacted by name, a printed secrets checklist) and `hands import` (through
   the `project add` path, Purpose and Parameters intact, no daemon until
   `hands doctor` is green); `hands upgrade [--accept-builder]` (the release
@@ -202,14 +284,26 @@ then an install (`uv tool install --force`) and a driver-kit refresh.
   MagicDNS name. Gate: a rehearsal on a purpose-built Ubuntu VM — both
   projects from an export plus the secrets checklist, proven by one kickoff
   and one phone approve.
+- **More projects on this machine** (decided 2026-10-16; changed
+  2026-10-18 03:08): a project started from scratch may be onboarded once
+  the separation (mission 26) is installed — its own chat operates it from
+  day one under the new instruction, and the hands Project checks its first
+  playbook; no gate on credential profiles (a usage limit is met when it
+  hits). The migrated, in-progress project is agile-skills (M7, below),
+  after M9 is installed and its VM rehearsal has passed. Each gate is
+  declared met from the branch, never from memory.
 - **M5b discotrade's second series on the Codex backend** — decided
   2026-10-15: no new pet project; discotrade-v2 starts at a series switch
-  point (a new playbook with `backend` per role, approved by the human),
+  point (a new playbook with `[roles.<role>] harness` per role, approved by
+  the human),
   builder on Codex and reviewer on Claude first, the architect role on
   Claude; after M9 (decided 2026-10-16); if v1 ends before then, the
   project waits. Its new playbook gains `aux.orphaned → resume` and the
-  blocked→consult rule. Gate: as M5, on the second backend.
-- **M6 spanweave integration** — INSTRUCTION PASTE DUE: the spanweave
+  blocked→consult rule, and the hands Project checks its hands-facing
+  parts. Gate: as M5, on the second backend.
+- **M6 spanweave integration** — MOVED TO THE BACKLOG 2026-10-18: the human
+  develops spanweave without hands for now; it may come later. The plan of
+  2026-09-12, kept as history: INSTRUCTION PASTE DUE: the spanweave
   Project gets its own copy, parameters filled in.
   spanweave integration — hands drives spanweave's *development*
   (its builders and reviewers run as hands jobs); nothing of hands enters
@@ -242,8 +336,13 @@ then an install (`uv tool install --force`) and a driver-kit refresh.
      is mission 19's (DESIGN §35): the review merges, merge commits.
   Gate: one series of at least two runs merged with no human action
   between kickoff and the series-close stop.
-- **M7 agile-skills integration** — INSTRUCTION PASTE DUE: the agile-skills
-  Project gets its own copy.
+- **M7 agile-skills: the migration of an in-progress project** — REDEFINED
+  2026-10-18 03:08: agile-skills, stopped mid-work and relayed by hand
+  today, is migrated to hands in the second onboarding shape (DESIGN §42)
+  as the shakedown of migrating an in-progress project, after M9 and when
+  the human says it is ready; its own chat operates it from the start. Its
+  original integration line, kept as history: INSTRUCTION PASTE DUE: the
+  agile-skills Project gets its own copy.
   agile-skills integration — hands drives agile-skills' development;
   agile-skills stays machinery-agnostic and owns the mission-form contract
   (kickoff line, checkpoint resume, `VERDICT:` first line) as its own spec,

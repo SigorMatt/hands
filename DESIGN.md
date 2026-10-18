@@ -1,4 +1,4 @@
-# hands — DESIGN v3.24
+# hands — DESIGN v3.25
 
 Machinery that replaces the human relay between the planning brain and the two
 Claude Code roles (builder, aux) on the Ubuntu laptop, and that keeps a series
@@ -2517,3 +2517,474 @@ is.
 script records on a timeout and that redaction precedes cutting; the
 handbook's §7 carries the definition of a stale worktree. The instruction
 paste is not due.
+
+## 42. Changes from v3.24 (mission 25 review; the project separation: a project operated from its own chat)
+
+Mission 25 closed review 24 on the branch `mission-24`. REVIEW-25
+(`reviewed: fbe58a5`, `blockers=0 should-fix=3`; the hosted review's nine
+findings each with an upheld disposition) merged PR #5 itself (594b8ee),
+which closed M8a, and the build was installed on both daemons on 2026-10-17
+at 20:40; the restart orphaned another project's builder and that project's
+`builder.orphaned → resume` rule re-sent it from its checkpoint, the second
+proof of §38's H-047. This section holds the operation of a project from its
+own chat (designed 2026-10-17 18:45–20:27, made the whole of mission 26 on
+2026-10-18), the roadmap reordered around it, the decisions kept on disk
+for later missions, and three findings carried from another project's
+ledger.
+
+**Roadmap (decided 2026-10-18 01:33, 03:08–03:12 and 11:41: separation
+first, small missions).** In the human's words, all planned work that does not
+contribute to project separation is postponed, and separation comes
+first; and missions are kept small — not split into micro-missions, but
+never large just because they can be, so they are easier to review and
+their bugs easier to address. Mission 26 is the project separation: a
+project operated from its own chat and the phone, without the hands
+Project chat. Mission 27 is M8b, the harness seam of §40 and §41, with
+Codex first: the second backends wanted are Codex and a harness for a
+local model (OpenCode or dsh, or both), and the local one is mission 28,
+M8b's second mission, OpenCode first. The aux re-checked both on
+2026-10-18 at 03:28, correcting the probe's `unavailable` rows of
+2026-10-17: OpenCode is signed in to an inference provider through a
+credential file under `$HOME` (a job `handsd` starts sees it), has a
+default model and answered a headless one-shot; dsh's key is exported only
+for interactive shells and dsh has no credentials file, so no hands job
+could reach it until the human writes one (with dsh's session-log
+extension and telemetry disabled, §40). Mission 29 is M9
+(§40). Then M5b (the other project's second series, its builder on
+Codex), a project started from scratch (once mission 26 is installed;
+no gate on credential profiles), and the migration of an in-progress,
+hand-relayed project — agile-skills, stopped mid-work — in the second
+onboarding shape, after M9 and when the human says it is ready; that
+replaces M7's integration. Moved to the backlog: Claude credential
+profiles, until a usage limit actually hits (the human's current models
+spend a subscription far more slowly, 2026-10-18), and M6, spanweave,
+which the human develops without hands for now.
+
+The host decision of 2026-10-17 21:21 (a narrow AppArmor profile for
+Codex's bundled bubblewrap) is superseded on 2026-10-18 at 03:08: Codex
+runs on this machine as Claude Code does, unconfined (its
+`danger-full-access` mode, as Claude Code runs the unguarded roles with
+its permission bypass); the machine is the sandbox and the branch is the
+record. No AppArmor profile is made, and no doctor row checks one. The
+guarded roles (driver, architect) stay on Claude Code until a harness
+guard has been reviewed, as §40 ordered; a role on Codex is graded by the
+review and the pull-request checks, not by its verdict line (§41).
+
+On 2026-10-18 at 11:41 the human numbered the local-model harness 28
+and moved M9 to 29 (at 03:08 M9 was 28 and the local harness had no
+number). This supersedes the order of 2026-10-17 20:27 (mission 26 the
+separation with credential profiles, 27 the seam, 28 M9) and §41's (M8b = mission 26
+as the seam, M9 = mission 27). Never built, in any mission: a harness
+chosen per mission, two jobs of one role in parallel, balancing by
+remaining quota (it cannot be observed), a fallback to metered usage, and
+a switch of profile anywhere but at a resume point.
+
+**Who operates a project.** Three places can take a notification: the
+project's own Claude Project chat, the laptop's aux session, and the hands
+Project chat. Since 2026-10-18 01:45 another project has been operated this
+way by interim documents in its own Project (an operations document and an
+interim rule 15); this mission makes the arrangement hands' own, and the
+instruction paste after its release retires the interim documents.
+
+- **The project's own chat operates that project**, as well as designing
+  it. It reads a pasted notification, reads the branch, decides, writes the
+  file the decision needs (a kit, an owner file) and gives the human the
+  exact phone command, or, when the phone has none, a self-contained aux
+  prompt that names `--project <project>`. It keeps the project's state
+  board in its own Project docs. Its vehicle is the Project instruction
+  (`docs/ARCHITECT-INSTRUCTION.md`, rule 15 below) and the handbook of the
+  hands installed in its own sandbox (rule 13), not a skill: a claude.ai
+  skill reaches Claude Code on the laptop only after an explicit sync, the
+  aux needs none, and loading one in a phone Project chat was not
+  confirmed, whereas the instruction with the installed handbook was proven
+  from the phone on 2026-10-17, when another project's chat wrote its owner
+  file from the installed template.
+- **The laptop's aux is hands for every project**: one interactive Claude
+  Code session that runs a self-contained prompt and decides nothing.
+- **The hands Project chat keeps hands' own missions and the operations of
+  the whole machine**: installs and upgrades, restarts that touch every
+  project, the Claude accounts, a migration, the notification server. It
+  does not operate another project: a project's notification brought to it
+  is sent back to that project's chat. It receives from each project only
+  that project's HF reports (below), takes them into the next hands kit as
+  evidence only (handbook §15), and, before a release install restarts
+  every daemon, asks the human to check that no project's review or
+  consultation is running. It checks the hands-facing parts of every new
+  playbook — a project's first plan kit and each series switch point: the
+  playbook's rules, both orphaned rules and the blocked→consult rule among
+  them, the verdict vocabulary, the kickoff, the review protocol against the
+  template, the paths a prompt names — and never a mission kit.
+
+The aim is phone commands only for a project's routine operations.
+
+**An HF report.** A defect of hands that a project meets is recorded in that
+project's ledger as an HF-nnn entry and handed to the hands Project as one
+file, `HF-<n>-report.md`, holding evidence only: the HF id and its date,
+the project's name, the hands build it ran (`hands --version` and the
+commit the last install named), what hands did — the notifications, job ids, command
+lines and their output as they appeared — and what the project expected
+of hands, the commit, review number or consultation number where it was
+seen, and the project's interim workaround if any, named by what it does to
+hands, never by the project's content. No product design, code, domain term
+or fixture goes into it. The handbook gives the form; the hands Project
+files it as H-nnn citing the HF id.
+
+**The operator table (handbook §19).** The handbook gains a section
+written for the human and for the project's chat: one row per notification
+hands writes — every `stop` and `notify` message of the shipped playbook
+templates, and every stop and published line the engine, the limit manager
+and the daemon write themselves (the budget exhausted, the kit wait, a
+consultation's escalation, a usage-limit stop, `handsd started`, a refused
+phone command, a `digest`) — in four columns: the notification as it reads
+on the phone (its title and first words), who answers it (nobody, the human
+alone, the project's chat, the hands Project), the phone route, and the
+laptop route (the commands, or the aux prompt). The rows use these routes:
+
+1. **Nothing to do.** A kit applied; a kit filed by the architect whose
+   apply the playbook approved; a consultation resolved; `handsd started`
+   naming the jobs it resumed.
+2. **A hold.** The Approve or Deny button, or typed `approve <job>
+   <secret>` / `deny <job> <secret>`; at the laptop `hands approve <job>` /
+   `hands deny <job>`.
+3. **A kit.** `kit <secret>` with the zip attached, Approve, then `go
+   <secret>` for a mission or run kit; at the laptop `hands kit apply
+   <zip>`, `hands approve <job>`, `hands go`.
+4. **A ruling the builder needs in the middle of a mission** (its
+   question, a driver's escalation, a blocked mission the human rules on).
+   The project chat's owner file travels as a decisions kit: a zip holding
+   `meta/decisions/<date>-owner.md` and a `KIT.md` whose first line is
+   `plan: decisions <date> (owner)`, checked by `hands kit check` like any
+   kit and sent by route 3 (below, "The decisions kit"), then `go
+   <secret>`: the builder starts from the
+   checkpoint, and the brief's §R makes it carry out the newest owner
+   file's "For the builder" steps first (below). When the builder's last
+   job is the one that asked (`VERDICT: question`), `answer <secret> <text>`
+   with the zip attached is the shorter route. At the laptop: `hands kit
+   apply <zip>`, `hands approve <job>`, then `hands go`.
+5. **A consultation the role must make after a ruling or a stop** (an
+   architect escalation, whatever its reason — a ruling, a change of
+   shape, an unanswered blocker, a missing milestone, human-supplied
+   content — or a blocked mission
+   under a playbook without the blocked→consult rule): any owner file first,
+   as route 4's kit; then `consult <secret> <reason>` (below); at the
+   laptop `hands consult`.
+6. **A stop the project's chat reads before deciding** (a failed job, an
+   orphaned consultation, an unrecognised verdict, `max_resumes` reached,
+   processes left behind, a tripwire, a review a restart killed under a
+   playbook without `aux.orphaned`): `progress <secret>` and `status
+   <secret>`, then route 3, 4 or 5, or `go <secret>` when the branch shows
+   the work can continue as it stands; a killed review is re-sent by the aux
+   prompt the table gives (the playbook's review prompt, sent to the aux
+   role). A defect of hands found on the way is an HF report.
+7. **A usage-limit stop.** Under the shipped playbooks a builder's limit
+   stops the pipeline (no rule names `builder.limited`), while §6's resume
+   is scheduled at the reset and runs anyway. The human keeps the stop's
+   capture for the hands Project (`bash scripts/capture-quota-stop.sh
+   <project>` from the hands repository, docs/OPERATIONS.md), then `resume
+   <secret>` (at the laptop `hands resume`), so the resumed job's end fires
+   the playbook's rules. This row is rewritten when credential profiles
+   are built (the backlog).
+8. **A machine-wide event** (a daemon down, the notification server
+   unreachable, a sign-in lost, an install due): the hands Project.
+
+A review outcome in role mode consults the role by itself; the human sees
+only its consequences. The table's `digest` row says what each field of a
+digest line means, and an `HF report` row gives the report's form.
+
+**The second onboarding shape (handbook §13).** An existing project whose
+architect and workers the human relays by hand is reshaped into mission
+form before hands drives it: the `meta/` layout (checkpoint, plan, journal,
+findings, reviews), briefs from `templates/BUILDER-N-PROMPT.md` with their
+`VERDICT:` lines, the review protocol from `templates/REVIEW-PROTOCOL.md`,
+a roadmap of what exists and what remains, and a playbook from
+`templates/PLAYBOOK-missions.toml` carrying both orphaned rules and the
+blocked→consult rule. The project's own chat writes that plan kit from the
+repository as it stands — its history is left as it is, never rewritten —
+and the hands Project checks its hands-facing parts as it checks a first
+plan kit; the rest of onboarding is §12's. Such a project is onboarded only
+after M9's rehearsal (mission 29); the first is agile-skills, stopped
+mid-work.
+
+**`consult` from the phone and the laptop.** The architect role has been
+started by a `consult` rule only (§31, H-032). §42 amends that: it is
+started by a `consult` rule or by the `consult` command below, both through
+the engine, and `Api.send` still refuses the architect role from every
+client. After a ruling, the next
+consultation has been re-fired through the aux role reciting a
+review-shaped reply (handbook §16), three times so far (2026-10-15, and
+twice on 2026-10-17). A command replaces the recital.
+
+`consult <secret> <text>` on `cmd_topic`, its secret the second word as
+`reply`'s and `answer`'s are, starts one architect consultation whose
+prompt carries, in place of a review, the human's reason: the text after
+the secret and, when the message carries an ntfy attachment, the attached
+file's text after it. The attachment is checked as a kit's is
+(`url_problem`, `kit_dir` inside `allowed_roots`, the reported size, the
+download capped while it streams and ending at exactly that size), under
+its own name rule — a printable basename ending in lowercase `.md`, with no
+`/` or `\`, no leading dot and a non-empty stem — and a size of at most
+256 KiB; it is fetched into `kit_dir` as a kit is and read as UTF-8, and a
+refused or undecodable attachment refuses the command. The kit path's
+fetch and its first-free naming assume `.zip` today; they take the
+extension from the name rule in force. The prompt is §31's architect
+consult prompt — the roadmap's next unmet milestone, the series' escalation
+conditions, the human decisions since the last consultation, the handbook
+and templates paths — with the review's sections replaced by one section
+headed `The human's reason for this consultation`, holding the reason
+verbatim; a prompt over `hands.runner.MAX_PROMPT_BYTES` is refused with the
+cap's reason. The prompt's first line is exactly `hands consult: consult on
+job none (role human)`, the shape `consult_head` reads; the runner sets
+the job's `HANDS_CONSULT_ROLE` from it to `human`, which changes nothing in
+architect mode, where the guard refuses every send whatever that variable
+says.
+
+The command is a request to the engine, not a send. An architect job of
+origin `phone` is a `reply` (§33, `is_architect_reply`): it would not
+un-pause, not count against the budget, not be read for a verdict, and
+would make `hands kit file` refuse the kit. So the engine starts the
+consultation itself, in a branch of its `consult` action that has no event
+job: the action today stops when its event carries no job, and its prompt
+and record are built from that job, so the architect's prompt builder is
+factored to take either a review (or blocked) job or the human's reason.
+The job is an architect job of origin `playbook` like every other
+consultation:
+counted against `[limits] max_architect_consults`, read for its verdict
+(`next kit`, `series complete`, `escalate`), its kit filed and applied as
+any. The secret is the approval: no §8 hold. Once every refusal below has
+been passed, the command un-pauses a stopped pipeline itself, as `resume
+<secret>` does, and then has the engine start the consultation. Its
+`consult.sent` event holds, field by field: `job` (the architect job),
+`about: null`, `role: "human"`, `consulted: "architect"`, `event:
+"consult"`, `verdict: null`, `rule: null`, `consults` and `max_consults`
+(the count including this one, and the budget), `requested_by` (`phone`
+or `cli`), `head` — the builder's HEAD, as every architect consultation's
+does, so the next one's "since" is right — and `reason_sha256`, never the
+reason. When it ends, `consult.done` carries `about: null` (not the head
+line's `none`) and `role: "human"`, and the journal line reads
+`consult <job> (architect <state>) on consult by the human: <verdict>`.
+
+It is refused, and the refusal published titled `consult` (H-058): when the
+playbook in force does not set `[series] architect = "role"` or the project
+configures no `[roles.architect]`; while an architect job is running,
+queued or held, or a consultation's `next kit` wait is open; while a
+builder or aux job is running, queued or held (a consultation decides what
+a stopped series does next); when the reason is empty; and when the budget
+is spent, with the budget's reason. `hands consult [--file <path>]
+[<text>]` is its twin at the laptop, through the daemon's socket
+(`requested_by: cli`), with the same refusals; the CLI reads the file under
+the same name and size rules. Neither guarded role's guard admits `hands
+consult`.
+
+`architect/CLAUDE.md` gains a rule: a consultation the human started (its
+first line names `role human`) carries the human's reason in place of a
+review; read the branch as rule 1 says and answer it as a review outcome is
+answered — the next kit, `series complete`, or an escalation — and the
+consultation counts against the budget. Its rule 13's last sentence names
+routes 4 and 5 (the owner file as a decisions kit, then `go` or `consult`)
+in place of the `keep` send. The handbook's §16 describes `consult` and
+retires the recital.
+
+**`digest`.** `hands digest` prints one line per project configured on the
+machine — every `~/.hands/<project>.toml` that loads, in name order — and
+needs no daemon. Each line holds: the project; the daemon, `up` when its
+socket answers `status` within two seconds, else `down`; the pipeline,
+`running` or `paused`; the mission, the number on the first line of the
+builder's `meta/CHECKPOINT.md` (at its repository root) that begins
+`Mission:`, else `-`; the builder, `running <job> <age>` or `idle`, with the
+newest builder job's verdict line cut to 60 characters; the consultations
+used and the budget, `architect <used>/<budget>` in role mode, else `driver
+<used>/<budget>`; and the last stop's time and the first line of its
+reason cut to 100 characters, or `no stop`. It reads each project's spool
+and repository, read-only. `digest <secret>` on any project's `cmd_topic`
+publishes the same lines on that project's `ntfy_topic`, titled `digest`.
+Every line is redacted — every loadable project's `cmd_secret` and
+`ntfy_token`, by value — before anything is cut, and only then are
+the fields cut to their lengths, as §41 ruled for the capture script. A
+project whose config does not load gets one line naming the file only:
+never the file's contents and never the loader's message, which can quote
+a value. Neither guarded role's guard admits `hands digest`. Like `status`
+and `progress`, its publish answers a command; it is not one of the kinds
+§11 publishes unprompted (`stop`, `job.held`), and neither is `consult`'s
+refusal.
+
+**The newest owner file, on a resume.** Route 4 needs one sentence in the
+brief template's §R recovery brief: if a `plan: decisions <date> (owner)`
+commit is on the branch after the checkpoint's last update and the
+checkpoint does not record its "For the builder" steps as done, carry them
+out first, record them in the checkpoint, and continue. This repository's
+briefs carry it from this mission on.
+
+**The decisions kit.** The phone's `kit` path already files the apply of
+a zip with no brief (`apply_from_zip` lists entries and needs none), but
+`hands kit check` fails such a kit on `brief`, `verdicts` and `wording`,
+and the instruction's rule 13 forbids sending a kit that fails the check.
+So `hands kit check` recognises a decisions kit — a kit whose every file
+entry (directory entries aside; an entry the path rules refuse counts as
+another entry) is either `KIT.md` or a file `meta/decisions/<name>-owner.md`
+whose `<name>` is one non-empty path component, the shape the engine's
+owner-file glob reads; with at least one such file; no playbook; and a
+`KIT.md` whose first line passes §28's rules and reads `plan: decisions
+<date> (owner)`, so the apply commits under the message §R looks for — and
+passes it: `brief` says it is a decisions
+kit and needs no brief, `verdicts` that it carries no vocabulary and the
+playbook in force is unchanged, `wording` that it holds no brief, and
+`paths`, `playbook` and `protocol` run as for any kit; the report ends `kit
+check: pass (6 of 6 checks)` with the plan-only apply prompt. A kit with
+any other entry is judged as before §42. `hands kit apply` takes it the
+same way, so route 4 has a laptop form. `hands kit file`, the architect
+role's filing, refuses a decisions kit with a reason: an owner file is the
+human's word, and one the role filed would be listed to the next
+consultation as decided by the human and carried out by §R. The
+handbook's §3, §4 and §11 say so.
+
+**Findings carried from another project's ledger (its HF-013, HF-014 and
+the 2026-10-17 update of its HF-006, discotrade; H-070..H-072 here;
+evidence only).**
+
+- **H-070, a report's twelve lines** (decided here, built in mission 27).
+  Per-commit reports ran past the protocol's twelve lines (that project's
+  review 18). A count nothing enforces is not a rule: both review protocols
+  drop it and say what a report holds — the sha, a verdict per point, what
+  is not proven, and for the hosted-review sub-agent every finding
+  verbatim. The brief template keeps its twelve lines, which budget the
+  orchestrator's context over a whole mission.
+- **H-071, the architect's guard on read-only commands** (decided here,
+  built in mission 27). At two consultations (that project's 22 and 23,
+  2026-10-17) the guard refused every command holding `#`, `{` or a
+  backslash, so a Markdown heading or a pattern could not be searched for,
+  and refused `ls -R`, `git ls-tree --name-only`, `git status --short` and
+  `git log --date=<format>`. The characters stay refused (§30: quoting
+  makes no character safe). A search of content goes through the Grep and
+  Read tools, which the role has and the Bash guard does not judge, and
+  `architect/CLAUDE.md` rule 10 will say so. The four options are read-only
+  and will be admitted — in the guard's option sets, for both guarded
+  modes, and in the architect's settings allow-list — each pinned with its
+  neighbours still refused. A project runs without it (its role worked
+  around each refusal), and a guard change is the unit a review weighs
+  hardest, so it waits for mission 27, which makes the guard
+  harness-neutral.
+- **H-072, a gate past the timeout on a shared machine** (decided and done
+  here). A gate run on a shared machine took 1281 s, past the 20 minutes a
+  brief names and the 15 minutes hands gives builder and aux jobs by
+  default (`BASH_MAX_TIMEOUT_MS`, §36). A project whose gate runs longer
+  raises `BASH_DEFAULT_TIMEOUT_MS` and `BASH_MAX_TIMEOUT_MS` in its
+  `[roles.builder.env]` and `[roles.aux.env]` — an edit of its own config at
+  the laptop, an aux prompt its own chat gives — and its briefs name a
+  timeout no longer than that. The builder reads the installed CLI's
+  package files for a ceiling of its own on that variable;
+  docs/INTEGRATION.md states the raise and the ceiling if there is one.
+  hands' default is unchanged, and from this mission hands' own briefs name
+  15 minutes (900000 ms), the default's own value, in place of 20; the
+  review protocols' "20-minute cap" wording is aligned in mission 27,
+  which rewrites both protocols for H-070.
+
+**Decided and kept on disk for later missions.** Claude credential
+profiles — in the backlog until a usage limit actually hits; the mission
+that builds them writes them in full — as agreed 2026-10-16 23:14 and
+refined by kit 26's cold review of 2026-10-17: a machine-level registry
+`~/.hands/profiles/profiles.toml` (inside a directory, because every
+`~/.hands/*.toml` is read as a project; `profiles` a reserved project
+name) and a shared exhaustion state `~/.hands/profiles/state.json`
+(written under an exclusive `fcntl` lock on `~/.hands/profiles/state.lock`,
+atomically; read by every project's daemon); a profile is a harness, an
+optional `home` (the job's `CLAUDE_CONFIG_DIR`; none means the default
+sign-in), an absolute `path_prefix` and an `env` that may not set
+`CLAUDE_CONFIG_DIR`, `PATH`, `HOME`, `HANDS_*`, the variables hands sets
+itself or any `ANTHROPIC_*` name; `[roles.<r>] profiles` per role, the
+first eligible profile chosen at dispatch; a limit (§6's `limited`, which
+§40 calls `quota`) marks the profile and resumes at once on the next
+eligible one from the checkpoint, a builder `keep` job resumed with the
+kickoff, or the role waits for the earliest reset (§40's "stops" read as
+waiting; no pipeline stop); a `keep` send refused on an exhausted profile;
+an unspawned job when no profile is eligible; the start notification,
+`status` and `who` naming or reading the profile; a
+`builder.limited → notify` rule in the shipped playbooks (no new publish
+kind; `aux.limited` stays outside §10's events); the trailer
+`Hands-Profile: <name>`, a should-fix only when another commit of the
+mission carries it; doctor's rows per profile and each profile home's
+settings layer for a guarded role; the classifier read from the installed
+CLI with a fixture slot for the first capture. The default pool: the
+architect and the driver `["claude-A"]`, the builder and the aux
+`["claude-B", "claude-C", "claude-A"]`; account A is the human's
+interactive account, protected only by leaving it off the workers' lists;
+no metered usage.
+
+Mission 27 (the seam with Codex) also carries: review 25's should-fix 1
+(the correction line under meta/FINAL-REPORT-25.md §3's NOT PROVEN line
+on the U4 warning test) and 3 (docs/HARNESS-PROBE.md naming the approval
+flag in the form that ran, `-c approval_policy='"on-request"'`, and
+losing its stray line break), because it re-probes Codex; H-070 and
+H-071, because it makes the protocols and the guard harness-neutral; and
+the three findings whose DESIGN wording lags the code, H-027 (§12 rule
+6's quoting sentence and §14's un-templated unit names), H-034 (§10's
+example maps `monitor.task_killed` to `stop`; §32 says `notify`) and
+H-039 (§34's start fold: the fold holds back everything but `job.held`,
+as the code does), written into its section by its kit. Mission 29 (M9)
+carries review 25's should-fix 2: after a failed `find`,
+`scripts/capture-quota-stop.sh` writes its timeout line in the job-record
+section, skips only what needs the record, and still captures the
+inbox's tail, pinned by the hanging-`find` test. Dropped on 2026-10-18,
+because the interactive driver session they served is retired: the tmux
+wake channel and the driver guard's self-noise filter (BACKLOG,
+Unscheduled).
+
+**Documentation.** The handbook: §3, §4 and §11 name the decisions kit;
+§10's row for a builder question and §14, the ruling round, give route 4
+(the decisions kit, then `go`) with `answer` as the shorter route after
+`VERDICT: question`, and name no driver; §13 gains the second onboarding
+shape, who operates a project and the hands Project's playbook check; §16 is
+`consult`; §18 names `consult` and `digest`; §19 is the operator table with
+the HF report's form. docs/ARCHITECT-INSTRUCTION.md: the opening paragraph,
+rules 3, 9, 12 and 14 reworded and rule 15, verbatim below.
+docs/OPERATIONS.md: the no-phone table gains `consult` and `digest`.
+docs/INTEGRATION.md: H-072. README.md: the commands. **The instruction
+paste is due** after this release for every Project, hands and discotrade;
+in discotrade's it replaces the interim rule 15, and its interim operations
+document is retired.
+
+The instruction's opening paragraph, which replaces "You are the ARCHITECT
+… from files you write.":
+
+    You are the ARCHITECT for the project named below. You design missions,
+    playbooks, decisions and design documents with the human, and you
+    operate the project with the human from this chat. You never drive
+    execution: hands, on the human's laptop, runs the project's roles from
+    the files you write. Besides files, the only text you give the human to
+    send is a phone command or, when the phone has none, a self-contained
+    prompt for the laptop's aux session, each complete and verbatim.
+
+Four rules that stay are reworded, so the instruction names neither a
+driver session nor a `keep` send for a ruling. In rule 3, "Short
+instructions for the driver or aux sessions, and this Project instruction
+itself, are chat text by nature" becomes "Short instructions for the aux
+session, phone commands, and this Project instruction itself, are chat
+text by nature". Rule 9 becomes "When the human reports what the aux
+session or a role said, treat the report as a claim like any other and
+verify it from the branch." In rule 12, "the driver's `check` is for
+runtime state that is not in the repository" becomes "`status`, `progress`
+and `digest` are for runtime state that is not in the repository". In rule
+14, "Deliver it as a file; it is committed as `plan: decisions <date>
+(owner)`, and the human sends the builder a `keep` that names it." becomes
+"Deliver it as a file and as a decisions kit — a zip holding the file at
+its repository path and a `KIT.md` whose first line is `plan: decisions
+<date> (owner)` — and give the route rule 15's table names for it." The
+rest of each rule stands.
+
+Its new rule 15, after rule 14:
+
+    15. When the human pastes a hands notification — a stop, a hold, an
+        escalation, a usage-limit stop, a digest — answer from the operator
+        table in the handbook of the hands installed in your sandbox:
+        install it by rule 13's command first if this chat has not, and
+        `hands handbook` prints the handbook's path. Say who answers it,
+        then give this project's route in full: the phone command exactly
+        as it is typed or, when the table gives none, the aux prompt,
+        self-contained and naming `--project <PROJECT>`. Read the branch
+        before answering a stop (rule 12). A defect of hands itself is filed
+        as an HF-nnn entry in this project's ledger (in hands' own ledger,
+        an H-nnn entry) and handed to the hands Project as an
+        `HF-<n>-report.md` in the handbook's form, evidence only; it is
+        never fixed or worked around in this project's code. The operations
+        of the whole machine — installs, restarts of every project, the
+        Claude accounts, a migration — are the hands Project's: say so, and
+        give nothing to send for them unless this is that Project.

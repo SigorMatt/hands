@@ -72,7 +72,7 @@ item names the mission it is scheduled for; unscheduled items say so.
 7. Docs: restart kills every job; one hook vs two; stop pauses, apply+go
    un-pauses; the `[server]` fallback; QODO-EXTRACTION cited.
 
-## Mission 25 (closer for review 24, scheduled 2026-10-17, kit issued) — continues mission-24, PR #5. Spec: DESIGN v3.24 §41.
+## Mission 25 — DONE 2026-10-17 (closer for review 24 on mission-24; review 25: blockers=0, should-fix=3, carried to missions 27 and 29; PR #5 merged by the review, 594b8ee; installed on both daemons 20:40). Spec: DESIGN v3.24 §41.
 
 1. Blocker 1 and should-fix 1: the capture script records every timeout and
    redacts before it cuts; hanging-fake and straddling-secret tests.
@@ -90,7 +90,7 @@ item names the mission it is scheduled for; unscheduled items say so.
 6. Adopted: a cli send equal to the kickoff line is a kickoff (hosted
    finding 3). The AppArmor host decision is the human's, outside hands.
 
-## Mission 24 — BUILT 2026-10-17 (PR #5; review 24: blockers=1, should-fix=8; the PR stays open for the closer). Spec: DESIGN v3.23 §40.
+## Mission 24 — DONE 2026-10-17 (PR #5; review 24: blockers=1, should-fix=8, closed by mission 25; merged with it, 594b8ee). Spec: DESIGN v3.23 §40.
 
 1. U1 the probe on the laptop's three harnesses (Codex CLI 0.163.0, OpenCode
    1.19.2, dsh 0.2.0-rc.2; Node 22 by nvm, PATH prefix on every command),
@@ -115,9 +115,89 @@ item names the mission it is scheduled for; unscheduled items say so.
    proxy are the checklist; its four integration tiers name the level a
    harness must reach (their Tier 3). Cited, never imported.
 
-## Mission 26 (M8b; was 25 before the closer) — DESIGN §42 from docs/HARNESS-PROBE.md and the human's AppArmor decision: the seam (per-harness runner or hands as ACP client), the implementations the probe approved, credential profiles (`[profiles.<n>]`, `[roles.<r>] profiles`, the `quota` end with the reset time, resume from the checkpoint on the first non-exhausted profile, doctor rows, the profile named in `status` and the start notification; the quota fixture from the laptop's first real stop), the polish round, the harness-neutral guard and transcript reader, the templates' harness-neutral wording. Builder and aux may run on the second harness; driver and architect stay on Claude until a review finds no hole. Then a closer if needed.
+## Order (2026-10-18: 01:33 project separation first; 03:08–03:12 the rest; small missions) — 26 the separation; 27 M8b the harness seam with Codex (+ review 25's should-fix 1 and 3, H-070, H-071, the DESIGN wording of H-027, H-034, H-039); 28 M8b's second mission, a local-model harness (OpenCode first; numbered 11:41); 29 M9 (+ review 25's should-fix 2); then M5b, a project from scratch (after 26), agile-skills migrated (after M9). Supersedes 2026-10-17 20:27's order. The 2026-10-17 23:25 kit for mission 26 (separation and profiles together) was never sent.
 
-## Mission 27 (M9, "a machine is replaceable"; was 26) — `hands export` / `hands import`, `hands upgrade [--accept-builder]`, `hands project refresh <p>`, the spool inventory, ntfy by MagicDNS name, docs/OPERATIONS.md updated; gate: the VM rehearsal. Then M5b (discotrade-v2 on the second harness), M6, M7.
+## Mission 26 (the project separation; kit issued 2026-10-18) — a project operated from its own chat and the phone. Spec: DESIGN v3.25 §42.
+
+1. U0 the branch `mission-26`; H-070 (a report's twelve lines) and H-071
+   (the architect guard on read-only commands), decided for mission 27;
+   H-072 (a gate past the timeout on a shared machine), closed here; from
+   another project's ledger (its HF-013, HF-014, HF-006's 2026-10-17
+   update; evidence only).
+2. U1 `consult <secret> <text>` (optional `.md` attachment) and `hands
+   consult`, the consultation started by the engine (origin `playbook`,
+   never a phone `reply`), counted against the budget, the command
+   un-pausing first; architect/CLAUDE.md's new rule and rule 13; handbook
+   §16 retires the recital.
+3. U2 `hands digest` and `digest <secret>`: one redacted line per project,
+   no daemon needed.
+4. U3 the decisions kit (the phone's `kit` path files a brief-less kit of
+   one owner file, pinned) and the owner file read on a resume (the brief
+   template's §R).
+5. U4 the handbook's §19 operator table (eight routes) with the HF report's
+   form, §13's second onboarding shape, who operates a project and the
+   playbook check, §18; the instruction's opening, rules 3, 9, 12 and 14
+   reworded and rule 15, verbatim (INSTRUCTION PASTE DUE: hands,
+   discotrade); OPERATIONS' no-phone rows; INTEGRATION's H-072. U5 the PR
+   and its hosted review.
+
+## Mission 27 (M8b, the harness seam with Codex; renumbered several times — 25, then 26, then 27 in 2026-10-17 20:27's order — and mission 27 since 2026-10-18 03:08) — DESIGN §43 from docs/HARNESS-PROBE.md.
+
+1. The seam: a per-harness runner or hands as an ACP client (the prior, if
+   commands route through permission requests; the adapter
+   `@zed-industries/codex-acp` is not installed); `[roles.<role>]
+   harness`; the opaque harness profile; the four requirements per harness;
+   Codex for the unguarded roles, unconfined (`danger-full-access`,
+   decided 2026-10-18 03:08; no AppArmor profile); the guarded roles stay
+   on Claude Code until a harness guard is reviewed.
+2. The harness-neutral guard and transcript reader; the templates'
+   Task-tool and worktree wording; doctor rows per harness; a privacy note.
+3. Review 25's should-fix 1 (the correction line under FINAL-REPORT-25 §3)
+   and 3 (the probe record's approval flag in the form that ran, and its
+   stray line break).
+4. H-070: both protocols drop the twelve-line count and say what a report
+   holds. H-071: the guard admits `ls -R`, `git ls-tree --name-only`, `git
+   status --short`, `git log --date=<format>`; rule 10 names Grep and Read
+   for content searches.
+5. The DESIGN wording of H-027 (§12 rule 6's quoting sentence; §14's
+   templated unit names), H-034 (§10's example: `monitor.task_killed` →
+   `notify`; its fixture, doc copy and tests follow) and H-039 (§34's start
+   fold holds back everything but `job.held`), written by the kit.
+6. Gate: one hands mission built by a builder on Codex and reviewed clean.
+   Split further if the kit grows past one review's size (small missions).
+
+## Mission 28 (M8b's second mission; numbered 2026-10-18 11:41) — a harness for a local model (OpenCode or dsh, or both), OpenCode first. Re-checked 2026-10-18 03:28 by the aux: OpenCode 1.19.2 signed in (Nebius Token Factory, a credential file under `$HOME`, a default model set, a headless JSON one-shot answered); dsh unreachable by any hands job (its key is exported only for interactive shells; no `~/.dsh` credentials file) until the human writes one, with its session-log extension and telemetry disabled (DESIGN §40). Its own small mission, after mission 27.
+
+## Mission 29 (M9, "a machine is replaceable"; 26, then 27, then 28 in 2026-10-17 20:27's order and at 2026-10-18 03:08; mission 29 since 2026-10-18 11:41) — `hands export` / `hands import`, `hands upgrade [--accept-builder]`, `hands project refresh <p>` (replacing the laptop's merge script for architect/CLAUDE.md), the spool inventory, ntfy by MagicDNS name, docs/OPERATIONS.md updated; review 25's should-fix 2 (after a failed `find`, the capture script still writes the inbox tail; pinned by the hanging-`find` test); gate: the VM rehearsal. Split into two missions if it grows past one review's size. Then M5b (discotrade-v2 on Codex), a project from scratch (any time after mission 26 is installed), agile-skills migrated (M7, after M9).
+
+## Backlog: Claude credential profiles (moved out of mission 26 on 2026-10-18; built when a usage limit actually hits) — DESIGN §42 "Decided and kept on disk for later missions".
+
+1. The registry `~/.hands/profiles/profiles.toml` and the shared state
+   `~/.hands/profiles/state.json` (locked, atomic; the name `profiles`
+   reserved), `[roles.<r>] profiles`, `hands profiles` and `hands profiles
+   clear <name>`; the profile's `env` refusals (`CLAUDE_CONFIG_DIR`, `PATH`,
+   `HOME`, `HANDS_*`, hands' own variables, `ANTHROPIC_*`), an absolute
+   `path_prefix`.
+2. A job on a profile: chosen at dispatch, recorded, its environment
+   (`CLAUDE_CONFIG_DIR`, the PATH prefix, the profile's env,
+   `HANDS_PROFILE`), a `keep` refused on an exhausted profile, the
+   unspawned `limited` end, `status`, the start notification, `who`.
+3. A limit on a profile: mark, resume at once on the next eligible
+   profile, or wait for the earliest reset with no stop; a limited keep
+   job resumed with the kickoff; a restart reschedules by the rule; the
+   classifier read from the installed CLI; `tests/fixtures/quota/`; the
+   `builder.limited` notify rule in the three playbooks (`aux.limited` stays
+   outside §10's events); docs/INTEGRATION.md's limit paragraph.
+4. Doctor's profile rows and each profile home's settings layer for a
+   guarded role; the trailer `Hands-Profile:` (a should-fix only when
+   another commit of the mission carries it); the operator table's
+   usage-limit row rewritten; OPERATIONS' usage-limit runbook.
+5. Gate (the human's, after the install): a second Max account signed in
+   as `claude-B`, the registry and the lists written, one real limit
+   resumed on the next profile; the first real capture becomes the
+   classifier's fixture.
+
+## Backlog: M6 spanweave (moved 2026-10-18) — developed by the human without hands for now; may come later (ROADMAP M6 keeps the 2026-09-12 plan as history).
 
 ## Mission 22 — DONE 2026-10-15 (review 22: blockers=0, should-fix=12; PR #3 merged by the review, f11cfb1; installed 20:23; M4d closed). Spec: DESIGN v3.21 §38. Items 1–8 below plus: H-037 the buttons carry the token (FIRST; live on the self-hosted server since 2026-10-14, 403 on every button); review 21 should-fix 1–3 (H-049 the revert step for added files, H-050 the reviewer's schedule, the `-I` hook text in INTEGRATION); the human-supplied unit shape in the brief template and the protocol.
 
@@ -245,7 +325,8 @@ item names the mission it is scheduled for; unscheduled items say so.
   `gh pr view`/checks; hands' own review could post as a PR review. A
   playbook rule and one tool, after M5's first auto-merge works.
 
-- **tmux wake channel.** `handsd` (or a small watcher) sends a fixed
+- **tmux wake channel** — DROPPED 2026-10-18: the interactive driver session
+  it served is retired. `handsd` (or a small watcher) sends a fixed
   `check` + Enter into the driver's tmux pane on `stop`/`held`, removing
   the human's message from the idle-time wake. Risk: `Enter` answers any
   open dialog in that pane. Decide from how many idle-time pokes the human
@@ -254,5 +335,6 @@ item names the mission it is scheduled for; unscheduled items say so.
   is wanted.
 - **Authenticated approvals.** `decided_by: driver` is a declaration
   (DESIGN §8); authentication belongs to the remote face if built.
-- **Driver guard: self-noise.** The driver's own gated send wakes its own
+- **Driver guard: self-noise** — DROPPED 2026-10-18: the interactive driver
+  session is retired. The driver's own gated send wakes its own
   wait; harmless, could be filtered by job origin.
