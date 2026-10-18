@@ -393,16 +393,22 @@ def test_kit_apply_refuses_a_staged_name_with_dot_dot(
     project: str, workdir: Path, downloads: Path, tmp_path: Path
 ) -> None:
     """A `..` name is refused by the staged-name check and the file it points at,
-    a passing kit outside `kit_dir`, is neither read nor removed."""
+    a passing kit outside `kit_dir`, is neither read nor removed.
+
+    H-076: the target's bytes are compared with the bytes written, never with a
+    second `kit_zip` — `zipfile` stamps each entry with the time of the call (two
+    seconds' resolution), so a daemon start that crossed a boundary made the two
+    differ and the test red."""
     outside = tmp_path / "outside"
     outside.mkdir()
     target = outside / ".hands-kit-abc.part"
-    target.write_bytes(kit_zip(passing_kit()))
+    written = kit_zip(passing_kit())
+    target.write_bytes(written)
 
     async def body(daemon: Daemon) -> None:
         said = refused(await raw_kit_apply(daemon, "m24.zip", "../outside/.hands-kit-abc.part"))
         assert "staged must be the hidden .hands-kit-*.part basename" in strip_paths(said), said
-        assert target.read_bytes() == kit_zip(passing_kit())
+        assert target.read_bytes() == written
         assert (await ok("jobs"))["jobs"] == []
         assert list(downloads.iterdir()) == []
 
@@ -413,20 +419,63 @@ def test_kit_apply_refuses_a_staged_symlink_and_removes_the_link_only(
     project: str, workdir: Path, downloads: Path, tmp_path: Path
 ) -> None:
     """A staged name that is a symlink — here to a passing kit — is refused, never
-    followed (`O_NOFOLLOW`); the link is removed, its target is not."""
+    followed (`O_NOFOLLOW`); the link is removed, its target is not. The target is
+    compared with its own bytes as written (H-076)."""
     target = tmp_path / "outside" / "m24.zip"
-    a_kit(target, passing_kit())
+    written = a_kit(target, passing_kit()).read_bytes()
     link = downloads / ".hands-kit-link.part"
     link.symlink_to(target)
 
     async def body(daemon: Daemon) -> None:
         said = refused(await raw_kit_apply(daemon, "m24.zip", link.name))
         assert f"the staged kit {link.name!r} is a symlink" in strip_paths(said), said
-        assert target.read_bytes() == kit_zip(passing_kit())
+        assert target.read_bytes() == written
         assert (await ok("jobs"))["jobs"] == []
         assert list(downloads.iterdir()) == []
 
     drive(body)
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        test_kit_apply_refuses_a_staged_name_with_dot_dot,
+        test_kit_apply_refuses_a_staged_symlink_and_removes_the_link_only,
+    ],
+    ids=["dot_dot", "symlink"],
+)
+def test_the_staged_refusals_hold_whatever_the_clock_does_between_two_zips(
+    case: Any,
+    project: str,
+    workdir: Path,
+    downloads: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """H-076 (§43 "The intermittent test"): `zipfile` stamps an entry with the time
+    of the `writestr` call, so `kit_zip` called twice gives different bytes once the
+    clock crosses a two-second boundary between the calls, as a slow daemon start
+    can make it. Every call of `kit_zip` here gets a timestamp of its own, so a test
+    that compared the target with a second `kit_zip` is red at once, not now and
+    then; each test compares it with the bytes it wrote."""
+    import zipfile
+
+    calls = iter(range(1, 1000))
+
+    def a_later_zip(files: dict[str, str]) -> bytes:
+        import io
+
+        second = 2 * next(calls)
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, "w") as archive:
+            for name, text in files.items():
+                stamp = (2026, 1, 1, 0, second // 60, second % 60)
+                archive.writestr(zipfile.ZipInfo(name, date_time=stamp), text)
+        return buffer.getvalue()
+
+    assert a_later_zip(passing_kit()) != a_later_zip(passing_kit())
+    monkeypatch.setitem(globals(), "kit_zip", a_later_zip)
+    case(project, workdir, downloads, tmp_path)
 
 
 def test_kit_apply_refuses_a_staged_fifo_without_blocking(

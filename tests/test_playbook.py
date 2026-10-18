@@ -265,9 +265,10 @@ def test_the_example_parses_into_the_rules_of_section_10(tmp_home: Path, workdir
         ("builder.orphaned", "resume"),
         ("builder.failed", "resume"),
         ("monitor.tripwire", "stop"),
-        ("monitor.task_killed", "stop"),
+        ("monitor.task_killed", "notify"),
         ("monitor.orphan_processes", "stop"),
     ]
+    assert book.rules[-2].message == "A task inside a role job was killed"
     assert book.rules[1].run == "{n+1}"
     assert book.rules[1].role == "builder"
     assert book.rules[1].context == "clear"
@@ -1037,11 +1038,15 @@ def test_a_monitor_tripwire_stops_the_pipeline(tmp_home: Path, workdir: Path) ->
 
 def test_a_task_killed_rule_loads_and_stops_the_pipeline(tmp_home: Path, workdir: Path) -> None:
     """§24: the loader accepts `monitor.task_killed` and the event reaches the rule.
-    A playbook may still map it to `stop`; §32's shipped playbooks map it to
-    `notify` (pinned below, over `SHIPPED_PLAYBOOKS`)."""
-    body = EXAMPLE + '\n[[rule]]\non = "monitor.task_killed"\nthen = "stop"\n'
+    A playbook may still map it to `stop`; §32's shipped playbooks and §10's
+    example (§43) map it to `notify` (pinned below, over `SHIPPED_PLAYBOOKS`), so
+    the example's `notify` rule is replaced by a `stop` rule here."""
+    notify = 'then = "notify"\nmessage = "A task inside a role job was killed"\n'
+    assert EXAMPLE.count(notify) == 1
+    body = EXAMPLE.replace(notify, 'then = "stop"\n')
     book = parse_playbook(body, path=workdir / "PLAYBOOK.toml")
-    assert (book.rules[-1].on, book.rules[-1].then) == ("monitor.task_killed", "stop")
+    killed = [(rule.on, rule.then) for rule in book.rules if rule.on == "monitor.task_killed"]
+    assert killed == [("monitor.task_killed", "stop")]
     engine, recorder = engine_for(tmp_home, workdir, body=body)
     job = engine.spool.create_job(role="builder", context="clear", prompt="p", origin="cli")
     run(engine.on_job_start(job))

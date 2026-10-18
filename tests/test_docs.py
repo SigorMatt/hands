@@ -181,7 +181,6 @@ def test_the_playbook_doc_maps_the_mission_8_detectors_and_says_the_group_is_wea
     for must in (
         "a long foreground command the harness moved to the background and then reaped",
         "a job that ends `failed` is what stops",
-        "H-034",
     ):
         assert must in prose, f"docs/PLAYBOOK.md's prose does not say {must!r} (§32)"
     assert "which is weaker" in prose
@@ -229,15 +228,21 @@ def test_both_docs_say_the_task_killed_cause_is_always_unknown() -> None:
 
 
 def test_the_sentence_under_the_verbatim_example_says_a_killed_task_notifies_here() -> None:
-    """§33 (review 16 should-fix 8), §32, H-034: the reading of §10's example under
-    its verbatim copy still says killed tasks stop (the copy is §10's), so it says
-    that this repository and the templates only `notify` on a killed task."""
+    """§33 (review 16 should-fix 8), §32, §43 (H-034): §10's example maps a killed
+    task to `notify`, as this repository's playbook and both templates do, so the
+    reading under the verbatim copy says that the example and this repository
+    both notify on a killed task, and no longer names H-034 or says that killed
+    tasks stop."""
     doc = (ROOT / "docs" / "PLAYBOOK.md").read_text(encoding="utf-8")
     after = flattened(doc.split("## The example (DESIGN §10, verbatim)", 1)[1])
     reading = after.split("Read it as a sentence:", 1)[1]
-    assert "H-034" in reading, "the reading under the verbatim example does not name H-034"
-    assert "`notify`" in reading, "the reading under the verbatim example does not say `notify`"
-    assert "`PLAYBOOK.toml`" in reading and "templates" in reading, reading
+    assert "H-034" not in flattened(doc), "docs/PLAYBOOK.md still names H-034"
+    assert "killed tasks and orphan processes stop" not in reading, reading
+    assert "a killed task only notifies you" in reading, reading
+    assert (
+        "The example and this repository's `PLAYBOOK.toml` and both templates all "
+        "`notify` on a killed task"
+    ) in reading, reading
 
 
 #: The key statements of INTEGRATION.md's optional section (§11, §24), each
@@ -827,12 +832,8 @@ def test_the_driver_kit_says_how_a_paged_log_and_a_cut_tail_read() -> None:
 
 
 #: §30 (mission 14 U1): quoting stopped making a character safe — a character of
-#: the guard's refused set is refused inside quotes too. DESIGN §12 rule 6 still
-#: carries the old clause and builders may not edit DESIGN.md, so H-027 asks the
-#: architect for that line. Until it lands the kit's rule 6 is DESIGN's rule with
-#: this one clause corrected: every other word stays pinned, and this test keeps
-#: passing unchanged once DESIGN says the same thing (the replace is then a no-op).
-STALE_QUOTED_CLAUSE = "the guard treats quoted text as text"
+#: the guard's refused set is refused inside quotes too. DESIGN §12 rule 6 says so
+#: since v3.26 §43 (H-027), so the kit's rule 6 is DESIGN's word for word.
 GUARD_REFUSAL_CLAUSE = (
     "quoting makes no character safe: one from the guard's refused set is "
     "refused inside quotes too"
@@ -841,10 +842,11 @@ GUARD_REFUSAL_CLAUSE = (
 
 def test_driver_rule_6_is_the_design_section_12_rule_6() -> None:
     """§20 (review 3 should-fix 10): v3.3 rewrote rule 6 "to match what the
-    driver can do", so the kit carries that text and not a paraphrase of it —
-    corrected for §30's language, and for nothing else (H-027)."""
+    driver can do", so the kit carries that text and not a paraphrase of it. §43
+    (H-027): DESIGN's rule carries §30's language, so the two are equal exactly."""
     assert design_rule(6), "DESIGN §12 has no rule 6 to pin the kit to"
-    assert kit_rule(6) == design_rule(6).replace(STALE_QUOTED_CLAUSE, GUARD_REFUSAL_CLAUSE)
+    assert GUARD_REFUSAL_CLAUSE in design_rule(6), "DESIGN §12 rule 6 lacks §30's refusal"
+    assert kit_rule(6) == design_rule(6)
 
 
 def test_no_driver_kit_file_still_promises_that_quoting_makes_text() -> None:

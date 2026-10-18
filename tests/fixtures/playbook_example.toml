@@ -48,7 +48,8 @@ then = "stop"
 
 [[rule]]
 on = "monitor.task_killed"
-then = "stop"
+then = "notify"
+message = "A task inside a role job was killed"
 
 [[rule]]
 on = "monitor.orphan_processes"
