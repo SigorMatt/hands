@@ -23,7 +23,7 @@ blocked (two failures) or refused.
       docs/ARCHITECT-HANDBOOK.md §10, §13, §14, §18, §19,
       docs/ARCHITECT-INSTRUCTION.md, docs/OPERATIONS.md,
       docs/INTEGRATION.md, README.md, tests; closes H-072
-- [ ] U5 (this commit) Final report, the pull request and the hosted review's findings —
+- [x] U5 ce2088b, 73aa1b3, a5ca441, (this commit) Final report, the pull request and the hosted review's findings —
       meta/FINAL-REPORT-26.md (drafted under meta/drafts/),
       meta/reviews/hosted/PR-<pr>/
 

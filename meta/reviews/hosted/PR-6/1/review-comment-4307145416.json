@@ -1,0 +1,69 @@
+{
+  "url": "https://api.github.com/repos/SigorMatt/hands/pulls/comments/4307145416",
+  "pull_request_review_id": 5563121872,
+  "id": 4307145416,
+  "node_id": "PRRC_kwDOUVwTn88AAAABALnSyA",
+  "diff_hunk": "@@ -494,6 +545,83 @@ async def kickoff(self, origin: str) -> dict[str, Any]:\n         except ApiError as exc:\n             raise ApiError(f\"the send was refused ({exc})\") from exc\n \n+    # ---------------------------------------------------------- consult (§42)\n+\n+    async def consult(self, *, reason: str) -> dict[str, Any]:\n+        \"\"\"§42: `hands consult [--file <path>] [<text>]` — the phone's `consult` at the\n+        laptop, through the socket, `requested_by: cli`. The client reads the file\n+        under the name and size rules and sends the reason it makes\n+        (`consult_reason`); the refusals are the phone's. Returns the job.\"\"\"\n+        return await self.start_consult(reason, requested_by=\"cli\")\n+\n+    async def consult_refusal(self, reason: str | None) -> str | None:\n+        \"\"\"§42: why a consultation the human asks for is refused now, or None.\n+\n+        In §42's order: the playbook in force does not set `[series] architect =\n+        \"role\"`, or the project configures no `[roles.architect]`; an architect job\n+        is running, queued or held, or a consultation's `next kit` wait is open; a\n+        builder or aux job is running, queued or held; the reason is empty\n+        (`reason=None` skips this one: the phone asks before it fetches the\n+        attachment, which may carry the whole reason); the budget is spent. The\n+        committed playbook is loaded first, as a job's start loads it; nothing is\n+        awaited after that, so `start_consult`'s enqueue follows these checks in one step\n+        of the event loop.\"\"\"\n+        engine = self.daemon.playbook\n+        await engine.reload()\n+        why = engine.consult_mode_refusal()\n+        if why is not None:\n+            return why\n+        why = self._role_busy(ARCHITECT_ROLE)\n+        if why is not None:\n+            return why",
+  "path": "src/hands/api.py",
+  "commit_id": "ce2088b445d74fe90974f0e358795dba50843432",
+  "original_commit_id": "ce2088b445d74fe90974f0e358795dba50843432",
+  "user": {
+    "login": "qodo-code-review[bot]",
+    "id": 151058649,
+    "node_id": "BOT_kgDOCQD42Q",
+    "avatar_url": "https://avatars.githubusercontent.com/in/484649?v=4",
+    "gravatar_id": "",
+    "url": "https://api.github.com/users/qodo-code-review%5Bbot%5D",
+    "html_url": "https://github.com/apps/qodo-code-review",
+    "followers_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/followers",
+    "following_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/following{/other_user}",
+    "gists_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/gists{/gist_id}",
+    "starred_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/starred{/owner}{/repo}",
+    "subscriptions_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/subscriptions",
+    "organizations_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/orgs",
+    "repos_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/repos",
+    "events_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/events{/privacy}",
+    "received_events_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/received_events",
+    "type": "Bot",
+    "user_view_type": "public",
+    "site_admin": false
+  },
+  "body": "<img src=\"https://img.shields.io/badge/Medium-634FD1?style=flat-square\" height=\"20px\" alt=\"Remediation recommended\">\n\n6\\. A refused consult can stop a running pipeline <code>🐞 Bug</code> <code>☼ Reliability</code>\n\n<pre>\n<b><i>Api.consult_refusal</i></b> calls <b><i>engine.reload()</i></b>, which runs the full <b><i>PlaybookEngine._load()</i></b>, before\nit checks for a busy builder, aux or architect. <b><i>_load()</i></b> stops and pauses the pipeline when the\nplaybook does not load (dirty, uncommitted, wrong config). It also swaps the in-memory playbook and\nclears <b><i>last_rule</i></b> in the middle of a running job. So a phone <b><i>consult</i></b> (asked twice, before and\nafter the fetch) or a <b><i>hands consult</i></b> sent while the builder is working can stop the pipeline. It\ncan also change which rules decide that builder&#x27;s end, even though the consult itself is then\nrefused as busy.\n</pre>\n\n\n<details>\n<summary><strong>Agent Prompt</strong></summary>\n\n```\n## Issue description\n`Api.consult_refusal` reloads the playbook through `PlaybookEngine._load()` before it checks for busy roles. `_load()` can call `stop()`, which pauses the pipeline and notifies. It also replaces the playbook in force and clears `last_rule` while a job is running. So a consult that is going to be refused anyway can stop a running pipeline or change the rules for the running job.\n\n## Fix Focus Areas\n- src/hands/api.py[557-591]\n- src/hands/playbook.py[1623-1627]\n\n## Recommended Fix\nRun the `_role_busy` checks for architect/builder/aux, and the `kit_wait` check, before calling `engine.reload()`. Only reload once no role is busy. Also make `reload()` side-effect free on failure: load the playbook without `stop()` (for example, a `_load(stop_on_error=False)` variant that only sets `load_error`), so the refusal text reports the load error without stopping the pipeline. Add a test: a consult sent while a builder job is running with a dirty playbook leaves `pipeline.json` unpaused and `last_rule` unchanged.\n```\n\n<code>ⓘ Copy this prompt and use it to remediate the issue with your preferred AI generation tools</code>\n</details>\n\n[Dismiss ↗](https://app.qodo.ai/findings/6a5a3002-45ce-4425-843b-6e2595874939?action=dismiss&origin=git) | [View ↗](https://app.qodo.ai/findings/6a5a3002-45ce-4425-843b-6e2595874939)",
+  "created_at": "2026-10-18T13:10:12Z",
+  "updated_at": "2026-10-18T13:10:12Z",
+  "html_url": "https://github.com/SigorMatt/hands/pull/6#discussion_r4307145416",
+  "pull_request_url": "https://api.github.com/repos/SigorMatt/hands/pulls/6",
+  "_links": {
+    "self": {
+      "href": "https://api.github.com/repos/SigorMatt/hands/pulls/comments/4307145416"
+    },
+    "html": {
+      "href": "https://github.com/SigorMatt/hands/pull/6#discussion_r4307145416"
+    },
+    "pull_request": {
+      "href": "https://api.github.com/repos/SigorMatt/hands/pulls/6"
+    }
+  },
+  "reactions": {
+    "url": "https://api.github.com/repos/SigorMatt/hands/pulls/comments/4307145416/reactions",
+    "total_count": 0,
+    "+1": 0,
+    "-1": 0,
+    "laugh": 0,
+    "hooray": 0,
+    "confused": 0,
+    "heart": 0,
+    "rocket": 0,
+    "eyes": 0
+  },
+  "start_line": 569,
+  "original_start_line": 569,
+  "start_side": "RIGHT",
+  "line": 576,
+  "original_line": 576,
+  "side": "RIGHT",
+  "author_association": "NONE",
+  "original_position": 125,
+  "position": 125,
+  "subject_type": "line"
+}

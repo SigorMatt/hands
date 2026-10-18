@@ -15,7 +15,8 @@ Done: U3 592fc6e — kit.py recognises a decisions kit (6 of 6, plan-only apply 
 
 Done: U4 79eb270 — handbook §10 row, §13, §14, §18, new §19 operator table (tests/test_operator_table.py, 41 tests); instruction opening, rules 3/9/12/14, rule 15 pinned to §42; OPERATIONS consult row; INTEGRATION H-072 (no CLI ceiling in 2.1.302); H-072 resolved-by-doc; green 3/3 (4823).
 
-In progress: U5 final report, the PR and the hosted review. meta/FINAL-REPORT-26.md moved in (report: commit), then `gh pr create`, `hands hosted-review <pr>` in one-minute steps up to ten minutes, fixes by sub-agent within §42, the `## Hosted review` table + archive committed, tree back to main. Done means: PR open, table committed and pushed, tree on main.
+Done: U5 ce2088b (report), 73aa1b3 (consult: hosted findings 2, 5, 6), a5ca441 (docs: findings 3, 4), (this commit) the Hosted review table + archive PR-6/1..2; H-073 filed (finding 1); finding 7 dismissed; bot fetch 2: 2 of 7 open (1 and 7). green 3/3 (4834).
+Mission 26 — FINISHED after this push; PR #6 open; tree returns to main.
 
 Standing constraints: one foreground sub-agent per unit, commit and push every
 unit to `mission-26`, ./scripts/check green three consecutive runs before each

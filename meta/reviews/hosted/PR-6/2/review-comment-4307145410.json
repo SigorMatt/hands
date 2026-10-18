@@ -1,0 +1,69 @@
+{
+  "url": "https://api.github.com/repos/SigorMatt/hands/pulls/comments/4307145410",
+  "pull_request_review_id": 5563121872,
+  "id": 4307145410,
+  "node_id": "PRRC_kwDOUVwTn88AAAABALnSwg",
+  "diff_hunk": "@@ -696,8 +796,163 @@ the human-supplied unit above that would carry the content.\n   kit_dir` and files its apply as a held builder job (`origin: kit`) that\n   `hands approve <job>` releases. The architect role's guard allows neither:\n   they are the human's commands for when the phone is away.\n+- **`hands consult [--file <path>] [<reason>]` and `consult <secret>\n+  <reason>`** start one architect consultation in role mode whose prompt\n+  carries the human's reason in place of a review (§16; DESIGN §42). The\n+  secret is the approval, nothing is held, and a refusal is published titled\n+  `consult`.\n+- **`hands digest` and `digest <secret>`** print, and on the phone publish\n+  titled `digest`, one line per project configured on the machine: its daemon,\n+  pipeline, mission, builder and newest verdict, consultations used of the\n+  budget, and last stop (§19's `digest` row says what each field means). It is\n+  read-only, needs no daemon, and redacts every project's `cmd_secret` and\n+  `ntfy_token` before a field is cut.\n - **docs/OPERATIONS.md is the human's runbook** for a hands machine: what it\n   holds, its secrets by kind, a usage-limit stop, operating without the\n   phone, a migration, a disaster and a release install. **docs/RELATED.md\n   records** two readings of other orchestrators, Gas Town and Conductor, that\n   the harness work cites (DESIGN §40). Neither is a design; DESIGN.md is.\n+\n+## 19. The operator table\n+\n+For the human and for the project's chat (DESIGN §42): one row per\n+notification hands writes — every `stop` and `notify` message of\n+`templates/PLAYBOOK-missions.toml` and `templates/PLAYBOOK-runs.toml`, and\n+every stop and published line the engine, the limit manager and the daemon\n+write themselves — with who answers it and the route at the phone and at the\n+laptop. The project's chat answers a pasted notification from this table\n+(the Project instruction's rule 15). Every title on the phone begins\n+`<project>: `, which the table leaves out. A playbook `stop` and every stop\n+the engine makes is titled `hands: the pipeline stopped` and its message is\n+the stop's reason; a playbook `notify` is titled `hands: <message>`. A\n+placeholder is written `<n>`, `<job>`, and so on. At the laptop a command\n+takes `--project <project>` when the machine has more than one project; the\n+table leaves it out, and an aux prompt names it.\n+\n+The routes:\n+\n+1. **Nothing to do.** A kit applied; a kit filed by the architect whose apply\n+   the playbook approved; a consultation resolved; `handsd started` naming the\n+   jobs it resumed.\n+2. **A hold.** The Approve or Deny button, or typed `approve <job> <secret>` /\n+   `deny <job> <secret>`; at the laptop `hands approve <job>` / `hands deny\n+   <job>`.\n+3. **A kit.** `kit <secret>` with the zip attached, Approve, then `go\n+   <secret>` for a mission or run kit; at the laptop `hands kit apply <zip>`,\n+   `hands approve <job>`, `hands go`.\n+4. **A ruling the builder needs in the middle of a mission** (its question, a\n+   driver's escalation, a blocked mission the human rules on). The project\n+   chat's owner file travels as a decisions kit: a zip holding\n+   `meta/decisions/<date>-owner.md` and a `KIT.md` whose first line is `plan:\n+   decisions <date> (owner)`, checked by `hands kit check` like any kit and\n+   sent by route 3 (§3), then `go <secret>`: the builder starts from the\n+   checkpoint, and the brief's §R makes it carry out the newest owner file's\n+   \"For the builder\" steps first (§14). When the builder's last job is the one\n+   that asked (`VERDICT: question`), `answer <secret> <text>` with the zip\n+   attached is the shorter route. At the laptop: `hands kit apply <zip>`,\n+   `hands approve <job>`, then `hands go`.\n+5. **A consultation the role must make after a ruling or a stop** (an\n+   architect escalation, whatever its reason — a ruling, a change of shape, an\n+   unanswered blocker, a missing milestone, human-supplied content — or a\n+   blocked mission under a playbook without the blocked→consult rule): any\n+   owner file first, as route 4's kit; then `consult <secret> <reason>` (§16);\n+   at the laptop `hands consult`.",
+  "path": "docs/ARCHITECT-HANDBOOK.md",
+  "commit_id": "73aa1b36a3083aa71eb307de8d88add00e160582",
+  "original_commit_id": "ce2088b445d74fe90974f0e358795dba50843432",
+  "user": {
+    "login": "qodo-code-review[bot]",
+    "id": 151058649,
+    "node_id": "BOT_kgDOCQD42Q",
+    "avatar_url": "https://avatars.githubusercontent.com/in/484649?v=4",
+    "gravatar_id": "",
+    "url": "https://api.github.com/users/qodo-code-review%5Bbot%5D",
+    "html_url": "https://github.com/apps/qodo-code-review",
+    "followers_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/followers",
+    "following_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/following{/other_user}",
+    "gists_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/gists{/gist_id}",
+    "starred_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/starred{/owner}{/repo}",
+    "subscriptions_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/subscriptions",
+    "organizations_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/orgs",
+    "repos_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/repos",
+    "events_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/events{/privacy}",
+    "received_events_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/received_events",
+    "type": "Bot",
+    "user_view_type": "public",
+    "site_admin": false
+  },
+  "body": "<img src=\"https://img.shields.io/badge/Medium-634FD1?style=flat-square\" height=\"20px\" alt=\"Remediation recommended\">\n\n4\\. Ruling follow-ups refuse consultation <code>🐞 Bug</code> <code>≡ Correctness</code>\n\n<pre>\nRoute 5 says to send an owner kit using route 4 and then run <b><i>consult</i></b>, but route 4 ends by running\n<b><i>go</i></b>. If the human follows that sequence immediately, <b><i>go</i></b> starts a builder job and the new consult\npath refuses the request while that job is queued or running.\n</pre>\n\n\n<details>\n<summary><strong>Agent Prompt</strong></summary>\n\n```\n## Issue description\nThe consultation route inherits a `go` command that makes the ensuing consultation fail its builder-busy check.\n## Fix Focus Areas\n- docs/ARCHITECT-HANDBOOK.md[843-859]\n- docs/ARCHITECT-HANDBOOK.md[924-925]\n## Recommended Fix\nSpell out when the owner kit has finished applying and when, if at all, `go` should run. If `go` is required first, instruct the human to wait for its builder job to end before issuing `consult`.\n```\n\n<code>ⓘ Copy this prompt and use it to remediate the issue with your preferred AI generation tools</code>\n</details>\n\n[Dismiss ↗](https://app.qodo.ai/findings/3187c741-5a3d-4f8c-9ea9-71bd6aac33e5?action=dismiss&origin=git) | [View ↗](https://app.qodo.ai/findings/3187c741-5a3d-4f8c-9ea9-71bd6aac33e5)",
+  "created_at": "2026-10-18T13:10:12Z",
+  "updated_at": "2026-10-18T13:10:12Z",
+  "html_url": "https://github.com/SigorMatt/hands/pull/6#discussion_r4307145410",
+  "pull_request_url": "https://api.github.com/repos/SigorMatt/hands/pulls/6",
+  "_links": {
+    "self": {
+      "href": "https://api.github.com/repos/SigorMatt/hands/pulls/comments/4307145410"
+    },
+    "html": {
+      "href": "https://github.com/SigorMatt/hands/pull/6#discussion_r4307145410"
+    },
+    "pull_request": {
+      "href": "https://api.github.com/repos/SigorMatt/hands/pulls/6"
+    }
+  },
+  "reactions": {
+    "url": "https://api.github.com/repos/SigorMatt/hands/pulls/comments/4307145410/reactions",
+    "total_count": 0,
+    "+1": 0,
+    "-1": 0,
+    "laugh": 0,
+    "hooray": 0,
+    "confused": 0,
+    "heart": 0,
+    "rocket": 0,
+    "eyes": 0
+  },
+  "start_line": null,
+  "original_start_line": 857,
+  "start_side": "RIGHT",
+  "line": null,
+  "original_line": 859,
+  "side": "RIGHT",
+  "author_association": "NONE",
+  "original_position": 309,
+  "position": 1,
+  "subject_type": "line"
+}

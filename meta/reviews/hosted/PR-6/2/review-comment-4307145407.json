@@ -1,0 +1,69 @@
+{
+  "url": "https://api.github.com/repos/SigorMatt/hands/pulls/comments/4307145407",
+  "pull_request_review_id": 5563121872,
+  "id": 4307145407,
+  "node_id": "PRRC_kwDOUVwTn88AAAABALnSvw",
+  "diff_hunk": "@@ -2429,6 +2522,51 @@ async def _act_consult(self, rule: Rule, event: str, job: Job | None) -> None:\n             },\n         )\n         self._fired(rule, event, job, fired_job=started.id)\n+        return started\n+\n+    async def _consult_for_human(self, book: Playbook, human: HumanConsult) -> Job:\n+        \"\"\"§42: the consultation's prompt — §31's, the human's reason in place of a\n+        review (`human_consult_prompt`) — refused over the cap; then a stopped\n+        pipeline un-paused, as `resume` does, and one architect job of origin\n+        `playbook` enqueued, and `consult.sent` with every field §42 lists, the\n+        reason only as its sha256. No rule fired it, so no `last_rule` is set.\"\"\"\n+        used, budget = self.architect_consults_used(), book.max_architect_consults\n+        recorded: dict[str, Any] = {\"head\": _git_head(self.config.role(\"builder\").cwd)}\n+        prompt = human_consult_prompt(human.reason, self.architect_brief(book, used + 1))\n+        size = len(prompt.encode(\"utf-8\"))\n+        if size > human.cap:\n+            raise ConsultRefused(\n+                f\"the consultation's prompt is {size} bytes, over the {human.cap} byte cap \"\n+                \"of §2\"\n+            )\n+        self._unpause(\"resume\")\n+        started = await self.enqueue(\n+            role=ARCHITECT,\n+            context=\"clear\",",
+  "path": "src/hands/playbook.py",
+  "commit_id": "ce2088b445d74fe90974f0e358795dba50843432",
+  "original_commit_id": "ce2088b445d74fe90974f0e358795dba50843432",
+  "user": {
+    "login": "qodo-code-review[bot]",
+    "id": 151058649,
+    "node_id": "BOT_kgDOCQD42Q",
+    "avatar_url": "https://avatars.githubusercontent.com/in/484649?v=4",
+    "gravatar_id": "",
+    "url": "https://api.github.com/users/qodo-code-review%5Bbot%5D",
+    "html_url": "https://github.com/apps/qodo-code-review",
+    "followers_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/followers",
+    "following_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/following{/other_user}",
+    "gists_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/gists{/gist_id}",
+    "starred_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/starred{/owner}{/repo}",
+    "subscriptions_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/subscriptions",
+    "organizations_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/orgs",
+    "repos_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/repos",
+    "events_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/events{/privacy}",
+    "received_events_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/received_events",
+    "type": "Bot",
+    "user_view_type": "public",
+    "site_admin": false
+  },
+  "body": "<img src=\"https://img.shields.io/badge/Medium-634FD1?style=flat-square\" height=\"20px\" alt=\"Remediation recommended\">\n\n2\\. Failed consults leave the pipeline running <code>🐞 Bug</code> <code>☼ Reliability</code>\n\n<pre>\n<b><i>_consult_for_human</i></b> persists an unpause before it calls <b><i>enqueue</i></b>, without restoring the stop if\nenqueue fails. A queue or spool failure can therefore leave a stopped pipeline running even though\nno architect consultation was created.\n</pre>\n\n\n<details>\n<summary><strong>Agent Prompt</strong></summary>\n\n```\n## Issue description\nA failed human-consult enqueue currently clears a persisted pipeline stop without starting a consultation.\n## Fix Focus Areas\n- src/hands/playbook.py[2533-2566]\n- src/hands/api.py[593-609]\n## Recommended Fix\nMake job creation succeed before persisting the unpause, or restore the prior stopped state on enqueue failure. Keep the consultation event consistent with the created job.\n```\n\n<code>ⓘ Copy this prompt and use it to remediate the issue with your preferred AI generation tools</code>\n</details>\n\n[Dismiss ↗](https://app.qodo.ai/findings/2b567793-01a9-4e80-b276-92416b35a421?action=dismiss&origin=git) | [View ↗](https://app.qodo.ai/findings/2b567793-01a9-4e80-b276-92416b35a421)",
+  "created_at": "2026-10-18T13:10:12Z",
+  "updated_at": "2026-10-18T13:10:12Z",
+  "html_url": "https://github.com/SigorMatt/hands/pull/6#discussion_r4307145407",
+  "pull_request_url": "https://api.github.com/repos/SigorMatt/hands/pulls/6",
+  "_links": {
+    "self": {
+      "href": "https://api.github.com/repos/SigorMatt/hands/pulls/comments/4307145407"
+    },
+    "html": {
+      "href": "https://github.com/SigorMatt/hands/pull/6#discussion_r4307145407"
+    },
+    "pull_request": {
+      "href": "https://api.github.com/repos/SigorMatt/hands/pulls/6"
+    }
+  },
+  "reactions": {
+    "url": "https://api.github.com/repos/SigorMatt/hands/pulls/comments/4307145407/reactions",
+    "total_count": 0,
+    "+1": 0,
+    "-1": 0,
+    "laugh": 0,
+    "hooray": 0,
+    "confused": 0,
+    "heart": 0,
+    "rocket": 0,
+    "eyes": 0
+  },
+  "start_line": null,
+  "original_start_line": 2542,
+  "start_side": "RIGHT",
+  "line": null,
+  "original_line": 2545,
+  "side": "RIGHT",
+  "author_association": "NONE",
+  "original_position": 163,
+  "position": 1,
+  "subject_type": "line"
+}

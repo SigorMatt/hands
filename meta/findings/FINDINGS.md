@@ -2724,3 +2724,29 @@ states the raise and the installed CLI's ceiling if it has one. hands'
 default is unchanged; hands' own briefs name 15 minutes (900000 ms).
 
 Status: resolved-by-doc (mission 26 U4 — docs/INTEGRATION.md states the raise of `BASH_DEFAULT_TIMEOUT_MS` and `BASH_MAX_TIMEOUT_MS` in `[roles.builder.env]` and `[roles.aux.env]`, briefs naming a timeout no longer than that, and that the installed CLI (2.1.302, read from its bundled files) has no ceiling of its own on `BASH_MAX_TIMEOUT_MS`; hands' default unchanged. Tests: tests/test_operator_table.py)
+
+## H-073 — route 4 relies on a §R sentence a project's older brief does not carry
+
+Severity: medium · Component: docs/ARCHITECT-HANDBOOK.md §19 (route 4),
+templates/BUILDER-N-PROMPT.md §R; DESIGN §42
+Filed by: mission 26 orchestrator, U5 (2026-10-18), from PR #6's hosted
+review (finding "Discotrade skips mid-mission rulings").
+Evidence: meta/reviews/hosted/PR-6/1/ — the reviewer reads that another
+project's active brief (its mission 20) has a §R recovery brief without
+§42's owner-file sentence.
+
+Problem. Route 4 sends an owner file as a decisions kit and then `go`; the
+builder carries out the owner file's "For the builder" steps only because
+the brief's §R says so (§42, "The newest owner file, on a resume"). A
+brief written before the template gained that sentence — any mission in
+flight when this release is installed — resumes from its checkpoint and
+does not act on the ruling, although the decisions kit is committed.
+
+Decision needed. Whether the operator table's route 4 names the condition
+(the brief's §R carries the sentence) and gives the fallback for a brief
+without it (`answer <secret> <text>` naming the owner file after `VERDICT:
+question`, or a `keep` send naming it), or whether the instruction paste
+due after this release asks each project's chat to add the sentence to its
+brief in flight. Not fixed in mission 26: the routes are §42's text.
+
+Status: open

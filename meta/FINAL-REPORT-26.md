@@ -5,7 +5,7 @@ VERDICT: mission 26 finished pr=6
 Source: meta/BUILDER-26-PROMPT.md, DESIGN v3.25 §42 (with §27, §31, §33,
 §36, §38), meta/reviews/REVIEW-25.md. Branch `mission-26`, from main
 9877b57. Gate: `./scripts/check` green three consecutive runs before every
-commit (4823 tests at U4's tip).
+commit (4834 tests at the tip).
 
 ## 1. What changed (sha per unit)
 
@@ -16,7 +16,7 @@ commit (4823 tests at U4's tip).
 | U2 `digest` | d222109 | `src/hands/digest.py` (added): `hands digest` (and `--json`) and phone `digest <secret>`, one line per project, redacted before any cut; docs/OPERATIONS.md `digest` row |
 | U3 The decisions kit and the owner file on a resume | 592fc6e | `hands kit check` passes a decisions kit 6 of 6 with the plan-only apply prompt; `hands kit apply` and the phone's `kit` path file its apply; `kit_file` refuses one; the brief template's §R carries the owner-file sentence; handbook §3, §4, §11 |
 | U4 The handbook, the instruction and the runbooks | 79eb270 | handbook §10's builder-question row, §13, §14, §18 and the new §19 (the operator table, the `digest` row, the HF report's form); docs/ARCHITECT-INSTRUCTION.md's opening, rules 3, 9, 12, 14 and rule 15; docs/OPERATIONS.md `consult` row; docs/INTEGRATION.md H-072; H-072 resolved-by-doc |
-| U5 Final report | (this commit) | this file; the `## Hosted review` table and archive follow the pull request |
+| U5 Final report | ce2088b, 73aa1b3, a5ca441, (this commit) | this file (ce2088b); the hosted review's fixes — `consult:` 73aa1b3 (findings 2, 5, 6), `docs:` a5ca441 (findings 3, 4); H-073 filed; the `## Hosted review` table and archive meta/reviews/hosted/PR-6/1..2 (this commit) |
 
 ## 2. What the tests prove
 
@@ -101,4 +101,21 @@ commit (4823 tests at U4's tip).
 
 ## Hosted review
 
-(written after the pull request's hosted review)
+PR #6, `qodo-code-review[bot]`, read with `hands hosted-review 6`. Fetch 1
+(Code Review comment 6250309209, updated 2026-10-18T13:10:11Z, at ce2088b):
+Bugs 5, Rule violations 0, Cross-repo conflicts 2, Skill insights 0; 7 of 7
+open. After the fixes the bot edited the comment in place; fetch 2
+(updated 2026-10-18T14:10:37Z, after a5ca441): 2 of 7 open, findings 2–6
+struck. Fetch 2 was read six times; the five byte-identical repeats were
+removed, so the archive is meta/reviews/hosted/PR-6/1..2. Numbers are
+fetch 1's.
+
+| # | Finding (title as the bot wrote it) | Disposition |
+|---|---|---|
+| 1 | Discotrade skips mid-mission rulings | finding H-073 filed |
+| 2 | Failed consults leave the pipeline running | fixed in 73aa1b3 |
+| 3 | Exhausted jobs stay stopped after resume | fixed in a5ca441 |
+| 4 | Ruling follow-ups refuse consultation | fixed in a5ca441 |
+| 5 | Rejected consults fill the kit directory | fixed in 73aa1b3 |
+| 6 | A refused consult can stop a running pipeline | fixed in 73aa1b3 |
+| 7 | Discotrade consultations lack reviews | dismissed: §42 defines a human-started consultation as one whose reason stands in place of a review, and hands' shipped role instruction (architect/CLAUDE.md, b956e2a) tells the role so; another project's own standing instructions are that project's chat's to update with the instruction paste §42 makes due after this release, not hands' code |
