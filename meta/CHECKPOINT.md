@@ -1,29 +1,34 @@
 # CHECKPOINT
 
-Mission: 26 (meta/BUILDER-26-PROMPT.md, DESIGN v3.25 §42 with §27, §31,
-§33, §36, §38; meta/reviews/REVIEW-25.md).
-Branch: `mission-26`, from main 9877b57; every unit commits and pushes to
-it; U5 opens the PR, reads the hosted review, fixes, returns the tree to main.
+Mission: 27 (meta/BUILDER-27-PROMPT.md, DESIGN v3.26 §43 with §10, §12,
+§14, §23, §24, §32, §33, §34, §36, §39, §41, §42; meta/reviews/REVIEW-26.md,
+meta/reviews/REVIEW-25.md should-fix 1).
+Branch: `mission-27`, from main 1b822a5; every unit commits and pushes to
+it; U7 opens the PR, reads the hosted review, fixes, returns the tree to main.
 
-Done: U0 5c1c9c3 (`plan:`) — plan, checkpoint, H-070/H-071 (mission 27), H-072 (closed by U4); origin/mission-26 pushed; green 3/3 (4659).
+Done: U0 (the `plan:` commit) — plan, branch, findings (H-074, H-075, H-076 filed;
+H-070/H-071 "decided (DESIGN §42, §43), scheduled for U4"; H-073 "decided
+(DESIGN §43), scheduled for U2"), FINAL-REPORT-25 correction line. Pushed;
+`origin/mission-27` exists.
 
-Done: U1 b956e2a — phone `consult` + `hands consult` start an architect job of origin playbook via the engine; refusals titled consult; budget, un-pause, consult.sent/done fields, journal line; architect/CLAUDE.md rule 14 + rule 13 routes 4/5; handbook §16; also docs/INTEGRATION.md command list; green 3/3 (4738; one unrelated flake in test_operations staged '..' once, not reproduced). Not proven: refusal while architect queued, restart mid human consult.
+Next: U1 — the base (DESIGN copies, H-076, review 26's untested refusals).
 
-Done: U2 d222109 — new src/hands/digest.py; `hands digest` (+--json) and phone `digest <secret>`; redact before cut; unloadable config by file only; down daemon; guard pin; OPERATIONS.md no-phone `digest` row (consult row left for U4); green 3/3 (4752).
-
-Done: U3 592fc6e — kit.py recognises a decisions kit (6 of 6, plan-only apply prompt), 14 non-decisions variants judged as before; kit apply and phone kit file the apply; api kit_file refuses it; template §R owner-file sentence pinned; handbook §3, §4, §11; green 3/3 (4782).
-
-Done: U4 79eb270 — handbook §10 row, §13, §14, §18, new §19 operator table (tests/test_operator_table.py, 41 tests); instruction opening, rules 3/9/12/14, rule 15 pinned to §42; OPERATIONS consult row; INTEGRATION H-072 (no CLI ceiling in 2.1.302); H-072 resolved-by-doc; green 3/3 (4823).
-
-Done: U5 ce2088b (report), 73aa1b3 (consult: hosted findings 2, 5, 6), a5ca441 (docs: findings 3, 4), (this commit) the Hosted review table + archive PR-6/1..2; H-073 filed (finding 1); finding 7 dismissed; bot fetch 2: 2 of 7 open (1 and 7). green 3/3 (4834).
-Mission 26 — FINISHED after this push; PR #6 open; tree returns to main.
+Base at U0's start (red, expected): three gate runs at 1b822a5, each
+`1 failed, 4833 passed`, the one red test
+`tests/test_playbook.py::test_the_fixture_is_section_10s_example_verbatim` —
+the kit's DESIGN edit to §10's example (`monitor.task_killed` → notify)
+while `tests/fixtures/playbook_example.toml` still carries the old rule.
+U0 commits only meta/ with it red; U1 turns it green. No other test red in
+any of the three runs (H-076 evidence: none of the intermittent tests
+failed).
 
 Standing constraints: one foreground sub-agent per unit, commit and push every
-unit to `mission-26`, ./scripts/check green three consecutive runs before each
-commit (each a foreground call, 15-minute / 900000 ms timeout), explicit paths
-only in `git add` (never `-A`), reports drafted under meta/drafts/, DESIGN.md
-is not edited by builders (file a finding), sub-agents do not edit
-meta/plan.md or this file, retry a failed unit once then `[b]`; a `refused:`
-report is not retried. Not touched: the harness seam, review 25's should-fix
-1-3, H-070/H-071 builds, a local-model harness, any M9 command, credential
-profiles, the `builder.limited` rule; no host change.
+unit to `mission-27`, ./scripts/check green three consecutive runs before each
+commit (each a foreground call, 15-minute / 900000 ms timeout, written
+`./scripts/check; echo "check-exit=$?"`), explicit paths only in `git add`
+(never `-A`), reports drafted under meta/drafts/, DESIGN.md is not edited by
+builders (file a finding), sub-agents do not edit meta/plan.md or this file,
+retry a failed unit once then `[b]`; a `refused:` report is not retried. Not
+touched: the harness seam, review 25's should-fix 2 and 3, a local-model
+harness, any M9 command, credential profiles, docs/ARCHITECT-INSTRUCTION.md,
+this repository's PLAYBOOK.toml; no host change.

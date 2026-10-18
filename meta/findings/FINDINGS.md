@@ -2687,7 +2687,7 @@ protocols drop the twelve lines and say what a report holds — the sha, a
 verdict per point, what is not proven, and for the hosted-review sub-agent
 every finding verbatim. The brief template keeps its twelve lines.
 
-Status: decided (DESIGN §42), scheduled for mission 27
+Status: decided (DESIGN §42, §43), scheduled for U4
 
 ## H-071 — the architect's guard refused read-only commands a consultation needed
 
@@ -2706,7 +2706,7 @@ and will be admitted in the guard's option sets for both guarded modes and
 in the architect's settings allow-list, each pinned with its neighbours
 still refused.
 
-Status: decided (DESIGN §42), scheduled for mission 27
+Status: decided (DESIGN §42, §43), scheduled for U4
 
 ## H-072 — a gate run on a shared machine ran past the timeouts
 
@@ -2749,4 +2749,102 @@ question`, or a `keep` send naming it), or whether the instruction paste
 due after this release asks each project's chat to add the sentence to its
 brief in flight. Not fixed in mission 26: the routes are §42's text.
 
-Status: open
+Status: decided (DESIGN §43), scheduled for U2
+
+## H-074 — a long gate backgrounded with no sanctioned wait, and the variable that stops it refused by hands' own hook
+
+Severity: medium · Component: .claude/hooks/no_background.py,
+src/hands/runner.py, src/hands/doctor.py, pyproject.toml,
+templates/BUILDER-N-PROMPT.md, both review protocols,
+docs/ARCHITECT-HANDBOOK.md §7, docs/INTEGRATION.md §21; DESIGN §43
+Filed by: mission 27 orchestrator, U0 (2026-10-18), carried from another
+project's ledger.
+Evidence: discotrade, its HF-015 and HF-016, 2026-10-18; its commit
+5ca133c; its jobs 0mvdoby7d-j90u, 0mvdxwh7s-y3e4 and 0mvdxy6xp-ysvh; its
+hook copy's commit 3fbed1d (2026-10-11, the same bytes as hands' main).
+Claude Code 2.1.300, read from its binary's strings on 2026-10-18 (nothing
+run; the `Agent` schema confirmed by that project's probe under 2.1.302):
+the `sleep` refusal (a first statement `sleep N`, N ≥ 25 s) is Claude
+Code's own guard; for a command moved to the background the harness
+advises one foreground command that blocks until the output file shows
+what is needed; `BASH_MAX_TIMEOUT_MS` has no ceiling and a call's
+effective timeout is the smaller of its own and that variable;
+`CLAUDE_CODE_DISABLE_BACKGROUND_TASKS` counts as set only when its value,
+trimmed, is `1`, `true`, `yes` or `on` in any case, and then no command is
+moved to the background, the `sleep` guard is off, a sub-agent always
+launches in the foreground, `SendMessage` runs inline, and the `Agent`
+schema has no `run_in_background`; hands' hook refuses an omitted or null
+flag (§23, H-014), so under the variable every sub-agent call is refused;
+a hook's environment is the session's.
+
+Problem. HF-015: a builder's long gate reached its timeout, the harness
+moved it to the background, and nothing hands ships gave the builder a
+sanctioned way to wait. HF-016: the project set the variable to stop the
+backgrounding, and its builder could not start a sub-agent, because
+hands' own hook refused every call (one stop; the variable was removed).
+
+Direction. DESIGN §43 rules 1–6: the hook admits an omitted or null flag
+under the variable's true spellings; the wheel ships the hook; doctor
+warns on a role's copy that is not the installed hands' copy; the runner
+sets the variable for a builder or aux job only when the role's copy is
+the installed copy; the role's env table decides either way and an
+inherited value reaches no job; the wait rule (prevent, an exit marker, a
+blocking foreground wait) in the brief template, both protocols and the
+handbook's §7.
+
+Status: decided (DESIGN §43), scheduled for U3 and U4
+
+## H-075 — a role-filed kit that carries the playbook is approved by the engine under autonomy
+
+Severity: medium · Component: src/hands/playbook.py (`_release_kit`),
+src/hands/kit.py (`kit check`), architect/CLAUDE.md rules 3 and 8,
+docs/ARCHITECT-HANDBOOK.md §3, §6, §12, §19; DESIGN §43
+Filed by: mission 27 orchestrator, U0 (2026-10-18).
+Evidence: found 2026-10-18 by the architect while checking another
+project's budget raise; scheduled by the human at 17:24.
+
+Problem. Under `[series] architect = "role"` with `autonomous = true` the
+engine approves every apply of a kit the architect role filed, judging its
+provenance and never its content. A kit carrying `PLAYBOOK.toml` or
+`meta/PLAYBOOK.toml` is approved too, so the role could raise its own
+`max_architect_consults`, drop a stop rule or change the kickoff without
+the human seeing it.
+
+Direction. DESIGN §43 "A playbook change is the owner's": `_release_kit`,
+after `kit_apply_problem` accepts and `_kit_bytes_unchanged` verifies,
+holds such an apply for the human with its buttons and the reason §43
+gives; no engine kickoff after the human approves it, the playbook's `kit
+applied` rule fires; `hands kit check` prints a `WARN playbook:` line.
+
+Status: decided (DESIGN §43), scheduled for U5
+
+## H-076 — `test_kit_apply_refuses_a_staged_name_with_dot_dot` fails intermittently
+
+Severity: medium · Component: tests/test_operations.py (and the code it
+drives, if the race is there); DESIGN §43
+Filed by: mission 27 orchestrator, U0 (2026-10-18), from REVIEW-26
+should-fix 1.
+Evidence: `tests/test_operations.py::test_kit_apply_refuses_a_staged_name_with_dot_dot`
+failed twice at b956e2a (mission 26 U1): once in the builder's U1 gate
+and once in the review's run, `1 failed, 4737 passed`; green alone, with
+its file and at every other commit. The test dates from mission 24
+(2f9e219). Leads (the architect's sandbox, 2026-10-18, at f16d6d1 and with
+the mission-27 kit applied, run as uid 0 on a loaded machine):
+`tests/test_library.py::test_open_refuses_a_running_job` failed in both
+full-suite runs and passed alone;
+`tests/test_gates.py::test_cancel_is_gated_by_default_and_approval_performs_it`
+failed in one full-suite run and once alone, then passed alone. At U0 on
+the laptop (mission-27 from 1b822a5, the kit applied), three full gate
+runs failed only `test_the_fixture_is_section_10s_example_verbatim` (the
+expected base red), `1 failed, 4833 passed` each; none of the three tests
+above failed.
+
+Problem. A gate that can go red on an unchanged tree is a gate nobody can
+read.
+
+Direction. DESIGN §43 "The intermittent test": find the race and fix it,
+in the test or the code; if no cause is found, run the test in a loop
+under the suite's conditions, record the count and result here, and pin
+what can be pinned.
+
+Status: open, scheduled for U1
