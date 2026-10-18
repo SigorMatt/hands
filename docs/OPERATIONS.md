@@ -272,6 +272,8 @@ Every phone command has a laptop form. The phone's command words are those of
 | `kit <secret>`, with the zip attached | `hands kit apply <zip>`, then `hands approve <job>` | Checked as `hands kit check` checks, copied into `kit_dir`, filed as a held apply of origin `kit`. |
 | `reply <secret> <text>` | none: `hands send --role architect` is refused (§27, §32) | `hands open <architect job>` resumes that session in a terminal (`claude --resume`, in the role's cwd); handsd records no job for it and the engine reads nothing from it. |
 | `answer <secret> <text>` | `hands send --role builder --context keep "<text>"`, or `--prompt-file <file>` | Unlike `answer`, it passes §8's gate patterns: a text that matches one is held for `hands approve`. A file for the builder goes under `allowed_roots` first (`hands put`), named in the text. |
+| `consult <secret> <reason>`, a `.md` file may be attached | `hands consult [--file <path>] [<reason>]` | Through the daemon's socket, `requested_by: cli`; the same refusals as the phone's, and the file read under the same name and size rules (§42). |
+| `digest <secret>` | `hands digest` | One line per project on the machine; needs no daemon (§42). |
 | `status`, `who`, `check` or `?` on `who_cmd_topic` | `hands who` | |
 
 **The notification server's web page.** ntfy serves a web app at its

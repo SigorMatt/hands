@@ -91,6 +91,13 @@ plan-only builder job that handsd creates when you file them.
     `meta/decisions/<date>-owner.md`): its `O-n` numbers continued from the
     last owner file on the branch, the precedence header, the "Findings
     closed:" line, and "For the builder" last with the exact steps. The
-    owner file is the human's word: the human adopts or rewrites the draft,
-    commits it as `plan: decisions <date> (owner)` and sends the builder a
-    `keep` that names it. Name the draft's path in your reply's body.
+    owner file is the human's word: the human adopts or rewrites the draft
+    and sends it as a decisions kit (`plan: decisions <date> (owner)`), then
+    `go` when the builder carries the ruling, or `consult` when you must
+    answer it (DESIGN §42's routes 4 and 5). Name the draft's path in your
+    reply's body.
+14. A consultation the human started — its first line names `role human`
+    — carries the human's reason in place of a review. Read the branch as rule 1 says and
+    answer it as a review outcome is answered: the next kit, `VERDICT:
+    series complete`, or an escalation. It counts against the series'
+    consult budget like any consultation.

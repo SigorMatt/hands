@@ -413,6 +413,21 @@ Notes that are easy to get wrong:
   where the no-background hook cannot see it, and a three-minute gate was moved
   so. Driver and architect jobs do not get them from hands. Doctor prints both
   effective values on the builder and aux rows.
+  A project whose gate runs longer than 15 minutes raises `BASH_DEFAULT_TIMEOUT_MS`
+  and `BASH_MAX_TIMEOUT_MS` in its `[roles.builder.env]` and `[roles.aux.env]`
+  — an edit of its own config at the laptop, or an aux prompt its own chat
+  gives — and its briefs name a timeout no longer than that (DESIGN §42,
+  H-072: a gate on a shared machine took 1281 s). hands' default is
+  unchanged, and hands' own briefs name 15 minutes (900000 ms). The installed
+  Claude Code CLI has no ceiling of its own on `BASH_MAX_TIMEOUT_MS`: in
+  2.1.302 it takes any positive number of milliseconds, raised to
+  `BASH_DEFAULT_TIMEOUT_MS` when that is larger, and is 600000 when unset. Found by
+  reading the CLI's bundled JavaScript inside its native binary
+  (`~/.local/share/claude/versions/2.1.302`, the target of the `claude` on
+  PATH) with `grep -a` for the variable's name, never by running it; the
+  only bound beside it is a cap of 2147483647 ms, JavaScript's longest timer,
+  on another limit the CLI derives from it. Read it again after a CLI
+  upgrade.
   Every role job's environment also carries `HANDS_PROJECT`, the config's
   project name (§36, H-043), over handsd's own environment and this table
   alike; doctor prints it on each role's row as `env HANDS_PROJECT=<project>`.
@@ -659,7 +674,7 @@ is stamped before anything the resumed job goes on to publish. An exhausted
 ### The command channel: approve from the phone
 
 With `[notify] cmd_topic` set, handsd subscribes to that topic — an outbound
-long poll to ntfy, nothing listening on this machine — and takes ten commands
+long poll to ntfy, nothing listening on this machine — and takes twelve commands
 from it. Set it up once:
 
     python3 -c 'import secrets; print("hands-<project>-cmd-" + secrets.token_urlsafe(16))'
@@ -679,7 +694,7 @@ to start. So does a secret with a blank inside it, and a `cmd_topic` equal to
 `ntfy_topic`.
 
 Publish a command to `cmd_topic` from the ntfy app. The last word is the token
-(but for `reply` and `answer`, whose second word is the secret):
+(but for `reply`, `answer` and `consult`, whose second word is the secret):
 
     approve <job> <secret>
     deny <job> [reason words] <secret>
@@ -691,6 +706,8 @@ Publish a command to `cmd_topic` from the ntfy app. The last word is the token
     kit <secret>                  (with a .zip attached to the message)
     reply <secret> <text>
     answer <secret> <text>        (a .zip may be attached to the message)
+    consult <secret> <text>       (a .md may be attached to the message)
+    digest <secret>
 
 - `approve` and `deny` decide a **held** job, exactly as `hands approve|deny`
   does, and the job record says `decided_by: phone`. `pause` and `resume` are
@@ -789,6 +806,38 @@ Publish a command to `cmd_topic` from the ntfy app. The last word is the token
   `hands send --role builder --context keep` and every committed
   `meta/decisions/*-owner.md`) since its last one, under "Decided by the human
   since your last consultation".
+- `consult` asks the engine for one architect consultation (DESIGN §42), in
+  role mode only. `consult <secret> <text>` starts an architect job of origin
+  `playbook` whose prompt is the architect's consult prompt with your reason —
+  the text, then an attached `.md` file's text — in place of the review's
+  sections, under "The human's reason for this consultation"; its first line is
+  `hands consult: consult on job none (role human)`. It counts against
+  `[limits] max_architect_consults`, its verdict is read as any
+  consultation's, its kit is filed and applied as any, and it un-pauses a
+  stopped pipeline. The secret is the approval: nothing is held. handsd answers
+  titled `hands: consult` with the job id; the inbox's `consult.sent` names the
+  phone and carries the reason's sha256, never the reason. It is refused, and
+  the refusal published titled `consult`, without `[series] architect = "role"`
+  or `[roles.architect]`, while an architect, builder or aux job is running,
+  queued or held or a `next kit` wait is open, when the reason is empty, when
+  the budget is spent, and when the prompt passes the 10 MB cap. The attachment
+  is judged as a kit's is, but by its own name rule (a plain `.md` name) and a
+  256 KiB cap, fetched into `kit_dir` (the first free `<stem>-<n>.md` when the
+  name is taken) and read as UTF-8. `hands consult [--file <path>] [<text>]` is
+  the same at the laptop.
+- `digest` (DESIGN §42) answers on `ntfy_topic`, titled `digest`, with the
+  lines `hands digest` prints at the laptop: one per project configured on the
+  machine (every `~/.hands/<project>.toml`, in name order) — the project; its
+  daemon, `up` when its socket answers `status` within two seconds, else `down`;
+  its pipeline, `running` or `paused`; the mission number from the first
+  `Mission:` line of the builder's `meta/CHECKPOINT.md`, else `-`; the builder,
+  `running <job> <age>` or `idle`, with the newest builder job's verdict line cut
+  to 60 characters; `architect <used>/<budget>` in role mode, else `driver
+  <used>/<budget>`; and the last stop's time and the first line of its reason cut
+  to 100 characters, or `no stop`. Every project's `cmd_secret` and `ntfy_token`
+  is redacted (`[redacted]`) before any field is cut. A config that does not load
+  is one line naming its file only, never the loader's message. It is read-only:
+  it starts no job, and `hands digest` needs no daemon.
 - **The buttons.** With the channel on, a held job's notification has Approve
   and Deny buttons. Each publishes `approve <job> <nonce>` or `deny <job>
   <nonce>` to `cmd_topic`. The nonce is 32 random bytes minted for that one job
@@ -799,7 +848,7 @@ Publish a command to `cmd_topic` from the ntfy app. The last word is the token
   buttons (§34), and names each by title in its `handsd started` notification.
   `hands approve <job>` / `hands deny <job>`, or `approve <job> <secret>` on
   `cmd_topic`, decide a held job all the same. `pause`, `resume`,
-  `status`, `progress` and `go` take the secret only, never a nonce. With
+  `status`, `progress`, `go` and `digest` take the secret only, never a nonce. With
   `ntfy_token` set each button also carries the bearer, so a token-protected
   server accepts the press (§38; "Self-hosted ntfy over Tailscale").
 - **A command with the right secret is always answered; nothing else is**

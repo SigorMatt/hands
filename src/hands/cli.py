@@ -25,12 +25,19 @@ from pathlib import Path
 from typing import Any, TextIO
 
 from hands import __version__, doctor
+from hands import digest as digest_mod
 from hands import hosted as hosted_mod
 from hands import kit as kit_mod
 from hands import notify as notify_mod
 from hands import project as project_mod
 from hands import who as who_mod
-from hands.api import MAX_TAIL_ENTRIES, TAIL_WINDOW_BYTES
+from hands.api import (
+    MAX_TAIL_ENTRIES,
+    TAIL_WINDOW_BYTES,
+    consult_file_problem,
+    consult_file_text,
+    consult_reason,
+)
 from hands.api import TIMEOUT as TIMEOUT_CODE
 from hands.config import (
     Config,
@@ -331,6 +338,21 @@ def build_parser() -> argparse.ArgumentParser:
         "origin cli; refused while a builder job is running, queued or held, as the "
         "phone's go is (§26, §40)",
     )
+    # §42: the phone's `consult` from the laptop — a daemon method outside §4's table.
+    consult = command(
+        "consult",
+        "have the engine start one architect consultation whose prompt carries your "
+        "reason in place of a review, requested_by cli; role mode only, refused while "
+        "any role has a job running, queued or held, and counted against [limits] "
+        "max_architect_consults; it un-pauses a stopped pipeline (§42)",
+    )
+    consult.add_argument(
+        "--file",
+        dest="consult_file",
+        metavar="PATH",
+        help="a .md file (UTF-8, at most 256 KiB) whose text follows the reason",
+    )
+    consult.add_argument("text", nargs="?", default="", help="the reason")
     command("pause", "pause the playbook engine")
     command("resume", "unpause the playbook engine")
     command("status", "daemon, roles, running jobs, monitor state")
@@ -361,6 +383,14 @@ def build_parser() -> argparse.ArgumentParser:
         f"move the flat spool ({', '.join(FLAT_ITEMS)} directly under ~/.hands) to "
         "~/.hands/hands/ and record the move in its inbox (§29); refused while a daemon "
         "answers, or when ~/.hands/hands exists",
+    )
+    # §42: answered by the client with no daemon, over every config on the machine.
+    command(
+        "digest",
+        "print one line per project configured in ~/.hands, in name order: its daemon "
+        "(up or down), pipeline, mission, builder, consultations and last stop, with "
+        "every project's cmd_secret and ntfy_token redacted; a config that does not "
+        "load is named by its file only (§42). Read-only; needs no daemon",
     )
     # §38 (HF-002): answered by the client with no daemon and no config, like
     # `kit check`: where this hands' own handbook and templates are.
@@ -738,7 +768,7 @@ def _render(command: str, result: Any) -> str:
     if command == "wait" and isinstance(result, dict) and "kind" in result:
         return _event_line(result)  # `wait --for` answers with an event, not a job
     if command in (
-        "result", "show", "wait", "send", "cancel", "approve", "deny", "go"
+        "result", "show", "wait", "send", "cancel", "approve", "deny", "go", "consult"
     ) and isinstance(result, dict):
         return _job_block(result)
     if command in ("put", "get") and isinstance(result, dict):
@@ -844,6 +874,10 @@ def main(
             )
         if command == "migrate-spool":
             return _migrate_spool(out=out, err=err, as_json=as_json)
+        if command == "digest":
+            lines = digest_mod.digest_lines()
+            print(json.dumps({"lines": lines}) if as_json else "\n".join(lines), file=out)
+            return 0
         if command == "handbook":
             return _handbook(args.templates, out=out, err=err, as_json=as_json)
         if command == "hosted-review":
@@ -939,6 +973,13 @@ def main(
                 f"tail -n takes 1 or more, not {args.n}; "
                 f"the answer is capped at {MAX_TAIL_ENTRIES} entries (§4)"
             )
+        # §42: `consult` sends the reason the client makes from the text and the file.
+        if command == "consult":
+            reason = _consult_reason(args.text or "", args.consult_file)
+            result = call(socket_path, "consult", {"reason": reason}, project=project)
+            print(json.dumps(result, sort_keys=True) if as_json else _render(command, result),
+                  file=out)
+            return 0
         # §40: `go` takes no params, and is not a row of §4's table that `_PARAMS` pins.
         params = {} if command == "go" else {
             key: value for key, value in _PARAMS[command](args).items() if value is not None
@@ -1496,6 +1537,39 @@ def _checked_prompt(text: str, where: str) -> str:
             f"{MAX_PROMPT_BYTES} byte cap of §2" + advice
         )
     return text
+
+
+def _consult_reason(text: str, where: str | None) -> str:
+    """§42: `hands consult`'s reason — `text`, and the `--file`'s text after it — with
+    the file read "under the same name and size rules" the phone's attachment
+    meets: a `.md` basename, at most 256 KiB, UTF-8. A file the rules refuse is
+    `Refused` here, before the daemon is asked. An empty reason is the daemon's to
+    refuse, as the phone's is."""
+    if where is None:
+        return consult_reason(text, None)
+    path = Path(where).expanduser()
+    named = f"--file {path}"
+    try:
+        info = path.stat()
+    except OSError as exc:
+        raise Refused(f"{named}: {exc.strerror or exc}") from exc
+    if not stat.S_ISREG(info.st_mode):
+        raise Refused(f"{named} is not a regular file")
+    problem = consult_file_problem(path.name, info.st_size, named)
+    if problem is not None:
+        raise Refused(problem)
+    try:
+        data = path.read_bytes()
+    except OSError as exc:
+        raise Refused(f"{named}: {exc.strerror or exc}") from exc
+    problem = consult_file_problem(path.name, len(data), named)
+    if problem is not None:
+        raise Refused(problem)
+    try:
+        attached = consult_file_text(data, named)
+    except ValueError as exc:
+        raise Refused(str(exc)) from exc
+    return consult_reason(text, attached)
 
 
 def _read_prompt_file(where: str) -> str:

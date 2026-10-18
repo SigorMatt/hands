@@ -91,6 +91,14 @@ The checks, in order (docs/ARCHITECT-HANDBOOK.md §11 says the same):
   file per job, so it is judged by its syntax only (placeholders read as `0`) and
   not read. A named path the check cannot resolve (`../X.md`, `~/X.md`,
   `../{n}.md`, `./scripts/check`) fails rather than being skipped (§27).
+
+§42 "The decisions kit": a kit holding only owner files
+(`meta/decisions/<name>-owner.md`) and a `KIT.md` whose first line passes §28's
+rules and reads `plan: decisions <date> (owner)` (`decisions_owner_files`) has no
+brief and no playbook; `brief`, `verdicts` and `wording` pass it, each saying why
+it applies no brief, and `paths`, `playbook` and `protocol` run as for any kit. A
+kit with any other entry is judged as above. `Report.decisions` says which, and
+handsd's `kit_file` refuses a decisions kit (an owner file is the human's word).
 """
 
 from __future__ import annotations
@@ -149,6 +157,7 @@ __all__ = [
     "apply_prompt",
     "build_zip",
     "check_kit",
+    "decisions_owner_files",
     "file_run",
     "final_reply_literals",
     "home_shown",
@@ -184,6 +193,13 @@ KIT_MD = "KIT.md"
 KIT_MD_MAX = 72
 #: §28: "no quote characters" — the three the shell quotes with.
 KIT_MD_QUOTES = "'\"`"
+#: §42 "The decisions kit": an owner file `meta/decisions/<name>-owner.md` whose
+#: `<name>` is one non-empty path component (the engine's owner-file glob,
+#: `hands.playbook.DECISIONS_DIR` and `OWNER_SUFFIX`), and the `KIT.md` first line
+#: the apply commits under, the message §R looks for. §42 does not say what
+#: `<date>` is; it is read as one non-empty run of non-space characters.
+OWNER_FILE_RE = re.compile(r"meta/decisions/[^/]+-owner\.md")
+DECISIONS_MESSAGE_RE = re.compile(r"plan: decisions \S+ \(owner\)")
 #: Where `kit check` says the kit lands: `[files] kit_dir`'s default (§26). It has
 #: no config to read, so a daemon with another `kit_dir` names another path, and
 #: its prompt differs from this one in that location only (review 11 SF9).
@@ -309,6 +325,9 @@ class Report:
     #: §40 (H-061): the playbook in force's warnings; printed `WARN playbook: …`,
     #: and none of them fails a check.
     warnings: list[str] = field(default_factory=list)
+    #: §42: the kit is a decisions kit (`decisions_owner_files`), so `brief`,
+    #: `verdicts` and `wording` pass it, and `hands kit file` refuses it.
+    decisions: bool = False
 
     @property
     def ok(self) -> bool:
@@ -329,6 +348,7 @@ class Report:
             "apply_prompt": self.apply_prompt,
             "kit_md": self.kit_md,
             "warnings": self.warnings,
+            "decisions": self.decisions,
         }
 
 
@@ -1316,6 +1336,47 @@ def kit_md_note(plan: Apply) -> str:
     return shape + f"this kit carries no {KIT_MD}, so the message is '{plan.commit_message}'"
 
 
+def decisions_owner_files(kit: _Kit) -> list[str]:
+    """§42 "The decisions kit": the kit's owner files when it is one, else `[]`.
+
+    It is one when every file entry is `KIT.md` or an owner file (`OWNER_FILE_RE`)
+    — directory entries are not file entries, and an entry the path rules refuse
+    (`kit.problems`) counts as another entry — with at least one owner file, and
+    its `KIT.md` first line passes §28's rules (`kit_md_message`) and reads
+    `plan: decisions <date> (owner)` (`DECISIONS_MESSAGE_RE`). No playbook can be
+    in it, since a playbook is another entry.
+    """
+    if kit.problems or KIT_MD not in kit.files:
+        return []
+    owners = sorted(name for name in kit.files if OWNER_FILE_RE.fullmatch(name))
+    if not owners or len(owners) + 1 != len(kit.files):
+        return []
+    message, _rule = kit_md_message(kit.files[KIT_MD])
+    if message is None or not DECISIONS_MESSAGE_RE.fullmatch(message):
+        return []
+    return owners
+
+
+def _decisions_checks(owners: list[str], message: str) -> tuple[Check, Check, Check]:
+    """§42: what `brief`, `verdicts` and `wording` say of a decisions kit: each
+    passes, saying why it applies no brief."""
+    held = _and(owners)
+    return (
+        Check(
+            "brief",
+            True,
+            f"a decisions kit (§42): {held} and {KIT_MD}, committed as '{message}'; "
+            "it needs no brief",
+        ),
+        Check(
+            "verdicts",
+            True,
+            "a decisions kit carries no vocabulary and the playbook in force is unchanged",
+        ),
+        Check("wording", True, "a decisions kit holds no brief"),
+    )
+
+
 def check_kit(
     path: Path, repo: Path, *, project: str | None = None, config: Config | None = None
 ) -> Report:
@@ -1323,17 +1384,27 @@ def check_kit(
     against `config` when given — handsd's own, in `Api.kit_file` (§33) — else
     against the config `project` names, resolved as `hands` resolves one (§32)."""
     kit = _read_kit(path)
-    brief_check, brief_name, brief_text = _find_brief(kit)
-    kickoff = kickoff_line(brief_text) if brief_text is not None else None
-    literals = final_reply_literals(brief_text) if brief_text is not None else None
-    playbook_check, book = _check_playbook(kit, repo, kickoff, project, config)
-    review = _review_vocabulary(book, kit, repo)
+    owners = decisions_owner_files(kit)
+    if owners:
+        # §42: no brief and no playbook; `paths`, `playbook` and `protocol` run as
+        # for any kit, and the playbook in force is the repo's.
+        playbook_check, book = _check_playbook(kit, repo, None, project, config)
+        message, _rule = kit_md_message(kit.files[KIT_MD])
+        brief_check, verdicts_check, wording_check = _decisions_checks(owners, str(message))
+    else:
+        brief_check, brief_name, brief_text = _find_brief(kit)
+        kickoff = kickoff_line(brief_text) if brief_text is not None else None
+        literals = final_reply_literals(brief_text) if brief_text is not None else None
+        playbook_check, book = _check_playbook(kit, repo, kickoff, project, config)
+        review = _review_vocabulary(book, kit, repo)
+        verdicts_check = _check_verdicts(book, literals, review)
+        wording_check = _check_wording(brief_name, brief_text)
     checks = [
         _check_paths(kit, repo),
         playbook_check,
         brief_check,
-        _check_verdicts(book, literals, review),
-        _check_wording(brief_name, brief_text),
+        verdicts_check,
+        wording_check,
         _check_protocol(book, kit, repo),
     ]
     plan = plan_apply(
@@ -1350,6 +1421,7 @@ def check_kit(
         kit_md_note=kit_md_note(plan),
         sha256=kit.sha256,
         warnings=orphaned_rule_warnings(book) if book is not None else [],
+        decisions=bool(owners),
     )
     if report.ok:
         report.apply_prompt = plan.prompt
@@ -1425,14 +1497,33 @@ def is_kit_file_name(name: object) -> bool:
     name written is the name the sender chose. The phone's `kit` and `hands kit
     apply` (§40) judge a kit's file name by this one rule.
     """
+    return is_basename_with_suffix(name, KIT_FILE_SUFFIX)
+
+
+#: §26: the one extension a kit's file name may end in.
+KIT_FILE_SUFFIX = ".zip"
+#: §42: the one extension the file a `consult` carries may end in.
+CONSULT_FILE_SUFFIX = ".md"
+
+
+def is_consult_file_name(name: object) -> bool:
+    """§42: the name rule of the file a `consult` carries (the phone's attachment,
+    `hands consult --file`) — the kit's rule (`is_kit_file_name`) with a lowercase
+    `.md` in place of `.zip`."""
+    return is_basename_with_suffix(name, CONSULT_FILE_SUFFIX)
+
+
+def is_basename_with_suffix(name: object, suffix: str) -> bool:
+    """A printable basename with no `/` or `\\`, no leading dot and a non-empty stem,
+    ending in `suffix` exactly (lowercase): §26's rule, and §42's with `.md`."""
     return (
         isinstance(name, str)
         and name.isprintable()
         and "/" not in name
         and "\\" not in name
         and not name.startswith(".")
-        and name.endswith(".zip")
-        and len(name) > len(".zip")
+        and name.endswith(suffix)
+        and len(name) > len(suffix)
     )
 
 

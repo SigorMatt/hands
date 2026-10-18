@@ -1,31 +1,29 @@
 # CHECKPOINT
 
-Mission: 25 (meta/BUILDER-25-PROMPT.md, DESIGN v3.24 §41 with §39, §40;
-meta/reviews/REVIEW-24.md; docs/HARNESS-PROBE.md).
-Branch: `mission-24` (PR #5, open), main 20aac9f merged in at cc2a9e5;
-every unit commits and pushes to it; U6 opens no PR, reads the hosted
-review again, fixes, and returns the tree to main.
+Mission: 26 (meta/BUILDER-26-PROMPT.md, DESIGN v3.25 §42 with §27, §31,
+§33, §36, §38; meta/reviews/REVIEW-25.md).
+Branch: `mission-26`, from main 9877b57; every unit commits and pushes to
+it; U5 opens the PR, reads the hosted review, fixes, returns the tree to main.
 
-Done: U0 (`plan:`) — main merged at cc2a9e5, H-062 note; green 3/3 (4636).
+Done: U0 5c1c9c3 (`plan:`) — plan, checkpoint, H-070/H-071 (mission 27), H-072 (closed by U4); origin/mission-26 pushed; green 3/3 (4659).
 
-Done: U1 11cd19c — find and the record read through `failed`; cut inside the redactor after redaction; 5 tests (hanging find/python3, straddle 4000, URL-encoded, by-value ntfy.password), -k 5 pinned; green 3/3 (4641).
+Done: U1 b956e2a — phone `consult` + `hands consult` start an architect job of origin playbook via the engine; refusals titled consult; budget, un-pause, consult.sent/done fields, journal line; architect/CLAUDE.md rule 14 + rule 13 routes 4/5; handbook §16; also docs/INTEGRATION.md command list; green 3/3 (4738; one unrelated flake in test_operations staged '..' once, not reproduced). Not proven: refusal while architect queued, restart mid human consult.
 
-Done: U2 2f9e219 — staged_path/read_staged O_NOFOLLOW|O_NONBLOCK + fstat; remove_staged in api finally; 8 socket-client cases ('..', symlink, FIFO guarded, dir, missing, .part removed x3); green 3/3 (4649).
+Done: U2 d222109 — new src/hands/digest.py; `hands digest` (+--json) and phone `digest <secret>`; redact before cut; unloadable config by file only; down daemon; guard pin; OPERATIONS.md no-phone `digest` row (consult row left for U4); green 3/3 (4752).
 
-Done: U3 f53ec39 — tests only (code already right): two sessions same task id, 1025th evicts oldest, backslash ambiguous prefix, cap counts journal sentence dirty/clean; each mutation red; green 3/3 (4654).
+Done: U3 592fc6e — kit.py recognises a decisions kit (6 of 6, plan-only apply prompt), 14 non-decisions variants judged as before; kit apply and phone kit file the apply; api kit_file refuses it; template §R owner-file sentence pinned; handbook §3, §4, §11; green 3/3 (4782).
 
-Done: U4 f0eb0d0 — kit.py unchanged (warning already unconditional), pinned (no-kickoff case red under the mutation); stale defined in both protocols and handbook §7; opening remove --force and closing prune pinned by paragraph; green 3/3 (4659).
+Done: U4 79eb270 — handbook §10 row, §13, §14, §18, new §19 operator table (tests/test_operator_table.py, 41 tests); instruction opening, rules 3/9/12/14, rule 15 pinned to §42; OPERATIONS consult row; INTEGRATION H-072 (no CLI ceiling in 2.1.302); H-072 resolved-by-doc; green 3/3 (4823).
 
-Done: U5 4f46bda — Codex VERDICT partial + footnote; opening qualified; OpenCode/dsh re-checked, stay unavailable; on-request approval row left a gap (no approval event, bwrap fails, file absent); grep -c redacted = 3; green 3/3 (4659).
-
-Done: U6 (this commit) — meta/FINAL-REPORT-25.md (NOT PROVEN, Review items, Hosted review); archive PR-5/4..5; bot at 4f46bda: 1 of 9 open (sub-agents/protected metadata, dismissed again); no fix needed.
-Mission 25 — FINISHED after this push; PR #5 open for review 25; tree returns to main.
+Done: U5 ce2088b (report), 73aa1b3 (consult: hosted findings 2, 5, 6), a5ca441 (docs: findings 3, 4), (this commit) the Hosted review table + archive PR-6/1..2; H-073 filed (finding 1); finding 7 dismissed; bot fetch 2: 2 of 7 open (1 and 7). green 3/3 (4834).
+Mission 26 — FINISHED after this push; PR #6 open; tree returns to main.
 
 Standing constraints: one foreground sub-agent per unit, commit and push every
-unit to `mission-24`, ./scripts/check green three consecutive runs before each
-commit (each a foreground call, 20-minute timeout), explicit paths only in
-`git add` (never `-A`), reports drafted under meta/drafts/, DESIGN.md is not
-edited by builders (file a finding), sub-agents do not edit meta/plan.md or
-this file, retry a failed unit once then `[b]`. Not touched: the backend
-seam, the credential profiles, the polish round, any M9 command (missions 26
-and 27), no host change (AppArmor is the human's).
+unit to `mission-26`, ./scripts/check green three consecutive runs before each
+commit (each a foreground call, 15-minute / 900000 ms timeout), explicit paths
+only in `git add` (never `-A`), reports drafted under meta/drafts/, DESIGN.md
+is not edited by builders (file a finding), sub-agents do not edit
+meta/plan.md or this file, retry a failed unit once then `[b]`; a `refused:`
+report is not retried. Not touched: the harness seam, review 25's should-fix
+1-3, H-070/H-071 builds, a local-model harness, any M9 command, credential
+profiles, the `builder.limited` rule; no host change.

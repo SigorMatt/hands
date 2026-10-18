@@ -3130,3 +3130,211 @@ def test_the_handbook_says_section_40s_rules(number: int, said: str) -> None:
     assert len(heads) == 1, number
     section = flat(text.split(heads[0], 1)[1].split("\n## ", 1)[0])
     assert said in strip_paths(section), f"handbook §{number} does not say {said!r}"
+
+
+# ------------------------- §42 "The decisions kit": an owner file sent as a kit
+
+DECISIONS_DATE = "2026-10-18"
+OWNER_PATH = f"meta/decisions/{DECISIONS_DATE}-owner.md"
+DECISIONS_MESSAGE = f"plan: decisions {DECISIONS_DATE} (owner)"
+
+
+def owner_text() -> str:
+    """An owner file from `templates/DECISIONS-owner.md`, its placeholders filled."""
+    return template("DECISIONS-owner.md").replace("<date>", DECISIONS_DATE).replace("<n>", "1")
+
+
+def decisions_kit() -> dict[str, str]:
+    return {OWNER_PATH: owner_text(), "KIT.md": f"{DECISIONS_MESSAGE}\n\nO-1.\n"}
+
+
+def zip_with_dirs(path: Path, files: dict[str, str]) -> Path:
+    """A zip as `zip -r` writes one: a directory entry for each directory, first."""
+    dirs = sorted({
+        "/".join(name.split("/")[:depth]) + "/"
+        for name in files
+        for depth in range(1, name.count("/") + 1)
+    })  # fmt: skip
+    with zipfile.ZipFile(path, "w") as archive:
+        for name in dirs:
+            archive.writestr(name, "")
+        for name, text in files.items():
+            archive.writestr(name, text)
+    return path
+
+
+@pytest.mark.parametrize("form", ["zip", "zip -r", "dir"])
+def test_a_decisions_kit_passes_six_of_six_with_the_plan_only_apply_prompt(
+    tmp_path: Path, repo: Path, form: str
+) -> None:
+    """§42: a kit of one owner file and a `KIT.md` reading `plan: decisions <date>
+    (owner)` passes 6 of 6 — `brief`, `verdicts` and `wording` each saying why it
+    applies no brief — and its apply prompt names that file and that message; built
+    with directory entries, as `zip -r` writes them, it passes too."""
+    if form == "zip":
+        kit = zip_kit(tmp_path / "decisions.zip", decisions_kit())
+    elif form == "zip -r":
+        kit = zip_with_dirs(tmp_path / "decisions.zip", decisions_kit())
+        with zipfile.ZipFile(kit) as archive:
+            dirs = [info.filename for info in archive.infolist() if info.is_dir()]
+        assert dirs == ["meta/", "meta/decisions/"], dirs
+    else:
+        kit = write_tree(tmp_path / "decisions", decisions_kit())
+    code, out, err = run_check(kit, repo)
+    assert code == 0, out + err
+    for name in CHECK_NAMES:
+        assert line(out, name).startswith(f"PASS {name}: "), out
+    assert "kit check: pass (6 of 6 checks)" in strip_paths(out)
+    brief, verdicts, wording = (strip_paths(line(out, n)) for n in ("brief", "verdicts", "wording"))
+    assert "a decisions kit" in strip_paths(brief) and "needs no brief" in strip_paths(brief), brief
+    assert "carries no vocabulary" in strip_paths(verdicts), verdicts
+    assert "the playbook in force is unchanged" in strip_paths(verdicts), verdicts
+    assert "holds no brief" in strip_paths(wording), wording
+    assert "the repo's PLAYBOOK.toml is in force" in strip_paths(line(out, "playbook")), out
+    said = flat(strip_paths(out))
+    assert (
+        "Apply ~/Downloads/decisions.zip to this repository: unzip -o into the repo root "
+        f"(it adds KIT.md and {OWNER_PATH}), then one plan-only sub-agent makes a single "
+        f"commit '{DECISIONS_MESSAGE}' listing those files in its body, and pushes."
+    ) in strip_paths(said), out
+    assert f"commit message: {DECISIONS_MESSAGE}" in strip_paths(out), out
+    report = kit_mod.check_kit(kit, repo)
+    assert report.decisions is True and report.ok
+    assert json.loads(run_check(kit, repo, "--json")[1])["decisions"] is True
+
+
+def test_two_owner_files_are_one_decisions_kit(tmp_path: Path, repo: Path) -> None:
+    files = {**decisions_kit(), "meta/decisions/2026-10-17-owner.md": owner_text()}
+    report = kit_mod.check_kit(zip_kit(tmp_path / "d.zip", files), repo)
+    assert report.decisions and report.ok, [c.line() for c in report.checks]
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"README.md": "# readme\n"},
+        {"PLAYBOOK.toml": PLAYBOOK},
+        {"KIT.md": None},
+        {"KIT.md": "plan: kit decisions\n"},
+        {"KIT.md": "plan: decisions  (owner)\n"},
+        {"KIT.md": "plan: decisions 'x' (owner)\n"},
+        {"KIT.md": f"{DECISIONS_MESSAGE} and more\n"},
+        {OWNER_PATH: None, "meta/decisions/a/b-owner.md": "x\n"},
+        {OWNER_PATH: None, "meta/decisions/-owner.md": "x\n"},
+        {"meta/decisions/a/b-owner.md": "x\n"},
+        {"meta/decisions/-owner.md": "x\n"},
+        {OWNER_PATH: None},
+        {"meta/decisions/notes.md": "x\n"},
+        {".claude/settings.json": "{}\n"},
+    ],
+    ids=[
+        "README.md", "PLAYBOOK.toml", "no KIT.md", "another first line", "an empty date",
+        "a quote", "a longer first line", "a/b-owner only", "-owner only",
+        "a/b-owner beside", "-owner beside", "KIT.md alone", "not an owner file",
+        "a refused entry",
+    ],
+)  # fmt: skip
+def test_a_kit_with_anything_else_is_not_a_decisions_kit_and_is_judged_as_before(
+    tmp_path: Path, repo: Path, change: dict[str, str | None]
+) -> None:
+    """§42: a kit with any other entry beside the owner files, without `KIT.md`, with
+    another first line, with an owner file whose `<name>` is not one non-empty path
+    component, with no owner file, or with an entry the path rules refuse, is judged
+    as before §42: no brief, so `brief` fails as it always has."""
+    files: dict[str, str] = {}
+    for name, text in {**decisions_kit(), **change}.items():
+        if text is not None:
+            files[name] = text
+    kit = zip_kit(tmp_path / "decisions.zip", files)
+    code, out, err = run_check(kit, repo)
+    assert code == 1, out + err
+    assert line(out, "brief") == (
+        "FAIL brief: the kit carries no brief (meta/BUILDER-<N>-PROMPT.md or WORKPLAN.md)"
+    ), out
+    assert "decisions kit" not in strip_paths(out), out
+    assert kit_mod.check_kit(kit, repo).decisions is False
+
+
+def test_the_brief_templates_recovery_carries_out_the_newest_owner_file() -> None:
+    """§42 "The newest owner file, on a resume": §R's sentence, as BUILDER-26's §R
+    has it. Deleting it from templates/BUILDER-N-PROMPT.md turns this red."""
+    section = _brief_section("§R Recovery brief")
+    assert (
+        "If a `plan: decisions <date> (owner)` commit is on the branch after the "
+        "checkpoint's last update and the checkpoint does not record its \"For the "
+        "builder\" steps as done, carry them out first, record them in the checkpoint, "
+        "and continue."
+    ) in strip_paths(section), section
+
+
+@pytest.mark.parametrize(
+    ("number", "said"),
+    [
+        (3, "decisions kit"),
+        (3, "`meta/decisions/<date>-owner.md`"),
+        (3, "`plan: decisions <date> (owner)`"),
+        (4, "decisions kit"),
+        (4, "\"For the builder\""),
+        (11, "decisions kit"),
+        (11, "`kit check: pass (6 of 6 checks)`"),
+        (11, "`hands kit file` refuses"),
+    ],
+)
+def test_the_handbook_names_the_decisions_kit(number: int, said: str) -> None:
+    """§42 "The decisions kit": the handbook's §3, §4 and §11 say so."""
+    text = (ROOT / "docs" / "ARCHITECT-HANDBOOK.md").read_text(encoding="utf-8")
+    heads = re.findall(rf"^## {number}\. .*$", text, flags=re.M)
+    assert len(heads) == 1, number
+    section = flat(text.split(heads[0], 1)[1].split("\n## ", 1)[0])
+    assert said in strip_paths(section), f"handbook §{number} does not say {said!r}"
+
+
+def test_kit_file_refuses_a_decisions_kit(
+    tmp_home: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """§42: `hands kit file` refuses a decisions kit with a reason — an owner file
+    is the human's word — during an open consultation, where an ordinary kit is
+    filed; nothing is filed and nothing stays in the spool."""
+    import asyncio
+
+    from harness import (
+        architect_table,
+        close_consultation,
+        config_body,
+        drive,
+        open_consultation,
+        write_project,
+    )
+
+    workdir = write_tree(
+        tmp_path / "work", {"PLAYBOOK.toml": PLAYBOOK, "meta/REVIEW-PROTOCOL.md": PROTOCOL}
+    )
+    clone = write_tree(
+        tmp_path / "clone", {"PLAYBOOK.toml": PLAYBOOK, "meta/REVIEW-PROTOCOL.md": PROTOCOL}
+    )
+    kits_dir = tmp_path / "kits"
+    kits_dir.mkdir()
+    monkeypatch.setenv("HANDS_KITS", str(kits_dir))
+    monkeypatch.setenv("HANDS_CLONE", str(clone))
+    kit = write_tree(kits_dir / "decisions", decisions_kit())
+    assert kit_mod.check_kit(kit, clone).ok
+    write_project(tmp_home, config_body(tmp_home, workdir, extra=architect_table(tmp_home)))
+    answers: dict[str, object] = {}
+
+    async def body(daemon) -> None:
+        consulting = open_consultation(daemon)
+        answers["filed"] = await asyncio.to_thread(run_file, kit)
+        answers["jobs"] = [job.id for job in daemon.spool.list_jobs()]
+        root = daemon.spool.root / "kits"
+        answers["kits"] = list(root.glob("*")) if root.exists() else []
+        answers["consultation"] = consulting.id
+        close_consultation(daemon, consulting)
+
+    drive(body)
+    code, out, err = answers["filed"]  # type: ignore[misc]
+    assert code != 0, out + err
+    said = flat(strip_paths(out + err))
+    assert "kit_file: kit 'decisions' is a decisions kit (§42)" in strip_paths(said), said
+    assert "an owner file is the human's word" in strip_paths(said), said
+    assert answers["jobs"] == [answers["consultation"]], "a decisions kit was filed"
+    assert answers["kits"] == [], "a refused decisions kit stayed in the spool"

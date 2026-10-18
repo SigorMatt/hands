@@ -1,0 +1,69 @@
+{
+  "url": "https://api.github.com/repos/SigorMatt/hands/pulls/comments/4307145413",
+  "pull_request_review_id": 5563121872,
+  "id": 4307145413,
+  "node_id": "PRRC_kwDOUVwTn88AAAABALnSxQ",
+  "diff_hunk": "@@ -529,6 +592,56 @@ async def _answer_command(self, text: str, attachment: object) -> None:\n         )\n         return None\n \n+    async def _consult_command(self, text: str, attachment: object) -> None:\n+        \"\"\"§42: `consult <secret> <text>` — the engine starts one architect\n+        consultation carrying the reason in place of a review (`Api.start_consult`,\n+        `requested_by: phone`).\n+\n+        Neither the text nor the attached file's text is logged. A token that is not\n+        the secret is ignored like any command; once the secret is accepted every\n+        refusal is published titled `consult` (§39, H-058). The refusals are asked\n+        before the attachment is fetched, so a refused consult never reaches its\n+        server, and again by `Api.start_consult` next to the enqueue, after the\n+        fetch's awaits.\n+        \"\"\"\n+        parsed = parse_consult(text)\n+        if parsed is None:\n+            return self._ignore(\"consult takes the secret and a text\")\n+        token, said = parsed\n+        if not self._is_secret(token):\n+            return self._ignore(\"consult: bad secret\")\n+        api = self.daemon.api\n+        why = await api.consult_refusal(said if attachment is None else None)\n+        if why is not None:\n+            return await self._refuse(\"consult\", why)\n+        attached: str | None = None\n+        if attachment is not None:\n+            fetched = await self._fetch(attachment, rule=CONSULT_RULE)\n+            if isinstance(fetched, str):\n+                return await self._refuse(\"consult\", fetched)\n+            directory, written, _total, _digest = fetched\n+            try:\n+                data = await asyncio.to_thread((directory / written).read_bytes)\n+                attached = consult_file_text(data, \"the attachment\")\n+            except (OSError, ValueError) as exc:\n+                problem = str(exc) if isinstance(exc, ValueError) else type(exc).__name__\n+                return await self._refuse(\"consult\", problem)",
+  "path": "src/hands/phone.py",
+  "commit_id": "ce2088b445d74fe90974f0e358795dba50843432",
+  "original_commit_id": "ce2088b445d74fe90974f0e358795dba50843432",
+  "user": {
+    "login": "qodo-code-review[bot]",
+    "id": 151058649,
+    "node_id": "BOT_kgDOCQD42Q",
+    "avatar_url": "https://avatars.githubusercontent.com/in/484649?v=4",
+    "gravatar_id": "",
+    "url": "https://api.github.com/users/qodo-code-review%5Bbot%5D",
+    "html_url": "https://github.com/apps/qodo-code-review",
+    "followers_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/followers",
+    "following_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/following{/other_user}",
+    "gists_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/gists{/gist_id}",
+    "starred_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/starred{/owner}{/repo}",
+    "subscriptions_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/subscriptions",
+    "organizations_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/orgs",
+    "repos_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/repos",
+    "events_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/events{/privacy}",
+    "received_events_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/received_events",
+    "type": "Bot",
+    "user_view_type": "public",
+    "site_admin": false
+  },
+  "body": "<img src=\"https://img.shields.io/badge/Medium-634FD1?style=flat-square\" height=\"20px\" alt=\"Remediation recommended\">\n\n5\\. Rejected consults fill the kit directory <code>🐞 Bug</code> <code>☼ Reliability</code>\n\n<pre>\n<b><i>_consult_command</i></b> leaves the permanently linked attachment in <b><i>kit_dir</i></b> when UTF-8 decoding or the\nfinal consultation check refuses it. Repeated authenticated requests with invalid text, or requests\nrefused after a state change during download, accumulate files even though no consultation starts.\n</pre>\n\n\n<details>\n<summary><strong>Agent Prompt</strong></summary>\n\n```\n## Issue description\nA phone consult can retain a downloaded attachment after refusing the command, allowing unused files to accumulate.\n## Fix Focus Areas\n- src/hands/phone.py[617-632]\n- src/hands/phone.py[1034-1043]\n## Recommended Fix\nTrack the path returned by `_fetch` and remove that specific newly written file if decoding or `start_consult` fails. Preserve attachments for successfully started consultations.\n```\n\n<code>ⓘ Copy this prompt and use it to remediate the issue with your preferred AI generation tools</code>\n</details>\n\n[Dismiss ↗](https://app.qodo.ai/findings/613e7991-180e-47c2-8e85-3b0c4c7126ab?action=dismiss&origin=git) | [View ↗](https://app.qodo.ai/findings/613e7991-180e-47c2-8e85-3b0c4c7126ab)",
+  "created_at": "2026-10-18T13:10:12Z",
+  "updated_at": "2026-10-18T13:10:12Z",
+  "html_url": "https://github.com/SigorMatt/hands/pull/6#discussion_r4307145413",
+  "pull_request_url": "https://api.github.com/repos/SigorMatt/hands/pulls/6",
+  "_links": {
+    "self": {
+      "href": "https://api.github.com/repos/SigorMatt/hands/pulls/comments/4307145413"
+    },
+    "html": {
+      "href": "https://github.com/SigorMatt/hands/pull/6#discussion_r4307145413"
+    },
+    "pull_request": {
+      "href": "https://api.github.com/repos/SigorMatt/hands/pulls/6"
+    }
+  },
+  "reactions": {
+    "url": "https://api.github.com/repos/SigorMatt/hands/pulls/comments/4307145413/reactions",
+    "total_count": 0,
+    "+1": 0,
+    "-1": 0,
+    "laugh": 0,
+    "hooray": 0,
+    "confused": 0,
+    "heart": 0,
+    "rocket": 0,
+    "eyes": 0
+  },
+  "start_line": 624,
+  "original_start_line": 624,
+  "start_side": "RIGHT",
+  "line": 628,
+  "original_line": 628,
+  "side": "RIGHT",
+  "author_association": "NONE",
+  "original_position": 200,
+  "position": 200,
+  "subject_type": "line"
+}

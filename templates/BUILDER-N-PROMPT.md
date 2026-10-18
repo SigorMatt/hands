@@ -95,7 +95,10 @@ leave the tree clean. Then continue from that unit. Push before taking any
 new unit. A `keep` send that arrives after you replied `VERDICT: question`
 is the answer: carry it out, continue the mission from the checkpoint, and
 end that reply with one of the mission's `VERDICT:` lines, always, even when
-the answer came with a file to commit first.
+the answer came with a file to commit first. If a `plan: decisions <date>
+(owner)` commit is on the branch after the checkpoint's last update and the
+checkpoint does not record its "For the builder" steps as done, carry them
+out first, record them in the checkpoint, and continue.
 
 ## Units, in order
 

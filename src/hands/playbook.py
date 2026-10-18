@@ -127,8 +127,14 @@ __all__ = [
     "next_milestone",
     "parse_playbook",
     "playbook_path",
+    "ConsultRefused",
+    "HUMAN",
+    "HUMAN_EVENT",
+    "HUMAN_HEAD",
+    "HUMAN_REASON_HEADING",
     "consult_head",
     "consult_prompt",
+    "human_consult_prompt",
     "review_sections",
     "render",
     "run_number",
@@ -270,6 +276,13 @@ BLOCKED = "blocked"
 #: §38: the heading of the consult prompt's section that carries a builder's blocked
 #: verdict line and its full reply, in place of the review's.
 BLOCKED_HEADING = "The builder's blocked verdict and its reply"
+#: §42: a consultation the human started (`consult <secret> <text>`, `hands
+#: consult`): the event and the role its prompt's first line names, that line, and
+#: the heading of the section that carries the human's reason in place of a review.
+HUMAN_EVENT = "consult"
+HUMAN = "human"
+HUMAN_HEAD = f"hands consult: {HUMAN_EVENT} on job none (role {HUMAN})"
+HUMAN_REASON_HEADING = "The human's reason for this consultation"
 #: §31: the reply the engine's own `builder.done` rule matches. It is the verdict
 #: line the apply prompt asks for (`hands.kit.APPLY_VERDICT`), anchored.
 KIT_APPLIED = r"^VERDICT: kit applied"
@@ -381,6 +394,23 @@ GIT_ENV_CLEARED = frozenset({"GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE"})
 
 class PlaceholderError(Exception):
     """A `{placeholder}` that cannot be resolved for this event (§10)."""
+
+
+class ConsultRefused(Exception):
+    """§42: a consultation the human asked for (`consult`, `hands consult`) that the
+    engine refuses; the text is the reason, in hands' own words."""
+
+
+@dataclass(frozen=True)
+class HumanConsult:
+    """§42: what a consultation the human started carries into the engine's `consult`
+    action in place of an event job: the reason, who asked (`phone` or `cli`), and
+    the prompt cap (`hands.runner.MAX_PROMPT_BYTES`, passed in: the runner imports
+    this module)."""
+
+    reason: str
+    requested_by: str
+    cap: int
 
 
 # --------------------------------------------------------------- placeholders
@@ -1590,6 +1620,12 @@ class PlaybookEngine:
         if not self._loaded:
             await self._load()
 
+    async def reload(self) -> None:
+        """§42: load the committed playbook now, as a job's start does (§10) — the
+        playbook in force for a consultation the human asks for, its series anchored
+        (§31) before the consultation's job exists."""
+        await self._load()
+
     async def _load(self) -> None:
         path = playbook_path(self.config)
         self._loaded = True
@@ -2344,13 +2380,70 @@ class PlaybookEngine:
         )
         self._fired(rule, event, job, fired_job=resumed.id, prompt=prompt)
 
-    async def _act_consult(self, rule: Rule, event: str, job: Job | None) -> None:
+    def consult_mode_refusal(self) -> str | None:
+        """§42: why the playbook in force cannot take a consultation the human
+        starts — no playbook, one that does not set `[series] architect = "role"`, or
+        no `[roles.architect]` — or None. The playbook is the one this engine holds
+        (`_ensure_loaded` first)."""
+        book = self.playbook
+        if book is None:
+            if self.load_error is not None:
+                return f"no playbook is loaded: it cannot be loaded ({self.load_error})"
+            return "no playbook is loaded"
+        if book.architect != "role":
+            return (
+                f'the playbook in force does not set [series] architect = "role" '
+                f"(it is {book.architect!r}), so there is no architect role to consult (§42)"
+            )
+        if ARCHITECT not in self.config.roles:
+            return "this project configures no [roles.architect] (§31, §42)"
+        return None
+
+    def consult_budget_refusal(self) -> str | None:
+        """§42: the budget's reason when a consultation the human starts would pass
+        `[limits] max_architect_consults`, or None (§31's count, per series)."""
+        book = self.playbook
+        if book is None:
+            return None
+        used, budget = self.architect_consults_used(), book.max_architect_consults
+        if used < budget:
+            return None
+        return (
+            f"consultation {used + 1} of this series would start and [limits] "
+            f"max_architect_consults is {budget} (§31): the series' consult budget is "
+            "exhausted (budget-exhausted)"
+        )
+
+    async def consult_human(self, reason: str, *, requested_by: str, cap: int) -> Job:
+        """§42: start the architect consultation the human asked for — the engine's
+        `consult` action, in its branch with no event job. Refuses (`ConsultRefused`)
+        outside role mode, with the budget spent, and with a prompt over `cap`; the
+        caller (`Api.consult_refusal`) has refused every busy role, an open `next kit`
+        wait and an empty reason, with nothing awaited between that and this."""
+        why = self.consult_mode_refusal() or self.consult_budget_refusal()
+        if why is not None:
+            raise ConsultRefused(why)
+        started = await self._act_consult(
+            None, HUMAN_EVENT, None, human=HumanConsult(reason, requested_by, cap)
+        )
+        assert started is not None
+        return started
+
+    async def _act_consult(
+        self, rule: Rule | None, event: str, job: Job | None, *, human: HumanConsult | None = None
+    ) -> Job | None:
         """§27, §31: start a job of the consulted role carrying the prompt hands
         writes — or stop, when that role is not configured, the event carries no job,
         or the budget is spent (`[limits] max_consults` per mission for the driver,
-        `max_architect_consults` per series for the architect)."""
+        `max_architect_consults` per series for the architect).
+
+        §42: with no event job and the human's reason (`human`), the architect's
+        consultation the human started (`_consult_for_human`)."""
         book = self.playbook
         assert book is not None
+        if job is None and human is not None:
+            return await self._consult_for_human(book, human)
+        assert rule is not None
         role = rule.role or DRIVER
         where = _payload(event, job, rule=rule.index)
         if role not in self.config.roles:
@@ -2429,6 +2522,66 @@ class PlaybookEngine:
             },
         )
         self._fired(rule, event, job, fired_job=started.id)
+        return started
+
+    async def _consult_for_human(self, book: Playbook, human: HumanConsult) -> Job:
+        """§42: the consultation's prompt — §31's, the human's reason in place of a
+        review (`human_consult_prompt`) — refused over the cap; then a stopped
+        pipeline un-paused, as `resume` does, and one architect job of origin
+        `playbook` enqueued, and `consult.sent` with every field §42 lists, the
+        reason only as its sha256. No rule fired it, so no `last_rule` is set. An
+        enqueue that raises puts the stop it cleared back (paused, by whom, reason,
+        time) and writes no event for it; its `pipeline.resumed` stays."""
+        used, budget = self.architect_consults_used(), book.max_architect_consults
+        recorded: dict[str, Any] = {"head": _git_head(self.config.role("builder").cwd)}
+        prompt = human_consult_prompt(human.reason, self.architect_brief(book, used + 1))
+        size = len(prompt.encode("utf-8"))
+        if size > human.cap:
+            raise ConsultRefused(
+                f"the consultation's prompt is {size} bytes, over the {human.cap} byte cap "
+                "of §2"
+            )
+        stopped = (self.state.paused, self.state.paused_by, self.state.stop_reason,
+                   self.state.stopped_at)
+        self._unpause("resume")
+        try:
+            started = await self.enqueue(
+                role=ARCHITECT,
+                context="clear",
+                prompt=prompt,
+                origin=ORIGIN,
+                playbook_sha256=book.sha256,
+            )
+        except BaseException:
+            # PR #6 hosted review finding 2: no consultation was created, so the stop
+            # the un-pause cleared is put back as it was, and the failure is raised.
+            if stopped[0] and not self.state.paused:
+                (self.state.paused, self.state.paused_by, self.state.stop_reason,
+                 self.state.stopped_at) = stopped
+                self._save()
+                log.warning("playbook: the consult's enqueue failed; the stop is restored "
+                            "(%s)", stopped[2])
+            raise
+        self.spool.append_event(
+            "consult.sent",
+            {
+                "job": started.id,
+                "about": None,
+                "role": HUMAN,
+                "consulted": ARCHITECT,
+                "event": HUMAN_EVENT,
+                "verdict": None,
+                "rule": None,
+                "consults": used + 1,
+                "max_consults": budget,
+                "requested_by": human.requested_by,
+                **recorded,
+                "reason_sha256": hashlib.sha256(human.reason.encode("utf-8")).hexdigest(),
+            },
+        )
+        log.info("playbook: consult by the human (%s) started architect job %s",
+                 human.requested_by, started.id)
+        return started
 
     def architect_brief(self, book: Playbook, consults: int) -> ArchitectBrief:
         """§31, §32: the roadmap's next unmet milestone and the series' conditions the
@@ -2628,10 +2781,19 @@ class PlaybookEngine:
         role = head.get("role")
         said = job.verdict if job.verdict is not None else "no VERDICT: line"
         journal = self.config.role("builder").cwd / JOURNAL
-        line = (
-            f"{now_iso()}  consult {job.id} ({job.role} {job.state}) on {event} of {role} "
-            f"job {about}: {said}"
-        )
+        if role == HUMAN and about == "none":
+            # §42: a consultation the human started is about no job: `about` is
+            # null (not the head line's `none`) and the line names the human.
+            about = None
+            line = (
+                f"{now_iso()}  consult {job.id} ({job.role} {job.state}) on {event} by the "
+                f"human: {said}"
+            )
+        else:
+            line = (
+                f"{now_iso()}  consult {job.id} ({job.role} {job.state}) on {event} of {role} "
+                f"job {about}: {said}"
+            )
         payload: dict[str, Any] = {
             "job": job.id,
             "about": about,
@@ -3202,8 +3364,20 @@ def consult_prompt(
     return _driver_prompt(event, job)
 
 
-def _record(event: str, job: Job) -> str:
-    """The head line every consult prompt begins with, and the job record (§27)."""
+def _record(event: str, job: Job | None) -> str:
+    """The head line every consult prompt begins with, and the job record (§27).
+
+    §42: a consultation the human started has no job: its head is `HUMAN_HEAD`
+    (`consult_head` reads `event` `consult`, `job` `none`, `role` `human`) and its
+    record names the event and the human."""
+    if job is None:
+        return (
+            f"{HUMAN_HEAD}\n"
+            "\n"
+            f"Event: {HUMAN_EVENT}\n"
+            "Job: none\n"
+            f"Role: {HUMAN}\n"
+        )
     verdict = job.verdict if job.verdict is not None else "(none: the reply has no VERDICT: line)"
     return (
         f"hands consult: {event} on job {job.id} (role {job.role})\n"
@@ -3244,11 +3418,20 @@ def _driver_prompt(event: str, job: Job) -> str:
     )
 
 
-def _architect_prompt(event: str, job: Job, brief: ArchitectBrief | None) -> str:
+def human_consult_prompt(reason: str, brief: ArchitectBrief | None = None) -> str:
+    """§42: the architect consult prompt of a consultation the human started — §31's
+    prompt with the review's sections replaced by the human's reason, verbatim, under
+    `HUMAN_REASON_HEADING`; its first line is `HUMAN_HEAD`."""
+    return _architect_prompt(HUMAN_EVENT, None, brief, reason=reason)
+
+
+def _architect_prompt(
+    event: str, job: Job | None, brief: ArchitectBrief | None, *, reason: str | None = None
+) -> str:
     """§31: the event, the review's verdict line and its Blockers and Should-fix
     sections verbatim — §38: for a builder's end, its blocked verdict line and full
-    reply instead — the roadmap's next unmet milestone (§32) with the roadmap's
-    path, and the instruction.
+    reply instead; §42: with no job, the human's `reason` instead — the roadmap's
+    next unmet milestone (§32) with the roadmap's path, and the instruction.
 
     The escalation conditions of `[series]` are here too: §31 has the architect
     judge two of them and `architect/CLAUDE.md` rule 8 says handsd tells it when
@@ -3264,7 +3447,7 @@ def _architect_prompt(event: str, job: Job, brief: ArchitectBrief | None) -> str
         "\n"
         f"{record}"
         "\n"
-        f"{_architect_subject(event, job)}"
+        f"{_architect_subject(event, job) if job is not None else _human_subject(reason)}"
         "\n"
         f"{DECIDED_HEADING} — every `answer` from the phone, every `hands send --role "
         f"builder --context keep`, and every {DECISIONS_DIR}/*{OWNER_SUFFIX} committed "
@@ -3342,6 +3525,17 @@ def _architect_subject(event: str, job: Job) -> str:
         "----- BEGIN REVIEW -----\n"
         f"{review_sections(job.result, job.verdict)}\n"
         "----- END REVIEW -----\n"
+    )
+
+
+def _human_subject(reason: str | None) -> str:
+    """§42: the section that stands in place of the review's — the human's reason
+    for the consultation, verbatim between its markers."""
+    return (
+        f"{HUMAN_REASON_HEADING}, verbatim between the markers:\n"
+        "----- BEGIN REASON -----\n"
+        f"{reason if reason is not None else ''}\n"
+        "----- END REASON -----\n"
     )
 
 
