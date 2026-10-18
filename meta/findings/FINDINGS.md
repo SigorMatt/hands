@@ -2705,7 +2705,7 @@ protocols drop the twelve lines and say what a report holds — the sha, a
 verdict per point, what is not proven, and for the hosted-review sub-agent
 every finding verbatim. The brief template keeps its twelve lines.
 
-Status: decided (DESIGN §42, §43), scheduled for U4
+Status: resolved (mission 27 U4, this commit — DESIGN §43: both review protocols drop the twelve-line count and say what a report holds (the sha, a verdict per point and what is not proven; for the hosted-review sub-agent, every finding verbatim with its verdict on the builder's disposition), and run one gate at a time inside the gate's timeout, 15 minutes (900000 ms) in this repository's protocol, the timeout the project's briefs name in the template; the brief template keeps its twelve lines; the handbook's §7 says so. Tests: tests/test_kit.py, tests/test_docs.py)
 
 ## H-071 — the architect's guard refused read-only commands a consultation needed
 
@@ -2724,7 +2724,7 @@ and will be admitted in the guard's option sets for both guarded modes and
 in the architect's settings allow-list, each pinned with its neighbours
 still refused.
 
-Status: decided (DESIGN §42, §43), scheduled for U4
+Status: resolved (mission 27 U4, this commit — DESIGN §43: the guard admits `ls -R`, `git ls-tree --name-only`, `git status --short` and `git log --date=<format>` in role and architect mode, each pinned with `ls -r`, `git ls-tree --name-status`, `git status --porcelain` and a `--date` with no value still refused, in the tests and in the guard's self-test (434 cases); `architect/settings.json` allows `git -C ./repo status`; `architect/CLAUDE.md` rule 10 sends a search of content through the Grep and Read tools; docs/INTEGRATION.md's table lists the options. Tests: tests/test_bash_guard.py, tests/test_docs.py)
 
 ## H-072 — a gate run on a shared machine ran past the timeouts
 
@@ -2810,7 +2810,7 @@ inherited value reaches no job; the wait rule (prevent, an exit marker, a
 blocking foreground wait) in the brief template, both protocols and the
 handbook's §7.
 
-Status: decided (DESIGN §43), scheduled for U3 and U4; U3 (rules 1–5) done in this commit
+Status: resolved (mission 27 U3 3383ffe, rules 1–5; mission 27 U4, this commit, rule 6 — the wait rule's three parts (a) prevent, (b) an exit marker, (c) one blocking foreground wait, word for word where §43 quotes them, in both review protocols' hosted-review and per-commit sub-agents, the brief template's sub-agent brief (its timeout the placeholder `<the gate's timeout, in ms>`) and the handbook's §7; this repository's protocol names 15 minutes (900000 ms). Tests: tests/test_kit.py)
 
 ## H-075 — a role-filed kit that carries the playbook is approved by the engine under autonomy
 

@@ -245,6 +245,27 @@ human-supplied commit is checked by `git show --stat` alone (§17). And
 each per-commit sub-agent is told to run `./scripts/check` once, in the
 foreground, and report only when every command has finished.
 
+What a sub-agent's report holds, and how it waits (DESIGN §43, H-070,
+H-074). The protocol counts no lines: a report holds the sha, a verdict per
+point and what is not proven, and the hosted-review sub-agent's adds every
+finding verbatim with its verdict on the builder's disposition (the brief
+template's unit sub-agent keeps its twelve lines). The sub-agents run one at
+a time so that one `./scripts/check` runs at a time inside the gate's
+timeout, the timeout the project's briefs name (hands' default 15 minutes).
+Every sub-agent — the hosted-review one, each per-commit one and each unit
+sub-agent of the brief — follows the wait rule: (a) prevent — a project
+whose gate can run past its role's `BASH_MAX_TIMEOUT_MS` raises
+`BASH_DEFAULT_TIMEOUT_MS` and `BASH_MAX_TIMEOUT_MS` above its worst case,
+and its briefs name that timeout; (b) a long command ends with an exit
+marker, `./scripts/check; echo "check-exit=$?"`, so its end shows in its
+output; (c) if a run is moved to the background anyway, wait with one
+foreground command that blocks until the output file shows the marker —
+`until grep -q '^check-exit=' <file>; do sleep 5; done`, with an explicit
+timeout — never a `sleep` of 25 seconds or more as a command's first
+statement, never Monitor or a background task, and never end the turn
+before the run has finished. The brief template writes the timeout as a
+placeholder the brief fills, `<the gate's timeout, in ms>`.
+
 ## 8. Decisions files
 
 Answers to memos, scope calls, corrections: `decisions-YYYY-MM-DD.md`

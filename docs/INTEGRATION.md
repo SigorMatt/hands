@@ -1290,11 +1290,12 @@ after its command word must be a plain word — no unquoted `*`, `?`, `[`, `!`,
 or `~` after `=` or `:` — because the shell would expand it after the guard
 read it. The table (§12, §31): `hands`, every subcommand but `open`; read-only
 `git`, with only `-C <path>` and `--no-pager` before the subcommand and after it
-only `log --oneline -n --grep --format --stat --name-status`, `show --stat
---name-status`, `fetch -q`, `ls-remote --heads --tags`, `rev-parse --verify
---short`, `diff --stat --name-status --name-only`, `grep -n -c -l -i -e`,
-`cat-file -t -p -e`, `ls-files`, `ls-tree`, `branch --list`, `remote -v` and
-`status`; `cat` (no options), `ls` (`-l -a -la -1`), `head` and `tail` (`-n
+only `log --oneline -n --grep --format --stat --name-status --date=<format>`
+(`--date` only with a value, §43), `show --stat --name-status`, `fetch -q`,
+`ls-remote --heads --tags`, `rev-parse --verify --short`, `diff --stat
+--name-status --name-only`, `grep -n -c -l -i -e`, `cat-file -t -p -e`,
+`ls-files`, `ls-tree --name-only`, `branch --list`, `remote -v` and `status
+--short`; `cat` (no options), `ls` (`-l -a -la -1 -R`), `head` and `tail` (`-n
 <int>`), `wc` (`-l -c -w`), `grep` (`-n -c -i -l -E -F -r -e <pattern>`), `jq`
 (`-r -c -e` and a `.` filter), `pgrep` (`-f -a -l`), `sleep <int>`, `date
 [+FORMAT]`, `echo` (no options) and `kill -0 <pid>`. Any other option (`wc

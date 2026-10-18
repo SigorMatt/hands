@@ -1031,8 +1031,7 @@ PROTOCOL_38_SENTENCES = {
     "the-schedule-in-the-notes": (
         "one line per sub-agent with its start and end time; the sub-agents run one"
         " at a time so that one `./scripts/check` runs at a time inside the"
-        " 20-minute cap. A review whose Notes lack the schedule is itself a"
-        " should-fix for the next review"
+        " gate's timeout"
     ),
     "the-owner-decisions-commit-is-not-a-unit": (
         "A `plan: decisions <date> (owner)` commit is read for what it says it does"
@@ -3338,3 +3337,136 @@ def test_kit_file_refuses_a_decisions_kit(
     assert "an owner file is the human's word" in strip_paths(said), said
     assert answers["jobs"] == [answers["consultation"]], "a decisions kit was filed"
     assert answers["kits"] == [], "a refused decisions kit stayed in the spool"
+
+
+# ------------- §43: what a report holds, the gate's timeout and the wait rule
+
+#: §43 "H-070 and H-071, built": what a per-commit sub-agent's report holds, and
+#: what the hosted-review sub-agent's holds, in both protocol files, flattened.
+PROTOCOL_43_REPORTS = {
+    "per-commit": "5. Reports the sha, a verdict per point and what is not proven.",
+    "hosted-review": (
+        "It reports the sha, a verdict per point and what is not proven, and every"
+        " finding verbatim with its verdict on the builder's disposition"
+    ),
+}
+
+#: §43 rule 6, the wait rule's three parts, word for word where §43 quotes them;
+#: each file then names its timeout (`WAIT_TIMEOUT`).
+WAIT_RULE = {
+    "a-prevent": (
+        "(a) prevent — a project whose gate can run past its role's"
+        " `BASH_MAX_TIMEOUT_MS` raises `BASH_DEFAULT_TIMEOUT_MS` and"
+        " `BASH_MAX_TIMEOUT_MS` above its worst case, and its briefs name that"
+        " timeout"
+    ),
+    "b-exit-marker": (
+        "(b) a long command ends with an exit marker,"
+        ' `./scripts/check; echo "check-exit=$?"`, so its end shows in its output'
+    ),
+    "c-blocking-wait": (
+        "(c) if a run is moved to the background anyway, wait with one foreground"
+        " command that blocks until the output file shows the marker —"
+        " `until grep -q '^check-exit=' <file>; do sleep 5; done`, with an explicit"
+        " timeout — never a `sleep` of 25 seconds or more as a command's first"
+        " statement, never Monitor or a background task, and never end the turn"
+        " before the run has finished"
+    ),
+}
+
+#: The timeout each file writes, as §43 gives it: 15 minutes in this repository's
+#: protocol, the project's briefs' timeout in the protocol template and the
+#: handbook, a placeholder the brief fills in the brief template.
+WAIT_TIMEOUT = {
+    "meta/REVIEW-PROTOCOL.md": "the gate's timeout, 15 minutes (900000 ms)",
+    "templates/REVIEW-PROTOCOL.md": (
+        "the gate's timeout, the timeout the project's briefs name (hands' default"
+        " 15 minutes)"
+    ),
+    "templates/BUILDER-N-PROMPT.md": "the gate's timeout, `<the gate's timeout, in ms>`",
+    "docs/ARCHITECT-HANDBOOK.md": (
+        "the gate's timeout, the timeout the project's briefs name (hands' default"
+        " 15 minutes)"
+    ),
+}
+
+PROTOCOLS = ("templates/REVIEW-PROTOCOL.md", "meta/REVIEW-PROTOCOL.md")
+
+
+def _flat(rel: str) -> str:
+    path = Path(__file__).resolve().parents[1] / rel
+    return " ".join(path.read_text(encoding="utf-8").split())
+
+
+def _brief_sub_agent_block() -> str:
+    text = _flat("templates/BUILDER-N-PROMPT.md")
+    return text.split("## Sub-agent brief", 1)[1].split("## §R Recovery brief", 1)[0]
+
+
+def _handbook_section_7() -> str:
+    return _flat("docs/ARCHITECT-HANDBOOK.md").split("## 7. The review protocol", 1)[1].split(
+        "## 8. ", 1
+    )[0]
+
+
+@pytest.mark.parametrize("key", sorted(PROTOCOL_43_REPORTS))
+@pytest.mark.parametrize("rel", PROTOCOLS)
+def test_both_protocols_say_what_a_report_holds(rel: str, key: str) -> None:
+    said = PROTOCOL_43_REPORTS[key]
+    assert said in strip_paths(_flat(rel)), f"{rel} does not say {said!r}"
+
+
+@pytest.mark.parametrize("rel", PROTOCOLS)
+def test_both_protocols_drop_the_twelve_line_count_and_the_20_minute_cap(rel: str) -> None:
+    text = _flat(rel)
+    for gone in ("≤12 lines", "≤12-line", "20-minute", "twelve lines"):
+        assert gone not in strip_paths(text), f"{rel} still says {gone!r}"
+
+
+@pytest.mark.parametrize("rel", PROTOCOLS)
+def test_both_protocols_run_one_gate_at_a_time_inside_the_gates_timeout(rel: str) -> None:
+    text = _flat(rel)
+    timeout = WAIT_TIMEOUT[rel]
+    assert f"one run at a time fits inside {timeout}" in strip_paths(text), rel
+    assert f"runs at a time inside {timeout}." in strip_paths(text), rel
+
+
+def _wait_rule_places() -> dict[str, str]:
+    """Each place §43 rule 6 writes the wait rule, by name, as its flattened text."""
+    places = {}
+    for rel in PROTOCOLS:
+        text = _flat(rel)
+        hosted = text.split("## The hosted review", 1)[1]
+        hosted = hosted.split("## The per-commit sub-agents", 1)[0]
+        per_commit = text.split("## The per-commit sub-agents", 1)[1]
+        per_commit = per_commit.split("## The review file", 1)[0]
+        places[f"{rel} hosted-review sub-agent"] = hosted
+        places[f"{rel} per-commit sub-agent"] = per_commit
+    places["templates/BUILDER-N-PROMPT.md sub-agent brief"] = _brief_sub_agent_block()
+    places["docs/ARCHITECT-HANDBOOK.md §7"] = _handbook_section_7()
+    return places
+
+
+@pytest.mark.parametrize("part", sorted(WAIT_RULE))
+@pytest.mark.parametrize(
+    "place",
+    [
+        f"{rel} {who}"
+        for rel in PROTOCOLS
+        for who in ("hosted-review sub-agent", "per-commit sub-agent")
+    ]
+    + ["templates/BUILDER-N-PROMPT.md sub-agent brief", "docs/ARCHITECT-HANDBOOK.md §7"],
+)
+def test_the_wait_rule_is_written_where_section_43_puts_it(place: str, part: str) -> None:
+    text = _wait_rule_places()[place]
+    said = WAIT_RULE[part]
+    assert said in strip_paths(text), f"{place} does not say {said!r}"
+    rel = place.split(" ", 1)[0]
+    assert WAIT_TIMEOUT[rel] in strip_paths(text), f"{place} does not name {WAIT_TIMEOUT[rel]!r}"
+
+
+def test_the_brief_template_keeps_its_twelve_lines() -> None:
+    """§43: the brief template's sub-agent report keeps its twelve lines."""
+    assert "report in ≤12 lines: sha, files, tests added, what is NOT proven" in (
+        strip_paths(_brief_sub_agent_block())
+    )

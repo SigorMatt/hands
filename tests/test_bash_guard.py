@@ -308,7 +308,9 @@ def test_adversarial_case(cmd: str, allowed: bool) -> None:
 # the design text. It is the whole allowed surface: every other token beginning
 # with `-` is refused for that subcommand.
 DESIGN_12_OPTIONS: dict[str, set[str]] = {
-    "log": {"--oneline", "-n", "--grep", "--format", "--stat", "--name-status"},
+    # §43 (H-071) adds `log --date` (with a value), `ls-tree --name-only` and
+    # `status --short`
+    "log": {"--oneline", "-n", "--grep", "--format", "--stat", "--name-status", "--date"},
     "show": {"--stat", "--name-status"},
     "fetch": {"-q"},
     "ls-remote": {"--heads", "--tags"},
@@ -317,10 +319,10 @@ DESIGN_12_OPTIONS: dict[str, set[str]] = {
     "grep": {"-n", "-c", "-l", "-i", "-e"},
     "cat-file": {"-t", "-p", "-e"},
     "ls-files": set(),
-    "ls-tree": set(),
+    "ls-tree": {"--name-only"},
     "branch": {"--list"},
     "remote": {"-v"},
-    "status": set(),
+    "status": {"--short"},
 }
 
 # Options whose value names a program to run or a file to write. §12: these are
@@ -1258,7 +1260,7 @@ def test_the_guards_own_tables_carry_every_review_14_probe() -> None:
 #: their rows list no flat option.
 DESIGN_31_TABLE: dict[str, set[str]] = {
     "cat": set(),
-    "ls": {"-l", "-a", "-la", "-1"},
+    "ls": {"-l", "-a", "-la", "-1", "-R"},  # §43 (H-071) adds `-R`
     "head": {"-n"},
     "tail": {"-n"},
     "wc": {"-l", "-c", "-w"},
@@ -1317,7 +1319,8 @@ TABLE_BOTH_MODES: list[tuple[str, bool]] = [
     ("ls ./repo", True),
     ("ls -la ./repo", True),
     ("ls -l -1 ./repo", True),
-    ("ls -R ./repo", False),
+    ("ls -R ./repo", True),  # §43 (H-071)
+    ("ls -r ./repo", False),
     ("head -n 20 ./repo/DESIGN.md", True),
     ("head -20 ./repo/DESIGN.md", True),
     ("head -n20 ./repo/DESIGN.md", True),
@@ -3316,3 +3319,83 @@ def test_the_shipped_file_reads_hands_docs_from_the_environment(tmp_path: Path) 
                           env={k: v for k, v in env.items() if k != "HANDS_DOCS"},
                           timeout=30, check=False)
     assert done.returncode == 2, done.stderr
+
+
+# --- §43 (H-071): the four read-only options, in both guarded modes ----------
+#
+# "H-070 and H-071, built": the guard admits `ls -R`, `git ls-tree --name-only`,
+# `git status --short` and `git log --date=<format>`, in its option sets for both
+# guarded modes, each pinned with its neighbours still refused (`ls -r`, `git
+# ls-tree --name-status`, `git status --porcelain`, a `--date` with no value).
+
+#: The four §43 admits, as a consultation runs them on its clone.
+SECTION_43_ADMITTED = [
+    "ls -R ./repo",
+    "git -C ./repo ls-tree --name-only HEAD",
+    "git -C ./repo status --short",
+    "git -C ./repo log --date=iso -n 3",
+    "git -C ./repo log --date=short --format=%ad -1",
+]
+
+#: The neighbours §43 names, each still refused.
+SECTION_43_NEIGHBOURS = [
+    "ls -r ./repo",
+    "git -C ./repo ls-tree --name-status HEAD",
+    "git -C ./repo status --porcelain",
+    "git -C ./repo log --date -n 3",
+    "git -C ./repo log --date= -n 3",
+]
+
+
+@pytest.mark.parametrize("cmd", SECTION_43_ADMITTED)
+@pytest.mark.parametrize("mode", ROLE_MODES_ONLY)
+def test_section_43_admits_the_four_read_only_options_in_each_guarded_mode(
+    mode: str, cmd: str
+) -> None:
+    reason = guard.check(cmd, **MODES[mode])
+    assert reason is None, f"{mode} refused {cmd!r}: {reason}"
+
+
+@pytest.mark.parametrize("cmd", SECTION_43_NEIGHBOURS)
+@pytest.mark.parametrize("mode", ROLE_MODES_ONLY)
+def test_section_43_still_refuses_each_neighbour_in_each_guarded_mode(
+    mode: str, cmd: str
+) -> None:
+    reason = guard.check(cmd, **MODES[mode])
+    assert reason is not None, f"{mode} admitted {cmd!r}"
+
+
+@pytest.mark.parametrize("cmd", SECTION_43_ADMITTED + SECTION_43_NEIGHBOURS)
+def test_the_guards_selftest_carries_section_43s_rows_in_both_guarded_modes(cmd: str) -> None:
+    """The shipped self-test, which a project runs after copying the guard, pins
+    each admit and each neighbour in role mode and in architect mode."""
+    expected = cmd in SECTION_43_ADMITTED
+    assert dict(guard.ROLE_SELFTEST).get(cmd) is expected, cmd
+    assert dict(guard.ARCHITECT_SELFTEST).get(cmd) is expected, cmd
+
+
+def test_the_guards_selftest_total_counts_section_43s_rows() -> None:
+    """`python3 -I bash_guard.py --selftest`, as a human runs it: 414 cases before
+    §43, plus the ten §43 rows in each of the two guarded modes."""
+    done = subprocess.run([sys.executable, "-I", str(GUARD), "--selftest"],
+                          capture_output=True, text=True, timeout=120, check=False)
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert "selftest: 434/434 ok" in done.stdout.splitlines(), done.stdout
+
+
+def test_the_architect_settings_allow_git_status_on_the_clone() -> None:
+    """§43: `architect/settings.json`'s allow-list gains `git -C ./repo status`,
+    which the guard admits in architect mode, `--short` among its options."""
+    allow = architect_settings()["permissions"]["allow"]
+    assert "Bash(git -C ./repo status:*)" in allow
+    for cmd in ("git -C ./repo status", "git -C ./repo status --short"):
+        assert guard.check(cmd, **MODES["architect"]) is None, cmd
+
+
+def test_architect_rule_10_names_the_grep_and_read_tools_for_a_content_search() -> None:
+    """§43: rule 10 says a search of content goes through the Grep and Read tools,
+    which the Bash guard does not judge; the characters stay refused (§30)."""
+    text = " ".join((ARCHITECT_KIT / "CLAUDE.md").read_text(encoding="utf-8").split())
+    rule = text.split(" 10. ", 1)[1].split(" 11. ", 1)[0]
+    assert "A search of content goes through the Grep and Read tools" in rule
+    assert "which the Bash guard does not judge" in rule

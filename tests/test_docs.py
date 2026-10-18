@@ -2146,12 +2146,19 @@ def test_each_templates_architect_block_carries_kit_wait_s(path: Path) -> None:
 def test_this_repositorys_review_protocol_is_the_template_with_its_names() -> None:
     """§35 "This repository" (mission 19 U3): `meta/REVIEW-PROTOCOL.md` is
     `templates/REVIEW-PROTOCOL.md` with this repository's names — the forge's
-    `<owner>/<repo>` is `SigorMatt/hands` — and nothing else differs."""
+    `<owner>/<repo>` is `SigorMatt/hands`, and (§43) the gate's timeout is 15
+    minutes (900000 ms) where the template names the project's briefs' timeout —
+    and nothing else differs."""
     template = (ROOT / "templates" / "REVIEW-PROTOCOL.md").read_text(encoding="utf-8")
     ours = (ROOT / "meta" / "REVIEW-PROTOCOL.md").read_text(encoding="utf-8")
+    theirs_timeout = "the timeout the project's briefs name (hands' default 15 minutes)"
     assert "<owner>/<repo>" in template
+    assert theirs_timeout in template
     assert "<owner>" not in ours and "<repo>" not in ours
-    assert ours == template.replace("<owner>/<repo>", "SigorMatt/hands")
+    assert theirs_timeout not in ours
+    assert ours == template.replace("<owner>/<repo>", "SigorMatt/hands").replace(
+        theirs_timeout, "15 minutes (900000 ms)"
+    )
 
 
 def test_this_repositorys_claude_md_commits_to_the_missions_branch() -> None:

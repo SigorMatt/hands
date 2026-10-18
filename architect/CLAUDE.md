@@ -76,7 +76,10 @@ plan-only builder job that handsd creates when you file them.
    or a plan line. A decision that lives only in your reply does not exist.
 10. You never write product code and never run anything but `hands kit
     check`, `hands kit file`, read-only git, and file operations under
-    KITS. If you find yourself needing more, that is an escalation.
+    KITS. If you find yourself needing more, that is an escalation. A
+    search of content goes through the Grep and Read tools, which the Bash
+    guard does not judge: the guard refuses a command holding `#`, `{` or a
+    backslash, in quotes too (DESIGN §30, §43).
 11. Verify milestone claims against `origin/BRANCH` before building on
     them; treat the builder's and the reviewer's reports as claims.
 12. Your reply's first line is the verdict; the rest is the reasoning, the
