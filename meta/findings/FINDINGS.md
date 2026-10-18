@@ -2810,7 +2810,7 @@ inherited value reaches no job; the wait rule (prevent, an exit marker, a
 blocking foreground wait) in the brief template, both protocols and the
 handbook's §7.
 
-Status: decided (DESIGN §43), scheduled for U3 and U4
+Status: decided (DESIGN §43), scheduled for U3 and U4; U3 (rules 1–5) done in this commit
 
 ## H-075 — a role-filed kit that carries the playbook is approved by the engine under autonomy
 

@@ -59,6 +59,7 @@ import hands.runner
 from hands.config import (
     ARCHITECT_ROLE,
     BASH_TIMEOUT_ENV,
+    BG_TASKS_ENV,
     BG_WAIT_CEILING_ENV,
     CLONE_ENV,
     DRIVER_ROLE,
@@ -68,6 +69,7 @@ from hands.config import (
     ROLE_ENV,
     Config,
     RoleConfig,
+    background_tasks,
     driver_clone,
 )
 from hands.kit import named_paths
@@ -729,6 +731,20 @@ def _bash_timeout_lines(role: RoleConfig) -> str:
     return lines
 
 
+def _background_tasks_lines(role: RoleConfig) -> tuple[str, str | None]:
+    """§43 rules 3 and 5: the variable as the job will carry it, with its source, and
+    the hook comparison — the runner's own decision (`background_tasks`) — and the
+    WARN it makes, if any."""
+    decided = background_tasks(role)
+    value = f"={decided.value}" if decided.value is not None else " unset"
+    lines = f"\nenv {BG_TASKS_ENV}{value} ({decided.source}; §43)"
+    if decided.hook:
+        lines += f"\n{decided.hook}"
+    if decided.warning is not None and decided.warning != decided.hook:
+        lines += f"\n{decided.warning}"
+    return lines, decided.warning
+
+
 def _role_check(role: RoleConfig, project: str) -> Check:
     """§2: every job is spawned in `role.cwd`, and hands reads git HEAD there."""
     name = f"role {role.name}"
@@ -741,12 +757,14 @@ def _role_check(role: RoleConfig, project: str) -> Check:
         if BG_WAIT_CEILING_ENV in role.env
         else "hands' default: claude -p waits for the tasks it started, never terminates"
     )
+    background, warning = _background_tasks_lines(role)
     # H-008: the two limit-resume behaviours are invisible until a limit is hit.
     detail = (
         f"{role.cwd}  model {role.model}; permission_flags {flags}"
         f"\n{role.resume_behaviour} (§6)"
         f"\nenv {BG_WAIT_CEILING_ENV}={role.spawn_env[BG_WAIT_CEILING_ENV]} ({source}; §23)"
         f"{_bash_timeout_lines(role)}"
+        f"{background}"
         f"\n{_project_line(project)}"
     )
     if not (role.cwd / ".git").exists():
@@ -756,7 +774,8 @@ def _role_check(role: RoleConfig, project: str) -> Check:
             f"{detail}\n{role.cwd} is not a git repository: head_at_start/head_at_end "
             "stay empty (§2) and the built-in monitor has no commits to read (§5)",
         )
-    return Check(name, OK, detail)
+    # §43 rule 3: a hook that is not the installed hands' copy warns, never fails.
+    return Check(name, WARN if warning is not None else OK, detail)
 
 
 def _driver_check(config: Config) -> Check:

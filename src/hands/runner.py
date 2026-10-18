@@ -21,7 +21,10 @@ The process runs in handsd's environment plus the role's `spawn_env` (§23):
 `CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS=0` unless `[roles.<r>] env` sets it; and
 `HANDS_JOB=<job id>`, which the post-exit sweep reads as corroboration only (§29);
 and `HANDS_PROJECT=<the config's project>` (§36, H-043); and `HANDS_DOCS=<the
-installed hands' handbook and templates directory>` (§38, HF-002).
+installed hands' handbook and templates directory>` (§38, HF-002); and, for a
+builder or aux job whose cwd holds the installed hands' no-background hook,
+`CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1` unless the env table sets it (§43, H-074;
+`background_tasks`), never handsd's own value.
 
 Before an architect or driver job, the role's clone (`driver_clone`) is advanced
 to `origin/<[roles.<r>] branch>`, detached (§36, H-042; `advance_clone`). A clone
@@ -73,6 +76,7 @@ from typing import Any, TextIO
 
 from hands.config import (
     ARCHITECT_ROLE,
+    BG_TASKS_ENV,
     CLONE_ENV,
     CONSULT_ROLE_ENV,
     DOCS_ENV,
@@ -81,6 +85,7 @@ from hands.config import (
     PROJECT_ENV,
     Config,
     RoleConfig,
+    background_tasks,
     docs_root,
     driver_clone,
 )
@@ -1124,8 +1129,16 @@ def job_env(job: Job, role: RoleConfig, project: str) -> dict[str, str]:
     §38 (HF-002): every job carries `HANDS_DOCS`, the directory of the handbook and
     templates of the hands that runs it (`docs_root`), the same way; it is absent
     only when this hands carries neither.
+    §43 (H-074): `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS` is what `background_tasks`
+    decides for the role, here at dispatch: `1` for a builder or aux job whose cwd
+    holds the installed hands' copy of the no-background hook, the env table's value
+    for any role that sets it, and otherwise absent — never handsd's own value.
     """
     env = {**os.environ, **role.spawn_env, JOB_ENV: job.id, PROJECT_ENV: project}
+    env.pop(BG_TASKS_ENV, None)
+    background = background_tasks(role)
+    if background.value is not None:
+        env[BG_TASKS_ENV] = background.value
     env.pop(DOCS_ENV, None)
     docs = docs_root()
     if docs is not None:
