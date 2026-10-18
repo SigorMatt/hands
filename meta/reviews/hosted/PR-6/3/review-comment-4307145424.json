@@ -1,0 +1,69 @@
+{
+  "url": "https://api.github.com/repos/SigorMatt/hands/pulls/comments/4307145424",
+  "pull_request_review_id": 5563121872,
+  "id": 4307145424,
+  "node_id": "PRRC_kwDOUVwTn88AAAABALnS0A",
+  "diff_hunk": "@@ -3244,11 +3403,20 @@ def _driver_prompt(event: str, job: Job) -> str:\n     )\n \n \n-def _architect_prompt(event: str, job: Job, brief: ArchitectBrief | None) -> str:\n+def human_consult_prompt(reason: str, brief: ArchitectBrief | None = None) -> str:\n+    \"\"\"§42: the architect consult prompt of a consultation the human started — §31's\n+    prompt with the review's sections replaced by the human's reason, verbatim, under\n+    `HUMAN_REASON_HEADING`; its first line is `HUMAN_HEAD`.\"\"\"\n+    return _architect_prompt(HUMAN_EVENT, None, brief, reason=reason)",
+  "path": "src/hands/playbook.py",
+  "commit_id": "d3c4f151575026c8aa29c3f057cbf45d248b9c63",
+  "original_commit_id": "ce2088b445d74fe90974f0e358795dba50843432",
+  "user": {
+    "login": "qodo-code-review[bot]",
+    "id": 151058649,
+    "node_id": "BOT_kgDOCQD42Q",
+    "avatar_url": "https://avatars.githubusercontent.com/in/484649?v=4",
+    "gravatar_id": "",
+    "url": "https://api.github.com/users/qodo-code-review%5Bbot%5D",
+    "html_url": "https://github.com/apps/qodo-code-review",
+    "followers_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/followers",
+    "following_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/following{/other_user}",
+    "gists_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/gists{/gist_id}",
+    "starred_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/starred{/owner}{/repo}",
+    "subscriptions_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/subscriptions",
+    "organizations_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/orgs",
+    "repos_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/repos",
+    "events_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/events{/privacy}",
+    "received_events_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/received_events",
+    "type": "Bot",
+    "user_view_type": "public",
+    "site_admin": false
+  },
+  "body": "<img src=\"https://img.shields.io/badge/Medium-634FD1?style=flat-square\" height=\"20px\" alt=\"Remediation recommended\">\n\n7\\. Discotrade consultations lack reviews <code>🔗 Cross-repo conflict</code> <code>≡ Correctness</code>\n\n<pre>\n<b><i>human_consult_prompt</i></b> replaces the review with a reason and starts the architect with no review\njob. Discotrade’s standing architect instructions require a consultation on a review outcome and\nrequire reading the review it names, leaving that required input undefined when its operator uses\nthe new <b><i>consult</i></b> command.\n</pre>\n\n\n<details>\n<summary><strong>Agent Prompt</strong></summary>\n\n```\n## Issue description\nHuman-started consultations omit the review required by discotrade’s standing architect procedure.\n\n## Fix Focus Areas\n- src/hands/playbook.py[3406-3410]\n- meta/ARCHITECT.md[1-5]\n- meta/ARCHITECT.md[30-43]\n\n## Recommended Fix\nUpdate discotrade’s architect instructions to define the human-reason path, including what replaces the named review when deciding whether to file a kit or escalate, before enabling that command for the project.\n```\n\n<code>ⓘ Copy this prompt and use it to remediate the issue with your preferred AI generation tools</code>\n</details>\n\n[Dismiss ↗](https://app.qodo.ai/findings/54f50653-a20c-47bc-b540-550d7837bb58?action=dismiss&origin=git) | [View ↗](https://app.qodo.ai/findings/54f50653-a20c-47bc-b540-550d7837bb58)",
+  "created_at": "2026-10-18T13:10:12Z",
+  "updated_at": "2026-10-18T13:10:12Z",
+  "html_url": "https://github.com/SigorMatt/hands/pull/6#discussion_r4307145424",
+  "pull_request_url": "https://api.github.com/repos/SigorMatt/hands/pulls/6",
+  "_links": {
+    "self": {
+      "href": "https://api.github.com/repos/SigorMatt/hands/pulls/comments/4307145424"
+    },
+    "html": {
+      "href": "https://github.com/SigorMatt/hands/pull/6#discussion_r4307145424"
+    },
+    "pull_request": {
+      "href": "https://api.github.com/repos/SigorMatt/hands/pulls/6"
+    }
+  },
+  "reactions": {
+    "url": "https://api.github.com/repos/SigorMatt/hands/pulls/comments/4307145424/reactions",
+    "total_count": 0,
+    "+1": 0,
+    "-1": 0,
+    "laugh": 0,
+    "hooray": 0,
+    "confused": 0,
+    "heart": 0,
+    "rocket": 0,
+    "eyes": 0
+  },
+  "start_line": 3421,
+  "original_start_line": 3406,
+  "start_side": "RIGHT",
+  "line": 3425,
+  "original_line": 3410,
+  "side": "RIGHT",
+  "author_association": "NONE",
+  "original_position": 247,
+  "position": 262,
+  "subject_type": "line"
+}
