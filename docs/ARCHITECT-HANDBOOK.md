@@ -333,7 +333,7 @@ does not fail, without `gh`, because a project may commit direct
 |---|---|---|
 | reviewed clean | the review's should-fix | next mission/run; carry should-fix into its U0 |
 | has blockers | the review's blockers | a mission that closes them first |
-| builder question | the job's `result` | usually a `keep` answer sent by the human/driver; a kit only if the plan changes |
+| builder question | the job's `result` | an owner file as a decisions kit (§3), then `go <secret>`: route 4 of §19; after `VERDICT: question`, `answer <secret> <text>` with the zip attached is the shorter route; a plan kit only if the plan changes |
 | unrecognised verdict | the job's `result` and `stderr_tail` | fix the vocabulary or the brief |
 | task_killed / orphan | the job record, the monitor event | a finding; rarely a kit |
 | max_resumes exhausted | the job records | the environment, not the plan |
@@ -602,6 +602,51 @@ Three chats touch a project, and each writes one kind of thing (DESIGN §38):
   §3 and §6, and `hands kit check`'s six checks. It does not judge the
   project's design, code or domain; those belong to the project's own chat.
 
+**Who operates a project (DESIGN §42).** Three places can take a
+notification: the project's own Claude Project chat, the laptop's aux session,
+and the hands Project chat.
+
+- **The project's own chat operates that project**, as well as designing it.
+  It reads a pasted notification, reads the branch, decides, writes the file
+  the decision needs (a kit, an owner file) and gives the human the exact phone
+  command, or, when the phone has none, a self-contained aux prompt that names
+  `--project <project>`. It keeps the project's state board in its own Project
+  docs. Its vehicle is the Project instruction (`docs/ARCHITECT-INSTRUCTION.md`,
+  rule 15) and the handbook of the hands installed in its own sandbox (rule
+  13), not a skill. It answers from §19's operator table.
+- **The laptop's aux is hands for every project**: one interactive Claude Code
+  session that runs a self-contained prompt and decides nothing.
+- **The hands Project chat keeps hands' own missions and the operations of the
+  whole machine**: installs and upgrades, restarts that touch every project, the
+  Claude accounts, a migration, the notification server. It does not operate
+  another project: a project's notification brought to it is sent back to that
+  project's chat. It receives from each project only that project's HF reports
+  (§19, "An HF report"), takes them into the next hands kit as evidence only
+  (§15), and, before a release install restarts every daemon, asks the human to
+  check that no project's review or consultation is running.
+
+The aim is phone commands only for a project's routine operations.
+
+**The hands Project's playbook check.** The hands Project checks the
+hands-facing parts of every new playbook — a project's first plan kit and each
+series switch point: the playbook's rules, both orphaned rules and the
+blocked→consult rule among them, the verdict vocabulary, the kickoff, the
+review protocol against the template, the paths a prompt names — and never a
+mission kit.
+
+**The second onboarding shape (DESIGN §42).** An existing project whose
+architect and workers the human relays by hand is reshaped into mission form
+before hands drives it: the `meta/` layout (checkpoint, plan, journal,
+findings, reviews), briefs from `templates/BUILDER-N-PROMPT.md` with their
+`VERDICT:` lines, the review protocol from `templates/REVIEW-PROTOCOL.md`, a
+roadmap of what exists and what remains, and a playbook from
+`templates/PLAYBOOK-missions.toml` carrying both orphaned rules and the
+blocked→consult rule. The project's own chat writes that plan kit from the
+repository as it stands — its history is left as it is, never rewritten — and
+the hands Project checks its hands-facing parts as it checks a first plan kit;
+the rest of onboarding is §12's. Such a project is onboarded only after M9's
+rehearsal (mission 29); the first is agile-skills, stopped mid-work.
+
 ## 14. The ruling round
 
 A ruling is a question only the human (the owner) can answer. End to end:
@@ -617,37 +662,48 @@ A ruling is a question only the human (the owner) can answer. End to end:
    and every earlier decision), a "Findings closed:" line, each ruling as
    Asked and Decided, and last "For the builder", the exact steps, which is the
    only section the builder is told to read.
-3. **The send.** The human answers the builder's last session with a `keep`
-   send naming the file and telling the builder to carry out its "For the
-   builder" steps: from the phone, `answer <secret> <text>` with the file
-   attached in a `.zip` (fetched to `kit_dir`, never unzipped; the delivered
-   text ends with its path), or at the laptop `hands send --role builder
-   --context keep "<text>"`. The builder commits the file as `plan: decisions
-   <date> (owner)`, the one commit the review protocol reads for what it says
-   it does and does not review as a unit. After an escalation the builder's
-   tree holds the consultation's uncommitted journal line (DESIGN §27, §39,
-   H-060), so the send tells the builder to commit a dirty `meta/journal.md`
-   first, on its own, as `journal: <consultation>`. On an `answer` and on a
-   `hands send` to the builder, hands puts that sentence before the text itself
-   while the file is dirty; a ruling sent any other way says it.
-4. **The §8 hold, answered by typing.** A laptop or driver send whose text
-   matches a gate pattern (`Apply ~/Downloads/`, `decisions-`, `playbook-`, …)
-   is held for a human. Answer it by typing `approve <job> <secret>` on
-   `cmd_topic`, or `hands approve <job>` at the laptop. The phone's `answer` is
-   never held: its secret is the approval. A job id, on the phone and at the
-   laptop alike, is matched case-insensitively, with `O` read as `0` and `l` or
-   `I` as `1`, and a unique prefix of four or more characters is accepted
-   (DESIGN §39, H-059). A command with the right secret that handsd refuses (no
-   such job, a job not held, no resumable session) is answered on `ntfy_topic`
-   titled `<command>` with the reason; only a wrong or missing secret stays
-   silent (H-058).
-5. **The resume.** The brief template's recovery rule: a `keep` send after
-   `VERDICT: question` is the answer. The builder carries it out, continues the
-   mission from `meta/CHECKPOINT.md`, and ends the reply with one of the brief's
-   `VERDICT:` lines, always, even when a file had to be committed first; that
-   line fires the playbook's rules as any builder end does. In role mode the
-   architect's next consultation lists the answer and the owner file under
-   "Decided by the human since your last consultation".
+3. **The send: route 4 of §19.** The owner file travels as a decisions kit
+   (§3): a zip holding `meta/decisions/<date>-owner.md` and a `KIT.md` whose
+   first line is `plan: decisions <date> (owner)`, checked by `hands kit check`
+   like any kit. From the phone: `kit <secret>` with the zip attached, Approve
+   the apply's hold, then `go <secret>`. At the laptop: `hands kit apply <zip>`,
+   `hands approve <job>`, then `hands go`. The apply commits the file as `plan:
+   decisions <date> (owner)`, the one commit the review protocol reads for what
+   it says it does and does not review as a unit. When the builder's last job
+   is the one that asked (`VERDICT: question`), `answer <secret> <text>` with
+   the zip attached is the shorter route: the text goes to that session as a
+   `keep` send naming the file and telling the builder to carry out its "For
+   the builder" steps (the zip is fetched to `kit_dir`, never unzipped; the
+   delivered text ends with its path), and the builder commits the file itself.
+   After an escalation the builder's tree holds the consultation's uncommitted
+   journal line (DESIGN §27, §39, H-060), so the builder is told to commit a
+   dirty `meta/journal.md` first, on its own, as `journal: <consultation>`. On
+   an `answer` and on a `hands send` to the builder, hands puts that sentence
+   before the text itself while the file is dirty; the kit's apply and `go`
+   carry no such sentence, and a ruling sent any other way says it.
+4. **The §8 hold, answered by typing.** A laptop send whose text matches a
+   gate pattern (`Apply ~/Downloads/`, `decisions-`, `playbook-`, …) is held
+   for a human, and the apply of a kit the human sends is filed held. Answer it with the Approve
+   button, by typing `approve <job> <secret>` on `cmd_topic`, or with `hands
+   approve <job>` at the laptop. The phone's `answer` is never held: its secret
+   is the approval. A job id, on the phone and at the laptop alike, is matched
+   case-insensitively, with `O` read as `0` and `l` or `I` as `1`, and a unique
+   prefix of four or more characters is accepted (DESIGN §39, H-059). A command
+   with the right secret that handsd refuses (no such job, a job not held, no
+   resumable session) is answered on `ntfy_topic` titled `<command>` with the
+   reason; only a wrong or missing secret stays silent (H-058).
+5. **The resume.** The brief template's §R recovery rule: after `go`, the
+   builder starts from the checkpoint, and if a `plan: decisions <date>
+   (owner)` commit is on the branch after the checkpoint's last update and the
+   checkpoint does not record its "For the builder" steps as done, it carries
+   them out first, records them in the checkpoint, and continues. After an
+   `answer`, a `keep` send that follows `VERDICT: question` is the answer: the
+   builder carries it out and continues the mission from `meta/CHECKPOINT.md`.
+   Either way the reply ends with one of the brief's `VERDICT:` lines, always,
+   even when a file had to be committed first; that line fires the playbook's
+   rules as any builder end does. In role mode the architect's next
+   consultation lists the owner file under "Decided by the human since your
+   last consultation".
 
 ## 15. The separation rule
 
@@ -740,8 +796,163 @@ the human-supplied unit above that would carry the content.
   kit_dir` and files its apply as a held builder job (`origin: kit`) that
   `hands approve <job>` releases. The architect role's guard allows neither:
   they are the human's commands for when the phone is away.
+- **`hands consult [--file <path>] [<reason>]` and `consult <secret>
+  <reason>`** start one architect consultation in role mode whose prompt
+  carries the human's reason in place of a review (§16; DESIGN §42). The
+  secret is the approval, nothing is held, and a refusal is published titled
+  `consult`.
+- **`hands digest` and `digest <secret>`** print, and on the phone publish
+  titled `digest`, one line per project configured on the machine: its daemon,
+  pipeline, mission, builder and newest verdict, consultations used of the
+  budget, and last stop (§19's `digest` row says what each field means). It is
+  read-only, needs no daemon, and redacts every project's `cmd_secret` and
+  `ntfy_token` before a field is cut.
 - **docs/OPERATIONS.md is the human's runbook** for a hands machine: what it
   holds, its secrets by kind, a usage-limit stop, operating without the
   phone, a migration, a disaster and a release install. **docs/RELATED.md
   records** two readings of other orchestrators, Gas Town and Conductor, that
   the harness work cites (DESIGN §40). Neither is a design; DESIGN.md is.
+
+## 19. The operator table
+
+For the human and for the project's chat (DESIGN §42): one row per
+notification hands writes — every `stop` and `notify` message of
+`templates/PLAYBOOK-missions.toml` and `templates/PLAYBOOK-runs.toml`, and
+every stop and published line the engine, the limit manager and the daemon
+write themselves — with who answers it and the route at the phone and at the
+laptop. The project's chat answers a pasted notification from this table
+(the Project instruction's rule 15). Every title on the phone begins
+`<project>: `, which the table leaves out. A playbook `stop` and every stop
+the engine makes is titled `hands: the pipeline stopped` and its message is
+the stop's reason; a playbook `notify` is titled `hands: <message>`. A
+placeholder is written `<n>`, `<job>`, and so on. At the laptop a command
+takes `--project <project>` when the machine has more than one project; the
+table leaves it out, and an aux prompt names it.
+
+The routes:
+
+1. **Nothing to do.** A kit applied; a kit filed by the architect whose apply
+   the playbook approved; a consultation resolved; `handsd started` naming the
+   jobs it resumed.
+2. **A hold.** The Approve or Deny button, or typed `approve <job> <secret>` /
+   `deny <job> <secret>`; at the laptop `hands approve <job>` / `hands deny
+   <job>`.
+3. **A kit.** `kit <secret>` with the zip attached, Approve, then `go
+   <secret>` for a mission or run kit; at the laptop `hands kit apply <zip>`,
+   `hands approve <job>`, `hands go`.
+4. **A ruling the builder needs in the middle of a mission** (its question, a
+   driver's escalation, a blocked mission the human rules on). The project
+   chat's owner file travels as a decisions kit: a zip holding
+   `meta/decisions/<date>-owner.md` and a `KIT.md` whose first line is `plan:
+   decisions <date> (owner)`, checked by `hands kit check` like any kit and
+   sent by route 3 (§3), then `go <secret>`: the builder starts from the
+   checkpoint, and the brief's §R makes it carry out the newest owner file's
+   "For the builder" steps first (§14). When the builder's last job is the one
+   that asked (`VERDICT: question`), `answer <secret> <text>` with the zip
+   attached is the shorter route. At the laptop: `hands kit apply <zip>`,
+   `hands approve <job>`, then `hands go`.
+5. **A consultation the role must make after a ruling or a stop** (an
+   architect escalation, whatever its reason — a ruling, a change of shape, an
+   unanswered blocker, a missing milestone, human-supplied content — or a
+   blocked mission under a playbook without the blocked→consult rule): any
+   owner file first, as route 4's kit; then `consult <secret> <reason>` (§16);
+   at the laptop `hands consult`.
+6. **A stop the project's chat reads before deciding** (a failed job, an
+   orphaned consultation, an unrecognised verdict, `max_resumes` reached,
+   processes left behind, a tripwire, a review a restart killed under a
+   playbook without `aux.orphaned`): `progress <secret>` and `status
+   <secret>`, then route 3, 4 or 5, or `go <secret>` when the branch shows the
+   work can continue as it stands; a killed review is re-sent by the aux
+   prompt the table gives (the playbook's review prompt, sent to the aux
+   role). A defect of hands found on the way is an HF report (below).
+7. **A usage-limit stop.** Under the shipped playbooks a builder's limit stops
+   the pipeline (no rule names `builder.limited`), while the limit manager's
+   resume is scheduled at the reset and runs anyway. The human keeps the stop's
+   capture for the hands Project (`bash scripts/capture-quota-stop.sh
+   <project>` from the hands repository, docs/OPERATIONS.md), then `resume
+   <secret>` (at the laptop `hands resume`), so the resumed job's end fires the
+   playbook's rules. This row is rewritten when credential profiles are built.
+8. **A machine-wide event** (a daemon down, the notification server
+   unreachable, a sign-in lost, an install due): the hands Project.
+
+A review outcome in role mode consults the role by itself; the human sees only
+its consequences.
+
+| Notification | Who answers | Phone | Laptop |
+|---|---|---|---|
+| `hands: Kit applied; the next kickoff is the driver's` (missions template) | nobody — route 1 | nothing; a mission kit's route 3 ends with `go <secret>` | nothing; route 3 ends with `hands go` |
+| `hands: Kit applied` (runs template) | nobody — route 1 | nothing; a run kit's route 3 ends with `go <secret>` | nothing; route 3 ends with `hands go` |
+| `hands: kit <name> filed by the architect; apply approved by the playbook` | nobody — route 1 | nothing: the engine sends the kickoff | nothing |
+| `hands: A held job was denied` | nobody — route 1 | nothing: a denial is somebody's decision already | nothing |
+| `hands: the pipeline stopped` — Mission <n> reviewed clean; next mission is the architect's | the project's chat — route 3 | the next mission's kit: `kit <secret>` with the zip, Approve, `go <secret>` | `hands kit apply <zip>`, `hands approve <job>`, `hands go` |
+| `hands: the pipeline stopped` — Mission <n> review has blockers | the project's chat — route 3 | a mission that closes the blockers first, by route 3 | `hands kit apply <zip>`, `hands approve <job>`, `hands go` |
+| `hands: the pipeline stopped` — Run <n> review has blockers | the project's chat — route 3 | a run that closes the blockers first, by route 3 | `hands kit apply <zip>`, `hands approve <job>`, `hands go` |
+| `hands: the pipeline stopped` — Mission <n> blocked; see the builder's reply | the project's chat — route 4 | `progress <secret>`; the owner file as a decisions kit: `kit <secret>` with the zip, Approve, `go <secret>`; in role mode under a playbook without the blocked→consult rule, then `consult <secret> <reason>` (route 5) | `hands kit apply <zip>`, `hands approve <job>`, `hands go` (or `hands consult`) |
+| `hands: the pipeline stopped` — Run <n> blocked | the project's chat — route 4 | as for a blocked mission | as for a blocked mission |
+| `hands: the pipeline stopped` — The builder has a question | the project's chat — route 4 | the decisions kit: `kit <secret>` with the zip, Approve, `go <secret>`; or, the shorter route, `answer <secret> <text>` with the zip attached | `hands kit apply <zip>`, `hands approve <job>`, `hands go`; or `hands send --role builder --context keep "<text>"` |
+| `hands: the pipeline stopped` — The builder needs a decision | the project's chat — route 4 | as for "The builder has a question" | as for "The builder has a question" |
+| `hands: the pipeline stopped` — Builder finished without a recognised verdict | the project's chat — route 6 | `progress <secret>`, `status <secret>`; then a kit that fixes the vocabulary or the brief (route 3), or `go <secret>` | `hands jobs --role builder -n 1`, `hands status`; then route 3 or `hands go` |
+| `hands: the pipeline stopped` — Aux finished without a recognised verdict | the project's chat — route 6 | `progress <secret>`, `status <secret>`; none to re-send a review: give the aux prompt | aux prompt: `hands --project <project> send --role aux --context clear "<the playbook's review prompt, <n> filled>"` |
+| `hands: the pipeline stopped` — Aux job failed | the project's chat — route 6 | `status <secret>`; none to re-send the review: give the aux prompt | aux prompt: `hands --project <project> jobs --role aux -n 1`, then the review prompt re-sent as above |
+| `hands: A task inside a role job was killed` | the project's chat — route 6 | `progress <secret>`; nothing more unless a stop follows | `hands jobs -n 3` |
+| `hands: Builder looks stalled` | the project's chat — route 6 | `progress <secret>`; nothing more unless it stays stalled | `hands who`, `hands status` |
+| `hands: the pipeline stopped` — Processes outlived their job | the project's chat — route 6 | `status <secret>`, `progress <secret>`; then `go <secret>` or route 3 | `hands who`, `hands status`, then `hands go` |
+| `hands: the pipeline stopped` — Tripwire fired | the project's chat — route 6 | `progress <secret>`; then route 3, 4 or 5 | `hands jobs -n 3`, `hands status` |
+| `hands: a job is held for a human` — <reason>, `role:`, `job:`, the job id on its own line | the human alone — route 2 | the Approve or Deny button, or `approve <job> <secret>` / `deny <job> [reason] <secret>` | `hands approve <job>` / `hands deny <job> --reason "<reason>"` |
+| `hands: kit received` — kit received <name> <bytes> <sha256> | the human alone — route 3 | Approve the apply's hold (its own notification), then `go <secret>` | `hands approve <job>`, `hands go` |
+| `hands: handsd started` — <project> on <socket>, then `Resumed: <role> job <job>, from job <job> …` | nobody — route 1 | nothing; a line folded in under `While starting, handsd raised …` is answered by its own row | `hands status` |
+| `hands: handsd crashed` — <error type>: <message> | the hands Project — route 8 | nothing to send; give it to the hands Project | `journalctl --user -u handsd@<project>` for the hands Project |
+| nothing arrives, or a `digest` line reads `daemon down` | the hands Project — route 8 | `digest <secret>` on another project's `cmd_topic` | `hands digest` |
+| `hands: the pipeline stopped` — paused by human | nobody — route 1 | `resume <secret>` when it should go on | `hands resume` |
+| `hands: the pipeline stopped` — builder.limited: the playbook has no rule for it, and §10 stops for anything it did not pre-plan | the human alone — route 7 | after the capture, `resume <secret>` | `bash scripts/capture-quota-stop.sh <project>` from the hands repository, then `hands resume` |
+| `hands: the pipeline stopped` — limits.max_resumes reached: <role> has been resumed <k> time(s) with no `done` in between and is limited again | the human alone — route 7 | after the capture, `resume <secret>` | `bash scripts/capture-quota-stop.sh <project>`, then `hands resume` |
+| `hands: the pipeline stopped` — could not resume <role> after its limit: <error> | the project's chat — route 6 | `status <secret>`; an HF report | `hands jobs --role <role> -n 1` |
+| `hands: the pipeline stopped` — <event>: <role> has already been resumed <k> time(s) with no `done` in between and [limits] max_resumes is <m> | the project's chat — route 6 | `progress <secret>`, `status <secret>`; then `go <secret>` or route 3 | `hands jobs --role <role> -n 3`, then `hands go` |
+| `hands: the pipeline stopped` — <event>: the playbook has no rule for it, and §10 stops for anything it did not pre-plan (any other event) | the project's chat — route 6 | `progress <secret>`; then a kit whose playbook has the rule (route 3), or `go <secret>` | `hands pipeline`, then route 3 or `hands go` |
+| `hands: the pipeline stopped` — <event>: every rule for it matches on a verdict and <what>; §10 stops on a missing or unparseable VERDICT: | the project's chat — route 6 | `progress <secret>`; then route 3, or `go <secret>` | `hands jobs -n 1`, then route 3 or `hands go` |
+| `hands: the pipeline stopped` — <event>: no rule matches the verdict '<verdict>' | the project's chat — route 6 | `progress <secret>`; then a kit that fixes the vocabulary or the playbook (route 3) | `hands jobs -n 1`, then route 3 |
+| `hands: the pipeline stopped` — the playbook cannot be read, does not agree with this project's configuration, or renames the series without restating the architect's budget, so no rule can be trusted to fire: <error> | the project's chat — route 6 | a kit whose playbook loads (route 3), checked first at the laptop | `hands kit check <kit> --repo <clone>`, then route 3 |
+| `hands: the pipeline stopped` — the apply removed <playbook path> | the project's chat — route 6 | a kit that restores the playbook (route 3) | route 3 |
+| `hands: the pipeline stopped` — <event>: the playbook engine failed (<error>) | the project's chat — route 6 | `status <secret>`; an HF report; then `go <secret>` | `hands pipeline`, then `hands go` |
+| `hands: the pipeline stopped` — <event>: rule <i> cannot be rendered: <error> | the project's chat — route 6 | a kit whose playbook's rule renders (route 3) | route 3 |
+| `hands: the pipeline stopped` — <event>: rule <i> would start run <run>, which [limits] auto_runs does not list (<runs>); §10 stops for a run nobody pre-planned | the project's chat — route 3 | a run kit that plans it, or a playbook listing it, by route 3 | route 3 |
+| `hands: the pipeline stopped` — <event>: rule <i> could not send to <role>, could not resume <role>, or could not start the <role>: <error> | the project's chat — route 6 | `status <secret>`; an HF report if the error is hands' own; then `go <secret>` | `hands status`, `hands doctor`, then `hands go` |
+| `hands: the pipeline stopped` — <event>: rule <i> is a resume and the event carries no job to resume, or is a consult and the event carries no job to consult about | the project's chat — route 6 | a kit whose playbook puts the rule on a job's event (route 3) | route 3 |
+| `hands: the pipeline stopped` — <event>: rule <i> is a consult and this project configures no [roles.<role>] | the project's chat — route 6 | a kit without the consult rule (route 3), or the aux prompt that adds the role | aux prompt: add the `[roles.<role>]` table docs/INTEGRATION.md gives to `~/.hands/<project>.toml`, then `systemctl --user restart handsd@<project>` between jobs |
+| `hands: the pipeline stopped` — <event>: rule <i> would start consultation <k> of this series and [limits] max_architect_consults is <b> (§31): the series' consult budget is exhausted (budget-exhausted) | the project's chat — route 3 | the next kit by route 3, its playbook restating the budget if the series goes on in role mode | route 3 |
+| `hands: the pipeline stopped` — <event>: rule <i> would start consultation <k> of this mission and [limits] max_consults is <b> (§27) | the project's chat — route 6 | `progress <secret>`; then route 3 or 4 | route 3 or 4 |
+| `hands: the pipeline stopped` — <event>: the architect escalated: <reason> — session <id>; continue it in the architect's directory with `claude --resume <id>` (§31) | the project's chat — route 5 | any owner file first (route 4's kit), then `consult <secret> <reason>` | `hands kit apply <zip>`, `hands approve <job>`, then `hands consult` |
+| `hands: the pipeline stopped` — <event>: the architect's consultation <job> ends escalate (§33): <why>; … | the project's chat — route 5 | as for "the architect escalated" | as for "the architect escalated" |
+| `hands: the pipeline stopped` — <event>: the architect replied series complete: the roadmap's gates are met and there is no next kit, so the pipeline stops (§31) | the project's chat — route 3 | the next series' kit by route 3, or nothing | route 3 |
+| `hands: the pipeline stopped` — <event>: the consultation's architect job ended <state>, and a consultation that does not end in a verdict stops (§31) | the project's chat — route 6 | `status <secret>`; then `consult <secret> <reason>` (route 5) | `hands jobs --role architect -n 1`, then `hands consult` |
+| `hands: the pipeline stopped` — <event>: the architect's reply has no VERDICT: line, or the architect's verdict '<verdict>' is none of … | the project's chat — route 6 | `status <secret>`; then `consult <secret> <reason>` (route 5) or route 3 | `hands jobs --role architect -n 1`, then `hands consult` or route 3 |
+| `hands: the pipeline stopped` — <event>: the architect replied '<verdict>' and no apply of kit '<name>' was filed for its consultation (job <job>) within [series] kit_wait_s = <s> (§32) | the project's chat — route 6 | `status <secret>`; then `consult <secret> <reason>` (route 5) or route 3 | `hands jobs --role architect -n 1`, then `hands consult` or route 3 |
+| `hands: the pipeline stopped` — job.held: the engine could not approve the architect's apply <job>: <error>, or <job> is the architect's apply under an autonomous playbook and this engine has no approve seam | the human alone — route 2 | the hold follows with its buttons: Approve or Deny it, then `resume <secret>` | `hands approve <job>` or `hands deny <job>`, then `hands resume` |
+| `hands: the pipeline stopped` — job.held: the architect's apply <job> is not approved: the stored zip of kit_id <kit> has sha256 <a>, and the kit check passed on sha256 <b> (§34); the hold is the human's | the human alone — route 2 | Deny the hold that follows; an HF report | `hands deny <job> --reason "<reason>"` |
+| `hands: a consultation stopped over a paused pipeline` — <reason> | the project's chat — route 6 | the pipeline stays paused; answer the reason by its own row | as the reason's own row |
+| `hands: the pipeline stopped` — driver.<state>: the driver escalated: <reason> (§27, §28); the <role>'s question (job <job>), verbatim: … | the project's chat — route 4 | as for "The builder has a question" | as for "The builder has a question" |
+| `hands: the pipeline stopped` — driver.<state>: the consultation's driver job ended <state>, the driver's reply has no VERDICT: line, or the driver's verdict '<verdict>' is neither resolved nor escalate | the project's chat — route 6 | `progress <secret>`; then route 3 or 4 | route 3 or 4 |
+| `<command>` — <command> refused: <why> (a refused phone command; `reply` and `answer` are titled `hands: reply` and `hands: answer`) | the project's chat — route 6 | the corrected command, once the reason is read | the laptop form, which refuses the same |
+| `hands: go`, `hands: answer`, `hands: reply`, `hands: consult` — go: builder job <job> <state> (and its kin) | nobody — route 1 | nothing: the job's end is its own row | nothing |
+| `architect` — the architect's reply to a `reply`; `builder` — the builder's final reply to an `answer` | nobody — route 1 | nothing: the builder's verdict fires the playbook's rules | nothing |
+| `hands: status`, `progress` — the answer to `status <secret>`, `progress <secret>` | nobody — route 1 | nothing | nothing |
+| `hands: notify --test` — <message> | nobody — route 1 | nothing: it proves the topic | nothing |
+| `digest` — one line per project: `<project> \| daemon up\|down \| pipeline running\|paused \| mission <n>\|- \| builder running <job> <age>\|idle, verdict <line>\|none \| architect\|driver <used>/<budget> \| stop <time> <reason>\|no stop`; a config that does not load is one line, `<file>: does not load` | nobody — route 1 | `digest <secret>` asks for it. The fields: the daemon is `up` when its socket answers `status` within two seconds, else `down`; the pipeline `running` or `paused`; the mission the number on the first `Mission:` line of the builder's `meta/CHECKPOINT.md`, else `-`; the builder `running <job> <age>` or `idle`, with the newest builder job's verdict cut to 60 characters; the consultations `architect <used>/<budget>` in role mode, else `driver <used>/<budget>`; the last stop's time and the first line of its reason cut to 100 characters, or `no stop`. Every project's `cmd_secret` and `ntfy_token` is redacted before a field is cut | `hands digest` |
+| HF report — a defect of hands met on the way (below) | the project's chat — route 6 | nothing to send: the file goes to the hands Project | nothing to run: the file goes to the hands Project |
+
+### An HF report
+
+A defect of hands that a project meets is recorded in that project's ledger as
+an HF-nnn entry and handed to the hands Project as one file,
+`HF-<n>-report.md`, holding evidence only (DESIGN §42):
+
+- the HF id and its date;
+- the project's name;
+- the hands build it ran: `hands --version` and the commit the last install named;
+- what hands did: the notifications, job ids, command lines and their output as they appeared;
+- what the project expected of hands;
+- the commit, review number or consultation number where it was seen;
+- the project's interim workaround if any, named by what it does to hands, never by the project's content.
+
+No product design, code, domain term or fixture goes into it (§15). The hands
+Project files it as H-nnn citing the HF id.

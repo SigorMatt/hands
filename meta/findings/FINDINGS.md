@@ -2723,4 +2723,4 @@ and its briefs name a timeout no longer than that; docs/INTEGRATION.md
 states the raise and the installed CLI's ceiling if it has one. hands'
 default is unchanged; hands' own briefs name 15 minutes (900000 ms).
 
-Status: decided (DESIGN §42), closed by U4
+Status: resolved-by-doc (mission 26 U4 — docs/INTEGRATION.md states the raise of `BASH_DEFAULT_TIMEOUT_MS` and `BASH_MAX_TIMEOUT_MS` in `[roles.builder.env]` and `[roles.aux.env]`, briefs naming a timeout no longer than that, and that the installed CLI (2.1.302, read from its bundled files) has no ceiling of its own on `BASH_MAX_TIMEOUT_MS`; hands' default unchanged. Tests: tests/test_operator_table.py)

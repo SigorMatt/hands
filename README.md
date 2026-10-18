@@ -192,6 +192,8 @@ Off unless configured in `[notify]`; `docs/INTEGRATION.md` has the setup.
 
 `hands doctor` reports each as on or off, `go` and the kit transport included,
 naming what is missing when off.
+What each notification asks of you, who answers it and the command that does
+is the operator table, `docs/ARCHITECT-HANDBOOK.md` §19.
 
 ## Development
 

@@ -413,6 +413,21 @@ Notes that are easy to get wrong:
   where the no-background hook cannot see it, and a three-minute gate was moved
   so. Driver and architect jobs do not get them from hands. Doctor prints both
   effective values on the builder and aux rows.
+  A project whose gate runs longer than 15 minutes raises `BASH_DEFAULT_TIMEOUT_MS`
+  and `BASH_MAX_TIMEOUT_MS` in its `[roles.builder.env]` and `[roles.aux.env]`
+  — an edit of its own config at the laptop, or an aux prompt its own chat
+  gives — and its briefs name a timeout no longer than that (DESIGN §42,
+  H-072: a gate on a shared machine took 1281 s). hands' default is
+  unchanged, and hands' own briefs name 15 minutes (900000 ms). The installed
+  Claude Code CLI has no ceiling of its own on `BASH_MAX_TIMEOUT_MS`: in
+  2.1.302 it takes any positive number of milliseconds, raised to
+  `BASH_DEFAULT_TIMEOUT_MS` when that is larger, and is 600000 when unset. Found by
+  reading the CLI's bundled JavaScript inside its native binary
+  (`~/.local/share/claude/versions/2.1.302`, the target of the `claude` on
+  PATH) with `grep -a` for the variable's name, never by running it; the
+  only bound beside it is a cap of 2147483647 ms, JavaScript's longest timer,
+  on another limit the CLI derives from it. Read it again after a CLI
+  upgrade.
   Every role job's environment also carries `HANDS_PROJECT`, the config's
   project name (§36, H-043), over handsd's own environment and this table
   alike; doctor prints it on each role's row as `env HANDS_PROJECT=<project>`.
