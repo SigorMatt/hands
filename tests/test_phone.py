@@ -3907,6 +3907,35 @@ def test_a_phone_consult_with_an_attachment_outside_the_rules_is_refused(
     phone_drive(body)
 
 
+@pytest.mark.parametrize(
+    ("text", "body_bytes", "fields", "why"),
+    [
+        (CONSULT_TEXT, "café".encode("latin-1"), {}, "the attachment is not UTF-8 text"),
+        ("", b"  \n\n ", {}, "the reason is empty"),
+        (CONSULT_TEXT, b"short", {"size": 9}, "not the 9 the attachment reported"),
+    ],
+    ids=["undecodable", "refused-after-fetch", "failed-fetch"],
+)
+def test_a_phone_consult_refused_after_its_fetch_leaves_no_file_in_kit_dir(
+    consult_project: str, downloads: Path, kit_server: KitServer, text: str,
+    body_bytes: bytes, fields: dict[str, Any], why: str
+) -> None:
+    """PR #6 hosted review finding 5: an attachment fetched for a consult the phone
+    then refuses — undecodable, refused by `start_consult`'s checks, or a download
+    that failed part-way — leaves nothing in `kit_dir`. (A consult that starts keeps
+    its file: `test_a_phone_consults_md_attachment_lands_in_kit_dir_...`.)"""
+
+    async def body(daemon: Daemon, fake: FakeNtfy) -> None:
+        attachment = kit_server.attach("notes.md", body_bytes, **fields)
+        await say(daemon, fake, f"consult {SECRET} {text}".rstrip(), attachment=attachment)
+        await drained(daemon)
+        assert kit_server.hits, "the attachment was never fetched"
+        assert_consult_refused(daemon, why)
+        assert sorted(p.name for p in downloads.iterdir()) == []
+
+    phone_drive(body)
+
+
 def test_a_phone_consult_with_an_empty_reason_is_refused(consult_project: str) -> None:
     async def body(daemon: Daemon, fake: FakeNtfy) -> None:
         await say(daemon, fake, f"consult {SECRET}")

@@ -557,23 +557,23 @@ class Api:
     async def consult_refusal(self, reason: str | None) -> str | None:
         """§42: why a consultation the human asks for is refused now, or None.
 
-        In §42's order: the playbook in force does not set `[series] architect =
-        "role"`, or the project configures no `[roles.architect]`; an architect job
-        is running, queued or held, or a consultation's `next kit` wait is open; a
+        Every refusal that needs no playbook is asked first: an architect job is
+        running, queued or held, or a consultation's `next kit` wait is open; a
         builder or aux job is running, queued or held; the reason is empty
         (`reason=None` skips this one: the phone asks before it fetches the
-        attachment, which may carry the whole reason); the budget is spent. The
-        committed playbook is loaded first, as a job's start loads it; nothing is
-        awaited after that, so `start_consult`'s enqueue follows these checks in one step
-        of the event loop."""
+        attachment, which may carry the whole reason). Only a command none of these
+        refuses loads the committed playbook, as a job's start loads it (§10) — so a
+        refused consult never stops the pipeline on a playbook that does not load,
+        nor swaps the playbook or clears `last_rule` under a running job (PR #6
+        hosted review finding 6). Then: the playbook in force does not set `[series]
+        architect = "role"`, or the project configures no `[roles.architect]`; the
+        budget is spent. Nothing is awaited after the load, so `start_consult`'s
+        enqueue follows these checks in one step of the event loop."""
         engine = self.daemon.playbook
-        await engine.reload()
-        why = engine.consult_mode_refusal()
-        if why is not None:
-            return why
-        why = self._role_busy(ARCHITECT_ROLE)
-        if why is not None:
-            return why
+        if ARCHITECT_ROLE in self.config.roles:
+            why = self._role_busy(ARCHITECT_ROLE)
+            if why is not None:
+                return why
         waiting = engine.kit_wait()
         if waiting is not None:
             consultation, name = waiting
@@ -588,6 +588,10 @@ class Api:
                     return f"{why}: a consultation decides what a stopped series does next"
         if reason is not None and not reason.strip():
             return "the reason is empty (§42)"
+        await engine.reload()
+        why = engine.consult_mode_refusal()
+        if why is not None:
+            return why
         return engine.consult_budget_refusal()
 
     async def start_consult(self, reason: str, *, requested_by: str) -> dict[str, Any]:

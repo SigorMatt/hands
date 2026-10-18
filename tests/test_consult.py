@@ -380,6 +380,78 @@ def test_hands_consult_is_refused_while_a_next_kit_wait_is_open(
     drive(body)
 
 
+def test_a_consultation_whose_enqueue_fails_leaves_the_pipeline_stopped(
+    tmp_home: Path, workdir: Path
+) -> None:
+    """PR #6 hosted review finding 2: the un-pause comes before the enqueue (§42),
+    and an enqueue that raises restores the stop it cleared — paused, by whom, its
+    reason and its time — and files no `consult.sent`."""
+    role_project(tmp_home, workdir)
+
+    async def body(daemon: Daemon) -> None:
+        await ok("pause")
+        engine = daemon.playbook
+        before = (engine.state.paused, engine.state.paused_by, engine.state.stop_reason,
+                  engine.state.stopped_at)
+        assert before[0] is True
+
+        async def broken(**_: Any) -> Job:
+            raise OSError("the spool is full")
+
+        engine.enqueue = broken
+        code, _out, _err = await cli("consult", "why")
+        assert code != 0
+        after = (engine.state.paused, engine.state.paused_by, engine.state.stop_reason,
+                 engine.state.stopped_at)
+        assert after == before
+        state = await ok("pipeline")
+        assert state["paused"] is True and state["stop_reason"] == before[2]
+        assert await events("consult.sent") == []
+        assert (await ok("jobs"))["jobs"] == []
+
+    drive(body)
+
+
+@pytest.mark.parametrize("change", ["dirty", "recommitted"])
+def test_a_consult_refused_as_busy_leaves_the_engine_untouched(
+    tmp_home: Path, workdir: Path, change: str
+) -> None:
+    """PR #6 hosted review finding 6: a consult refused because the builder runs
+    does not load the playbook — a dirty one does not stop the pipeline, and a newly
+    committed one replaces neither the engine's playbook nor its `last_rule`."""
+    role_project(tmp_home, workdir)
+
+    async def body(daemon: Daemon) -> None:
+        busy = await ok("send", "--role", "builder", "--context", "clear", "FAKE:block")
+
+        async def running() -> bool:
+            return (await ok("show", busy["id"]))["state"] == "running"
+
+        await poll(running, "the builder to run")
+        engine = daemon.playbook
+        book = engine.playbook
+        assert book is not None
+        rule = {"rule": 1, "event": "aux.done", "fired_at": "2026-10-18T00:00:00Z"}
+        engine.state.last_rule, engine.state.last_rule_sha256 = rule, book.sha256
+        if change == "dirty":
+            (workdir / "PLAYBOOK.toml").write_text(ROLE_BOOK + "\n# dirty\n", encoding="utf-8")
+        else:
+            commit_file(workdir, "PLAYBOOK.toml", ROLE_BOOK + "\n# another file\n")
+        try:
+            code, _out, err = await cli("consult", "why")
+            assert code == 1, err
+            assert f"the builder has a job running ({busy['id']})" in strip_paths(err), err
+            assert engine.playbook is book
+            assert engine.state.last_rule == rule
+            assert engine.state.last_rule_sha256 == book.sha256
+            assert engine.state.paused is False
+            assert await events("stop") == []
+        finally:
+            await ok("cancel", busy["id"])
+
+    drive(body)
+
+
 def test_the_budget_counts_a_human_consultation_and_refuses_at_the_limit(
     tmp_home: Path, workdir: Path
 ) -> None:

@@ -602,7 +602,8 @@ class PhoneChannel:
         refusal is published titled `consult` (§39, H-058). The refusals are asked
         before the attachment is fetched, so a refused consult never reaches its
         server, and again by `Api.start_consult` next to the enqueue, after the
-        fetch's awaits.
+        fetch's awaits. A file fetched for a consult that is then refused (or that
+        fails) is removed from `kit_dir`; a consultation that starts keeps its file.
         """
         parsed = parse_consult(text)
         if parsed is None:
@@ -615,21 +616,32 @@ class PhoneChannel:
         if why is not None:
             return await self._refuse("consult", why)
         attached: str | None = None
-        if attachment is not None:
-            fetched = await self._fetch(attachment, rule=CONSULT_RULE)
-            if isinstance(fetched, str):
-                return await self._refuse("consult", fetched)
-            directory, written, _total, _digest = fetched
-            try:
-                data = await asyncio.to_thread((directory / written).read_bytes)
-                attached = consult_file_text(data, "the attachment")
-            except (OSError, ValueError) as exc:
-                problem = str(exc) if isinstance(exc, ValueError) else type(exc).__name__
-                return await self._refuse("consult", problem)
+        kept: Path | None = None  # the fetched file, removed unless the consult starts
         try:
-            job = await api.start_consult(consult_reason(said, attached), requested_by="phone")
-        except ApiError as exc:
-            return await self._refuse("consult", str(exc))
+            if attachment is not None:
+                fetched = await self._fetch(attachment, rule=CONSULT_RULE)
+                if isinstance(fetched, str):
+                    return await self._refuse("consult", fetched)
+                directory, written, _total, _digest = fetched
+                kept = directory / written
+                try:
+                    data = await asyncio.to_thread(kept.read_bytes)
+                    attached = consult_file_text(data, "the attachment")
+                except (OSError, ValueError) as exc:
+                    problem = str(exc) if isinstance(exc, ValueError) else type(exc).__name__
+                    return await self._refuse("consult", problem)
+            try:
+                job = await api.start_consult(
+                    consult_reason(said, attached), requested_by="phone"
+                )
+            except ApiError as exc:
+                return await self._refuse("consult", str(exc))
+            kept = None  # the consultation started: its file stays in kit_dir
+        finally:
+            if kept is not None:
+                # PR #6 hosted review finding 5: a refused consult leaves no file.
+                with contextlib.suppress(OSError):
+                    kept.unlink()
         log.info("phone: consult started architect job %s (%s)", job["id"], job["state"])
         await self.daemon.notifier.answer(
             CONSULT_TITLE, f"consult: architect job {job['id']} {job['state']}"

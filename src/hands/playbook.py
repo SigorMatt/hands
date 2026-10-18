@@ -2529,7 +2529,9 @@ class PlaybookEngine:
         review (`human_consult_prompt`) — refused over the cap; then a stopped
         pipeline un-paused, as `resume` does, and one architect job of origin
         `playbook` enqueued, and `consult.sent` with every field §42 lists, the
-        reason only as its sha256. No rule fired it, so no `last_rule` is set."""
+        reason only as its sha256. No rule fired it, so no `last_rule` is set. An
+        enqueue that raises puts the stop it cleared back (paused, by whom, reason,
+        time) and writes no event for it; its `pipeline.resumed` stays."""
         used, budget = self.architect_consults_used(), book.max_architect_consults
         recorded: dict[str, Any] = {"head": _git_head(self.config.role("builder").cwd)}
         prompt = human_consult_prompt(human.reason, self.architect_brief(book, used + 1))
@@ -2539,14 +2541,27 @@ class PlaybookEngine:
                 f"the consultation's prompt is {size} bytes, over the {human.cap} byte cap "
                 "of §2"
             )
+        stopped = (self.state.paused, self.state.paused_by, self.state.stop_reason,
+                   self.state.stopped_at)
         self._unpause("resume")
-        started = await self.enqueue(
-            role=ARCHITECT,
-            context="clear",
-            prompt=prompt,
-            origin=ORIGIN,
-            playbook_sha256=book.sha256,
-        )
+        try:
+            started = await self.enqueue(
+                role=ARCHITECT,
+                context="clear",
+                prompt=prompt,
+                origin=ORIGIN,
+                playbook_sha256=book.sha256,
+            )
+        except BaseException:
+            # PR #6 hosted review finding 2: no consultation was created, so the stop
+            # the un-pause cleared is put back as it was, and the failure is raised.
+            if stopped[0] and not self.state.paused:
+                (self.state.paused, self.state.paused_by, self.state.stop_reason,
+                 self.state.stopped_at) = stopped
+                self._save()
+                log.warning("playbook: the consult's enqueue failed; the stop is restored "
+                            "(%s)", stopped[2])
+            raise
         self.spool.append_event(
             "consult.sent",
             {
