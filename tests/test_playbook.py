@@ -7185,3 +7185,103 @@ def test_the_filing_hold_reason_reads_the_zip_off_the_event_loop(
         assert threads.count(loop_thread) == 0, "the zip was read on the event loop"
 
     asyncio.run(scenario())
+
+
+# ---- mission 28 U5 (PR #8 hosted finding 2): no late hold notice for a decided job
+
+
+def _held_notes(posts: ActionPosts) -> list[dict[str, Any]]:
+    return [note for note in posts.sent if note["title"] == as_published(HELD_TITLE)]
+
+
+async def _decide(daemon: Daemon, job_id: str, decision: str) -> None:
+    """Another client deciding the held job: the driver's `--human-confirmed` path."""
+    method = daemon.api.approve if decision == "approved" else daemon.api.deny
+    await method(job=job_id, human_confirmed=True, quote="decided while the reason ran")
+
+
+@pytest.mark.parametrize("decision", ["approved", "denied"])
+def test_a_send_decided_while_its_hold_reason_is_computed_is_not_announced(
+    tmp_home: Path, workdir: Path, decision: str
+) -> None:
+    """PR #8 hosted finding 2 (§43, §44 review 27 should-fix 1, §34): `Api.send` awaits
+    the hold reason (`Daemon.decide_held_reason`) before it files `job.held`. A job
+    another client approves or denies during that wait gets no `job.held` event, no
+    held notification and no Approve/Deny buttons (no nonce is minted for it)."""
+    architect_project(tmp_home, workdir, book=OWNER_BOOK, ntfy=True)
+    posts = ActionPosts()
+
+    async def scenario() -> None:
+        daemon = _phone_daemon(tmp_home, posts)
+        real = daemon.decide_held_reason
+
+        async def racing(job: Job) -> None:
+            await _decide(daemon, job.id, decision)
+            await real(job)
+
+        daemon.decide_held_reason = racing  # type: ignore[method-assign]
+        await daemon.start()
+        try:
+            job = await daemon.api.send(
+                role="builder", context="clear", prompt=fake_result("done"), gate="why"
+            )
+            await daemon.notifier.drain()
+            kinds = [e.kind for e in daemon.spool.events() if e.payload.get("job") == job["id"]]
+            assert "gate.decided" in kinds, kinds
+            assert "job.held" not in kinds, kinds
+            assert _held_notes(posts) == [], posts.sent
+            assert daemon.phone is not None
+            assert daemon.phone.nonces.get(job["id"]) is None, "buttons were minted for it"
+        finally:
+            await daemon.stop()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("decision", ["approved", "denied"])
+def test_a_held_job_decided_while_the_start_computes_its_reason_is_not_republished(
+    tmp_home: Path, workdir: Path, decision: str
+) -> None:
+    """PR #8 hosted finding 2 (§34, §43, §44 review 27 should-fix 1): the start's
+    republish of a held architect apply (`Daemon._publish_held`) computes §43's reason
+    in a worker thread. A job another client approves or denies during that wait is not
+    published as held, mints no buttons, and is not among the start's held jobs."""
+    import threading
+
+    architect_project(tmp_home, workdir, book=OWNER_BOOK, ntfy=True)
+    posts = ActionPosts()
+    entered, release = threading.Event(), threading.Event()
+
+    async def scenario() -> None:
+        daemon = _phone_daemon(tmp_home, posts)
+        job = filed_kit(daemon.spool, data=kit_zip(OWNER_ENTRIES))
+        real = daemon.playbook.published_hold_reason
+
+        def blocking(held: Job) -> str | None:
+            entered.set()
+            assert release.wait(30), "the decision never came"
+            return real(held)
+
+        daemon.playbook.published_hold_reason = blocking  # type: ignore[method-assign]
+        starting = asyncio.create_task(daemon.start())
+        try:
+            async def reading() -> bool:
+                return entered.is_set()
+
+            await poll(reading, "the start to compute the hold reason")
+            await _decide(daemon, job.id, decision)
+            release.set()
+            await starting
+            await daemon.notifier.drain()
+            assert _held_notes(posts) == [], posts.sent
+            assert daemon.phone is not None
+            assert daemon.phone.nonces.get(job.id) is None, "buttons were minted for it"
+            listed = [] if daemon._start_pending is None else daemon._start_pending[1]
+            assert listed.count(job.id) == 0, listed
+        finally:
+            release.set()
+            if not starting.done():
+                await starting
+            await daemon.stop()
+
+    asyncio.run(scenario())

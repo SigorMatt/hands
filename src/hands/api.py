@@ -444,6 +444,11 @@ class Api:
             # §43: a hold published at filing reads §43's reason when its kit carries
             # the playbook — decided now, off the event loop (§44).
             await self.daemon.decide_held_reason(job)
+            if self.daemon.still_held(job.id) is None:
+                # PR #8 hosted finding 2: another client decided the job during that
+                # wait; its hold is over, so nothing is filed or published for it.
+                self.daemon.discard_held_reason(job.id)
+                return self._job(job.id).to_dict()
             self.spool.append_event(
                 "job.held",
                 {"job": job.id, "role": role, "state": "held", "reason": reason, "gate": "send"},

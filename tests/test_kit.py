@@ -3677,6 +3677,45 @@ def test_kit_check_warns_for_the_configured_playbook_path_judging_the_repos_ther
     ), said
 
 
+def test_the_daemons_kit_check_from_a_builder_cwd_below_the_root_warns_for_the_configured_path(
+    tmp_home: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Mission 28 U5, PR #8 hosted finding 5 (§44 "H-077, ruled", §38): handsd's
+    `kit_file` runs `check_kit` with the builder's cwd as its repo argument. With that
+    cwd at `sub/dir` below the repository root and `[playbook] path = "ops/rules.toml"`
+    (the repository path `sub/dir/ops/rules.toml`), a kit carrying that entry draws the
+    owner's WARN because the repository's playbook there is role mode with autonomy —
+    the configured path is resolved against the repository root, not joined beneath
+    the cwd a second time."""
+    from conftest import commit_file
+    from hands.config import load_config
+
+    monkeypatch.delenv("HANDS_PROJECT", raising=False)
+    root = tmp_path / "root"
+    commit_file(root, "sub/dir/ops/rules.toml", AUTONOMOUS_PLAYBOOK)
+    commit_file(root, "sub/dir/meta/REVIEW-PROTOCOL.md", PROTOCOL)
+    cwd = root / "sub" / "dir"
+    architect = tmp_path / "hands-architect"
+    architect.mkdir()
+    (tmp_home / ".hands" / "demo.toml").write_text(
+        f'[roles.builder]\ncwd = "{cwd}"\n\n[roles.architect]\ncwd = "{architect}"\n'
+        '\n[playbook]\npath = "ops/rules.toml"\n',
+        encoding="utf-8",
+    )
+    kit = write_tree(
+        tmp_path / "k",
+        {"meta/BUILDER-11-PROMPT.md": BRIEF, "sub/dir/ops/rules.toml": PLAYBOOK},
+    )
+    report = kit_mod.check_kit(kit, cwd, config=load_config("demo"))
+    owner = [text for text in report.warnings if "§43" in strip_paths(text)]
+    assert len(owner) == 1, report.warnings
+    said = strip_paths(owner[0])
+    assert said.startswith(
+        "the kit carries sub/dir/ops/rules.toml, and the repository's sub/dir/ops/rules.toml "
+        'sets [series] architect = "role" with autonomous = true'
+    ), said
+
+
 def test_an_ordinary_kit_is_unchanged_under_a_configured_playbook_path(
     tmp_home: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -322,7 +322,9 @@ stopped over a paused pipeline`; no playbook rule fires for it.
 notification check (§11) uses to put an event on your phone. Over a pipeline that is
 *already* stopped it is that later stop: it prints the reason it is already
 stopped for, keeps that reason and its timestamp in `hands pipeline`, notifies
-nobody, and leaves only the `pipeline.stop_suppressed` record.
+nobody, and leaves only the `pipeline.stop_suppressed` record. Over a human
+pause (below) it records nothing at all: no `pipeline.stop_suppressed`, no
+notification (DESIGN §44).
 
 ### A human pause (DESIGN §44)
 

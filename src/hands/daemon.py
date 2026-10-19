@@ -426,11 +426,30 @@ class Daemon:
         in a worker thread (review 27 should-fix 1, §44: it reads and hashes the
         stored zip, which never happens on the event loop).
         """
-        held = [job for job in self.spool.list_jobs() if job.state == "held"]
-        for job in held:
+        published: list[str] = []
+        for job in [job for job in self.spool.list_jobs() if job.state == "held"]:
             reason = await asyncio.to_thread(self.playbook.published_hold_reason, job)
-            self.publish_hold(job, reason)
-        return [job.id for job in held]
+            # PR #8 hosted finding 2: a job decided while its reason was computed is
+            # no longer held, and its hold is neither published nor listed.
+            current = self.still_held(job.id)
+            if current is None:
+                continue
+            self.publish_hold(current, reason)
+            published.append(current.id)
+        return published
+
+    def still_held(self, job_id: str) -> Job | None:
+        """The job `job_id` as it is now, when it is still `held` and its gate still
+        waits for a decision; None once anyone approved, denied or cancelled it (PR #8
+        hosted finding 2: an await between the hold and its notice lets another client
+        decide it, and a decided hold is never announced)."""
+        try:
+            job = self.spool.load_job(job_id)
+        except SpoolError:
+            return None
+        if job.state != "held" or (job.gate or {}).get("decided_by") is not None:
+            return None
+        return job
 
     def publish_hold(self, job: Job, reason: str | None = None) -> None:
         """One held job's notification, published at once with §34's buttons (a
@@ -920,6 +939,11 @@ class Daemon:
         reason = await asyncio.to_thread(self.playbook.published_hold_reason, job)
         if reason is not None:
             self._held_reasons[job.id] = reason
+
+    def discard_held_reason(self, job_id: str) -> None:
+        """Forget the reason `decide_held_reason` kept for a hold that is never filed
+        (PR #8 hosted finding 2: the job was decided while the reason was computed)."""
+        self._held_reasons.pop(job_id, None)
 
     async def wait_for_event(
         self, kinds: frozenset[str], *, timeout: float | None = None

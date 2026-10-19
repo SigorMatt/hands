@@ -889,6 +889,16 @@ def _configured_playbook(project: str | None, config: Config | None) -> tuple[bo
     return True, playbook_repo_path(config)
 
 
+def _repository_root(repo: Path) -> Path:
+    """The top level of the git repository `repo` is in, or `repo` itself where git
+    cannot say (the design is silent there; `playbook_repo_path` reads such a cwd as
+    the root too)."""
+    try:
+        return git_toplevel(repo)
+    except KitError:
+        return repo
+
+
 def _owner_warning(
     kit: _Kit, repo: Path, configured: str | None, known: bool
 ) -> str | None:
@@ -911,10 +921,18 @@ def _owner_warning(
         return None
     autonomous: list[str] = []
     candidates = [*([configured] if configured is not None else []), *PLAYBOOK_PATHS]
-    present = [name for name in dict.fromkeys(candidates) if (repo / name).is_file()]
-    for name in present:
+    # PR #8 hosted finding 5: `configured` is a repository path, so it is read under
+    # the repository's root — handsd passes the builder's cwd, which may sit below it.
+    # The fixed names are read under `repo`, as the `playbook` check reads them.
+    root = _repository_root(repo) if configured is not None else repo
+    files: dict[Path, str] = {}
+    for name in candidates:
+        files.setdefault((root if name == configured else repo) / name, name)
+    for file, name in files.items():
+        if not file.is_file():
+            continue
         with contextlib.suppress(PlaybookError, OSError):
-            if _load((repo / name).read_bytes(), name).architect_is_autonomous:
+            if _load(file.read_bytes(), name).architect_is_autonomous:
                 autonomous.append(f"the repository's {name}")
     for name in carried:
         with contextlib.suppress(PlaybookError):
