@@ -113,6 +113,11 @@ __all__ = [
     "JOB_PLACEHOLDERS",
     "ORIGIN",
     "UNPAUSE_ORIGINS",
+    "HUMAN_PAUSERS",
+    "KEPT_DISCARDED_TITLE",
+    "ROLE_ENDS",
+    "SUPPRESSED_HUMAN_TITLE",
+    "ResumeRefused",
     "PipelineState",
     "PlaceholderError",
     "Playbook",
@@ -336,6 +341,16 @@ UNPAUSE_ORIGINS = frozenset({"cli", "phone", "kit"})
 PAUSE_REASON = "paused by human"
 #: §29: the notification of an engine consult stop suppressed over a paused pipeline.
 SUPPRESSED_CONSULT_TITLE = "hands: a consultation stopped over a paused pipeline"
+#: §44: the `paused_by` of a human pause — `hands pause` (`cli`) or the phone's
+#: `pause` (`phone`). A pause by anything else (`stop`) is §10's stop, unchanged.
+HUMAN_PAUSERS = frozenset({"cli", "phone"})
+#: §44 rule 1: the role ends a human pause keeps when their decision would send,
+#: consult or stop.
+ROLE_ENDS = frozenset({"builder.done", "aux.done", "driver.done"})
+#: §44 rule 2: the notification of any other stop suppressed under a human pause.
+SUPPRESSED_HUMAN_TITLE = "hands: a stop under a human pause"
+#: §44 rule 5: the notification naming the kept ends a `resume` discarded.
+KEPT_DISCARDED_TITLE = "hands: resume discarded kept ends"
 
 TOP_KEYS: tuple[str, ...] = ("version", "series", "limits", "rule")
 LIMIT_KEYS: tuple[str, ...] = (
@@ -415,6 +430,12 @@ class PlaceholderError(Exception):
 class ConsultRefused(Exception):
     """§42: a consultation the human asked for (`consult`, `hands consult`) that the
     engine refuses; the text is the reason, in hands' own words."""
+
+
+class ResumeRefused(Exception):
+    """§44 rule 5: a `resume` of a human pause that cannot be made — the playbook
+    file does not load, or ends are kept and there is no playbook. The reason is
+    the text; the pause and the kept ends stay."""
 
 
 @dataclass(frozen=True)
@@ -1555,6 +1576,13 @@ class PipelineState:
     #: from (`SeriesAnchor`). Set by the engine's load, moved only when the loaded
     #: playbook names another series.
     series_since: SeriesAnchor | None = None
+    #: §44 rule 1: under a human pause, the role ends kept instead of decided, one per
+    #: role, in arrival order — each `{"event", "role", "job", "verdict", "kept_at"}`.
+    #: Cleared whenever the pipeline un-pauses (`_unpause`); `resume` replays them.
+    kept: list[dict[str, Any]] = field(default_factory=list)
+    #: §44 rule 2: the reason of the first stop suppressed under the human pause, or
+    #: None. Once set, a `resume` rule fires nothing until the pause ends.
+    suppressed_stop: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -1572,6 +1600,8 @@ class PipelineState:
             "series_since": (
                 self.series_since.to_dict() if self.series_since is not None else None
             ),
+            "kept": [dict(entry) for entry in self.kept],
+            "suppressed_stop": self.suppressed_stop,
         }
 
     @classmethod
@@ -1594,6 +1624,14 @@ class PipelineState:
             kickoffs=[item for item in data.get("kickoffs") or [] if isinstance(item, str)],
             consults_since=ConsultAnchor.from_data(data.get("consults_since")),
             series_since=SeriesAnchor.from_data(data.get("series_since")),
+            kept=[
+                dict(entry) for entry in data.get("kept") or []
+                if isinstance(entry, dict) and isinstance(entry.get("job"), str)
+                and isinstance(entry.get("event"), str)
+            ],
+            suppressed_stop=(
+                data["suppressed_stop"] if isinstance(data.get("suppressed_stop"), str) else None
+            ),
         )
 
 
@@ -1711,12 +1749,25 @@ class PlaybookEngine:
         nothing)". The un-pause comes first so that a playbook this load cannot
         read stops the pipeline and stays stopped, instead of being cleared by the
         job that just started.
+
+        §44 rule 3: only `resume` ends a human pause — a job of an un-pausing origin
+        that starts under one leaves it, and the ends it keeps, as they are.
         """
         log.debug("playbook: reading it for job %s (%s)", job.id, job.role)
         if job.origin in UNPAUSE_ORIGINS and not is_architect_reply(job):
             # §33: a phone `reply` to the architect answers the architect, not the stop.
-            self._unpause("start")
+            if self.human_paused:
+                log.info("playbook: job %s (%s) starts under a human pause, which stays "
+                         "until `resume` (§44)", job.id, job.origin)
+            else:
+                self._unpause("start")
         await self._load()
+
+    @property
+    def human_paused(self) -> bool:
+        """§44: the pipeline is paused by a human — `pause` from the laptop or the
+        phone (`paused_by` `cli` or `phone`), not a stop."""
+        return self.state.paused and self.state.paused_by in HUMAN_PAUSERS
 
     async def _ensure_loaded(self) -> None:
         if not self._loaded:
@@ -1728,7 +1779,11 @@ class PlaybookEngine:
         (§31) before the consultation's job exists."""
         await self._load()
 
-    async def _load(self) -> None:
+    async def _load(self, *, stop_on_error: bool = True) -> str | None:
+        """Load the committed playbook. A file that does not load stops the pipeline
+        (§10) — or, with `stop_on_error=False` (§44's `resume`, which is refused
+        rather than stopping), does not; either way the stop's reason is returned.
+        None when it loaded, or when there is no file."""
         path = playbook_path(self.config)
         self._loaded = True
         try:
@@ -1752,11 +1807,10 @@ class PlaybookEngine:
                 what = "renames the series without restating the architect's budget"
             else:
                 what = "cannot be read"
-            await self.stop(
-                f"the playbook {what}, so no rule can be trusted to fire: {exc}",
-                {"playbook": str(path)},
-            )
-            return
+            reason = f"the playbook {what}, so no rule can be trusted to fire: {exc}"
+            if stop_on_error:
+                await self.stop(reason, {"playbook": str(path)})
+            return reason
         self.load_error = None
         self.playbook = book
         if book is not None:
@@ -1779,6 +1833,7 @@ class PlaybookEngine:
         if book is not None and book.max_resumes is not None and self.limits is not None:
             # §10 lets the playbook set §6's counter; §6 is the one that counts.
             self.limits.max_resumes = book.max_resumes
+        return None
 
     def _check_series_rename(self, book: Playbook) -> None:
         """§32: "a rename is refused unless `[limits] max_architect_consults` is
@@ -1885,6 +1940,9 @@ class PlaybookEngine:
                 # the consultation did not resolve. No playbook rule fires (§10).
                 await self.stop(enforced, _payload(event, job), notify_suppressed=True)
                 return
+            if self.human_paused:
+                await self._under_human_pause(event, job)
+                return
             log.info("playbook: paused (%s); %s fires nothing", self.state.paused_by, event)
             return
         if event == "builder.done" and job is not None and self._engine_applied_kit(job):
@@ -1947,31 +2005,94 @@ class PlaybookEngine:
             extra = {} if chosen is None else {"rule_not_fired": chosen.index}
             await self.stop(enforced, _payload(event, job, **extra))
             return
-        if not candidates:
-            await self.stop(
-                f"{event}: the playbook has no rule for it, and §10 stops for anything "
-                "it did not pre-plan",
-                _payload(event, job),
-            )
-            return
-
-        verdict = job.verdict if job is not None else None
         chosen, match = _choose(candidates, job)
         if chosen is None:
-            if verdict is None:
-                what = (
-                    f"job {job.id} has no VERDICT: line" if job is not None else "it carries no job"
-                )
-                reason = (
-                    f"{event}: every rule for it matches on a verdict and {what}; "
-                    "§10 stops on a missing or unparseable VERDICT:"
-                )
-            else:
-                reason = f"{event}: no rule matches the verdict {verdict!r}"
-            await self.stop(reason, _payload(event, job))
+            await self.stop(_no_rule_reason(candidates, event, job), _payload(event, job))
             return
-
         await self._fire(chosen, event, job, match)
+
+    async def _under_human_pause(self, event: str, job: Job | None) -> None:
+        """§44 rules 1 and 2: `event` arrived under a human pause (an enforced driver
+        stop has been handled already: it is that stop, never kept).
+
+        Decided with the playbook as loaded now, rule matching and the engine's own
+        rule executed for nothing — H-044's reload at an engine-approved apply's end
+        waits for `resume`'s. A role's end (`ROLE_ENDS`) whose decision would send,
+        consult or stop is kept (`_keep`); one whose decision is a `notify` fires at
+        once. A `resume` rule fires, unless a stop has been suppressed under this
+        pause. A stop on any other event is a stop, suppressed and notified
+        (`stop`). `*.limited` (§6's), `job.held` and `job.denied` fire nothing, and
+        neither does any other action on any other event, as under any pause."""
+        book = self.playbook
+        if book is None or event.endswith(".limited") or event in ("job.held", "job.denied"):
+            log.info("playbook: paused by a human (%s); %s fires nothing",
+                     self.state.paused_by, event)
+            return
+        candidates = self._engine_rules(book, event, job) + book.rules_for(event)
+        chosen, match = _choose(candidates, job)
+        then = chosen.then if chosen is not None else "stop"
+        try:
+            if chosen is not None and then == "resume":
+                if self.state.suppressed_stop is not None:
+                    log.info("playbook: %s: a stop was suppressed under this human pause "
+                             "(%s); its resume rule fires nothing (§44)",
+                             event, self.state.suppressed_stop)
+                    return
+                await self._fire(chosen, event, job, match)
+                return
+            if event in ROLE_ENDS and job is not None:
+                if chosen is not None and then == "notify":
+                    await self._fire(chosen, event, job, match)
+                elif then in ("send", "consult", "stop"):
+                    self._keep(event, job)
+                return
+            if then != "stop":
+                log.info("playbook: paused by a human; %s (%s) fires nothing", event, then)
+                return
+            if chosen is None:
+                await self.stop(_no_rule_reason(candidates, event, job), _payload(event, job))
+                return
+            groups = {k: v for k, v in (match.groupdict() if match else {}).items()
+                      if v is not None}
+            await self.stop(self._stop_rule_reason(chosen, event, job, groups),
+                            _payload(event, job, rule=chosen.index))
+        except asyncio.CancelledError:
+            raise
+        except PlaceholderError as exc:
+            assert chosen is not None
+            await self.stop(f"{event}: rule {chosen.index} cannot be rendered: {exc}",
+                            _payload(event, job, rule=chosen.index))
+        except Exception as exc:  # a bug here must stop the pipeline, not chain blindly
+            log.exception("playbook: %s could not be decided", event)
+            await self.stop(
+                f"{event}: the playbook engine failed ({type(exc).__name__}: {exc})",
+                _payload(event, job),
+            )
+
+    def _keep(self, event: str, job: Job) -> None:
+        """§44 rule 1: keep `job`'s end, one per role, in arrival order — a later end
+        of the same role replaces the earlier and takes the later place, with one
+        `pipeline.kept_replaced` inbox event naming both."""
+        entry = {
+            "event": event,
+            "role": job.role,
+            "job": job.id,
+            "verdict": job.verdict,
+            "kept_at": now_iso(),
+        }
+        replaced = [kept for kept in self.state.kept if kept.get("role") == job.role]
+        self.state.kept = [
+            kept for kept in self.state.kept if kept.get("role") != job.role
+        ] + [entry]
+        self._save()
+        log.info("playbook: paused by a human; %s of job %s is kept until `resume` (§44)",
+                 event, job.id)
+        for old in replaced:
+            self.spool.append_event(
+                "pipeline.kept_replaced",
+                {"role": job.role, "replaced": old.get("job"), "replaced_event": old.get("event"),
+                 "by": job.id, "event": event, "verdict": job.verdict},
+            )
 
     def _engine_rules(self, book: Playbook, event: str, job: Job | None) -> list[Rule]:
         """§31: "a `builder.done` rule the engine adds, not the playbook".
@@ -2618,7 +2739,11 @@ class PlaybookEngine:
         outside role mode, with the budget spent, and with a prompt over `cap`; the
         caller (`Api.consult_refusal`) has refused every busy role, an open `next kit`
         wait and an empty reason, with nothing awaited between that and this."""
-        why = self.consult_mode_refusal() or self.consult_budget_refusal()
+        why = (
+            self.human_pause_refusal("consult")
+            or self.consult_mode_refusal()
+            or self.consult_budget_refusal()
+        )
         if why is not None:
             raise ConsultRefused(why)
         started = await self._act_consult(
@@ -3164,6 +3289,14 @@ class PlaybookEngine:
     async def _act_stop(
         self, rule: Rule, event: str, job: Job | None, groups: dict[str, str]
     ) -> None:
+        reason = self._stop_rule_reason(rule, event, job, groups)
+        self._fired(rule, event, job, message=reason)
+        await self.stop(reason, _payload(event, job, rule=rule.index))
+
+    def _stop_rule_reason(
+        self, rule: Rule, event: str, job: Job | None, groups: dict[str, str]
+    ) -> str:
+        """The reason a `stop` rule stops with: its message rendered, or §10's own."""
         if rule.message:
             reason = render(rule.message, groups=groups, job=job)
         else:
@@ -3171,8 +3304,7 @@ class PlaybookEngine:
         question = escalation_question(job, self._asked(job))
         if question is not None:  # §36: the question and the answer on one screen
             reason = f"{reason}; {question}"
-        self._fired(rule, event, job, message=reason)
-        await self.stop(reason, _payload(event, job, rule=rule.index))
+        return reason
 
     def _fired(
         self,
@@ -3216,6 +3348,7 @@ class PlaybookEngine:
         payload: dict[str, Any] | None = None,
         *,
         notify_suppressed: bool = False,
+        quiet: bool = False,
     ) -> None:
         """§10: pause the pipeline, notify, record the reason (§11's `stop` event).
 
@@ -3236,13 +3369,25 @@ class PlaybookEngine:
 
         §29: `notify_suppressed` is the one exception, the engine's consult stop over
         a paused pipeline: it is suppressed the same way and also notifies, once.
+
+        §44 rule 2: under a human pause every suppressed stop is notified once — a
+        consult stop under §29's title, any other under `SUPPRESSED_HUMAN_TITLE` —
+        and marks the pause (`suppressed_stop`), so that no `resume` rule fires past
+        it; the pause and its kept ends stay. `quiet` is a `pause` over the human
+        pause, which is a no-op and not a stop: recorded, never notified or marked.
         """
         if self.state.paused:
             suppressed = {**(payload or {}), "reason": reason, "kept": self.state.stop_reason}
             self.spool.append_event("pipeline.stop_suppressed", suppressed)
             log.info("playbook: stop suppressed (%s); kept: %s", reason, self.state.stop_reason)
+            human = self.human_paused and not quiet
+            if human and self.state.suppressed_stop is None:
+                self.state.suppressed_stop = reason
+                self._save()
             if notify_suppressed:
                 self._notify(SUPPRESSED_CONSULT_TITLE, suppressed)
+            elif human:
+                self._notify(SUPPRESSED_HUMAN_TITLE, suppressed)
             return
         self.state.paused = True
         self.state.paused_by = "stop"
@@ -3280,7 +3425,9 @@ class PlaybookEngine:
         `pipeline.stop_suppressed` record and changes nothing else.
         """
         already = self.state.paused
-        await self.stop(PAUSE_REASON, {"by": "hands pause" if by == "cli" else by})
+        # §44 rule 3: over a human pause too, a no-op that keeps `paused_by` and the
+        # kept ends, and is not a stop: never notified, never the suppressed mark.
+        await self.stop(PAUSE_REASON, {"by": "hands pause" if by == "cli" else by}, quiet=True)
         if already:
             return {**self.pipeline(), "already_stopped": True}
         self.state.paused_by = by  # `hands pipeline` still says who paused it
@@ -3288,9 +3435,91 @@ class PlaybookEngine:
         return self.pipeline()
 
     async def resume(self) -> dict[str, Any]:
-        """`hands resume` (§4, §10's stop → resume cycle)."""
+        """`hands resume` (§4, §10's stop → resume cycle).
+
+        §44 rule 5: a human pause is resumed by reloading the playbook first, so a
+        commit made at rest is the playbook replayed under. Refused
+        (`ResumeRefused`, with the load's reason; the pause and the kept ends stay)
+        when a playbook file exists and does not load, or when ends are kept and
+        there is no playbook. With no playbook and nothing kept it un-pauses as
+        today. Otherwise it un-pauses and replays the kept ends (`_replay`). Any
+        other stop is un-paused as §10 has it."""
+        if not self.human_paused:
+            self._unpause("resume")
+            return self.pipeline()
+        problem = await self._load(stop_on_error=False)
+        if problem is not None:
+            raise ResumeRefused(
+                f"{problem}; the human pause and its {len(self.state.kept)} kept end(s) stay "
+                "until a `resume` whose playbook loads (§44)"
+            )
+        kept = list(self.state.kept)
+        if self.playbook is None and kept:
+            raise ResumeRefused(
+                f"there is no playbook ({playbook_path(self.config)}) to decide the "
+                f"{len(kept)} kept end(s) with; the human pause and the kept ends stay "
+                "until a `resume` whose playbook loads (§44)"
+            )
         self._unpause("resume")
+        await self._replay(kept)
         return self.pipeline()
+
+    async def _replay(self, kept: list[dict[str, Any]]) -> None:
+        """§44 rule 5: decide the kept ends in order as if each had just arrived, up
+        to and including the first whose decision starts a job (a rule that fired a
+        job: a send, a consult, a resume) or stops the pipeline; the ends after it
+        are discarded, with one `pipeline.kept_discarded` inbox event and one
+        notification naming them."""
+        for index, entry in enumerate(kept):
+            job = self._job(entry.get("job"))
+            if job is None:  # pragma: no cover - the spool keeps every job
+                log.warning("playbook: the kept end of job %s is gone; skipped",
+                            entry.get("job"))
+                continue
+            before = self.state.last_rule
+            await self.on_event(str(entry.get("event")), job=job)
+            after = self.state.last_rule
+            started = after is not before and bool((after or {}).get("fired_job"))
+            if not (started or self.state.paused):
+                continue
+            rest = kept[index + 1:]
+            if rest:
+                self._discard(entry, rest, stopped=self.state.paused)
+            return
+
+    def _discard(
+        self, decided: dict[str, Any], rest: list[dict[str, Any]], *, stopped: bool
+    ) -> None:
+        """§44 rule 5: one replay starts at most one step; what was kept after it is
+        discarded, and the human is told which ends those were."""
+        named = "; ".join(
+            f"{entry.get('role')} job {entry.get('job')} ({_cut(entry.get('verdict'))})"
+            for entry in rest
+        )
+        what = "stopped the pipeline" if stopped else "started a job"
+        reason = (
+            f"resume replayed {decided.get('role')} job {decided.get('job')}, which {what}; "
+            f"discarded the {len(rest)} end(s) kept after it: {named} (§44)"
+        )
+        payload = {
+            "after": decided.get("job"),
+            "discarded": [dict(entry) for entry in rest],
+            "reason": reason,
+        }
+        self.spool.append_event("pipeline.kept_discarded", payload)
+        log.info("playbook: %s", reason)
+        self._notify(KEPT_DISCARDED_TITLE, payload)
+
+    def human_pause_refusal(self, command: str) -> str | None:
+        """§44 rule 3: why `command` (`go`, `consult`) is refused now — the pipeline
+        is paused by a human, which only `resume` ends — or None."""
+        if not self.human_paused:
+            return None
+        return (
+            f"the pipeline is paused by a human ({self.state.paused_by}), and a human pause "
+            f"holds the series' next step until `resume`; send `resume` first, then "
+            f"`{command}` (§44)"
+        )
 
     def _unpause(self, by: str) -> None:
         """Close §10's cycle, and say so in the inbox (§11's `pipeline.resumed`).
@@ -3310,6 +3539,9 @@ class PlaybookEngine:
         self.state.paused_by = None
         self.state.stop_reason = None
         self.state.stopped_at = None
+        # §44: nothing kept outlives the pause, and neither does its suppressed mark.
+        self.state.kept = []
+        self.state.suppressed_stop = None
         self._save()
         self.spool.append_event("pipeline.resumed", {"by": by, "was": was})
         log.info("playbook: un-paused by %s (was: %s)", by, was)
@@ -3346,6 +3578,10 @@ class PlaybookEngine:
             "paused_by": self.state.paused_by,
             "stop_reason": self.state.stop_reason,
             "stopped_at": self.state.stopped_at,
+            # §44: a human pause, the ends it keeps and the stop it suppressed, if any.
+            "human_pause": self.human_paused,
+            "kept": [dict(entry) for entry in self.state.kept],
+            "suppressed_stop": self.state.suppressed_stop,
             "auto_runs": {
                 "allowed": list(book.auto_runs) if book else [],
                 "used": list(self.state.auto_runs_used),
@@ -3421,7 +3657,10 @@ class PlaybookEngine:
             return PipelineState(
                 paused=True,
                 paused_by="stop",
-                stop_reason=f"the pipeline state file {self.state_path} is not readable: {exc}",
+                stop_reason=(
+                    f"the pipeline state file {self.state_path} is not readable: {exc}; a "
+                    "human pause and the ends it kept, if there were any, are lost with it (§44)"
+                ),
                 stopped_at=now_iso(),
             )
         if not isinstance(data, dict):  # pragma: no cover - hand-edited file
@@ -3451,6 +3690,32 @@ class PlaybookEngine:
 
 async def _await(outcome: Any) -> None:  # pragma: no cover - U8's seam may be async
     await outcome
+
+
+def _no_rule_reason(candidates: list[Rule], event: str, job: Job | None) -> str:
+    """§10: the reason the pipeline stops when no rule fires for `event` — none
+    names it, or none matches its verdict (or its missing `VERDICT:` line)."""
+    if not candidates:
+        return (
+            f"{event}: the playbook has no rule for it, and §10 stops for anything "
+            "it did not pre-plan"
+        )
+    verdict = job.verdict if job is not None else None
+    if verdict is None:
+        what = f"job {job.id} has no VERDICT: line" if job is not None else "it carries no job"
+        return (
+            f"{event}: every rule for it matches on a verdict and {what}; "
+            "§10 stops on a missing or unparseable VERDICT:"
+        )
+    return f"{event}: no rule matches the verdict {verdict!r}"
+
+
+def _cut(verdict: Any, size: int = 100) -> str:
+    """§44: a kept end's verdict line as it is named, cut to `size` characters."""
+    if not isinstance(verdict, str) or not verdict:
+        return "no VERDICT: line"
+    line = " ".join(verdict.split())
+    return line if len(line) <= size else line[: size - 1] + "…"
 
 
 def _choose(rules: list[Rule], job: Job | None) -> tuple[Rule | None, re.Match[str] | None]:

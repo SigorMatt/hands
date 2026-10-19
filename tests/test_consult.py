@@ -142,7 +142,7 @@ def test_hands_consult_starts_one_architect_consultation_of_origin_playbook(
     reason = REASON + "FAKE:result VERDICT: series complete"
 
     async def body(daemon: Daemon) -> None:
-        await ok("pause")
+        await daemon.playbook.stop("a rule's stop", {})  # §44: a human pause refuses consult
         job = await ok("consult", reason)
         assert (job["role"], job["origin"], job["context"]) == (ARCHITECT, "playbook", "clear")
         record = await ok("wait", job["id"])
@@ -159,7 +159,7 @@ def test_hands_consult_starts_one_architect_consultation_of_origin_playbook(
 
         # §42: the stopped pipeline was un-paused before the job started.
         (resumed,) = await events("pipeline.resumed")
-        assert resumed["payload"]["was"] == "paused by human"
+        assert resumed["payload"]["was"] == "a rule's stop"
         (sent,) = await events("consult.sent")
         payload = sent["payload"]
         head = payload.pop("head")
@@ -457,7 +457,7 @@ def test_a_consultation_whose_enqueue_fails_leaves_the_pipeline_stopped(
     role_project(tmp_home, workdir)
 
     async def body(daemon: Daemon) -> None:
-        await ok("pause")
+        await daemon.playbook.stop("a rule's stop", {})  # §44: a human pause refuses consult
         engine = daemon.playbook
         before = (engine.state.paused, engine.state.paused_by, engine.state.stop_reason,
                   engine.state.stopped_at)
@@ -551,7 +551,7 @@ def test_a_prompt_over_the_cap_is_refused_with_the_caps_reason(
     monkeypatch.setattr(api_mod, "MAX_PROMPT_BYTES", 4096)
 
     async def body(daemon: Daemon) -> None:
-        await ok("pause")
+        await daemon.playbook.stop("a rule's stop", {})  # §44: a human pause refuses consult
         code, _out, err = await cli("consult", "x" * 4096)
         assert code == 1, err
         assert "over the 4096 byte cap of §2" in strip_paths(err), err

@@ -1192,10 +1192,12 @@ def test_a_refused_send_stops_rather_than_losing_the_step(
 
 
 def test_while_paused_no_rule_fires_and_resume_unpauses(tmp_home: Path, workdir: Path) -> None:
+    """§10, under a stop: the end is dropped and `resume` replays nothing. (§44: a
+    human pause keeps it instead — tests/test_human_pause.py.)"""
     engine, recorder = engine_for(tmp_home, workdir)
     job = finished(engine.spool, verdict="VERDICT: run 2 finished", head_at_start="abc")
     run(engine.on_job_start(job))
-    run(engine.pause())
+    run(engine.stop("because", {}))
     assert engine.pipeline()["paused"] is True
     run(engine.on_job(job))
     assert recorder.sent == []
@@ -2619,9 +2621,10 @@ def test_a_consult_stop_over_a_paused_pipeline_is_suppressed_with_its_reason_and
 def test_a_resolved_consultation_over_a_paused_pipeline_files_and_notifies_nothing(
     tmp_home: Path, workdir: Path
 ) -> None:
-    """§10: paused, no rule fires; a resolved consultation is no stop to suppress."""
+    """§10: paused, no rule fires; a resolved consultation is no stop to suppress.
+    (Under a stop: §44 fires a role end's `notify` under a human pause.)"""
     engine, recorder = engine_for(tmp_home, workdir, CARRY_ON, driver=workdir.parent / "d")
-    run(engine.pause())
+    run(engine.stop("because", {}))
     about = finished(engine.spool, verdict="VERDICT: question x")
     verdict = "VERDICT: resolved sent keep, §27"
     run(engine.on_job(_driver_job(engine.spool, state="done", verdict=verdict, about=about)))
@@ -2633,9 +2636,10 @@ def test_a_resolved_consultation_over_a_paused_pipeline_files_and_notifies_nothi
 def test_a_non_consult_stop_over_a_paused_pipeline_still_notifies_nobody(
     tmp_home: Path, workdir: Path
 ) -> None:
-    """§10's rule for every other stop is unchanged: suppressed, not notified."""
+    """§10's rule for every other stop is unchanged: suppressed, not notified —
+    over a stop. (§44: under a human pause it is notified; test_human_pause.py.)"""
     engine, recorder = engine_for(tmp_home, workdir, EXAMPLE)
-    run(engine.pause())
+    run(engine.stop("because"))
     run(engine.stop("some other stop"))
     [suppressed] = [e for e in engine.spool.events() if e.kind == "pipeline.stop_suppressed"]
     assert suppressed.payload["reason"] == "some other stop"

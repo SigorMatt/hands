@@ -576,6 +576,7 @@ def _job_block(record: dict[str, Any]) -> str:
         ("context", "context"),
         ("state", "state"),
         ("origin", "origin"),
+        ("resumed_from", "resumed_from"),  # §6, §44: which job a resume came from
         ("created", "created"),
         ("started", "started"),
         ("ended", "ended"),
@@ -696,6 +697,18 @@ def _pipeline_block(result: dict[str, Any]) -> str:
     lines.append(f"  paused   {'yes' if paused else 'no'}" + (f" ({by})" if paused and by else ""))
     if result.get("stop_reason"):
         lines.append(f"  stop     {result['stop_reason']}  [{result.get('stopped_at')}]")
+    for entry in result.get("kept") or []:  # §44 rule 6: one line per kept end
+        verdict = " ".join(str(entry.get("verdict") or "no VERDICT: line").split())
+        if len(verdict) > 100:
+            verdict = verdict[:99] + "…"
+        lines.append(
+            f"  kept     {entry.get('role')} job {entry.get('job')} on {entry.get('event')}: "
+            f"{verdict}  [{entry.get('kept_at')}]"
+        )
+    if result.get("suppressed_stop"):
+        lines.append(
+            f"  suppressed {result['suppressed_stop']}  (no resume rule fires until `resume`)"
+        )
     auto = result.get("auto_runs") or {}
     used, allowed = auto.get("used") or [], auto.get("allowed") or []
     lines.append(

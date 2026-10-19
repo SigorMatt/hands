@@ -1107,7 +1107,7 @@ def test_go_after_a_stop_un_pauses_when_its_job_starts_and_the_done_fires_a_rule
     )
 
     async def body(daemon: Daemon, fake: FakeNtfy) -> None:
-        await ok("pause")
+        await daemon.playbook.stop("a rule's stop", {})  # §44: not a human pause
         assert (await ok("pipeline"))["paused"] is True
         await say(daemon, fake, f"go {SECRET}")
         (row,) = (await ok("jobs"))["jobs"]
@@ -3824,7 +3824,7 @@ def test_a_phone_consult_starts_one_architect_job_of_origin_playbook_with_the_re
     caplog.set_level(logging.DEBUG)
 
     async def body(daemon: Daemon, fake: FakeNtfy) -> None:
-        await ok("pause")
+        await daemon.playbook.stop("a rule's stop", {})  # §44: not a human pause
         await say(daemon, fake, f"consult {SECRET} {CONSULT_TEXT}")
         (row,) = (await ok("jobs"))["jobs"]
         record = await ok("wait", row["id"])
@@ -4048,3 +4048,50 @@ def test_consult_parsing_keeps_the_text_verbatim() -> None:
     assert phone_mod.parse_consult(f"Consult {SECRET}") == (SECRET, "")
     assert phone_mod.parse_consult(f"consult {SECRET}   ") == (SECRET, "")
     assert phone_mod.parse_consult("consult") is None
+
+
+# ------------------------------------------- §44: the phone under a human pause
+
+
+def test_under_a_phone_pause_go_consult_and_a_refused_resume_are_answered_titled(
+    project: str, workdir: Path
+) -> None:
+    """§44 rules 3, 5 and 6 on the phone: `status` names the human pause and the kept
+    end; `go` and `consult` are refused naming `resume`, and a `resume` while the
+    playbook does not load is refused with the load's reason, each published titled
+    as its refusals are (§39, H-058); the pause and the kept end stay."""
+    with_playbook(workdir, rules='[[rule]]\non = "aux.done"\nthen = "stop"\nmessage = "Reviewed"\n')
+
+    async def body(daemon: Daemon, fake: FakeNtfy) -> None:
+        await say(daemon, fake, f"pause {SECRET}")
+        assert daemon.playbook.pipeline()["paused_by"] == "phone"
+        review = daemon.spool.create_job(role="aux", context="clear", prompt="r",
+                                         origin="playbook")
+        daemon.spool.transition(review, "running")
+        review = daemon.spool.transition(review.id, "done", verdict="VERDICT: review mission 1")
+        await daemon.playbook.on_job(review)
+        await say(daemon, fake, f"status {SECRET}")
+        await say(daemon, fake, f"go {SECRET}")
+        await say(daemon, fake, f"consult {SECRET} what next")
+        commit_file(workdir, "PLAYBOOK.toml", "version = [\n")
+        await say(daemon, fake, f"resume {SECRET}")
+        await daemon.notifier.drain()
+        (status,) = titled(daemon, phone_mod.STATUS_TITLE)
+        assert f"pipeline: paused by a human (phone); kept: aux {review.id}" in (
+            status["message"].splitlines()
+        )
+        (go,) = refusals(daemon, "go")
+        (consult,) = refusals(daemon, "consult")
+        for said, command in ((go, "go"), (consult, "consult")):
+            assert said.startswith(f"{command} refused: the pipeline is paused by a human "
+                                   "(phone)"), said
+            assert "`resume`" in strip_paths(said), said
+        (resume,) = refusals(daemon, "resume")
+        assert resume.startswith("resume refused: the playbook cannot be read"), resume
+        state = daemon.playbook.pipeline()
+        assert (state["paused"], state["paused_by"]) == (True, "phone")
+        assert [entry["job"] for entry in state["kept"]] == [review.id]
+        assert (await ok("jobs"))["jobs"][0]["id"] == review.id
+        assert len((await ok("jobs"))["jobs"]) == 1, "nothing was started"
+
+    phone_drive(body)

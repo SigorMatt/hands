@@ -57,6 +57,7 @@ from hands.notify import NotifyError, send_test
 from hands.playbook import (
     ConsultRefused,
     PlaybookError,
+    ResumeRefused,
     load_playbook,
     playbook_path,
     sent_prompt,
@@ -530,6 +531,10 @@ class Api:
         files a stop. Gated by §8 as `send` is. Not reachable with `origin: phone`
         from a socket client: `go` is the socket's method and passes `cli` (§37).
         """
+        # §44 rule 3: only `resume` ends a human pause; `go` is refused under one.
+        paused = self.daemon.playbook.human_pause_refusal("go")
+        if paused is not None:
+            raise ApiError(paused)
         busy = self.builder_busy()
         if busy is not None:
             raise ApiError(busy)
@@ -578,6 +583,10 @@ class Api:
         budget is spent. Nothing is awaited after the load, so `start_consult`'s
         enqueue follows these checks in one step of the event loop."""
         engine = self.daemon.playbook
+        # §44 rule 3: only `resume` ends a human pause; `consult` is refused under one.
+        paused = engine.human_pause_refusal("consult")
+        if paused is not None:
+            return paused
         if ARCHITECT_ROLE in self.config.roles:
             why = self._role_busy(ARCHITECT_ROLE)
             if why is not None:
@@ -1542,8 +1551,14 @@ class Api:
         return await self.daemon.playbook.pause()
 
     async def resume(self) -> dict[str, Any]:
-        """Un-pause the playbook engine and clear the stop reason (§4, §10)."""
-        return await self.daemon.playbook.resume()
+        """Un-pause the playbook engine and clear the stop reason (§4, §10).
+
+        §44 rule 5: a human pause's `resume` replays the kept ends, and is refused
+        (`ApiError`, the load's reason) when the playbook does not load."""
+        try:
+            return await self.daemon.playbook.resume()
+        except ResumeRefused as exc:
+            raise ApiError(str(exc)) from exc
 
     # ---------------------------------------------------------- notify (§4)
 

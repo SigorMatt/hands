@@ -85,7 +85,8 @@ def test_for_stop_is_the_stop_kind_and_nothing_else() -> None:
     assert resolve_kinds("stop") == frozenset({"stop"})
     assert resolve_kinds("stop,held") == frozenset({"stop", "job.held"})
     assert resolve_kinds("pipeline") == frozenset(
-        {"pipeline.resumed", "pipeline.stop_suppressed"}
+        {"pipeline.resumed", "pipeline.stop_suppressed",
+         "pipeline.kept_replaced", "pipeline.kept_discarded"}  # §44
     )
     assert resolve_kinds("stop_suppressed") == frozenset({"pipeline.stop_suppressed"})
     assert resolve_kinds("pipeline.stop_suppressed") == frozenset({"pipeline.stop_suppressed"})

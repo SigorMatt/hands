@@ -181,6 +181,10 @@ EVENT_KINDS = frozenset(
         # driver on a stop that was deliberately not notified.
         "pipeline.stop_suppressed",
         "pipeline.resumed",  # the other half of §10's stop → resume cycle (H-007)
+        # §44: under a human pause, a role's later end replaced the one kept for it;
+        # and the kept ends a `resume`'s replay discarded after the one it decided.
+        "pipeline.kept_replaced",
+        "pipeline.kept_discarded",
         "gate.decided",
         "limit",
         "resume",
