@@ -2930,7 +2930,7 @@ or stands as written for a case-sensitive filesystem. Not changed in
 mission 27: §43 names the paths exactly, and widening them is the
 design's.
 
-Status: decided (DESIGN §44: casefolded match against the configured playbook path and the two fixed names), scheduled for U4
+Status: resolved (mission 28 U4, this commit — DESIGN §44 "H-077, ruled": one test, `spool.carries_playbook`, counts an entry as carrying the playbook when its casefolded path equals the casefolded configured playbook path (`[playbook] path` read as a repository path with the builder cwd's own place before it, `playbook.playbook_repo_path`) or either fixed name; the engine's hold and published reason (`stored_kit_playbooks`, also asked by the daemon's `decide_held_reason`) and `hands kit check`'s `WARN playbook:` line use it; the WARN judges the repository's playbook at the configured path as well as the fixed names and ends naming the names it knows — without a project configuration, the two fixed names only; the `playbook` check is unchanged. Tests: tests/test_playbook.py, tests/test_kit.py)
 
 ## H-078 — a human pause drops the event that would start the next step
 

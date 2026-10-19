@@ -51,6 +51,7 @@ import json
 import logging
 import math
 import os
+import posixpath
 import re
 import subprocess
 import tomllib
@@ -134,6 +135,7 @@ __all__ = [
     "owner_hold_reason",
     "parse_playbook",
     "playbook_path",
+    "playbook_repo_path",
     "ConsultRefused",
     "HUMAN",
     "HUMAN_EVENT",
@@ -687,6 +689,24 @@ def orphaned_rule_warnings(book: Playbook) -> list[str]:
 def playbook_path(config: Config) -> Path:
     """§10, §13: `<roles.builder.cwd>/<playbook.path>`."""
     return config.role("builder").cwd / config.playbook.path
+
+
+def playbook_repo_path(config: Config) -> str | None:
+    """§44 "H-077, ruled": `[playbook] path` read as a repository path — the builder's
+    cwd's own place in the repository (`git rev-parse --show-prefix`, as §38 reads the
+    owner files) before it, normalised — the path a kit entry carrying the playbook
+    in force has. Blocking (it runs git). Where git cannot say where the cwd is, the
+    prefix is empty (the cwd read as the root: the design is silent there). None when
+    the path leaves the repository (`..` past its root): no entry can name it."""
+    cwd = config.role("builder").cwd
+    try:
+        where = _git(cwd, "rev-parse", "--show-prefix").strip()
+    except PlaybookError:
+        where = ""
+    joined = posixpath.normpath(posixpath.join(where, config.playbook.path))
+    if joined in (".", "..") or joined.startswith("../") or joined.startswith("/"):
+        return None
+    return joined
 
 
 def load_playbook(path: Path, *, cwd: Path | None = None) -> Playbook | None:
@@ -2432,7 +2452,8 @@ class PlaybookEngine:
 
     async def _carries_no_playbook(self, job: Job) -> bool:
         """§43 "A playbook change is the owner's": True when the stored kit of `job`
-        carries neither of `PLAYBOOK_PATHS`, so the engine may approve its apply.
+        carries no entry that carries the playbook (§44: `_stored_kit_playbooks`), so the
+        engine may approve its apply.
 
         Asked by `_release_kit` only, after `kit_apply_problem` has accepted the apply
         and `_kit_bytes_unchanged` has verified the stored zip, so the entries read are
@@ -2445,9 +2466,7 @@ class PlaybookEngine:
         assert job.kit_id is not None  # `kit_apply_problem` accepted it
         record = self.spool.read_kit_record(job.kit_id)
         assert record is not None  # likewise
-        carried = await asyncio.to_thread(
-            self.spool.stored_kit_playbooks, job.kit_id, record["name"]
-        )
+        carried = await asyncio.to_thread(self._stored_kit_playbooks, job.kit_id, record["name"])
         if carried is None:
             log.warning(
                 "playbook: %s is not approved: the stored zip of kit_id %s does not read "
@@ -2470,8 +2489,8 @@ class PlaybookEngine:
         §43's sentence (`owner_hold_reason`) when `job` is held because its kit
         carries the playbook: a held apply `kit_apply_problem` accepts, whose stored
         zip is the one the check passed on (the sha256 `kit.json` recorded, as
-        `_kit_bytes_unchanged` asks) and carries `PLAYBOOK.toml` or
-        `meta/PLAYBOOK.toml`, under a playbook in force in role mode with
+        `_kit_bytes_unchanged` asks) and carries the playbook (§44:
+        `_stored_kit_playbooks`), under a playbook in force in role mode with
         `autonomous` (`_book_in_force`). None otherwise: the gate's own reason,
         `apply <name>`, which stays the gate's either way. Blocking (it reads and
         hashes the stored zip); the engine asks it in a worker thread. A hold the
@@ -2484,7 +2503,7 @@ class PlaybookEngine:
         record = self.spool.read_kit_record(job.kit_id)
         if record is None:  # pragma: no cover - `kit_apply_problem` read it
             return None
-        carried = self.spool.stored_kit_playbooks(job.kit_id, record["name"])
+        carried = self._stored_kit_playbooks(job.kit_id, record["name"])
         if not carried:
             return None
         if self.spool.stored_kit_sha256(job.kit_id, record["name"]) != record["sha256"]:
@@ -2493,6 +2512,15 @@ class PlaybookEngine:
         if book is None or not book.architect_is_autonomous:
             return None
         return owner_hold_reason(record["name"], carried[0])
+
+    def _stored_kit_playbooks(self, kit_id: str, name: str) -> tuple[str, ...] | None:
+        """§44 "H-077, ruled": the entries of the stored zip that carry the playbook,
+        judged against this project's configured playbook path read as a repository
+        path (`playbook_repo_path`) and the two fixed names, in any letter case. The
+        engine's approval (`_carries_no_playbook`) and the published reason
+        (`published_hold_reason`, the daemon's `decide_held_reason` too) ask this one.
+        Blocking (git and the zip): asked in a worker thread."""
+        return self.spool.stored_kit_playbooks(kit_id, name, playbook_repo_path(self.config))
 
     def _book_in_force(self) -> Playbook | None:
         """The playbook `published_hold_reason` judges under: the one loaded, once the

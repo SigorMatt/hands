@@ -66,6 +66,7 @@ from hands.playbook import (
     owner_files_pending,
     parse_playbook,
     playbook_path,
+    playbook_repo_path,
     render,
     sent_prompt,
 )
@@ -6966,6 +6967,128 @@ def test_the_start_fold_republishes_a_held_owners_kit_with_its_reason(
             await daemon.stop()
 
     asyncio.run(scenario())
+
+
+# ---- mission 28 U4: §44 "H-077, ruled" — the playbook in any letter case, and at the
+# configured path
+
+
+def _configured_owner_engine(
+    tmp_home: Path, workdir: Path, configured: str
+) -> tuple[PlaybookEngine, Recorder, Holds]:
+    """`_owner_engine` under `[playbook] path = configured`, the autonomous playbook
+    committed there and nowhere else."""
+    import dataclasses
+
+    from hands.config import PlaybookConfig
+
+    engine, recorder = engine_for(tmp_home, workdir, None, architect=architect_dir(tmp_home))
+    commit_file(workdir, configured, ARCHITECT_BOOK)
+    commit_file(workdir, str(ROADMAP), ROADMAP_TEXT)
+    engine.config = dataclasses.replace(engine.config, playbook=PlaybookConfig(configured))
+    engine.sleep = Sleeps()
+    holds = Holds()
+    engine.hold = holds
+    run(engine._load())
+    assert engine.playbook is not None and engine.playbook.architect_is_autonomous
+    return engine, recorder, holds
+
+
+def _held_for_the_owner(
+    engine: PlaybookEngine, recorder: Recorder, holds: Holds, entry: str
+) -> None:
+    """A kit carrying `entry` filed during a consultation that ends naming it: not
+    approved, held with §43's reason naming `entry`, and the same reason from
+    `published_hold_reason` (the daemon's `decide_held_reason` and start fold)."""
+    architect = consultation(engine.spool)
+    entries = {entry: ARCHITECT_BOOK, "meta/BUILDER-17-PROMPT.md": "b\n"}
+    job = _filed_with(engine, architect, entries)
+    architect = engine.spool.transition(
+        architect, "done", verdict="VERDICT: next kit m16", result="VERDICT: next kit m16"
+    )
+    end_consultation(engine, architect)
+    assert recorder.approved == [] and recorder.denied == []
+    assert engine.spool.load_job(job.id).state == "held"
+    assert holds.published == [(job.id, owner_reason("m16", entry))]
+    assert engine.published_hold_reason(engine.spool.load_job(job.id)) == owner_reason(
+        "m16", entry
+    )
+
+
+@pytest.mark.parametrize(
+    "entry", ["playbook.toml", "Playbook.toml", "meta/playbook.toml", "Meta/PLAYBOOK.toml"]
+)
+def test_a_kit_carrying_the_playbook_in_another_letter_case_is_the_owners(
+    tmp_home: Path, workdir: Path, entry: str
+) -> None:
+    """§44 "H-077, ruled": an entry carries the playbook when its path, casefolded,
+    equals either fixed name casefolded: the engine does not approve it, and the
+    published reason names the entry as the kit carries it."""
+    engine, recorder, holds = _owner_engine(tmp_home, workdir)
+    _held_for_the_owner(engine, recorder, holds, entry)
+
+
+@pytest.mark.parametrize("entry", ["ops/rules.toml", "OPS/Rules.toml"])
+def test_a_kit_carrying_the_configured_playbook_path_is_the_owners(
+    tmp_home: Path, workdir: Path, entry: str
+) -> None:
+    """§44 "H-077, ruled": under `[playbook] path = "ops/rules.toml"` an entry at that
+    path, in any letter case, carries the playbook in force: held for the human."""
+    engine, recorder, holds = _configured_owner_engine(tmp_home, workdir, "ops/rules.toml")
+    _held_for_the_owner(engine, recorder, holds, entry)
+
+
+def test_a_kit_carrying_a_fixed_name_is_the_owners_under_a_configured_path(
+    tmp_home: Path, workdir: Path
+) -> None:
+    """§44: the configured path is judged as well as the two fixed names, not in
+    their place."""
+    engine, recorder, holds = _configured_owner_engine(tmp_home, workdir, "ops/rules.toml")
+    _held_for_the_owner(engine, recorder, holds, "meta/PLAYBOOK.toml")
+
+
+def test_an_entry_at_another_projects_configured_path_is_approved_as_before(
+    tmp_home: Path, workdir: Path
+) -> None:
+    """§44: without that configuration `ops/rules.toml` is an ordinary file: the
+    engine approves the kit, one buttonless line, no hold published."""
+    engine, recorder, holds = _owner_engine(tmp_home, workdir)
+    architect = consultation(engine.spool)
+    job = _filed_with(
+        engine, architect, {"ops/rules.toml": ARCHITECT_BOOK, "meta/BUILDER-17-PROMPT.md": "b\n"}
+    )
+    architect = engine.spool.transition(
+        architect, "done", verdict="VERDICT: next kit m16", result="VERDICT: next kit m16"
+    )
+    end_consultation(engine, architect)
+    assert recorder.approved == [{"job": job.id, "reason": AUTONOMOUS_APPROVAL}]
+    assert holds.published == []
+
+
+def test_the_configured_playbook_path_is_read_as_a_repository_path(
+    tmp_home: Path, tmp_path: Path
+) -> None:
+    """§44 with §38: `[playbook] path` is read with the builder cwd's own place in the
+    repository before it, normalised; a path that leaves the repository is None."""
+    import dataclasses
+
+    from hands.config import PlaybookConfig
+
+    root = tmp_path / "root"
+    commit_file(root, "README.md", "x\n")
+    cwd = root / "sub" / "dir"
+    cwd.mkdir(parents=True)
+    config = make_config(tmp_home, cwd)
+    for configured, expected in (
+        ("PLAYBOOK.toml", "sub/dir/PLAYBOOK.toml"),
+        ("ops/rules.toml", "sub/dir/ops/rules.toml"),
+        ("../rules.toml", "sub/rules.toml"),
+        ("../../../rules.toml", None),
+    ):
+        judged = dataclasses.replace(config, playbook=PlaybookConfig(configured))
+        assert playbook_repo_path(judged) == expected, configured
+    at_root = make_config(tmp_home, root)
+    assert playbook_repo_path(at_root) == "PLAYBOOK.toml"
 
 
 # ---- mission 28 U3 (review 27 should-fix 1): §43's hold reason off the event loop
