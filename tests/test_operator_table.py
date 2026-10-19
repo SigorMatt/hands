@@ -539,10 +539,11 @@ EXEMPT: dict[tuple[str, str, str], str] = {
     ("daemon", "_on_event", "event.payload"):
         "an inbox event's payload; NOTIFY_KINDS publishes only `job.held`, whose "
         "reason is the gate's (gates.py), the `hands: a job is held for a human` row",
-    ("daemon", "_held_reason", "self.playbook.published_hold_reason(job)"):
-        "§43's hold reason at filing and at a start, decided by playbook.py "
-        "`published_hold_reason` (`owner_hold_reason`): the `the kit carries <path>` "
-        "row, pinned by test_section_43s_three_rows_are_in_the_table",
+    ("daemon", "_on_event", "self._held_reasons.pop(str(job_id), None)"):
+        "§43's hold reason at filing, decided by playbook.py `published_hold_reason` "
+        "(`owner_hold_reason`) in a worker thread before the `job.held` is filed "
+        "(`Daemon.decide_held_reason`): the `the kit carries <path>` row, pinned by "
+        "test_section_43s_three_rows_are_in_the_table",
     ("playbook", "_release_kit", "asyncio.to_thread(self.published_hold_reason, job)"):
         "the same §43 reason, asked in a worker thread (it hashes the stored zip): "
         "the `the kit carries <path>` row, pinned by test_section_43s_three_rows_are_in_the_table",

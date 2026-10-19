@@ -215,6 +215,10 @@ class Daemon:
         #: daemon about every event it appends, so a wait is a subscription and
         #: never a poll of the inbox file.
         self._subscribers: set[asyncio.Queue[Event]] = set()
+        # §43, review 27 should-fix 1 (§44): a hold's published reason, decided in a
+        # worker thread before its `job.held` is filed (`decide_held_reason`) and
+        # taken by `_on_event`, which reads no zip.
+        self._held_reasons: dict[str, str] = {}
         self.spool.listeners.append(self._on_event)
 
     # ------------------------------------------------------------- lifecycle
@@ -290,7 +294,7 @@ class Daemon:
             self.phone.start()
         # §34: every job still held is published at once with fresh buttons, and the
         # start notification names each by title.
-        still_held = self._publish_held()
+        still_held = await self._publish_held()
         message = f"{self.config.project} on {self.socket_path}"
         for job in resumed:  # §38: the start notification names what was resumed
             message += f"\nResumed: {job.role} job {job.id}, from job {job.resumed_from} "
@@ -400,7 +404,7 @@ class Daemon:
                 return False
         return True
 
-    def _publish_held(self) -> list[str]:
+    async def _publish_held(self) -> list[str]:
         """Every job still `held` at this start, by id, each published at once.
 
         §25 re-minted a nonce per held job; §31 (review 14 should-fix 1) listed the
@@ -412,11 +416,15 @@ class Daemon:
         and its buttons carrying the nonce minted now — and the start notification
         names it by title (`_publish_start`). Without the command channel there is
         nothing to mint, and the notification goes out without buttons.
+
+        §43: a held kit that carries the playbook reads §43's reason here too, decided
+        in a worker thread (review 27 should-fix 1, §44: it reads and hashes the
+        stored zip, which never happens on the event loop).
         """
         held = [job for job in self.spool.list_jobs() if job.state == "held"]
         for job in held:
-            # §43: a held kit that carries the playbook reads §43's reason here too.
-            self.publish_hold(job, self.playbook.published_hold_reason(job))
+            reason = await asyncio.to_thread(self.playbook.published_hold_reason, job)
+            self.publish_hold(job, reason)
         return [job.id for job in held]
 
     def publish_hold(self, job: Job, reason: str | None = None) -> None:
@@ -880,8 +888,9 @@ class Daemon:
                 if self.phone is not None:
                     actions = self.phone.actions(str(job_id))
                 # §43: a hold published at filing (a paused pipeline's, §36) whose kit
-                # carries the playbook reads §43's reason; the event keeps the gate's.
-                reason = self._held_reason(str(job_id))
+                # carries the playbook reads §43's reason, decided before the event
+                # was filed (`decide_held_reason`); the event keeps the gate's.
+                reason = self._held_reasons.pop(str(job_id), None)
                 if reason is not None:
                     payload = {**payload, "reason": reason}
             # §34: a `job.held` is never folded into the start notification.
@@ -889,17 +898,18 @@ class Daemon:
                 title, payload, actions=actions, fold=event.kind != "job.held"
             )
 
-    def _held_reason(self, job_id: str) -> str | None:
+    async def decide_held_reason(self, job: Job) -> None:
         """§43: the reason `PlaybookEngine.published_hold_reason` gives the held job
-        `job_id` at filing, or None (the gate's). Only an apply of origin `architect`
-        is asked; a job the spool cannot read is published as filed."""
-        try:
-            job = self.spool.load_job(job_id)
-        except SpoolError:
-            return None
-        if job.origin != ARCHITECT_ORIGIN:
-            return None
-        return self.playbook.published_hold_reason(job)
+        `job` at filing, decided before `Api.send` files its `job.held` and kept for
+        `_on_event` to publish; none kept is the gate's. Only an apply of origin
+        `architect` whose hold the engine did not defer (§36) is asked, in a worker
+        thread: it reads and hashes the stored zip, which review 27 should-fix 1 (§44)
+        keeps off the event loop."""
+        if job.origin != ARCHITECT_ORIGIN or self.playbook.hold_deferred(job.id):
+            return
+        reason = await asyncio.to_thread(self.playbook.published_hold_reason, job)
+        if reason is not None:
+            self._held_reasons[job.id] = reason
 
     async def wait_for_event(
         self, kinds: frozenset[str], *, timeout: float | None = None

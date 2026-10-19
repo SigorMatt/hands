@@ -441,6 +441,9 @@ class Api:
             # §36 (H-045): the hold of a kit the role filed, under `autonomous`, is
             # decided by the engine before anything is published.
             self.daemon.playbook.defer_hold(job)
+            # §43: a hold published at filing reads §43's reason when its kit carries
+            # the playbook — decided now, off the event loop (§44).
+            await self.daemon.decide_held_reason(job)
             self.spool.append_event(
                 "job.held",
                 {"job": job.id, "role": role, "state": "held", "reason": reason, "gate": "send"},

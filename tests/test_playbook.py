@@ -6966,3 +6966,98 @@ def test_the_start_fold_republishes_a_held_owners_kit_with_its_reason(
             await daemon.stop()
 
     asyncio.run(scenario())
+
+
+# ---- mission 28 U3 (review 27 should-fix 1): §43's hold reason off the event loop
+
+
+def _zip_reads(monkeypatch: pytest.MonkeyPatch) -> list[int]:
+    """Every read and hash of a stored kit's zip, by the thread that ran it: the two
+    `Spool` methods `published_hold_reason` reads the zip through."""
+    import threading
+
+    threads: list[int] = []
+    for name in ("stored_kit_playbooks", "stored_kit_sha256"):
+        real = getattr(Spool, name)
+
+        def spy(self: Spool, *args: Any, _real: Any = real) -> Any:
+            threads.append(threading.get_ident())
+            return _real(self, *args)
+
+        monkeypatch.setattr(Spool, name, spy)
+    return threads
+
+
+def test_the_start_folds_hold_reason_reads_the_zip_off_the_event_loop(
+    tmp_home: Path, workdir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Review 27 should-fix 1 (§44): the start's republish of a held architect apply
+    (`Daemon._publish_held`) reads and hashes the stored zip in a worker thread, never
+    on the loop's; the published hold still reads §43's reason."""
+    import threading
+
+    architect_project(tmp_home, workdir, book=OWNER_BOOK, ntfy=True)
+    posts = ActionPosts()
+    threads = _zip_reads(monkeypatch)
+
+    async def scenario() -> None:
+        loop_thread = threading.get_ident()
+        daemon = _phone_daemon(tmp_home, posts)
+        job = filed_kit(daemon.spool, data=kit_zip(OWNER_ENTRIES))
+        await daemon.start()
+        try:
+            await daemon.notifier.drain()
+            [note] = [n for n in posts.sent if n["title"] == as_published(HELD_TITLE)]
+            said = strip_paths(note["message"]).splitlines()
+            assert said[0] == owner_reason("m16", "PLAYBOOK.toml"), note
+            assert f"job: {job.id}" in said, note
+            assert threads, "the zip was never read"
+            assert threads.count(loop_thread) == 0, "the zip was read on the event loop"
+        finally:
+            await daemon.stop()
+
+    asyncio.run(scenario())
+
+
+def test_the_filing_hold_reason_reads_the_zip_off_the_event_loop(
+    tmp_home: Path, workdir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Review 27 should-fix 1 (§44): a hold the daemon publishes at filing (the
+    pipeline paused before the architect filed its kit, §36) has §43's reason computed
+    in a worker thread before the notification is published, never on the loop's; the
+    published hold reads §43's reason with its buttons."""
+    import threading
+
+    architect_project(tmp_home, workdir, book=OWNER_BOOK, ntfy=True)
+    argv = file_apply_argv(tmp_home, {"mission-17-kit": _e2e_owner_kit("PLAYBOOK.toml")})
+    argv[2] = PAUSE_THEN_FILE
+    script(tmp_home, monkeypatch, [{"result": "VERDICT: next kit mission-17-kit", "exec": argv}])
+    posts = ActionPosts()
+    held_title = as_published(HELD_TITLE)
+    threads = _zip_reads(monkeypatch)
+
+    async def scenario() -> None:
+        loop_thread = threading.get_ident()
+        daemon = _phone_daemon(tmp_home, posts)
+        await daemon.start()
+        try:
+            await asyncio.wait_for(body(daemon, loop_thread), 60)
+        finally:
+            await daemon.stop()
+
+    async def body(daemon: Daemon, loop_thread: int) -> None:
+        review = await ok("send", "--role", "aux", "--context", "clear", fake_result(REVIEW))
+        await ok("wait", review["id"])
+
+        async def held() -> Any:
+            await daemon.notifier.drain()
+            return [note for note in posts.sent if note["title"] == held_title]
+
+        [note] = await poll(held, "the hold to be published")
+        said = strip_paths(note["message"]).splitlines()
+        assert said[0] == owner_reason("mission-17-kit", "PLAYBOOK.toml"), note
+        assert [a["label"] for a in note["actions"]] == ["Approve", "Deny"], note
+        assert threads, "the zip was never read"
+        assert threads.count(loop_thread) == 0, "the zip was read on the event loop"
+
+    asyncio.run(scenario())

@@ -426,6 +426,37 @@ def test_the_live_turn_runs_with_the_role_environment(
         assert "ceiling=0" in strip_paths(found[f"live {role}"]["detail"]), found[f"live {role}"]
 
 
+@pytest.mark.parametrize("state", ["installed", "differs"])
+def test_each_live_turn_carries_the_background_variable_a_job_carries(
+    tmp_home: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, state: str
+) -> None:
+    """Review 27 should-fix 2 (§44, §43 rules 4 and 5): both of `--live`'s turns —
+    the builder's and aux's one-line turn and the architect's kits turn — build their
+    environment as a real job's (`runner.job_env`'s one decision). With doctor's own
+    `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1` inherited and a stale hook in the cwd,
+    no turn carries the variable; with the installed copy, the builder's and aux's
+    turns carry `=1` and the architect's (never a default for that role) none."""
+    import hands.doctor
+    from hands.spool import Spool
+
+    monkeypatch.setenv(BG_TASKS, "1")
+    add_architect(write_config(tmp_home, tmp_path), architect_dir(tmp_path))
+    _bg_layout(tmp_path, state, monkeypatch)
+    Spool(load_config("demo").spool_root).create_job(
+        role="aux", context="clear", prompt="hello", origin="cli", state="held"
+    )
+    seen: dict[str, str | None] = {}
+
+    def turn(config: Any, role: Any, prompt: str, env: dict[str, str]) -> Check:
+        seen[role.name] = env.get(BG_TASKS, "absent")
+        return Check(f"live {role.name}", FAIL, "the turn's environment was recorded")
+
+    monkeypatch.setattr(hands.doctor, "_live_turn", turn)
+    checks("--live")
+    on = "1" if state == "installed" else "absent"
+    assert seen == {"builder": on, "aux": on, "architect": "absent"}, seen
+
+
 def test_a_missing_claude_binary_fails(tmp_home: Path, tmp_path: Path, fake_mode: None) -> None:
     write_config(tmp_home, tmp_path, claude=tmp_path / "no-such-claude")
     code, found = checks()
