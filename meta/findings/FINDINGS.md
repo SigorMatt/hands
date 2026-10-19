@@ -2930,4 +2930,40 @@ or stands as written for a case-sensitive filesystem. Not changed in
 mission 27: §43 names the paths exactly, and widening them is the
 design's.
 
-Status: open
+Status: decided (DESIGN §44: casefolded match against the configured playbook path and the two fixed names), scheduled for U4
+
+## H-078 — a human pause drops the event that would start the next step
+
+Severity: medium · Component: src/hands/playbook.py (`on_event`'s paused
+branch, `pause`, `resume`, `_unpause`), src/hands/daemon.py
+(`_feed_orphans`); DESIGN §10, §44
+Filed by: mission 28 orchestrator, U0 (2026-10-19).
+Evidence: another project's ledger (discotrade), its HF-017 (2026-10-19):
+its builder job 0mve1pq5x-jej2 ran a whole mission while three owner
+commits waited from 2026-10-18 21:14, and its aux guard replied `VERDICT:
+blocked busy`. The code read at f16d6d1 and d587fa6: `playbook.py`
+`on_event`'s paused branch logs "fires nothing" and returns, so a paused
+pipeline drops every event it receives; `pause` is a stop and `resume`
+un-pauses (`_unpause`) without replaying anything; nothing publishes the
+moment the series has come to rest; `daemon.py` `_feed_orphans` feeds each
+orphan once and marks it fed before the engine hears it, so a restart while
+the pipeline is paused consumes the builder's orphan and nothing ever
+resumes it.
+
+Problem. In an autonomous series a builder job spans a whole mission, so
+the first job boundary is the mission's end. A human who needs the working
+tree quiet for an owner commit cannot stop the series at the next
+boundary: `pause` lets the running job finish and then drops its end, so
+the series is lost rather than held, `resume` does not take it up again,
+and the human must poll `jobs` to learn when the tree is quiet.
+
+Direction. DESIGN §44 "A pause that holds the next step", rules 1-6: under
+a human pause (`paused_by` `cli` or `phone`) a role's end that would start
+the next step is kept, one per role; everything else is as under any pause
+and every suppressed stop is notified; `resume` rules fire until a stop is
+suppressed under the pause; only `resume` ends a human pause, reloading the
+playbook and replaying the kept ends up to the first that starts a job or
+stops; `hands: at rest` is published once nothing runs; the state lives in
+`pipeline.json`.
+
+Status: decided (DESIGN §44), scheduled for U1 and U2
