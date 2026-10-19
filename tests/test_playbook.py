@@ -1230,12 +1230,13 @@ def test_a_hand_pause_files_a_stop_event_and_notifies(tmp_home: Path, workdir: P
 def test_pausing_an_already_paused_pipeline_files_one_event(
     tmp_home: Path, workdir: Path
 ) -> None:
-    """One stop, one notification: the second pause is a
-    `pipeline.stop_suppressed` record in the inbox and nothing else (§10)."""
+    """One stop, one notification: the second pause, over the human pause, is a
+    no-op and not a stop — nothing in the inbox (§44 rules 2 and 3; over any other
+    stop it is still §10's `pipeline.stop_suppressed`, tests/test_human_pause.py)."""
     engine, recorder = engine_for(tmp_home, workdir)
     run(engine.pause())
     run(engine.pause())
-    assert [e.kind for e in engine.spool.events()] == ["stop", "pipeline.stop_suppressed"]
+    assert [e.kind for e in engine.spool.events()] == ["stop"]
     # the pause's stop and its `at rest` (§44 rule 4); the second pause adds nothing
     assert len(recorder.notified) == 2
 

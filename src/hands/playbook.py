@@ -2060,8 +2060,17 @@ class PlaybookEngine:
         once. A `resume` rule fires, unless a stop has been suppressed under this
         pause. A stop on any other event is a stop, suppressed and notified
         (`stop`). `*.limited` (§6's), `job.held` and `job.denied` fire nothing, and
-        neither does any other action on any other event, as under any pause."""
+        neither does any other action on any other event, as under any pause.
+
+        With no playbook loaded because the file does not load (`load_error`), a
+        role's end is kept: its §10 decision is the stop that load made, which was
+        suppressed and notified when it was made (rule 2), and the `resume` that
+        loads decides it. With no playbook file, nothing chains (§10): it is not
+        kept."""
         book = self.playbook
+        if book is None and self.load_error is not None and event in ROLE_ENDS and job:
+            self._keep(event, job)
+            return
         if book is None or event.endswith(".limited") or event in ("job.held", "job.denied"):
             log.info("playbook: paused by a human (%s); %s fires nothing",
                      self.state.paused_by, event)
@@ -3398,7 +3407,6 @@ class PlaybookEngine:
         payload: dict[str, Any] | None = None,
         *,
         notify_suppressed: bool = False,
-        quiet: bool = False,
     ) -> None:
         """§10: pause the pipeline, notify, record the reason (§11's `stop` event).
 
@@ -3423,14 +3431,14 @@ class PlaybookEngine:
         §44 rule 2: under a human pause every suppressed stop is notified once — a
         consult stop under §29's title, any other under `SUPPRESSED_HUMAN_TITLE` —
         and marks the pause (`suppressed_stop`), so that no `resume` rule fires past
-        it; the pause and its kept ends stay. `quiet` is a `pause` over the human
-        pause, which is a no-op and not a stop: recorded, never notified or marked.
+        it; the pause and its kept ends stay. (A `pause` over the human pause is a
+        no-op that never reaches here: `pause`.)
         """
         if self.state.paused:
             suppressed = {**(payload or {}), "reason": reason, "kept": self.state.stop_reason}
             self.spool.append_event("pipeline.stop_suppressed", suppressed)
             log.info("playbook: stop suppressed (%s); kept: %s", reason, self.state.stop_reason)
-            human = self.human_paused and not quiet
+            human = self.human_paused
             if human and self.state.suppressed_stop is None:
                 self.state.suppressed_stop = reason
                 self._save()
@@ -3475,9 +3483,12 @@ class PlaybookEngine:
         `pipeline.stop_suppressed` record and changes nothing else.
         """
         already = self.state.paused
-        # §44 rule 3: over a human pause too, a no-op that keeps `paused_by` and the
-        # kept ends, and is not a stop: never notified, never the suppressed mark.
-        await self.stop(PAUSE_REASON, {"by": "hands pause" if by == "cli" else by}, quiet=True)
+        if self.human_paused:
+            # §44 rules 2 and 3: over a human pause, a no-op that keeps `paused_by`
+            # and the kept ends, and is not a stop: nothing is recorded or notified.
+            self.check_at_rest()
+            return {**self.pipeline(), "already_stopped": True}
+        await self.stop(PAUSE_REASON, {"by": "hands pause" if by == "cli" else by})
         if already:
             self.check_at_rest()
             return {**self.pipeline(), "already_stopped": True}
@@ -3500,14 +3511,19 @@ class PlaybookEngine:
         if not self.human_paused:
             self._unpause("resume")
             return self.pipeline()
+        # §44 rule 5: a refused `resume` is a no-op, so it leaves the playbook as
+        # loaded before it — the ends that arrive after it are decided as before.
+        before = (self.playbook, self.load_error, self._loaded)
         problem = await self._load(stop_on_error=False)
         if problem is not None:
+            self.playbook, self.load_error, self._loaded = before
             raise ResumeRefused(
                 f"{problem}; the human pause and its {len(self.state.kept)} kept end(s) stay "
                 "until a `resume` whose playbook loads (§44)"
             )
         kept = list(self.state.kept)
         if self.playbook is None and kept:
+            self.playbook, self.load_error, self._loaded = before
             raise ResumeRefused(
                 f"there is no playbook ({playbook_path(self.config)}) to decide the "
                 f"{len(kept)} kept end(s) with; the human pause and the kept ends stay "

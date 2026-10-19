@@ -1021,3 +1021,166 @@ def test_at_rest_after_the_humans_own_job_is_cancelled_and_nothing_else_runs(
         await published_rest(posts)
 
     life(body, posts)
+
+
+# ------------------------------------- PR #8's hosted review: findings 1, 3, 4, 6
+
+
+def test_a_pause_over_the_human_pause_files_no_suppressed_stop(
+    tmp_home: Path, workdir: Path
+) -> None:
+    """§44 rules 2 and 3 (hosted finding 1): a `pause` over the human pause is a
+    no-op and not a stop — no `pipeline.stop_suppressed` in the inbox either."""
+    engine, recorder = held_engine(tmp_home, workdir)
+    run(engine.pause(by="phone"))
+    before = kinds(engine)
+    state = run(engine.pause())
+    assert state["already_stopped"] is True and paused_by_human(engine, "phone")
+    assert kinds(engine) == before == ["stop"], "a pause over the human pause records nothing"
+
+
+def test_a_pause_over_another_stop_still_files_its_suppressed_stop(
+    tmp_home: Path, workdir: Path
+) -> None:
+    """§19 as before mission 28: over a stop that is not a human pause, `pause`
+    files one `pipeline.stop_suppressed` and changes nothing else."""
+    engine, recorder = held_engine(tmp_home, workdir)
+    run(engine.stop("because", {}))
+    run(engine.pause())
+    assert kinds(engine).count("pipeline.stop_suppressed") == 1
+    assert engine.pipeline()["stop_reason"] == "because"
+    assert titles(recorder) == [STOPPED]
+
+
+def test_a_daemon_start_under_a_human_pause_with_nothing_owed_publishes_at_rest(
+    tmp_home: Path, workdir: Path
+) -> None:
+    """§44 rule 4 (hosted finding 3): a builder limited at `max_resumes` while
+    paused, with the daemon down: the start reschedules nothing and no job ends,
+    so the start itself is the first idle moment."""
+    daemon_home(tmp_home, workdir)
+    posts = Posts()
+
+    async def first(daemon: Daemon) -> None:
+        builder = running_on(daemon.spool, "builder")
+        assert (await ok("pause"))["human_pause"] is True
+        await asyncio.sleep(0.2)
+        assert rest_posts(posts) == [], "the builder runs: not at rest"
+        daemon.spool.update_role("builder", consecutive_resumes=99)
+        daemon.spool.transition(builder, "limited")  # its end never reached the engine
+
+    life(first, posts)
+    assert rest_posts(posts) == []
+    later = Posts()
+
+    async def second(daemon: Daemon) -> None:
+        state = await ok("pipeline")
+        assert state["human_pause"] is True and state["at_rest"] is not None
+
+    life(second, later)
+    (started,) = [sent for sent in later.sent
+                  if sent["title"] == f"{PROJECT}: hands: handsd started"]
+    assert AT_REST in strip_paths(started["message"]), "folded into the start's notification"
+
+    async def third(daemon: Daemon) -> None:
+        assert (await ok("pipeline"))["at_rest"] is not None
+
+    last = life(third)
+    messages = "\n".join(str(sent.get("message")) for sent in last.sent)
+    assert rest_posts(last) == [], "once per human pause"
+    assert AT_REST not in strip_paths(messages), "not folded into the start either"
+
+
+def test_a_section_6_resume_that_fails_without_a_job_is_followed_by_at_rest(
+    tmp_home: Path, workdir: Path
+) -> None:
+    """§44 rule 4 (hosted finding 4): the scheduled resume fails to enqueue; its
+    stop is notified (rule 2) and, its task no longer scheduled, at rest follows."""
+    daemon_home(tmp_home, workdir)
+    posts = Posts()
+
+    async def body(daemon: Daemon) -> None:
+        builder = running_on(daemon.spool, "builder")
+        await ok("pause")
+        gate = asyncio.Event()
+
+        async def until_gate(_: float) -> None:
+            await gate.wait()
+
+        async def refuse(**_: Any) -> Job:
+            raise RuntimeError("the builder's queue is full")
+
+        daemon.limits.sleep = until_gate
+        daemon.limits.enqueue = refuse
+        limited = daemon.spool.transition(builder, "limited")
+        await daemon.limits.on_job_finished(limited)
+        await daemon.playbook.on_job(limited)
+        await asyncio.sleep(0.2)
+        assert rest_posts(posts) == [], "§6's resume is scheduled: not at rest"
+        gate.set()
+        await daemon.limits.drain()
+        (note,) = await published_rest(posts)
+        assert "no end is kept" in strip_paths(note["message"])
+        suppressed = [sent for sent in posts.sent
+                      if sent["title"] == f"{PROJECT}: {SUPPRESSED_HUMAN_TITLE}"]
+        assert len(suppressed) == 1 and posts.sent.index(suppressed[0]) < posts.sent.index(note)
+
+    life(body, posts)
+
+
+def test_after_a_refused_resume_a_later_end_is_still_kept_and_rules_still_fire(
+    tmp_home: Path, workdir: Path
+) -> None:
+    """§44 rule 5 (hosted finding 6): a refused `resume` leaves the playbook as
+    loaded before it, so a later end is kept, a `resume` rule fires, and the next
+    `resume` that loads replays."""
+    engine, recorder = held_engine(tmp_home, workdir)
+    run(engine.pause())
+    first = ended(engine.spool, "builder", FINISHED)
+    run(engine.on_job(first))
+    commit_file(workdir, "PLAYBOOK.toml", "version = [\n")
+    with pytest.raises(ResumeRefused):
+        run(engine.resume())
+    assert engine.pipeline()["playbook"]["loaded"] is True
+    review = ended(engine.spool, "aux", REVIEWED)
+    run(engine.on_job(review))
+    assert kept_jobs(engine) == [first.id, review.id]
+    orphan = ended(engine.spool, "aux", None, state="orphaned")
+    run(engine.on_job(orphan))
+    assert len(recorder.enqueued) == 1, "the aux.orphaned resume rule still fires"
+    commit_file(workdir, "PLAYBOOK.toml", HELD)
+    run(engine.resume())
+    (sent,) = recorder.sent
+    assert sent["prompt"] == "Review mission 28 of this repository"
+
+
+def test_an_end_arriving_while_the_playbook_does_not_load_is_kept_and_the_stop_notified(
+    tmp_home: Path, workdir: Path
+) -> None:
+    """§44 rules 1 and 2 with §10's load: after a restart with a playbook that does
+    not load, the load's stop is suppressed and notified once, and a role's end
+    (whose §10 decision is that stop) is kept for the `resume` that loads."""
+    engine, _recorder = held_engine(tmp_home, workdir)
+    run(engine.pause())
+    commit_file(workdir, "PLAYBOOK.toml", "version = [\n")
+    again, after = restarted(tmp_home, workdir)
+    first = ended(again.spool, "builder", FINISHED)
+    run(again.on_job(first))
+    second = ended(again.spool, "aux", REVIEWED)
+    run(again.on_job(second))
+    assert titles(after) == [SUPPRESSED_HUMAN_TITLE]
+    assert "cannot be read" in strip_paths(after.notified[0][1]["reason"])
+    assert kept_jobs(again) == [first.id, second.id] and paused_by_human(again)
+    commit_file(workdir, "PLAYBOOK.toml", HELD)
+    run(again.resume())
+    assert len(after.sent) == 1
+
+
+def test_an_end_arriving_under_a_human_pause_with_no_playbook_file_fires_nothing(
+    tmp_home: Path, workdir: Path
+) -> None:
+    """§10: with no playbook, hands runs jobs and nothing chains — not kept."""
+    engine, recorder = engine_for(tmp_home, workdir, None)
+    run(engine.pause())
+    run(engine.on_job(ended(engine.spool, "builder", FINISHED)))
+    assert kept_jobs(engine) == [] and titles(recorder) == [STOPPED]

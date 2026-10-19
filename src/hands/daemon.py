@@ -133,7 +133,8 @@ class Daemon:
         #: §6's limits: it is handed every terminal job and schedules the resume.
         #: Its `sleep` and `clock` are attributes so a test never waits one out.
         self.limits = LimitManager(
-            config, self.spool, enqueue=self._enqueue_resume, on_stop=self._limit_stop
+            config, self.spool, enqueue=self._enqueue_resume, on_stop=self._limit_stop,
+            on_no_resume=self._limit_no_resume,
         )
         #: §5's watch: one per builder job, started with the job and stopped with
         #: it. It reports to the inbox and never touches a job (§1 invariant 4).
@@ -290,6 +291,10 @@ class Daemon:
         # §38 (H-047): every orphan owed to the engine — reconciled above, or recorded
         # by the daemon whose stop ended it — is fed now, once, the workers being up.
         resumed = await self._feed_orphans()
+        # §44 rule 4: a human pause restored here, its orphans fed and its §6 resumes
+        # decided, may be at rest already with no job left to end; a set mark is not
+        # published again.
+        self.playbook.check_at_rest()
         if self.phone is not None:
             self.phone.start()
         # §34: every job still held is published at once with fresh buttons, and the
@@ -828,6 +833,11 @@ class Daemon:
         that and leaves a `pipeline.stop_suppressed` in the inbox instead.
         """
         await self.playbook.stop(reason, payload)
+
+    def _limit_no_resume(self) -> None:
+        """§44 rule 4: a scheduled §6 resume ended without a job; no job end will
+        follow it, so `at rest` is checked now."""
+        self.playbook.check_at_rest()
 
     def _monitor_event(self, kind: str, payload: dict[str, Any]) -> None:
         """§5's watch speaks to §10: `monitor.stall`, `monitor.tripwire` and §24's
