@@ -678,6 +678,95 @@ def test_driver_and_architect_jobs_do_not_get_the_bash_timeouts_from_hands(
     assert _ran(runner, spool, "driver", var) == "120000"
 
 
+# ------------------------- §43 rules 2, 4, 5: background tasks off (H-074)
+
+BG_TASKS = "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS"
+NO_BACKGROUND = Path(__file__).parents[1] / ".claude" / "hooks" / "no_background.py"
+ALL_ROLES = ("builder", "aux", "driver", "architect")
+#: The cwd hook states §43 rule 3 compares: the installed hands' copy, a copy
+#: that differs, no hook at all, and a cwd whose copy is the only one found.
+HOOK_STATES = ("installed", "differs", "absent", "own")
+
+
+def _hook_state(tmp_path: Path, cwd: Path, state: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Lay out the cwd's hook and the installed hands' copy for `state`."""
+    import hands.config
+
+    installed = tmp_path / "installed" / "hands" / "shipped" / "no_background.py"
+    installed.parent.mkdir(parents=True, exist_ok=True)
+    installed.write_bytes(NO_BACKGROUND.read_bytes())
+    own = cwd / ".claude" / "hooks" / "no_background.py"
+    own.parent.mkdir(parents=True, exist_ok=True)
+    if state == "installed":
+        own.write_bytes(installed.read_bytes())
+    elif state == "differs":
+        own.write_bytes(installed.read_bytes() + b"# an older copy\n")
+    elif state == "own":
+        own.write_bytes(installed.read_bytes())
+    monkeypatch.setattr(
+        hands.config, "SHIPPED_HOOKS", (own,) if state == "own" else (installed,)
+    )
+
+
+def _bg_runner(
+    tmp_home: Path, workdir: Path, spool: Spool, env: dict[str, str] | None = None
+) -> Runner:
+    _clone_behind(workdir.parent, workdir / "repo")  # §36: driver and architect clones
+    table = {"env": env} if env is not None else {}
+    return _env_runner(
+        tmp_home, workdir, spool, {role: {"cwd": str(workdir), **table} for role in ALL_ROLES}
+    )
+
+
+@pytest.mark.parametrize("inherited", [None, "yes"])
+@pytest.mark.parametrize("state", HOOK_STATES)
+def test_builder_and_aux_carry_the_variable_only_over_the_installed_hook(
+    tmp_home: Path, tmp_path: Path, workdir: Path, spool: Spool,
+    monkeypatch: pytest.MonkeyPatch, state: str, inherited: str | None,
+) -> None:
+    """§43 rule 4: `=1` for a builder or aux job only when the role's hook is the
+    installed hands' copy (rule 2: never the role's own file), never for the driver
+    or the architect; rule 5: a value handsd itself inherited reaches no job."""
+    if inherited is None:
+        monkeypatch.delenv(BG_TASKS, raising=False)
+    else:
+        monkeypatch.setenv(BG_TASKS, inherited)
+    _hook_state(tmp_path, workdir, state, monkeypatch)
+    runner = _bg_runner(tmp_home, workdir, spool)
+    for role in ALL_ROLES:
+        want = "1" if state == "installed" and role in ("builder", "aux") else f"UNSET:{BG_TASKS}"
+        assert _ran(runner, spool, role, BG_TASKS) == want, (role, state, inherited)
+
+
+@pytest.mark.parametrize("value", ["0", "1", "on"])
+@pytest.mark.parametrize("state", HOOK_STATES)
+def test_the_role_env_table_sets_the_variable_whatever_the_hook(
+    tmp_home: Path, tmp_path: Path, workdir: Path, spool: Spool,
+    monkeypatch: pytest.MonkeyPatch, state: str, value: str,
+) -> None:
+    """§43 rule 5: the table decides over the default, either way, for every role."""
+    monkeypatch.setenv(BG_TASKS, "true")  # handsd's own: never the job's
+    _hook_state(tmp_path, workdir, state, monkeypatch)
+    runner = _bg_runner(tmp_home, workdir, spool, env={BG_TASKS: value})
+    for role in ALL_ROLES:
+        assert _ran(runner, spool, role, BG_TASKS) == value, (role, state)
+
+
+def test_the_variable_is_decided_at_dispatch_not_at_enqueue(
+    tmp_home: Path, tmp_path: Path, workdir: Path, spool: Spool,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """§43 rule 4: a job queued over an old hook runs with the variable once the
+    project commits the installed copy before it is dispatched."""
+    monkeypatch.delenv(BG_TASKS, raising=False)
+    _hook_state(tmp_path, workdir, "differs", monkeypatch)
+    runner = _bg_runner(tmp_home, workdir, spool)
+    job = spool.create_job(role="builder", context="clear", prompt=f"FAKE:env {BG_TASKS}",
+                           origin="cli")
+    _hook_state(tmp_path, workdir, "installed", monkeypatch)
+    assert asyncio.run(runner.run(job)).result == "1"
+
+
 def test_non_json_lines_in_the_stream_are_ignored(runner: Runner, spool: Spool) -> None:
     job = send(runner, spool, "FAKE:junk not json at all\nFAKE:result ok")
     assert job.state == "done"

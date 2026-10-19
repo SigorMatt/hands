@@ -69,6 +69,10 @@ runs before every commit (4659 tests at the tip).
   memory across a daemon restart (it starts empty) (U3).
 - The kickoff-differs case of the U4 warning test did not go red under the
   `playbook_check.ok` mutation; only the no-kickoff case pins it (U4).
+  Correction 2026-10-18 (mission 27 U0, review 25 should-fix 1): REVIEW-25
+  found that both parametrized cases, kickoff differs and no kickoff, went
+  red under the `playbook_check.ok` mutation at src/hands/kit.py:1352; both
+  cases pin it.
 - How a reviewer tells a concurrent or human-made worktree apart, or
   learns the aux job's start; the protocol states the rule only (U4).
 - docs/HARNESS-PROBE.md's internal consistency is checked by reading, no

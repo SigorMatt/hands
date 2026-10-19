@@ -1422,7 +1422,11 @@ rule with that one clause corrected (`STALE_QUOTED_CLAUSE` →
 test keeps passing unchanged once DESIGN says the same thing — the replacement
 is then a no-op. Nothing else in the repository depends on either line.
 
-Status: open
+Status: resolved by DESIGN v3.26 §43 ("The DESIGN wording, written here": §12
+rule 6 and §14's and §24's unit names). The copies, mission 27 U1:
+`tests/test_docs.py::test_driver_rule_6_is_the_design_section_12_rule_6` now
+requires `driver/CLAUDE.md` rule 6 to equal DESIGN's rule exactly, and
+`STALE_QUOTED_CLAUSE` is gone.
 
 ---
 
@@ -1765,7 +1769,17 @@ after the verbatim block ("killed tasks and orphan processes stop and call you")
 and drops the H-034 sentence from `docs/PLAYBOOK.md`'s prose and its pin in
 `tests/test_docs.py`.
 
-Status: open
+Status: resolved by DESIGN v3.26 §43 ("The DESIGN wording, written here": §10's
+example maps `monitor.task_killed` to `notify` with a message; §24 names
+`monitor.orphan_processes` only). The copies, mission 27 U1:
+`tests/fixtures/playbook_example.toml` and the verbatim block in
+`docs/PLAYBOOK.md` take §10's example; `test_the_example_parses_into_the_rules_of_section_10`
+lists `("monitor.task_killed", "notify")`; the sentence under the verbatim copy
+says the example and this repository both notify on a killed task; the H-034
+sentence in `docs/PLAYBOOK.md`'s prose and its pin in `tests/test_docs.py` are
+gone; `test_a_task_killed_rule_loads_and_stops_the_pipeline` replaces the
+example's `notify` rule by a `stop` rule instead of appending one the first
+match would now shadow.
 
 Correction appended 2026-09-17 (mission 17 U0, from REVIEW-16 should-fix 8): the
 tests do not pin docs/PLAYBOOK.md's closing copy to §10 byte for byte, as the
@@ -1998,7 +2012,11 @@ Direction, for the architect. Either confirm the reading (the fold holds back
 everything except `job.held`), or state which other kinds must publish at
 once during the window.
 
-Status: open
+Status: resolved by DESIGN v3.26 §43 ("The DESIGN wording, written here": §34's
+start fold holds back everything a re-admitted job publishes except a
+`job.held`, published at once with its buttons — U1's reading, which the code
+has kept since mission 18). Mission 27 U1 copies nothing for it: no code or
+test changes, since §33's one-notification tests already bind the reading.
 
 ---
 
@@ -2687,7 +2705,7 @@ protocols drop the twelve lines and say what a report holds — the sha, a
 verdict per point, what is not proven, and for the hosted-review sub-agent
 every finding verbatim. The brief template keeps its twelve lines.
 
-Status: decided (DESIGN §42), scheduled for mission 27
+Status: resolved (mission 27 U4, this commit — DESIGN §43: both review protocols drop the twelve-line count and say what a report holds (the sha, a verdict per point and what is not proven; for the hosted-review sub-agent, every finding verbatim with its verdict on the builder's disposition), and run one gate at a time inside the gate's timeout, 15 minutes (900000 ms) in this repository's protocol, the timeout the project's briefs name in the template; the brief template keeps its twelve lines; the handbook's §7 says so. Tests: tests/test_kit.py, tests/test_docs.py)
 
 ## H-071 — the architect's guard refused read-only commands a consultation needed
 
@@ -2706,7 +2724,7 @@ and will be admitted in the guard's option sets for both guarded modes and
 in the architect's settings allow-list, each pinned with its neighbours
 still refused.
 
-Status: decided (DESIGN §42), scheduled for mission 27
+Status: resolved (mission 27 U4, this commit — DESIGN §43: the guard admits `ls -R`, `git ls-tree --name-only`, `git status --short` and `git log --date=<format>` in role and architect mode, each pinned with `ls -r`, `git ls-tree --name-status`, `git status --porcelain` and a `--date` with no value still refused, in the tests and in the guard's self-test (434 cases); `architect/settings.json` allows `git -C ./repo status`; `architect/CLAUDE.md` rule 10 sends a search of content through the Grep and Read tools; docs/INTEGRATION.md's table lists the options. Tests: tests/test_bash_guard.py, tests/test_docs.py)
 
 ## H-072 — a gate run on a shared machine ran past the timeouts
 
@@ -2748,5 +2766,168 @@ without it (`answer <secret> <text>` naming the owner file after `VERDICT:
 question`, or a `keep` send naming it), or whether the instruction paste
 due after this release asks each project's chat to add the sentence to its
 brief in flight. Not fixed in mission 26: the routes are §42's text.
+
+Status: resolved (mission 27 U2, this commit — DESIGN §43: every builder job but an apply (a job with a `kit_id`, or a resume of one found through `resumed_from`) is dispatched with §43's owner sentence, after the journal sentence, naming the owner files with no `meta/CHECKPOINT.md` update since, oldest first, decided in a worker thread and counted by the prompt cap; one helper (`sent_prompt`) strips hands' sentences for `is_kickoff`, `consults_used`, the limit resume, the playbook `resume` action, §36's listing and the job summary line; the handbook's §4, §14 and §19 route 4 say hands names the owner file itself. Tests: tests/test_playbook.py, tests/test_operations.py, tests/test_limits.py)
+
+## H-074 — a long gate backgrounded with no sanctioned wait, and the variable that stops it refused by hands' own hook
+
+Severity: medium · Component: .claude/hooks/no_background.py,
+src/hands/runner.py, src/hands/doctor.py, pyproject.toml,
+templates/BUILDER-N-PROMPT.md, both review protocols,
+docs/ARCHITECT-HANDBOOK.md §7, docs/INTEGRATION.md §21; DESIGN §43
+Filed by: mission 27 orchestrator, U0 (2026-10-18), carried from another
+project's ledger.
+Evidence: discotrade, its HF-015 and HF-016, 2026-10-18; its commit
+5ca133c; its jobs 0mvdoby7d-j90u, 0mvdxwh7s-y3e4 and 0mvdxy6xp-ysvh; its
+hook copy's commit 3fbed1d (2026-10-11, the same bytes as hands' main).
+Claude Code 2.1.300, read from its binary's strings on 2026-10-18 (nothing
+run; the `Agent` schema confirmed by that project's probe under 2.1.302):
+the `sleep` refusal (a first statement `sleep N`, N ≥ 25 s) is Claude
+Code's own guard; for a command moved to the background the harness
+advises one foreground command that blocks until the output file shows
+what is needed; `BASH_MAX_TIMEOUT_MS` has no ceiling and a call's
+effective timeout is the smaller of its own and that variable;
+`CLAUDE_CODE_DISABLE_BACKGROUND_TASKS` counts as set only when its value,
+trimmed, is `1`, `true`, `yes` or `on` in any case, and then no command is
+moved to the background, the `sleep` guard is off, a sub-agent always
+launches in the foreground, `SendMessage` runs inline, and the `Agent`
+schema has no `run_in_background`; hands' hook refuses an omitted or null
+flag (§23, H-014), so under the variable every sub-agent call is refused;
+a hook's environment is the session's.
+
+Problem. HF-015: a builder's long gate reached its timeout, the harness
+moved it to the background, and nothing hands ships gave the builder a
+sanctioned way to wait. HF-016: the project set the variable to stop the
+backgrounding, and its builder could not start a sub-agent, because
+hands' own hook refused every call (one stop; the variable was removed).
+
+Direction. DESIGN §43 rules 1–6: the hook admits an omitted or null flag
+under the variable's true spellings; the wheel ships the hook; doctor
+warns on a role's copy that is not the installed hands' copy; the runner
+sets the variable for a builder or aux job only when the role's copy is
+the installed copy; the role's env table decides either way and an
+inherited value reaches no job; the wait rule (prevent, an exit marker, a
+blocking foreground wait) in the brief template, both protocols and the
+handbook's §7.
+
+Status: resolved (mission 27 U3 3383ffe, rules 1–5; mission 27 U4, this commit, rule 6 — the wait rule's three parts (a) prevent, (b) an exit marker, (c) one blocking foreground wait, word for word where §43 quotes them, in both review protocols' hosted-review and per-commit sub-agents, the brief template's sub-agent brief (its timeout the placeholder `<the gate's timeout, in ms>`) and the handbook's §7; this repository's protocol names 15 minutes (900000 ms). Tests: tests/test_kit.py)
+
+## H-075 — a role-filed kit that carries the playbook is approved by the engine under autonomy
+
+Severity: medium · Component: src/hands/playbook.py (`_release_kit`),
+src/hands/kit.py (`kit check`), architect/CLAUDE.md rules 3 and 8,
+docs/ARCHITECT-HANDBOOK.md §3, §6, §12, §19; DESIGN §43
+Filed by: mission 27 orchestrator, U0 (2026-10-18).
+Evidence: found 2026-10-18 by the architect while checking another
+project's budget raise; scheduled by the human at 17:24.
+
+Problem. Under `[series] architect = "role"` with `autonomous = true` the
+engine approves every apply of a kit the architect role filed, judging its
+provenance and never its content. A kit carrying `PLAYBOOK.toml` or
+`meta/PLAYBOOK.toml` is approved too, so the role could raise its own
+`max_architect_consults`, drop a stop rule or change the kickoff without
+the human seeing it.
+
+Direction. DESIGN §43 "A playbook change is the owner's": `_release_kit`,
+after `kit_apply_problem` accepts and `_kit_bytes_unchanged` verifies,
+holds such an apply for the human with its buttons and the reason §43
+gives; no engine kickoff after the human approves it, the playbook's `kit
+applied` rule fires; `hands kit check` prints a `WARN playbook:` line.
+
+Status: fixed (mission 27 U5, this commit — DESIGN §43: `_release_kit`, after `kit_apply_problem` accepts the apply and `_kit_bytes_unchanged` verifies the stored zip, does not approve an architect-filed apply whose stored kit carries `PLAYBOOK.toml` or `meta/PLAYBOOK.toml` (`Spool.stored_kit_playbooks`, by the zip's central-directory names); `kit_apply_problem` is unchanged, so the kit stays a filed kit to the `next kit` wait, `defer_hold` and the `job.held` path; the hold is published with its buttons and the reason `apply <name>: the kit carries <path>, the playbook in force; a change of the playbook is the owner's (§43)`, passed to `Daemon.publish_hold` as `reason=` wherever the engine publishes a hold it does not approve, a paused pipeline's included; the gate's reason stays `apply <name>`; after a human approval no engine kickoff, the playbook's `kit applied` rule fires; `hands kit check` prints a `WARN playbook:` line when the repository's playbook or the kit's own is role mode with autonomy; architect rules 3 and 8, the handbook's §3, §6 and §12, and the role-mode kickoff notes of the missions playbook and brief templates. Tests: tests/test_playbook.py, tests/test_kit.py, tests/test_consult.py, tests/test_docs.py)
+
+## H-076 — `test_kit_apply_refuses_a_staged_name_with_dot_dot` fails intermittently
+
+Severity: medium · Component: tests/test_operations.py (and the code it
+drives, if the race is there); DESIGN §43
+Filed by: mission 27 orchestrator, U0 (2026-10-18), from REVIEW-26
+should-fix 1.
+Evidence: `tests/test_operations.py::test_kit_apply_refuses_a_staged_name_with_dot_dot`
+failed twice at b956e2a (mission 26 U1): once in the builder's U1 gate
+and once in the review's run, `1 failed, 4737 passed`; green alone, with
+its file and at every other commit. The test dates from mission 24
+(2f9e219). Leads (the architect's sandbox, 2026-10-18, at f16d6d1 and with
+the mission-27 kit applied, run as uid 0 on a loaded machine):
+`tests/test_library.py::test_open_refuses_a_running_job` failed in both
+full-suite runs and passed alone;
+`tests/test_gates.py::test_cancel_is_gated_by_default_and_approval_performs_it`
+failed in one full-suite run and once alone, then passed alone. At U0 on
+the laptop (mission-27 from 1b822a5, the kit applied), three full gate
+runs failed only `test_the_fixture_is_section_10s_example_verbatim` (the
+expected base red), `1 failed, 4833 passed` each; none of the three tests
+above failed.
+
+Problem. A gate that can go red on an unchanged tree is a gate nobody can
+read.
+
+Direction. DESIGN §43 "The intermittent test": find the race and fix it,
+in the test or the code; if no cause is found, run the test in a loop
+under the suite's conditions, record the count and result here, and pin
+what can be pinned.
+
+Found (mission 27 U1). A race between the test and the clock, in the test,
+not in the code. `tests/harness.py::kit_zip` writes each entry with
+`zipfile.ZipFile.writestr(name, text)`, which stamps it with
+`time.localtime(time.time())` at the call, in the zip's DOS time of two
+seconds' resolution. The test wrote the target with one `kit_zip(passing_kit())`
+before the daemon started and compared it, after the start and one request,
+with a second `kit_zip(passing_kit())`; when the clock crossed an even second
+between the two calls the bytes differed (offset 10, the local header's time)
+and the assertion `target.read_bytes() == kit_zip(passing_kit())` failed. The
+longer the daemon's start, the likelier: a loaded machine, or a commit that
+lengthens the start. `test_kit_apply_refuses_a_staged_symlink_and_removes_the_link_only`
+had the same comparison. Reproduced ad hoc (not committed) by delaying
+`Daemon.start` 2.1 s: both tests red at the old comparison, green at the fixed
+one. No other test compares with a second `kit_zip` or `crafted_zip` call
+(`grep` over tests/).
+
+Fixed in the test: both compare the target with the bytes they wrote. Pinned by
+`tests/test_operations.py::test_the_staged_refusals_hold_whatever_the_clock_does_between_two_zips`
+(both cases), which gives every `kit_zip` call a timestamp of its own: red at
+the old comparison, green at the fixed one.
+
+The leads, looked at with the same eye: neither
+`tests/test_library.py::test_open_refuses_a_running_job` nor
+`tests/test_gates.py::test_cancel_is_gated_by_default_and_approval_performs_it`
+compares generated bytes; both wait on a real fake-claude process (60 s body
+bound, a cancel wait of `cancel_grace_s` + 10 s). No cause was found for them.
+On the laptop at mission 27 U1 (machine otherwise idle): the two together 20
+times in a loop, 20 passed; their files with tests/test_operations.py 3 times,
+all passed; the U1 gate runs, recorded in the commit. Not proven: that the
+zip timestamp was the cause of mission 26's two failures (their output was not
+recorded), nor anything about the leads under the architect sandbox's load or
+uid 0.
+
+Status: resolved (test: mission 27 U1 — the race found and fixed in
+tests/test_operations.py, pinned there); the two leads not reproduced, no
+cause found, open as leads only (§43).
+
+## H-077 — a role-filed kit entry naming the playbook in another case passes the engine's playbook check
+
+Severity: low · Component: src/hands/spool.py (`stored_kit_playbooks`),
+src/hands/kit.py (the `WARN playbook:` line); DESIGN §43, §26
+Filed by: mission 27 orchestrator, U7 (2026-10-19), from PR #7's hosted
+review (finding 1, "Role kits can rewrite the playbook by changing its
+case").
+Evidence: meta/reviews/hosted/PR-7/1/review-comment-4309801219.md — the
+check recognises only the exact entries `PLAYBOOK.toml` and
+`meta/PLAYBOOK.toml`; an entry `playbook.toml`, `Playbook.toml` or
+`Meta/PLAYBOOK.toml` is approved by the engine, and on a case-insensitive
+filesystem the apply's `unzip -o` would write it over the playbook in
+force.
+
+Problem. §43 names the two paths `hands kit check` reads and the engine
+loads. On the case-sensitive filesystems hands runs on (Linux; the
+systemd units of §14), such an entry is a different file from the
+playbook in force and changes no rule; on a case-insensitive filesystem
+(a casefolded directory, a macOS clone) it would replace it, past the
+human.
+
+Decision needed. Whether §43's check matches the two paths
+case-insensitively (any entry whose casefolded path is `playbook.toml` or
+`meta/playbook.toml`), or refuses such an entry outright at `kit check`,
+or stands as written for a case-sensitive filesystem. Not changed in
+mission 27: §43 names the paths exactly, and widening them is the
+design's.
 
 Status: open

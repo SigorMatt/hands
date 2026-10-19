@@ -83,16 +83,31 @@ finding H-nnn filed. It reports a finding with no row, a fix whose commit
 does not touch the finding's anchor or that the comment still shows open, a
 dismissal with no reason, a filed finding absent from
 `meta/findings/FINDINGS.md`, and a finding that needed a design decision and
-was fixed in silence. It reports in ≤12 lines plus every finding verbatim,
-and names the `<k>` it wrote.
+was fixed in silence. It reports the sha, a verdict per point and what is
+not proven, and every finding verbatim with its verdict on the builder's
+disposition, and names the `<k>` it wrote. Each long command it runs
+follows the wait rule (DESIGN §43), its explicit timeout the gate's timeout,
+15 minutes (900000 ms):
+(a) prevent — a project whose
+gate can run past its role's `BASH_MAX_TIMEOUT_MS` raises
+`BASH_DEFAULT_TIMEOUT_MS` and `BASH_MAX_TIMEOUT_MS` above its worst case,
+and its briefs name that timeout; (b) a long command ends with an exit
+marker, `./scripts/check; echo "check-exit=$?"`, so its end shows in its
+output; (c) if a run is moved to the background anyway, wait with one
+foreground command that blocks until the output file shows the marker —
+`until grep -q '^check-exit=' <file>; do sleep 5; done`, with an explicit
+timeout — never a `sleep` of 25 seconds or more as a command's first
+statement, never Monitor or a background task, and never end the turn
+before the run has finished.
 
 ## The per-commit sub-agents
 
 Dispatch ONE sub-agent per unit commit, one at a time, never concurrently:
 the next starts when the last has reported, because each runs
-`./scripts/check` and one run at a time fits inside the 20-minute cap. These
-commits are not units, and none gets a sub-agent, a revert or a run of the
-gate:
+`./scripts/check` and one run at a time fits inside the gate's timeout,
+15 minutes (900000 ms).
+These commits are not units, and none gets a sub-agent, a revert or a run
+of the gate:
 
 - A `plan: decisions <date> (owner)` commit is read for what it says it does
   and is not reviewed as a unit: no sub-agent, no revert, no run of the gate.
@@ -131,10 +146,23 @@ Each sub-agent, in a `git worktree` at that commit:
    names none is a blocker.
 3. At that commit: run `./scripts/check` once, in the foreground, and
    report only when every command has finished; record green/red verbatim.
+   The run follows the wait rule (DESIGN §43), its explicit timeout the
+   gate's timeout,
+   15 minutes (900000 ms):
+   (a) prevent — a project whose gate can run past its role's `BASH_MAX_TIMEOUT_MS` raises
+   `BASH_DEFAULT_TIMEOUT_MS` and `BASH_MAX_TIMEOUT_MS` above its worst case,
+   and its briefs name that timeout; (b) a long command ends with an exit
+   marker, `./scripts/check; echo "check-exit=$?"`, so its end shows in its
+   output; (c) if a run is moved to the background anyway, wait with one
+   foreground command that blocks until the output file shows the marker —
+   `until grep -q '^check-exit=' <file>; do sleep 5; done`, with an explicit
+   timeout — never a `sleep` of 25 seconds or more as a command's first
+   statement, never Monitor or a background task, and never end the turn
+   before the run has finished.
 4. Checks design conformance against the named sections, and that nothing
    forbidden was touched (`DESIGN.md`, `meta/plan.md`, `meta/CHECKPOINT.md`
    by a sub-agent commit).
-5. Reports in ≤12 lines: sha, verdict per point, anything NOT proven.
+5. Reports the sha, a verdict per point and what is not proven.
 
 You run `./scripts/check` yourself once, at the tip under review (in a `git
 worktree` at it), and record the result in `## Notes`; that is your only
@@ -155,12 +183,14 @@ bot, verbatim, each with one of: confirmed → carried as blocker k or
 should-fix m; dismissed → the reason; and the sub-agent's audit of the
 builder's disposition of it; without a PR, or with no bot review after ten
 minutes, one line saying so), `## Notes`, `## Per-commit verdicts` (the
-≤12-line reports, verbatim, the hosted-review sub-agent's among them).
+sub-agents' reports, verbatim, the hosted-review sub-agent's among them).
 
 `## Notes` carries the schedule: one line per sub-agent with its start and
 end time; the sub-agents run one at a time so that one `./scripts/check`
-runs at a time inside the 20-minute cap. A review whose Notes lack the
-schedule is itself a should-fix for the next review.
+runs at a time inside the gate's timeout,
+15 minutes (900000 ms).
+A review whose Notes lack the schedule is itself a should-fix for the next
+review.
 
 Before you commit it, bring the tree to an up-to-date `main`: `git
 checkout main && git pull --ff-only`, and copy the directory the

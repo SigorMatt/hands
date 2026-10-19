@@ -37,6 +37,7 @@ from hands.runner import job_env
 from hands.spool import Job, Spool
 from harness import (
     PROJECT,
+    REVIEW_VOCABULARY_RULE,
     architect_table,
     cli,
     close_consultation,
@@ -45,7 +46,7 @@ from harness import (
     kit_zip,
     ok,
     open_consultation,
-    passing_kit,
+    playbookless_kit,
     poll,
 )
 
@@ -360,6 +361,73 @@ def test_hands_consult_is_refused_while_an_architect_job_is_running_or_held(
     drive(body)
 
 
+def test_a_consult_is_refused_while_an_architect_job_is_queued(
+    tmp_home: Path, workdir: Path
+) -> None:
+    """§42 (review 26's NOT PROVEN item, §43): "an architect job is running, queued
+    or held" refuses a consultation. A job is `queued` with nothing running only
+    until the role's worker takes it, so the refusal is asked in that step of the
+    event loop: the job enqueued, `start_consult` asked before anything is awaited.
+    Nothing more is enqueued, the pipeline is not stopped by the refusal, and no
+    `consult.sent` is filed."""
+    role_project(tmp_home, workdir)
+
+    async def body(daemon: Daemon) -> None:
+        queued = daemon.enqueue(
+            role=ARCHITECT, context="clear", prompt="FAKE:result VERDICT: x", origin="playbook"
+        )
+        assert daemon.running(ARCHITECT) is None
+        assert daemon.status()["roles"][ARCHITECT]["queued"] == [queued.id]
+        with pytest.raises(api_mod.ApiError) as refused:
+            await daemon.api.start_consult("why", requested_by="cli")
+        assert f"the architect has a job queued ({queued.id})" in strip_paths(
+            str(refused.value)
+        ), refused.value
+        assert [job.id for job in daemon.spool.list_jobs()] == [queued.id]
+        assert daemon.playbook.state.paused is False
+        assert "consult.sent" not in [event.kind for event in daemon.spool.events()]
+        # cancelled while still queued; its end is a consultation's (§31), not ours
+        killed = await daemon.cancel(daemon.spool.load_job(queued.id))
+        assert killed.state == "killed"
+
+    drive(body)
+
+
+def test_a_refused_consult_on_an_idle_project_with_a_dirty_playbook_stops_through_the_load(
+    tmp_home: Path, workdir: Path
+) -> None:
+    """§42, §43 (review 26's observation, weighed): on an idle project no busy
+    refusal applies, so a consult loads the committed playbook as a job's start does
+    (§10). A dirty playbook is refused by that load, which stops the pipeline with
+    the load's own reason — the playbook in force is not the committed copy,
+    whatever command found it — and the consult is refused because no playbook is
+    loaded, naming the load's error. Nothing is enqueued."""
+    role_project(tmp_home, workdir)
+    (workdir / "PLAYBOOK.toml").write_text(ROLE_BOOK + "\n# dirty\n", encoding="utf-8")
+
+    async def body(daemon: Daemon) -> None:
+        code, _out, err = await cli("consult", "why")
+        assert code == 1, err
+        assert "no playbook is loaded: it cannot be loaded (" in strip_paths(err), err
+        state = await ok("pipeline")
+        assert state["paused"] is True, state
+        reason = strip_paths(state["stop_reason"])
+        assert reason.startswith(
+            "the playbook is not the committed copy, so no rule can be trusted to fire: "
+        ), reason
+        load_error = daemon.playbook.load_error
+        assert load_error is not None
+        assert reason.endswith(strip_paths(load_error)), (reason, load_error)
+        assert strip_paths(load_error) in strip_paths(err), err
+        assert [e["payload"].get("playbook") for e in await events("stop")] == [
+            str(workdir / "PLAYBOOK.toml")
+        ]
+        assert (await ok("jobs"))["jobs"] == []
+        assert await events("consult.sent") == []
+
+    drive(body)
+
+
 def test_hands_consult_is_refused_while_a_next_kit_wait_is_open(
     tmp_home: Path, workdir: Path
 ) -> None:
@@ -516,11 +584,13 @@ def test_a_human_consultations_next_kit_is_filed_approved_and_applied_as_any(
     """§42: "read for its verdict (`next kit`, …), its kit filed and applied as any":
     `hands kit file` during it is accepted as a consultation's, the engine approves
     the apply under `autonomous` and the kickoff follows."""
-    role_project(tmp_home, workdir)
+    # §43: a kit that carries no playbook, the one the engine approves; the rule
+    # gives the check its review vocabulary.
+    role_project(tmp_home, workdir, book=ROLE_BOOK + REVIEW_VOCABULARY_RULE)
     kits = tmp_home / "filed"
     kits.mkdir()
     zipped = kits / "mission-18-kit.zip"
-    zipped.write_bytes(kit_zip(passing_kit()))
+    zipped.write_bytes(kit_zip(playbookless_kit()))
     argv = [sys.executable, "-c", FILE_APPLY, str(tmp_home / ".hands" / "handsd.sock"),
             PROJECT, f"mission-18-kit={zipped}"]
     replies = tmp_home / "replies.json"

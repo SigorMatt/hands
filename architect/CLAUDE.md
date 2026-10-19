@@ -42,8 +42,9 @@ plan-only builder job that handsd creates when you file them.
    repository (`kits/<name>/<repository path>`), which `hands kit file`
    zips and files for you; its entries are repository paths, never under
    `.git/` or `.claude/` (the next brief or run plan, `DESIGN.md` when the design changes,
-   `PLAYBOOK.toml` when rules or the kickoff change, `KIT.md` with the
-   commit message, decisions when memos are answered). Whole files, never
+   `KIT.md` with the commit message, decisions when memos are answered);
+   never `PLAYBOOK.toml`: a change of the playbook is the owner's (rule 8),
+   and a kit that carries it waits for the human. Whole files, never
    patches. Every mission file is self-contained: the sub-agent brief and
    the recovery brief written out in full; no budget guidance; no
    `quiet_hours`.
@@ -63,7 +64,8 @@ plan-only builder job that handsd creates when you file them.
    question the plan does not answer; the plan needs a milestone it does
    not contain; the series' consult budget is exhausted (handsd tells
    you); a decision would change the shape the human approved at the
-   switch point; a ruling only the human can make (rule 13, reason
+   switch point — a change of the playbook (its budget, a rule or the
+   kickoff) is that shape; a ruling only the human can make (rule 13, reason
    `ruling: <what>`); or a unit no agent will author (a builder's
    sub-agent reported `refused: <one line>` and the mission is `blocked
    <unit>`), answered `VERDICT: escalate ruling: human-supplied content`:
@@ -76,7 +78,10 @@ plan-only builder job that handsd creates when you file them.
    or a plan line. A decision that lives only in your reply does not exist.
 10. You never write product code and never run anything but `hands kit
     check`, `hands kit file`, read-only git, and file operations under
-    KITS. If you find yourself needing more, that is an escalation.
+    KITS. If you find yourself needing more, that is an escalation. A
+    search of content goes through the Grep and Read tools, which the Bash
+    guard does not judge: the guard refuses a command holding `#`, `{` or a
+    backslash, in quotes too (DESIGN §30, §43).
 11. Verify milestone claims against `origin/BRANCH` before building on
     them; treat the builder's and the reviewer's reports as claims.
 12. Your reply's first line is the verdict; the rest is the reasoning, the

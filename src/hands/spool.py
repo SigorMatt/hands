@@ -27,6 +27,7 @@ import os
 import re
 import secrets
 import time
+import zipfile
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import MISSING, dataclass, field, fields
 from datetime import UTC, datetime
@@ -43,6 +44,7 @@ __all__ = [
     "JOB_FIELDS",
     "KIT_CHECK_PASSED",
     "ORPHAN_DAEMON_STOP",
+    "PLAYBOOK_PATHS",
     "ANSWER_ORIGIN",
     "REPLY_ORIGIN",
     "STATES",
@@ -144,6 +146,10 @@ KIT_RECORD = "kit.json"
 #: bytes. `Api.kit_file` refuses a failing kit, so no record says otherwise; the
 #: engine approves nothing whose record does not say this.
 KIT_CHECK_PASSED = "pass"
+#: DESIGN §10's two spellings of the playbook's path, the two `hands kit check`
+#: reads (§26). §43: the engine does not approve an architect-filed apply whose
+#: stored kit carries either.
+PLAYBOOK_PATHS = ("PLAYBOOK.toml", "meta/PLAYBOOK.toml")
 #: `new_kit_id`'s shape: 16 lowercase hex digits.
 KIT_ID_RE = re.compile(r"[0-9a-f]{16}")
 #: §34: `kit.json`'s `sha256`: 64 lowercase hex digits, as `hashlib` writes them.
@@ -564,6 +570,17 @@ class Spool:
         except (SpoolError, OSError):
             return None
         return digest.hexdigest()
+
+    def stored_kit_playbooks(self, kit_id: str, name: str) -> tuple[str, ...] | None:
+        """§43: which of `PLAYBOOK_PATHS` the zip stored for `kit_id` carries, by its
+        central-directory names (the names `hands kit check` judges, §33), or None
+        when the zip cannot be read as one."""
+        try:
+            with zipfile.ZipFile(self.kit_dir(kit_id) / f"{name}.zip") as archive:
+                names = set(archive.namelist())
+        except (SpoolError, OSError, zipfile.BadZipFile, ValueError):
+            return None
+        return tuple(path for path in PLAYBOOK_PATHS if path in names)
 
     # ---------------------------------------------------------------- jobs
 

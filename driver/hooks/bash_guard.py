@@ -230,7 +230,7 @@ import unicodedata
 # these listed options themselves.
 GIT_SUBCOMMAND_OPTIONS = {
     "log": frozenset({"--oneline", "-n", "--grep", "--format", "--stat",
-                      "--name-status"}),
+                      "--name-status", "--date"}),
     "show": frozenset({"--stat", "--name-status"}),
     "fetch": frozenset({"-q"}),
     "ls-remote": frozenset({"--heads", "--tags"}),
@@ -239,11 +239,15 @@ GIT_SUBCOMMAND_OPTIONS = {
     "grep": frozenset({"-n", "-c", "-l", "-i", "-e"}),
     "cat-file": frozenset({"-t", "-p", "-e"}),
     "ls-files": frozenset(),
-    "ls-tree": frozenset(),
+    "ls-tree": frozenset({"--name-only"}),
     "branch": frozenset({"--list"}),
     "remote": frozenset({"-v"}),
-    "status": frozenset(),
+    "status": frozenset({"--short"}),
 }
+# DESIGN §43 (H-071): an option listed above that is admitted only with a
+# non-empty `=<value>` — `git log --date=<format>`; a bare `--date`, or
+# `--date=`, is refused.
+GIT_OPTIONS_WITH_VALUE = {"log": frozenset({"--date"})}
 # Not options, so the option allowlist cannot see them: the second word of an
 # allowed subcommand can still be a mutating verb (`git remote add`,
 # `git remote set-url`). Those stay refused by name.
@@ -750,7 +754,10 @@ def unlisted_git_option(sub: str, word: str):
     """
     if not word.startswith("-") or word == "--":
         return None
-    if word.split("=", 1)[0] in GIT_SUBCOMMAND_OPTIONS[sub]:
+    name, eq, value = word.partition("=")
+    if name in GIT_OPTIONS_WITH_VALUE.get(sub, ()):
+        return None if eq and value else word
+    if name in GIT_SUBCOMMAND_OPTIONS[sub]:
         return None
     if sub == "log" and re.fullmatch(r"-n?\d+", word):
         return None
@@ -1134,7 +1141,7 @@ COMMAND_TABLE = {
     # the read-only inspection commands the driver's rules name, each with the
     # options §31 lists and no others
     "cat": Command(reads=every_word),
-    "ls": Command(flags={"-l", "-a", "-la", "-1"}, reads=listed_or_here),
+    "ls": Command(flags={"-l", "-a", "-la", "-1", "-R"}, reads=listed_or_here),
     "head": Command(values={"-n": an_integer}, count=True, reads=every_word),
     "tail": Command(values={"-n": an_integer}, count=True, reads=every_word),
     "wc": Command(flags={"-l", "-c", "-w"}, reads=every_word),
@@ -1658,7 +1665,7 @@ SELFTEST = [
     ("cat ~/.hands/inbox.jsonl", True),
     ("cat -n ~/.hands/inbox.jsonl", False),
     ("ls -la ~/git/hands", True),
-    ("ls -R ~/git/hands", False),
+    ("ls -r ~/git/hands", False),  # §43 admits `-R`; its neighbour `-r` stays refused
     ("head -n 20 ./repo/DESIGN.md", True),
     ("git -C ./repo log --oneline -5 | head -1", True),
     ("head -c 20 ./repo/DESIGN.md", False),
@@ -1710,6 +1717,18 @@ SELFTEST_SPOOL = "/home/u/.hands/hands"
 
 # Role mode (§27, §28): `check(cmd, role="driver", consult_role="builder")`.
 ROLE_SELFTEST = [
+    # §43 (H-071): the four read-only options a consultation needed, each with
+    # the neighbours §43 names still refused
+    ("ls -R ./repo", True),
+    ("git -C ./repo ls-tree --name-only HEAD", True),
+    ("git -C ./repo status --short", True),
+    ("git -C ./repo log --date=iso -n 3", True),
+    ("git -C ./repo log --date=short --format=%ad -1", True),
+    ("ls -r ./repo", False),
+    ("git -C ./repo ls-tree --name-status HEAD", False),
+    ("git -C ./repo status --porcelain", False),
+    ("git -C ./repo log --date -n 3", False),
+    ("git -C ./repo log --date= -n 3", False),
     ("git -C ./repo log --oneline -5", True),
     ("git -C ./repo rev-parse HEAD^0", True),
     ("git -C ./repo rev-parse HEAD^{commit}", False),
@@ -1790,6 +1809,18 @@ SELFTEST_KITS = "./kits"
 
 # Architect mode (§31): `check(cmd, role="architect", kits="./kits")`.
 ARCHITECT_SELFTEST = [
+    # §43 (H-071): the four read-only options a consultation needed, each with
+    # the neighbours §43 names still refused
+    ("ls -R ./repo", True),
+    ("git -C ./repo ls-tree --name-only HEAD", True),
+    ("git -C ./repo status --short", True),
+    ("git -C ./repo log --date=iso -n 3", True),
+    ("git -C ./repo log --date=short --format=%ad -1", True),
+    ("ls -r ./repo", False),
+    ("git -C ./repo ls-tree --name-status HEAD", False),
+    ("git -C ./repo status --porcelain", False),
+    ("git -C ./repo log --date -n 3", False),
+    ("git -C ./repo log --date= -n 3", False),
     # the read-only table, as the driver role has it
     ("git -C ./repo fetch && git -C ./repo log --oneline origin/main -10", True),
     ("git -C ./repo show origin/main:meta/ROADMAP.md", True),

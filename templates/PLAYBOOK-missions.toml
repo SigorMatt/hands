@@ -13,7 +13,14 @@ kickoff = "Read meta/BUILDER-N-PROMPT.md and execute the mission below its divid
 # uncomment every line between the `>>> architect` markers below (strip one
 # "# " from each) and read docs/INTEGRATION.md "The architect role" first:
 # approving an `autonomous` playbook approves every apply the architect files
-# under it, with no further gate.
+# under it, with no further gate — but not a rewrite of the playbook: a change
+# of the playbook is the owner's (§43), so the apply of a kit the role files
+# that carries PLAYBOOK.toml or meta/PLAYBOOK.toml waits for the human.
+# In role mode, therefore, the kickoff above must be a line that never changes,
+# such as "Read the builder prompt with the highest mission number in the meta
+# directory and execute the mission below its divider.": a kickoff that names
+# the mission would need a playbook in every kit, and every kit would wait for
+# the human.
 # >>> architect
 # architect = "role"
 # autonomous = true
@@ -41,8 +48,10 @@ context = "clear"
 prompt = "Read meta/REVIEW-PROTOCOL.md and review mission {n} of this repository: the protocol finds the mission's commits itself (its pull request, or main since the last review: commit). Follow the protocol exactly, commit only meta/reviews/REVIEW-{n}.md, and begin your reply with the VERDICT line it specifies."
 
 # A kit was applied: worth a note, not a stop. Under an autonomous architect
-# series this rule does not fire: the engine sends `[series] kickoff` itself on
-# the same verdict, ahead of every rule in this file (§31).
+# series, for an apply the engine approved, the engine sends `[series] kickoff`
+# itself on the same verdict, ahead of every rule in this file (§31); this rule
+# fires for an apply the human approved — a kit that carries the playbook among
+# them (§43) — and the human sends `go`.
 [[rule]]
 on = "builder.done"
 verdict = '^VERDICT: kit applied'

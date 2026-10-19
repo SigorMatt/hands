@@ -47,15 +47,30 @@ def _load_hook() -> ModuleType:
 hook = _load_hook()
 
 
-def run_hook(payload: object, *args: str) -> subprocess.CompletedProcess[str]:
-    """Run the hook the way Claude Code does: a subprocess fed hook JSON."""
+#: §43 rule 1: the variable the hook reads from its own environment.
+BG_TASKS_ENV = "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS"
+
+
+def run_hook(
+    payload: object, *args: str, bg: str | None = None
+) -> subprocess.CompletedProcess[str]:
+    """Run the hook the way Claude Code does: a subprocess fed hook JSON.
+
+    The hook's answer to a sub-agent call depends on `BG_TASKS_ENV` (§43 rule 1),
+    so the subprocess never inherits the test's own value: `bg=None` runs it with
+    the variable absent, anything else with the variable set to exactly that.
+    """
     text = payload if isinstance(payload, str) else json.dumps(payload)
+    env = {k: v for k, v in os.environ.items() if k != BG_TASKS_ENV}
+    if bg is not None:
+        env[BG_TASKS_ENV] = bg
     return subprocess.run(
         [sys.executable, str(HOOK), *args],
         input=text,
         capture_output=True,
         text=True,
         timeout=60,
+        env=env,
     )
 
 
@@ -624,22 +639,35 @@ def test_send_message_is_not_refused() -> None:
         assert done.stderr == ""
 
 
-@pytest.mark.parametrize("tool_input,allowed", hook.SUBAGENT_SELFTEST)
-def test_subagent_selftest_case(tool_input: dict[str, object], allowed: bool) -> None:
-    reason = hook.check_subagent(tool_input)
-    assert (reason is None) == allowed, (tool_input, reason)
+@pytest.mark.parametrize("tool_input,disabled,allowed", hook.SUBAGENT_SELFTEST)
+def test_subagent_selftest_case(
+    tool_input: dict[str, object], disabled: bool, allowed: bool
+) -> None:
+    reason = hook.check_subagent(tool_input, disabled)
+    assert (reason is None) == allowed, (tool_input, disabled, reason)
 
 
 def test_the_subagent_selftest_table_covers_true_false_and_omitted() -> None:
-    cases = [(json.dumps(t, sort_keys=True), allowed) for t, allowed in hook.SUBAGENT_SELFTEST]
-    assert (json.dumps({"run_in_background": True}), False) in cases
-    assert (json.dumps({"run_in_background": False}), True) in cases
-    assert (json.dumps({}), False) in cases
-    assert all(
-        not allowed
-        for t, allowed in hook.SUBAGENT_SELFTEST
-        if t.get("run_in_background") is not False
-    )
+    cases = [
+        (json.dumps(t, sort_keys=True), disabled, allowed)
+        for t, disabled, allowed in hook.SUBAGENT_SELFTEST
+    ]
+    for disabled in (False, True):  # §43 rule 1: the table runs both states
+        assert (json.dumps({"run_in_background": True}), disabled, False) in cases
+        assert (json.dumps({"run_in_background": False}), disabled, True) in cases
+        assert (json.dumps({"run_in_background": None}), disabled, disabled) in cases
+    assert (json.dumps({}), False, False) in cases
+    assert (json.dumps({}), True, True) in cases
+    # Without the variable only the boolean false is foreground; under it an
+    # omitted or null flag is too, and nothing else.
+    for t, disabled, allowed in hook.SUBAGENT_SELFTEST:
+        flag = t.get("run_in_background")
+        if flag is False:
+            assert allowed, t
+        elif disabled and flag is None:
+            assert allowed, t
+        else:
+            assert not allowed, (t, disabled)
 
 
 def test_the_selftest_subprocess_reports_the_subagent_table() -> None:
@@ -654,13 +682,15 @@ def test_the_selftest_subprocess_reports_the_subagent_table() -> None:
 # ------------------------------------------- the Bash half, byte for byte (U2)
 
 #: The Bash refusals exactly as the hook printed them at 2955a20, before the
-#: sub-agent tool was added: U2 must leave every byte of them alone.
+#: sub-agent tool was added: U2 must leave every byte of them alone. The one
+#: change since is §43 rule 1's (mission 27 U3): the advice no longer says "up to
+#: 20 minutes" (§42 lifted that ceiling) and says what bounds the timeout instead.
 BASH_ADVICE_AT_2955A20 = (
     "Role sessions never run background tasks (DESIGN §21): the harness reaps them, so a "
     "long background job can die silently mid-mission and nothing says so. Run it in the "
     "foreground instead, with a timeout — the Bash tool's own `timeout` parameter "
-    "(milliseconds, up to 20 minutes), or `timeout <seconds> <command>` — and split work "
-    "that cannot fit into steps that each finish."
+    "(milliseconds, bounded by `BASH_MAX_TIMEOUT_MS`), or `timeout <seconds> <command>` — "
+    "and split work that cannot fit into steps that each finish."
 )
 BASH_STDERR_AT_2955A20: list[tuple[object, str]] = [
     (
@@ -734,3 +764,104 @@ def test_the_settings_command_runs_the_hook_isolated_from_a_planted_module(
         else:
             assert "planted" not in done.stdout, done
             assert done.returncode == 2, done
+
+
+# ------------------------------- §43 rule 1: an omitted flag under the variable
+
+#: Claude Code's own set, trimmed and in any case: these count as set.
+ADMITTED_SPELLINGS = ["1", "true", "TRUE", " yes ", "on"]
+#: These do not, and `None` is the variable absent.
+REFUSED_SPELLINGS: list[str | None] = ["0", "false", "", None, "2"]
+
+
+def _flagged(tool: str, flag: str) -> dict[str, object]:
+    """A sub-agent event whose flag is omitted, null, `true` or `false`."""
+    event = subagent_event(tool)
+    tool_input = event["tool_input"]
+    assert isinstance(tool_input, dict)
+    if flag == "null":
+        tool_input["run_in_background"] = None
+    elif flag == "true":
+        tool_input["run_in_background"] = True
+    elif flag == "false":
+        tool_input["run_in_background"] = False
+    return event
+
+
+@pytest.mark.parametrize("tool", SUBAGENT_TOOLS)
+@pytest.mark.parametrize("bg", ADMITTED_SPELLINGS)
+def test_under_the_variable_an_omitted_or_null_flag_is_admitted(tool: str, bg: str) -> None:
+    """§43 rule 1: under the variable the harness strips the flag and launches every
+    sub-agent in the foreground, so an omitted or null flag is a foreground one."""
+    for flag, code in (("omitted", 0), ("null", 0), ("false", 0), ("true", 2)):
+        done = run_hook(_flagged(tool, flag), bg=bg)
+        assert done.returncode == code, (tool, bg, flag, done)
+        if code == 0:
+            assert done.stderr == "", done.stderr
+        else:
+            assert one_line(done.stderr) and "run_in_background is true" in done.stderr
+
+
+@pytest.mark.parametrize("tool", SUBAGENT_TOOLS)
+@pytest.mark.parametrize("bg", REFUSED_SPELLINGS)
+def test_a_value_that_is_not_claude_codes_set_changes_nothing(
+    tool: str, bg: str | None
+) -> None:
+    """§43 rule 1: nothing wider than `1`/`true`/`yes`/`on`, so the hook never
+    admits what the CLI would still background."""
+    for flag, code in (("omitted", 2), ("null", 2), ("false", 0), ("true", 2)):
+        done = run_hook(_flagged(tool, flag), bg=bg)
+        assert done.returncode == code, (tool, bg, flag, done)
+        if code == 2:
+            assert one_line(done.stderr), done.stderr
+
+
+@pytest.mark.parametrize("value", ["true", "false", 0, 1, "", "0", 0.0])
+def test_under_the_variable_a_non_boolean_flag_stays_refused(value: object) -> None:
+    done = run_hook(subagent_event("Agent", run_in_background=value), bg="1")
+    assert done.returncode == 2, (value, done)
+    assert one_line(done.stderr) and "Traceback" not in done.stderr, done.stderr
+
+
+@pytest.mark.parametrize("bg", ["1", None])
+def test_the_selftest_answers_the_same_with_the_variable_set_and_unset(bg: str | None) -> None:
+    done = run_hook("", "--selftest", bg=bg)
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert done.stdout == run_hook("", "--selftest", bg="on" if bg is None else None).stdout
+    total = str(len(hook.SUBAGENT_SELFTEST))
+    assert f"selftest (Agent, Task): {total}/{total} ok" in done.stdout.splitlines()
+
+
+def test_the_sub_agent_check_takes_the_state_and_never_reads_the_environment() -> None:
+    import inspect
+
+    assert list(inspect.signature(hook.check_subagent).parameters) == ["tool_input", "disabled"]
+    assert "environ" not in inspect.getsource(hook.check_subagent)
+    assert hook.background_tasks_disabled({BG_TASKS_ENV: " On "}) is True
+    assert hook.background_tasks_disabled({}) is False
+
+
+def test_the_bash_advice_drops_the_twenty_minute_ceiling() -> None:
+    assert "20 minutes" not in hook.ADVICE
+    assert "BASH_MAX_TIMEOUT_MS" in hook.ADVICE
+
+
+def test_the_built_wheel_carries_the_hook(tmp_path: Path) -> None:
+    """§43 rule 2: `pyproject.toml` force-includes the hook as
+    `hands/shipped/no_background.py`, read from the build's own file list as the
+    guard's `hands/shipped/bash_guard.py` is."""
+    import shutil
+    import zipfile
+
+    uv = shutil.which("uv")
+    assert uv is not None
+    dist = tmp_path / "dist"
+    built = subprocess.run(
+        [uv, "build", "--wheel", "--offline", "--quiet", "-o", str(dist)],
+        cwd=ROOT, capture_output=True, text=True, timeout=300,
+    )
+    assert built.returncode == 0, built.stderr
+    (wheel,) = dist.glob("hands-*.whl")
+    with zipfile.ZipFile(wheel) as archive:
+        assert "hands/shipped/no_background.py" in archive.namelist()
+        assert archive.read("hands/shipped/no_background.py") == HOOK.read_bytes()

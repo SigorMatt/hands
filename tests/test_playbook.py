@@ -49,7 +49,9 @@ from hands.playbook import (
     ESCALATE_ON,
     EVENTS,
     JOB_PLACEHOLDERS,
+    JOURNAL_REMINDER,
     LIMIT_KEYS,
+    OWNER_REMINDER,
     ROADMAP,
     Milestones,
     PipelineState,
@@ -61,13 +63,17 @@ from hands.playbook import (
     load_playbook,
     next_milestone,
     orphaned_rule_warnings,
+    owner_files_pending,
     parse_playbook,
     playbook_path,
     render,
+    sent_prompt,
 )
 from hands.spool import Job, Spool, new_kit_id, now_iso
 from harness import (
+    PASSING_PLAYBOOK,
     PROJECT,
+    REVIEW_VOCABULARY_RULE,
     UNCHECKED_KIT,
     architect_table,
     as_published,
@@ -77,6 +83,7 @@ from harness import (
     kit_zip,
     ok,
     passing_kit,
+    playbookless_kit,
     poll,
     running_job,
     write_project,
@@ -265,9 +272,10 @@ def test_the_example_parses_into_the_rules_of_section_10(tmp_home: Path, workdir
         ("builder.orphaned", "resume"),
         ("builder.failed", "resume"),
         ("monitor.tripwire", "stop"),
-        ("monitor.task_killed", "stop"),
+        ("monitor.task_killed", "notify"),
         ("monitor.orphan_processes", "stop"),
     ]
+    assert book.rules[-2].message == "A task inside a role job was killed"
     assert book.rules[1].run == "{n+1}"
     assert book.rules[1].role == "builder"
     assert book.rules[1].context == "clear"
@@ -1037,11 +1045,15 @@ def test_a_monitor_tripwire_stops_the_pipeline(tmp_home: Path, workdir: Path) ->
 
 def test_a_task_killed_rule_loads_and_stops_the_pipeline(tmp_home: Path, workdir: Path) -> None:
     """§24: the loader accepts `monitor.task_killed` and the event reaches the rule.
-    A playbook may still map it to `stop`; §32's shipped playbooks map it to
-    `notify` (pinned below, over `SHIPPED_PLAYBOOKS`)."""
-    body = EXAMPLE + '\n[[rule]]\non = "monitor.task_killed"\nthen = "stop"\n'
+    A playbook may still map it to `stop`; §32's shipped playbooks and §10's
+    example (§43) map it to `notify` (pinned below, over `SHIPPED_PLAYBOOKS`), so
+    the example's `notify` rule is replaced by a `stop` rule here."""
+    notify = 'then = "notify"\nmessage = "A task inside a role job was killed"\n'
+    assert EXAMPLE.count(notify) == 1
+    body = EXAMPLE.replace(notify, 'then = "stop"\n')
     book = parse_playbook(body, path=workdir / "PLAYBOOK.toml")
-    assert (book.rules[-1].on, book.rules[-1].then) == ("monitor.task_killed", "stop")
+    killed = [(rule.on, rule.then) for rule in book.rules if rule.on == "monitor.task_killed"]
+    assert killed == [("monitor.task_killed", "stop")]
     engine, recorder = engine_for(tmp_home, workdir, body=body)
     job = engine.spool.create_job(role="builder", context="clear", prompt="p", origin="cli")
     run(engine.on_job_start(job))
@@ -3212,7 +3224,12 @@ KIT_BYTES = b"PK\x05\x06" + bytes(18)
 
 
 def filed_kit(
-    spool: Spool, *, name: str = "m16", during: Job | None = None, **job: Any
+    spool: Spool,
+    *,
+    name: str = "m16",
+    during: Job | None = None,
+    data: bytes = KIT_BYTES,
+    **job: Any,
 ) -> Job:
     """§32: a kit's held apply exactly as `Api.kit_file` leaves it — the zip stored
     under `kits/<kit_id>/` by `Spool.store_kit` and its record (`Spool.record_kit`),
@@ -3228,10 +3245,10 @@ def filed_kit(
     if during is None:
         during = consultation(spool, state="done", verdict=f"VERDICT: next kit {name}")
     kit_id = new_kit_id()
-    spool.store_kit(kit_id, name=name, data=KIT_BYTES)
+    spool.store_kit(kit_id, name=name, data=data)
     spool.record_kit(
         kit_id, name=name, consultation=during.id, check="pass",
-        sha256=hashlib.sha256(KIT_BYTES).hexdigest(),
+        sha256=hashlib.sha256(data).hexdigest(),
     )
     fields: dict[str, Any] = {
         "role": "builder",
@@ -4905,7 +4922,7 @@ def test_a_series_rename_that_restates_the_budget_moves_the_anchor(
 #: (`fake_claude` prefers a `FAKE:` directive and leaves the queue where it was).
 E2E_BOOK = ARCHITECT_BOOK.replace(
     ARCHITECT_KICKOFF, f"{ARCHITECT_KICKOFF}\\nFAKE:result VERDICT: mission 17 finished"
-)
+) + REVIEW_VOCABULARY_RULE  # §43: so a kit without a playbook passes the check here
 
 #: What the scripted architect runs in place of `hands kit file <dir>`: the call
 #: that command makes once its client-side check passes — the daemon's `kit_file`
@@ -4935,7 +4952,7 @@ def file_apply_argv(
     socket, in order; by default one kit, `mission-17-kit`, that passes the check."""
     import sys
 
-    kits = kits if kits is not None else {"mission-17-kit": passing_kit()}
+    kits = kits if kits is not None else {"mission-17-kit": playbookless_kit()}
     where = tmp_home / "filed-kits"
     where.mkdir(exist_ok=True)
     pairs = []
@@ -5376,7 +5393,7 @@ def test_end_to_end_a_kit_filed_after_the_architect_ended_is_waited_for(
     async def body(daemon: Daemon) -> None:
         import base64
 
-        data = base64.b64encode(kit_zip(passing_kit())).decode()
+        data = base64.b64encode(kit_zip(playbookless_kit())).decode()
         filed: list[dict[str, Any]] = []
 
         async def sleep(delay: float) -> None:
@@ -5476,8 +5493,8 @@ def test_end_to_end_a_kit_the_rule_forbids_is_denied_and_the_consultation_escala
     consultation" before it is checked, so it is never filed; `foo`, the one kit
     filed, is denied and the consultation escalates, as §33 requires."""
     architect_project(tmp_home, workdir, ntfy=True)
-    kits = {"foo": passing_kit(), "bar": passing_kit()} if case == "two kits" else {
-        "bar": passing_kit()
+    kits = {"foo": playbookless_kit(), "bar": playbookless_kit()} if case == "two kits" else {
+        "bar": playbookless_kit()
     }
     script(tmp_home, monkeypatch,
            [{"result": "VERDICT: next kit foo", "exec": file_apply_argv(tmp_home, kits)}])
@@ -5565,7 +5582,7 @@ def test_end_to_end_two_concurrent_kit_files_during_the_wait_check_and_file_one(
     monkeypatch.setattr("hands.api.check_kit", checks)
 
     async def body(daemon: Daemon) -> None:
-        data = base64.b64encode(kit_zip(passing_kit())).decode()
+        data = base64.b64encode(kit_zip(playbookless_kit())).decode()
         both: list[asyncio.Future[list[Any]]] = []
 
         async def sleep(delay: float) -> None:
@@ -5619,7 +5636,7 @@ def test_two_concurrent_kit_files_while_the_architect_runs_check_and_file_one(
     monkeypatch.setattr("hands.api.check_kit", checks)
 
     async def body(daemon: Daemon) -> None:
-        data = base64.b64encode(kit_zip(passing_kit())).decode()
+        data = base64.b64encode(kit_zip(playbookless_kit())).decode()
         consulting = open_consultation(daemon)
         try:
             outcomes = await asyncio.gather(
@@ -5657,7 +5674,7 @@ def test_end_to_end_a_byte_flip_between_check_and_approval_is_refused_with_both_
 
     architect_project(tmp_home, workdir)
     script(tmp_home, monkeypatch, ["VERDICT: next kit mission-17-kit"])
-    zipped = kit_zip(passing_kit())
+    zipped = kit_zip(playbookless_kit())
     flipped: list[str] = []
 
     def flip(path: Path) -> None:
@@ -5712,8 +5729,8 @@ def test_end_to_end_a_passing_zip_swapped_in_for_the_check_only_is_refused(
 
     architect_project(tmp_home, workdir)
     script(tmp_home, monkeypatch, ["VERDICT: next kit mission-17-kit"])
-    passing = kit_zip(passing_kit())
-    failing_files = passing_kit()
+    passing = kit_zip(playbookless_kit())
+    failing_files = playbookless_kit()
     del failing_files["meta/BUILDER-17-PROMPT.md"]
     failing = kit_zip(failing_files)
     checked: list[bool] = []
@@ -6365,3 +6382,575 @@ def test_a_playbook_without_done_rules_warns_nothing(tmp_path: Path) -> None:
     """The warning is for a `<role>.done` rule without its `<role>.orphaned` one only."""
     body = 'version = 1\n\n[[rule]]\non = "monitor.tripwire"\nthen = "stop"\n'
     assert orphaned_rule_warnings(parse_playbook(body, path=tmp_path / "PLAYBOOK.toml")) == []
+
+
+# ---- §43 (H-073): the owner file on every builder job
+
+#: §43's sentence, word for word, with `{files}` for the paths joined by `, `.
+OWNER_SAID = (
+    "[hands: an owner file was committed after the last update of meta/CHECKPOINT.md: "
+    "{files}. Carry out the \"For the builder\" steps of each, oldest first, record them "
+    "in the checkpoint and commit it, then do what follows.]"
+)
+
+
+def test_the_owner_sentence_is_section_43s_text_word_for_word() -> None:
+    assert OWNER_REMINDER == OWNER_SAID
+    design = " ".join(DESIGN.read_text(encoding="utf-8").split())
+    assert OWNER_SAID.format(files="<files>") in design
+
+
+def test_owner_files_with_no_checkpoint_update_since_are_named_oldest_first(
+    tmp_home: Path, workdir: Path
+) -> None:
+    """§43: each tracked `meta/decisions/<name>-owner.md` whose last commit no
+    checkpoint commit follows is named, in the order of those commits, oldest first
+    (here not the paths' order); a nested `a/b-owner.md` and a file deleted at HEAD
+    are not; once `meta/CHECKPOINT.md` is committed after them, there is no sentence."""
+    engine, _ = engine_for(tmp_home, workdir)
+    commit_file(workdir, "meta/CHECKPOINT.md", "# CHECKPOINT\n")
+    commit_file(workdir, "meta/decisions/gone-owner.md", "deleted below\n")
+    commit_file(workdir, "meta/decisions/zz-owner.md", "the OLDER ruling\n")
+    commit_file(workdir, "meta/decisions/a/b-owner.md", "nested, not an owner file\n")
+    commit_file(workdir, "meta/decisions/aa-owner.md", "the NEWER ruling\n")
+    _git_in(workdir, "rm", "-q", "meta/decisions/gone-owner.md")
+    _git_in(workdir, "commit", "-q", "-m", "drop gone")
+    assert engine.owner_reminder() == OWNER_SAID.format(
+        files="meta/decisions/zz-owner.md, meta/decisions/aa-owner.md"
+    )
+    commit_file(workdir, "meta/CHECKPOINT.md", "# CHECKPOINT\n\nO-1 done.\n")
+    assert engine.owner_reminder() is None
+    commit_file(workdir, "meta/decisions/zz-owner.md", "an EDIT is a new ruling\n")
+    assert engine.owner_reminder() == OWNER_SAID.format(files="meta/decisions/zz-owner.md")
+
+
+def test_an_owner_file_committed_with_the_checkpoint_is_still_named(
+    tmp_home: Path, workdir: Path
+) -> None:
+    """§43: `A..HEAD` leaves `A` out, so a commit that changes an owner file and the
+    checkpoint together names the file until a later checkpoint commit."""
+    engine, _ = engine_for(tmp_home, workdir)
+    (workdir / "meta" / "decisions").mkdir(parents=True)
+    (workdir / "meta" / "CHECKPOINT.md").write_text("# CHECKPOINT\n")
+    (workdir / "meta" / "decisions" / "x-owner.md").write_text("ruling\n")
+    _git_in(workdir, "add", "meta")
+    _git_in(workdir, "commit", "-q", "-m", "both")
+    assert engine.owner_reminder() == OWNER_SAID.format(files="meta/decisions/x-owner.md")
+
+
+def test_no_tracked_checkpoint_gives_no_owner_sentence(
+    tmp_home: Path, workdir: Path, tmp_path: Path
+) -> None:
+    """§43: with `meta/CHECKPOINT.md` not tracked at HEAD there is no sentence, and a
+    git failure (a cwd that is no repository) gives none either."""
+    engine, _ = engine_for(tmp_home, workdir)
+    commit_file(workdir, "meta/decisions/x-owner.md", "ruling\n")
+    (workdir / "meta" / "CHECKPOINT.md").write_text("written, never committed\n")
+    assert engine.owner_reminder() is None
+    elsewhere = tmp_path / "plain"
+    elsewhere.mkdir()
+    assert owner_files_pending(elsewhere) is None
+
+
+def test_an_owner_file_carried_out_on_a_merged_side_branch_is_not_named(
+    tmp_home: Path, workdir: Path
+) -> None:
+    """§43: asked per file, so an owner file whose checkpoint update was committed on
+    a side branch merged into HEAD is not named, although the newest checkpoint
+    commit on HEAD's first-parent line is older than the owner file's."""
+    engine, _ = engine_for(tmp_home, workdir)
+    commit_file(workdir, "meta/CHECKPOINT.md", "# CHECKPOINT\n")
+    commit_file(workdir, "meta/decisions/x-owner.md", "ruling\n")
+    main = subprocess.run(
+        ["git", "-C", str(workdir), "rev-parse", "--abbrev-ref", "HEAD"],
+        check=True, capture_output=True, text=True,
+    ).stdout.strip()
+    _git_in(workdir, "checkout", "-q", "-b", "side")
+    commit_file(workdir, "meta/CHECKPOINT.md", "# CHECKPOINT\n\nO-1 done.\n")
+    _git_in(workdir, "checkout", "-q", main)
+    commit_file(workdir, "notes.txt", "unrelated\n")
+    assert engine.owner_reminder() == OWNER_SAID.format(files="meta/decisions/x-owner.md")
+    _git_in(workdir, "merge", "-q", "--no-ff", "-m", "merge side", "side")
+    assert engine.owner_reminder() is None
+
+
+def test_hands_sentences_are_stripped_in_either_order_and_nothing_else() -> None:
+    """§43: one helper strips the journal sentence and the owner sentence, in either
+    order, each with its blank line, once each — and nothing else."""
+    journal = JOURNAL_REMINDER.format(journal="meta/journal.md", consultation="J-1")
+    owner = OWNER_SAID.format(files="meta/decisions/a-owner.md, meta/decisions/b-owner.md")
+    text = "Take option B.\n\nmore"
+    assert sent_prompt(f"{journal}\n\n{owner}\n\n{text}") == text
+    assert sent_prompt(f"{owner}\n\n{journal}\n\n{text}") == text
+    assert sent_prompt(f"{owner}\n\n{text}") == text
+    assert sent_prompt(f"{journal}\n\n{text}") == text
+    assert sent_prompt(text) == text
+    assert sent_prompt(f"{owner}\n\n{owner}\n\n{text}") == f"{owner}\n\n{text}"
+    assert sent_prompt(f"{owner}\n{text}") == f"{owner}\n{text}"  # no blank line
+    assert sent_prompt(f"x {owner}\n\n{text}") == f"x {owner}\n\n{text}"  # not leading
+
+
+def test_neither_sentence_is_listed_as_the_humans_words(
+    tmp_home: Path, workdir: Path
+) -> None:
+    """§43 (§36): the listing of the human's sends in a consult prompt reads a stored
+    prompt without hands' sentences."""
+    engine, _ = architect_engine(tmp_home, workdir)
+    journal = JOURNAL_REMINDER.format(journal="meta/journal.md", consultation="J-1")
+    owner = OWNER_SAID.format(files="meta/decisions/a-owner.md")
+    _human_job(engine.spool, role="builder", context="keep", origin="phone",
+               prompt=f"{journal}\n\n{owner}\n\nTake option B.")
+    _human_job(engine.spool, role="builder", context="keep", origin="cli",
+               prompt=f"{owner}\n\nTake option C.")
+    said = strip_paths(engine.human_decisions())
+    assert "]\nTake option B." in strip_paths(said), said
+    assert "]\nTake option C." in strip_paths(said), said
+    assert "an owner file was committed" not in strip_paths(said), said
+    assert "is uncommitted" not in strip_paths(said), said
+
+
+def test_a_kickoff_that_carried_the_sentences_is_still_a_kickoff(
+    tmp_home: Path, workdir: Path
+) -> None:
+    """§43: a kickoff whose stored prompt carries hands' sentences still is one
+    (`is_kickoff`) and still anchors `consults_used`, so a driver job before it is
+    not counted and one after it is."""
+    engine, _ = engine_for(tmp_home, workdir, 'version = 1\n[series]\nkickoff = "GO"\n')
+    run(engine.on_job_start(finished(engine.spool, role="driver", origin="playbook")))
+    time.sleep(0.003)
+    owner = OWNER_SAID.format(files="meta/decisions/a-owner.md")
+    journal = JOURNAL_REMINDER.format(journal="meta/journal.md", consultation="J-1")
+    kickoff = engine.spool.create_job(
+        role="builder", context="clear", prompt=f"{journal}\n\n{owner}\n\nGO", origin="cli"
+    )
+    assert engine.is_kickoff(kickoff)
+    assert engine.consults_used(engine.playbook) == 0
+    time.sleep(0.003)
+    finished(engine.spool, role="driver", origin="playbook")
+    assert engine.consults_used(engine.playbook) == 1
+
+
+@pytest.mark.parametrize("answer", [True, False], ids=["answer", "kickoff"])
+def test_a_resume_rule_resends_the_senders_prompt_without_hands_sentences(
+    tmp_home: Path, workdir: Path, answer: bool
+) -> None:
+    """§43 (§10): an orphaned builder job that carried the sentences — an `answer`
+    with the journal sentence among them — is re-sent with the sender's prompt
+    alone; the dispatch of the resume decides its own sentences again."""
+    engine, recorder = engine_for(tmp_home, workdir)
+    owner = OWNER_SAID.format(files="meta/decisions/a-owner.md")
+    journal = JOURNAL_REMINDER.format(journal="meta/journal.md", consultation="J-1")
+    origin, context = ("phone", "keep") if answer else ("cli", "clear")
+    job = engine.spool.create_job(
+        role="builder", context=context, origin=origin,
+        prompt=f"{journal}\n\n{owner}\n\nthe sender's words",
+    )  # fmt: skip
+    engine.spool.transition(job, "running")
+    job = engine.spool.transition(job, "orphaned")
+    run(engine.on_job_start(job))
+    run(engine.on_job(job))
+    assert [(e["prompt"], e["context"]) for e in recorder.enqueued] == [
+        ("the sender's words", context)
+    ]
+
+
+# ---- §43 "A playbook change is the owner's" (H-075)
+
+
+class Holds:
+    """The engine's `hold` seam (`Daemon.publish_hold`): every hold it publishes,
+    with the reason it passes for the notification."""
+
+    def __init__(self) -> None:
+        self.published: list[tuple[str, str | None]] = []
+
+    def __call__(self, job: Job, reason: str | None = None) -> None:
+        self.published.append((job.id, reason))
+
+
+#: §43: the kits whose apply the engine does not approve — the path the stored zip
+#: carries and the playbook there — by the case's name.
+OWNER_KITS: dict[str, tuple[str, str]] = {
+    "PLAYBOOK.toml": ("PLAYBOOK.toml", ARCHITECT_BOOK),
+    "meta/PLAYBOOK.toml": ("meta/PLAYBOOK.toml", ARCHITECT_BOOK),
+    "a playbook that switches the series to phone mode": (
+        "PLAYBOOK.toml", ARCHITECT_BOOK.replace('architect = "role"', 'architect = "phone"')
+    ),
+}
+
+
+def owner_reason(name: str, path: str) -> str:
+    """§43's published reason, word for word."""
+    return (
+        f"apply {name}: the kit carries {path}, the playbook in force; a change of the "
+        "playbook is the owner's (§43)"
+    )
+
+
+def _owner_engine(tmp_home: Path, workdir: Path) -> tuple[PlaybookEngine, Recorder, Holds]:
+    engine, recorder = architect_engine(tmp_home, workdir)
+    engine.sleep = Sleeps()
+    holds = Holds()
+    engine.hold = holds
+    run(engine._load())
+    return engine, recorder, holds
+
+
+def _filed_with(engine: PlaybookEngine, during: Job, entries: dict[str, str]) -> Job:
+    """A kit filed during `during` as `Api.send` files it: deferred (§36), then its
+    `job.held`."""
+    job = filed_kit(engine.spool, during=during, data=kit_zip(entries))
+    assert engine.defer_hold(job)
+    run(engine.on_event("job.held", job=job))
+    return job
+
+
+@pytest.mark.parametrize("case", list(OWNER_KITS))
+@pytest.mark.parametrize(
+    "when", ["at its consultation's end", "on its hold", "over a paused pipeline"]
+)
+def test_an_architect_kit_carrying_the_playbook_is_the_owners_to_approve(
+    tmp_home: Path, workdir: Path, case: str, when: str
+) -> None:
+    """§43: under autonomy the engine does not approve an architect-filed apply whose
+    stored kit carries `PLAYBOOK.toml` or `meta/PLAYBOOK.toml`, whatever its bytes —
+    a playbook that switches the series to phone mode included (judged under the
+    playbook in force when it is filed). The hold is published through the hold seam
+    with §43's reason naming the path; the gate's reason stays `apply <name>`. The
+    consultation's end is not an escalation, and `next kit` does not wait for a kit
+    "not filed". Over a paused pipeline the hold is published with the same reason."""
+    path, book = OWNER_KITS[case]
+    engine, recorder, holds = _owner_engine(tmp_home, workdir)
+    spool = engine.spool
+    entries = {path: book, "meta/BUILDER-17-PROMPT.md": "brief\n"}
+    if when == "on its hold":
+        architect = consultation(spool, state="done", verdict="VERDICT: next kit m16")
+        job = _filed_with(engine, architect, entries)
+    else:
+        architect = consultation(spool)
+        job = _filed_with(engine, architect, entries)
+        assert holds.published == [] and recorder.approved == []
+        if when == "over a paused pipeline":
+            run(engine.pause())
+        architect = spool.transition(
+            architect, "done", verdict="VERDICT: next kit m16", result="VERDICT: next kit m16"
+        )
+        end_consultation(engine, architect)
+    assert recorder.approved == [] and recorder.denied == []
+    record = spool.load_job(job.id)
+    assert record.state == "held"
+    assert record.gate is not None and record.gate["reason"] == "apply m16"
+    assert holds.published == [(job.id, owner_reason("m16", path))]
+    assert all("approved by the playbook" not in strip_paths(title)
+               for title, _ in recorder.notified)
+    assert engine.sleep.delays == [] and engine.kit_wait() is None  # filed, not waited for
+    if when == "over a paused pipeline":
+        assert engine.state.stop_reason == PAUSE_REASON, engine.state.stop_reason
+    else:
+        assert not engine.state.paused, engine.state.stop_reason  # no escalation, no stop
+    assert [e for e in spool.events() if e.kind == "kit.refused"] == []
+
+
+@pytest.mark.parametrize("entries", ["an empty zip", "a brief and a protocol"])
+def test_an_architect_kit_without_a_playbook_is_approved_by_the_engine_as_before(
+    tmp_home: Path, workdir: Path, entries: str
+) -> None:
+    """§43: a kit that carries no playbook is approved by the engine, unchanged:
+    `decided_by: playbook`, one buttonless line, no hold published."""
+    engine, recorder, holds = _owner_engine(tmp_home, workdir)
+    architect = consultation(engine.spool)
+    data = KIT_BYTES if entries == "an empty zip" else kit_zip(playbookless_kit())
+    job = filed_kit(engine.spool, during=architect, data=data)
+    assert engine.defer_hold(job)
+    run(engine.on_event("job.held", job=job))
+    architect = engine.spool.transition(
+        architect, "done", verdict="VERDICT: next kit m16", result="VERDICT: next kit m16"
+    )
+    end_consultation(engine, architect)
+    assert recorder.approved == [{"job": job.id, "reason": AUTONOMOUS_APPROVAL}]
+    assert holds.published == []
+    assert [title for title, _ in recorder.notified] == [
+        "hands: kit m16 filed by the architect; apply approved by the playbook"
+    ]
+
+
+@pytest.mark.parametrize("decided_by", ["cli", "phone"])
+def test_after_the_human_approves_the_owners_kit_no_engine_kickoff_and_the_kit_applied_rule_fires(
+    tmp_home: Path, workdir: Path, decided_by: str
+) -> None:
+    """§43: once the human approves the held apply, the engine's kickoff-after-apply
+    does not fire (it is for applies the engine approved, §32); the playbook's own
+    `kit applied` rule fires."""
+    engine, recorder = architect_engine(tmp_home, workdir, AUTONOMOUS)
+    job = applied_kit(
+        engine.spool, decided_by=decided_by,
+        data=kit_zip({"PLAYBOOK.toml": AUTONOMOUS}),
+    )
+    run(engine.on_job(job))
+    assert recorder.sent == [], "the engine sent a kickoff after a human's approval"
+    assert [title for title, _ in recorder.notified] == [
+        "hands: Kit applied; the next kickoff is the driver's"
+    ]
+    [fired] = [e.payload for e in engine.spool.events() if e.kind == "playbook.rule"]
+    assert fired["rule"] != ENGINE_RULE_INDEX, fired
+
+
+#: §43's e2e playbook: E2E_BOOK with the `kit applied` rule every shipped playbook
+#: carries, so a human-approved apply has a rule of the playbook's own to meet.
+OWNER_BOOK = E2E_BOOK + """
+[[rule]]
+on = "builder.done"
+verdict = '^VERDICT: kit applied'
+then = "notify"
+message = "Kit applied; the next kickoff is the driver's"
+"""
+
+ROLE_KIT_PLAYBOOK = PASSING_PLAYBOOK.replace(
+    'name = "demo-17"\n', 'name = "demo-17"\narchitect = "role"\nautonomous = true\n'
+)
+
+
+def _e2e_owner_kit(case: str) -> dict[str, str]:
+    """§43's kits as the architect files them over the socket — each passes handsd's
+    own check against the e2e repository."""
+    kit = passing_kit()
+    if case == "PLAYBOOK.toml":
+        return {**kit, "PLAYBOOK.toml": ROLE_KIT_PLAYBOOK}
+    if case == "meta/PLAYBOOK.toml":
+        del kit["PLAYBOOK.toml"]
+        return {**kit, "meta/PLAYBOOK.toml": ROLE_KIT_PLAYBOOK}
+    assert case == "a playbook that switches the series to phone mode"
+    return kit  # PASSING_PLAYBOOK sets no `architect`: phone mode
+
+
+#: The scripted architect's `exec` for "over a paused pipeline": file the kit, then
+#: `hands pause` over the same socket, before the consultation ends.
+FILE_THEN_PAUSE = FILE_APPLY + """
+call(sys.argv[1], "pause", {}, project=sys.argv[2])
+"""
+
+#: The scripted architect's `exec` for "before filing": `hands pause` over the socket,
+#: then file the kit — so the daemon, not the engine, publishes its hold (§36).
+PAUSE_THEN_FILE = FILE_APPLY.replace(
+    "for pair in", 'call(sys.argv[1], "pause", {}, project=sys.argv[2])\nfor pair in', 1
+)
+
+
+def _phone_daemon(tmp_home: Path, posts: ActionPosts) -> Daemon:
+    with (tmp_home / ".hands" / f"{PROJECT}.toml").open("a") as config:
+        config.write(f'\n[notify]\ncmd_topic = "hands-cmd-test"\ncmd_secret = "{PHONE_SECRET}"\n')
+    daemon = Daemon(load_config(PROJECT))
+    daemon.notifier.post = posts  # before start(): no test may reach a network
+    assert daemon.phone is not None, "the command channel is on in this config"
+    daemon.phone.stream = SilentStream()
+    return daemon
+
+
+@pytest.mark.parametrize("case", list(OWNER_KITS))
+@pytest.mark.parametrize("pause", ["never", "after filing", "before filing"])
+def test_end_to_end_a_role_filed_kit_carrying_the_playbook_is_held_for_the_human(
+    tmp_home: Path, workdir: Path, monkeypatch: pytest.MonkeyPatch, case: str, pause: str
+) -> None:
+    """§43 under a real daemon: the kit the architect files carries `PLAYBOOK.toml`,
+    `meta/PLAYBOOK.toml`, or a playbook that switches the series to phone mode. The
+    apply is held and published with its Approve/Deny buttons and §43's reason naming
+    the path; the gate's reason stays `apply <name>`; the engine approves nothing;
+    the consultation's end stops nothing. Over a paused pipeline (paused while the
+    consultation ran, after the kit was filed — the engine publishes the hold — or
+    before it — the daemon publishes it at filing, mission 27 U7) the published
+    reason names the path too. Not paused, the human
+    then approves it: the builder applies it, no engine kickoff follows, and the
+    playbook's `kit applied` rule fires."""
+    architect_project(tmp_home, workdir, book=OWNER_BOOK, ntfy=True)
+    argv = file_apply_argv(tmp_home, {"mission-17-kit": _e2e_owner_kit(case)})
+    if pause == "after filing":
+        argv[2] = FILE_THEN_PAUSE
+    elif pause == "before filing":
+        argv[2] = PAUSE_THEN_FILE
+    paused = pause != "never"
+    script(tmp_home, monkeypatch, [
+        {"result": "VERDICT: next kit mission-17-kit", "exec": argv},
+        "VERDICT: kit applied abc1234",
+    ])
+    path = OWNER_KITS[case][0]
+    posts = ActionPosts()
+    held_title = as_published(HELD_TITLE)
+
+    async def scenario() -> None:
+        daemon = _phone_daemon(tmp_home, posts)
+        await daemon.start()
+        try:
+            await asyncio.wait_for(body(daemon), 60)
+        finally:
+            await daemon.stop()
+
+    async def body(daemon: Daemon) -> None:
+        review = await ok("send", "--role", "aux", "--context", "clear", fake_result(REVIEW))
+        await ok("wait", review["id"])
+
+        async def held() -> Any:
+            await daemon.notifier.drain()
+            return [note for note in posts.sent if note["title"] == held_title]
+
+        [note] = await poll(held, "the hold to be published")
+        [architect] = [r for r in (await ok("jobs", "-n", "50"))["jobs"] if r["role"] == ARCHITECT]
+        await ok("wait", architect["id"])
+        await daemon.playbook.drain()
+        await daemon.notifier.drain()
+        [apply_row] = [r for r in (await ok("jobs", "-n", "50"))["jobs"]
+                       if r["origin"] == "architect"]
+        assert apply_row["state"] == "held"
+        record = await ok("result", apply_row["id"])
+        assert record["gate"]["reason"] == "apply mission-17-kit", record["gate"]
+        said = strip_paths(note["message"]).splitlines()
+        assert said[0] == owner_reason("mission-17-kit", path), note
+        assert f"job: {apply_row['id']}" in said, note
+        assert [a["label"] for a in note["actions"]] == ["Approve", "Deny"], note
+        assert apply_row["id"] in json.dumps(note["actions"])
+        assert [n for n in posts.sent if n["title"] == held_title] == [note], posts.sent
+        assert [n for n in posts.sent if n["title"] == as_published(APPROVED_TITLE)] == []
+        assert await _events("gate.decided") == []
+        state = await ok("pipeline")
+        if paused:
+            assert state["paused"] and state["stop_reason"] == PAUSE_REASON, state
+            return
+        assert not state["paused"], state  # the consultation's end is no escalation
+
+        await ok("approve", apply_row["id"])
+        await ok("wait", apply_row["id"])
+        kit_applied = as_published("hands: Kit applied; the next kickoff is the driver's")
+
+        async def fired() -> Any:
+            await daemon.notifier.drain()
+            return [n for n in posts.sent if n["title"] == kit_applied]
+
+        await poll(fired, "the playbook's kit applied rule")
+        await daemon.playbook.drain()
+        rows = sorted((await ok("jobs", "-n", "50"))["jobs"], key=lambda row: row["id"])
+        assert [(row["role"], row["origin"]) for row in rows] == [
+            ("aux", "cli"),
+            (ARCHITECT, "playbook"),
+            ("builder", "architect"),
+        ], "the engine sent a kickoff after the human's approval"
+        decided = await ok("result", apply_row["id"])
+        assert decided["gate"]["decided_by"] != "playbook", decided["gate"]
+
+    asyncio.run(scenario())
+
+
+def test_end_to_end_a_denial_of_the_owners_kit_is_a_denial_as_today(
+    tmp_home: Path, workdir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """§43: "A denial takes the path a denial takes today": the held apply is denied
+    by the human, nothing runs, and `job.denied` meets the playbook's rules — none
+    in this playbook, so the pipeline stops, as for any denial."""
+    architect_project(tmp_home, workdir, book=OWNER_BOOK)
+    argv = file_apply_argv(tmp_home, {"mission-17-kit": _e2e_owner_kit("PLAYBOOK.toml")})
+    script(tmp_home, monkeypatch, [{"result": "VERDICT: next kit mission-17-kit", "exec": argv}])
+
+    async def body(daemon: Daemon) -> None:
+        review = await ok("send", "--role", "aux", "--context", "clear", fake_result(REVIEW))
+        await ok("wait", review["id"])
+        await _wait_events("job.held", 1)
+        [architect] = [r for r in (await ok("jobs", "-n", "50"))["jobs"] if r["role"] == ARCHITECT]
+        await ok("wait", architect["id"])
+        await daemon.playbook.drain()
+        [apply_row] = [r for r in (await ok("jobs", "-n", "50"))["jobs"]
+                       if r["origin"] == "architect"]
+        assert apply_row["state"] == "held"
+        assert not (await ok("pipeline"))["paused"]
+        await ok("deny", apply_row["id"])
+        state = await wait_for_stop()
+        assert state["stop_reason"].startswith("job.denied: the playbook has no rule"), state
+        record = await ok("result", apply_row["id"])
+        assert record["state"] == "denied" and record["gate"]["decided_by"] == "cli"
+        rows = (await ok("jobs", "-n", "50"))["jobs"]
+        assert sorted((row["role"], row["origin"]) for row in rows) == sorted([
+            ("aux", "cli"), (ARCHITECT, "playbook"), ("builder", "architect"),
+        ])
+
+    drive(body)
+
+
+# ---- mission 27 U7 (PR #7 hosted findings 3 and 4): §43's reason, for its cause only
+
+
+#: An autonomous playbook a kit carries at `PLAYBOOK.toml`, with a brief.
+OWNER_ENTRIES = {"PLAYBOOK.toml": ARCHITECT_BOOK, "meta/BUILDER-17-PROMPT.md": "brief\n"}
+
+
+@pytest.mark.parametrize("cause", ["a verdict naming another kit", "the hash mismatches"])
+def test_a_hold_for_another_cause_is_published_with_the_gates_reason(
+    tmp_home: Path, workdir: Path, cause: str
+) -> None:
+    """Finding 4: a kit carrying the playbook whose hold has another cause — §33's
+    escalation (the verdict names another kit, so the engine denies it) or §34's hash
+    mismatch (the stored zip is not the one the check passed on) — is published with
+    the gate's reason (`reason=None` to the hold seam), not §43's."""
+    engine, recorder, holds = _owner_engine(tmp_home, workdir)
+    spool = engine.spool
+    architect = consultation(spool)
+    job = _filed_with(engine, architect, OWNER_ENTRIES)
+    verdict = "VERDICT: next kit m16"
+    if cause == "the hash mismatches":
+        assert job.kit_id is not None
+        stored = spool.kit_dir(job.kit_id) / "m16.zip"
+        stored.write_bytes(kit_zip({**OWNER_ENTRIES, "KIT.md": "swapped\n"}))
+    else:
+        verdict = "VERDICT: next kit other"
+    architect = spool.transition(architect, "done", verdict=verdict, result=verdict)
+    end_consultation(engine, architect)
+    assert recorder.approved == []
+    assert holds.published == [(job.id, None)]
+    if cause == "the hash mismatches":
+        assert [e.kind for e in spool.events() if e.kind == "kit.refused"] == ["kit.refused"]
+    else:
+        assert [d["job"] for d in recorder.denied] == [job.id]
+
+
+#: The playbooks in force for the start fold's republish, by case.
+START_BOOKS: dict[str, str] = {
+    "autonomous": OWNER_BOOK,
+    "role, not autonomous": OWNER_BOOK.replace("autonomous = true", "autonomous = false"),
+}
+
+
+@pytest.mark.parametrize(
+    "case", ["autonomous", "role, not autonomous", "the hash mismatches", "no playbook in the kit"]
+)
+def test_the_start_fold_republishes_a_held_owners_kit_with_its_reason(
+    tmp_home: Path, workdir: Path, case: str
+) -> None:
+    """Finding 3, §34's start fold: a held architect apply whose stored kit carries the
+    playbook, republished at a start under an autonomous playbook in force, reads
+    §43's reason naming the path. Under a playbook that is not autonomous, after a
+    hash mismatch, or for a kit without a playbook, it reads the gate's `apply
+    <name>`."""
+    book = START_BOOKS.get(case, OWNER_BOOK)
+    architect_project(tmp_home, workdir, book=book, ntfy=True)
+    posts = ActionPosts()
+    held_title = as_published(HELD_TITLE)
+
+    async def scenario() -> None:
+        daemon = _phone_daemon(tmp_home, posts)
+        entries = playbookless_kit() if case == "no playbook in the kit" else OWNER_ENTRIES
+        job = filed_kit(daemon.spool, data=kit_zip(entries))
+        if case == "the hash mismatches":
+            assert job.kit_id is not None
+            stored = daemon.spool.kit_dir(job.kit_id) / "m16.zip"
+            stored.write_bytes(kit_zip({**entries, "KIT.md": "swapped\n"}))
+        await daemon.start()
+        try:
+            await daemon.notifier.drain()
+            [note] = [n for n in posts.sent if n["title"] == held_title]
+            said = strip_paths(note["message"]).splitlines()
+            expected = owner_reason("m16", "PLAYBOOK.toml") if case == "autonomous" else "apply m16"
+            assert said[0] == expected, note
+            assert f"job: {job.id}" in said, note
+            assert [a["label"] for a in note["actions"]] == ["Approve", "Deny"], note
+            record = daemon.spool.load_job(job.id)
+            assert record.gate is not None and record.gate["reason"] == "apply m16"
+        finally:
+            await daemon.stop()
+
+    asyncio.run(scenario())

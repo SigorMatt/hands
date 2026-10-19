@@ -276,10 +276,8 @@ one is in force. Work the job left running did not finish with it, so the rule i
 
 An event with no matching rule stops anyway; each rule says it on purpose.
 This repository's own `PLAYBOOK.toml` and both templates carry both rules,
-`monitor.task_killed` as `notify` and `monitor.orphan_processes` as `stop`. The
-verbatim copy of DESIGN §10's example at the end of this file still maps
-`monitor.task_killed` to `stop`, as §10 does today; finding H-034 asks for §10 to
-follow §32, and until it does the copy stays byte for byte.
+`monitor.task_killed` as `notify` and `monitor.orphan_processes` as `stop`, as
+DESIGN §10's example does.
 
 `quiet_hours` is retired: a playbook whose `[limits]` sets it is refused at
 load with a message saying so. Notifications are never delayed (§11).
@@ -679,19 +677,20 @@ known to load.
 
     [[rule]]
     on = "monitor.task_killed"
-    then = "stop"
+    then = "notify"
+    message = "A task inside a role job was killed"
 
     [[rule]]
     on = "monitor.orphan_processes"
     then = "stop"
 
 Read it as a sentence: a clean run starts a cold review; a clean review of a
-pre-planned run starts the next run; blockers, memos, questions, tripwires,
-killed tasks and orphan processes stop and call you; failures and orphans resume themselves until `max_resumes`.
-That is §10's example as §10 writes it today. This repository's `PLAYBOOK.toml`
-and both templates only `notify` on a killed task, since the detector cannot say
-who killed it, and a job that ends `failed` is what stops (DESIGN §32; H-034
-asks §10 to follow). This repository's `PLAYBOOK.toml` and both templates also
+pre-planned run starts the next run; blockers, memos, questions, tripwires and
+orphan processes stop and call you; a killed task only notifies you; failures and
+orphans resume themselves until `max_resumes`. The example and this repository's
+`PLAYBOOK.toml` and both templates all `notify` on a killed task, since the
+detector cannot say who killed it, and a job that ends `failed` is what stops
+(DESIGN §32, §43). This repository's `PLAYBOOK.toml` and both templates also
 carry `aux.orphaned` → `resume` (DESIGN §39, H-057), which §10's example
 predates: a review a daemon restart killed is re-sent to a fresh context,
 bounded by `max_resumes`.

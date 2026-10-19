@@ -292,6 +292,118 @@ def test_doctor_prints_the_effective_bash_timeouts_on_each_role_row(
     assert f"{var}=120000" not in strip_paths(found["role aux"]["detail"])
 
 
+# ------------------------------ §43 rules 3 and 5: the hook and the variable
+
+BG_TASKS = "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS"
+NO_BACKGROUND = Path(__file__).parents[1] / ".claude" / "hooks" / "no_background.py"
+
+
+def _bg_layout(
+    tmp_path: Path, state: str, monkeypatch: pytest.MonkeyPatch
+) -> tuple[str, str]:
+    """The builder's and aux's shared cwd hook for `state`, and the installed
+    hands' copy; returns (the cwd copy's sha256 or "", the installed copy's)."""
+    import hands.config
+
+    work = tmp_path / "work"
+    installed = tmp_path / "installed" / "hands" / "shipped" / "no_background.py"
+    installed.parent.mkdir(parents=True, exist_ok=True)
+    installed.write_bytes(NO_BACKGROUND.read_bytes())
+    own = work / ".claude" / "hooks" / "no_background.py"
+    own.parent.mkdir(parents=True, exist_ok=True)
+    if state in ("installed", "own", "missing"):
+        own.write_bytes(installed.read_bytes())
+    elif state == "differs":
+        own.write_bytes(installed.read_bytes() + b"# an older copy\n")
+    found = {
+        "own": (own,),
+        "missing": (tmp_path / "nowhere" / "no_background.py",),
+    }.get(state, (installed,))
+    monkeypatch.setattr(hands.config, "SHIPPED_HOOKS", found)
+    mine = hashlib.sha256(own.read_bytes()).hexdigest() if own.is_file() else ""
+    return mine, hashlib.sha256(installed.read_bytes()).hexdigest()
+
+
+@pytest.mark.parametrize("inherited", [None, "1"])
+@pytest.mark.parametrize("state", ["installed", "differs", "absent", "own", "missing"])
+def test_doctor_compares_the_role_hook_with_the_installed_copy(
+    tmp_home: Path, tmp_path: Path, fake_mode: None, monkeypatch: pytest.MonkeyPatch,
+    state: str, inherited: str | None,
+) -> None:
+    """§43 rule 3: the builder and aux rows WARN, never FAIL, on a hook that is not
+    the installed hands' copy, naming both files and both sha256; rule 5: the row
+    prints the variable as the job will carry it, never doctor's own value."""
+    if inherited is None:
+        monkeypatch.delenv(BG_TASKS, raising=False)
+    else:
+        monkeypatch.setenv(BG_TASKS, inherited)
+    write_config(tmp_home, tmp_path)
+    mine, theirs = _bg_layout(tmp_path, state, monkeypatch)
+    code, found = checks()
+    assert code == 0, found
+    for role in ("builder", "aux"):
+        row = found[f"role {role}"]
+        detail = row["detail"]
+        if state == "installed":
+            assert row["status"] == "ok", row
+            assert f"env {BG_TASKS}=1 (hands' default: the hook admits an omitted " \
+                "sub-agent flag; §43)" in strip_paths(detail), strip_paths(detail)
+            assert theirs in strip_paths(detail)
+            continue
+        assert row["status"] == "warn", row
+        assert f"env {BG_TASKS} unset" in strip_paths(detail), strip_paths(detail)
+        assert f"{BG_TASKS}=" not in strip_paths(detail), strip_paths(detail)
+        assert "work/.claude/hooks/no_background.py" in strip_paths(detail), strip_paths(detail)
+        if state == "differs":
+            assert mine != theirs
+            assert mine in strip_paths(detail) and theirs in strip_paths(detail)
+            assert "installed/hands/shipped/no_background.py" in strip_paths(detail)
+            assert "--selftest" in strip_paths(detail), strip_paths(detail)
+            assert "no job running" in strip_paths(detail), strip_paths(detail)
+        elif state == "absent":
+            assert "absent" in strip_paths(detail), strip_paths(detail)
+            assert theirs in strip_paths(detail), strip_paths(detail)
+            assert "installed/hands/shipped/no_background.py" in strip_paths(detail)
+        elif state == "own":
+            assert "the role's own file" in strip_paths(detail), strip_paths(detail)
+        else:
+            assert "not found" in strip_paths(detail), strip_paths(detail)
+            assert "nowhere/no_background.py" in strip_paths(detail), strip_paths(detail)
+    code, out, err = run()
+    assert code == 0, f"{out}\n{err}"
+    head = strip_paths(text_row(out, "role builder")).splitlines()[0]
+    assert head.split()[0] == ("ok" if state == "installed" else "warn"), head
+
+
+@pytest.mark.parametrize("value", ["0", "1", "Yes"])
+@pytest.mark.parametrize("state", ["installed", "differs", "absent"])
+def test_doctor_names_the_table_as_the_variables_source(
+    tmp_home: Path, tmp_path: Path, fake_mode: None, monkeypatch: pytest.MonkeyPatch,
+    state: str, value: str,
+) -> None:
+    """§43 rule 5: the table wins either way; a table that sets it on over a copy
+    that is not the installed hands' copy is a WARN naming HF-016's effect."""
+    monkeypatch.delenv(BG_TASKS, raising=False)
+    write_config(
+        tmp_home, tmp_path, builder_extra=f'[roles.builder.env]\n{BG_TASKS} = "{value}"'
+    )
+    _bg_layout(tmp_path, state, monkeypatch)
+    code, found = checks()
+    assert code == 0, found
+    row = found["role builder"]
+    detail = row["detail"]
+    source = f"env {BG_TASKS}={value} (set by [roles.builder.env]; §43)"
+    assert source in strip_paths(detail), strip_paths(detail)
+    on = value.strip().lower() in ("1", "yes")
+    if state == "installed":
+        assert row["status"] == "ok", row
+    else:
+        assert row["status"] == "warn", row
+    refused = "every sub-agent call" in strip_paths(detail)
+    assert refused == (on and state != "installed"), strip_paths(detail)
+    assert "[roles.aux.env]" not in strip_paths(found["role aux"]["detail"])
+
+
 def test_the_live_turn_runs_with_the_role_environment(
     tmp_home: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

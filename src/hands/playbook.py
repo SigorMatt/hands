@@ -125,6 +125,7 @@ __all__ = [
     "check_series_roles",
     "load_playbook",
     "next_milestone",
+    "owner_hold_reason",
     "parse_playbook",
     "playbook_path",
     "ConsultRefused",
@@ -139,6 +140,11 @@ __all__ = [
     "render",
     "run_number",
     "series_roles_problem",
+    "CHECKPOINT",
+    "JOURNAL_REMINDER",
+    "OWNER_REMINDER",
+    "owner_files_pending",
+    "sent_prompt",
 ]
 
 log = logging.getLogger("hands.playbook")
@@ -298,6 +304,16 @@ AUTONOMOUS_APPROVAL = (
     "the human's approval of that playbook is the standing approval for the applies "
     "the architect files under it (§31)"
 )
+
+
+def owner_hold_reason(name: str, path: str) -> str:
+    """§43: the published reason of the hold of an architect-filed apply of kit
+    `name` whose stored kit carries the playbook at `path`."""
+    return (
+        f"apply {name}: the kit carries {path}, the playbook in force; a change of the "
+        "playbook is the owner's (§43)"
+    )
+
 
 #: §10's "Placeholders": the job fields a rule may name as `{job.<field>}`.
 JOB_PLACEHOLDERS: tuple[str, ...] = ("id", "head_at_start", "head_at_end", "session_id")
@@ -911,6 +927,89 @@ JOURNAL_REMINDER = (
     "what follows.]"
 )
 _JOURNAL_REMINDER_RE = re.compile(r"\A\[hands: meta/journal\.md is uncommitted [^\n]*\]\n\n")
+#: §43 (H-073): the checkpoint whose update after an owner file means its steps are
+#: recorded, under the builder's cwd.
+CHECKPOINT = Path("meta") / "CHECKPOINT.md"
+#: §43 (H-073): the one sentence put before every builder job but an apply while an
+#: owner file has had no checkpoint update since it was last committed, word for
+#: word; `{files}` are the root-relative paths joined by `, `, oldest first.
+OWNER_REMINDER = (
+    "[hands: an owner file was committed after the last update of meta/CHECKPOINT.md: "
+    "{files}. Carry out the \"For the builder\" steps of each, oldest first, record them "
+    "in the checkpoint and commit it, then do what follows.]"
+)
+_OWNER_REMINDER_RE = re.compile(
+    r"\A\[hands: an owner file was committed after the last update of "
+    r"meta/CHECKPOINT\.md: .*? then do what follows\.\]\n\n",
+    re.DOTALL,
+)
+
+
+def sent_prompt(prompt: str) -> str:
+    """§43: what the sender sent — a stored prompt without hands' leading sentences,
+    the journal sentence (§39) and the owner sentence (§43), in either order, each
+    with its blank line, each once, and nothing else stripped. Every reader asking
+    what a job was sent reads its prompt through this: the kickoff test, the
+    consult count, a resume's prompt, §36's listing and the job summary line."""
+    left = [_JOURNAL_REMINDER_RE, _OWNER_REMINDER_RE]
+    while True:
+        for pattern in left:
+            found = pattern.match(prompt)
+            if found is not None:
+                prompt = prompt[found.end():]
+                left.remove(pattern)
+                break
+        else:
+            return prompt
+
+
+def owner_files_pending(cwd: Path) -> list[str] | None:
+    """§43 (H-073): the owner files under `cwd` with no checkpoint update since they
+    were last committed, root-relative, oldest first; None when git cannot answer.
+
+    The candidates are the files tracked at HEAD that are `meta/decisions/<name>-
+    owner.md` with `<name>` one non-empty path component, under `cwd` (§38's
+    reading). For each, `A` is the newest commit that touched it, and it is named
+    when no commit of `A..HEAD` touched `meta/CHECKPOINT.md` — asked per file, so a
+    checkpoint update on a side branch merged into HEAD counts. With the checkpoint
+    not tracked at HEAD, nothing is named. Oldest first is the committer time of
+    `A`, then its count of ancestors (an ancestor always has fewer), then the path.
+    """
+    try:
+        if not _git(cwd, "ls-tree", "--name-only", "HEAD", "--", CHECKPOINT.as_posix()).strip():
+            return []
+        where = _git(cwd, "rev-parse", "--show-prefix").strip()
+        tree = _git(
+            cwd, "ls-tree", "-r", "-z", "--full-name", "--name-only", "HEAD", "--",
+            f"{DECISIONS_DIR.as_posix()}/",
+        )
+        directory = PurePosixPath(where or ".") / DECISIONS_DIR.as_posix()
+        named: list[tuple[int, int, str]] = []
+        for name in tree.split("\0"):
+            path = PurePosixPath(name)
+            if not (
+                name
+                and path.parent == directory
+                and path.name.endswith(OWNER_SUFFIX)
+                and len(path.name) > len(OWNER_SUFFIX)
+            ):
+                continue
+            last = _git(
+                cwd, "log", "-1", "--format=%H %ct", "HEAD", "--", f":(top,literal){name}"
+            ).split()
+            if len(last) != 2:
+                continue
+            sha, when = last
+            after = _git(
+                cwd, "log", "-1", "--format=%H", f"{sha}..HEAD", "--", CHECKPOINT.as_posix()
+            )
+            if after.strip():
+                continue
+            depth = _git(cwd, "rev-list", "--count", sha).strip()
+            named.append((int(when), int(depth), name))
+    except (PlaybookError, ValueError):
+        return None
+    return [name for _when, _depth, name in sorted(named)]
 
 
 #: §39: the sample verdict lines an architect consult on `builder.done` is judged by.
@@ -1514,7 +1613,8 @@ class PlaybookEngine:
       for one thing only: a held apply hands filed from a kit the architect role
       filed (§32, `kit_apply_problem`) under a playbook that sets `[series]
       architect = "role"` and `autonomous = true`, once the consultation it was
-      filed during has ended naming it (§33);
+      filed during has ended naming it (§33), and (§43) only when its stored kit
+      carries no playbook — a change of the playbook is the owner's;
     * `deny` — `Api.deny_from_playbook`, the same authority's other answer, for a
       kit §33 forbids: a second kit of one consultation, or one whose name is not
       the verdict's `next kit <name>`;
@@ -1523,7 +1623,9 @@ class PlaybookEngine:
       hold of a kit the role filed is not published when it is filed
       (`defer_hold`); the engine decides it first and then publishes one buttonless
       "kit <name> filed by the architect; apply approved by the playbook", or,
-      when it does not approve it, the hold through this seam;
+      when it does not approve it, the hold through this seam. §43: with the
+      notification's reason as a parameter (`reason=`), §43's own when the stored
+      kit carries the playbook (`owner_hold_reason`), else None and the gate's;
     * `sleep` — an attribute, `asyncio.sleep` by default: §32's `kit_wait_s` is
       waited through it, so a test never waits one out (as `LimitManager.sleep`).
     """
@@ -1539,7 +1641,7 @@ class PlaybookEngine:
         notify: Callable[[str, dict[str, Any]], Any] | None = None,
         approve: Callable[..., Awaitable[dict[str, Any]]] | None = None,
         deny: Callable[..., Awaitable[dict[str, Any]]] | None = None,
-        hold: Callable[[Job], Any] | None = None,
+        hold: Callable[..., Any] | None = None,
     ) -> None:
         self.config = config
         self.spool = spool
@@ -2006,11 +2108,16 @@ class PlaybookEngine:
         """§36: True while the notification of the hold `job_id` waits for the engine."""
         return job_id in self._deferred_holds
 
-    def _announce_hold(self, job: Job, *, approved: bool) -> None:
+    def _announce_hold(
+        self, job: Job, *, approved: bool, reason: str | None = None
+    ) -> None:
         """§36 (H-045): the engine decided the deferred hold `job`. Approved: one
         buttonless notification naming the kit. Not approved: the hold, published
-        with its buttons as §34 publishes every hold. A hold that was not deferred
-        was published when it was filed, and nothing more is said here."""
+        with its buttons as §34 publishes every hold, with `reason` (§43's, from
+        `published_hold_reason`) in place of the gate's when given — only a caller
+        that holds `job` because its kit carries the playbook passes one. A hold
+        that was not deferred was published when it was filed, and nothing more is
+        said here."""
         if job.id not in self._deferred_holds:
             return
         self._deferred_holds.discard(job.id)
@@ -2029,7 +2136,7 @@ class PlaybookEngine:
             )
             return
         if self.hold is not None:
-            outcome = self.hold(job)
+            outcome = self.hold(job, reason=reason)
             if inspect.isawaitable(outcome):  # pragma: no cover - the daemon's is sync
                 task = asyncio.create_task(_await(outcome), name="hands-playbook-hold")
                 self._tasks.add(task)
@@ -2126,15 +2233,20 @@ class PlaybookEngine:
 
     async def _release_kit(self, filed: Job) -> None:
         """§31, §33: approve the one kit a consultation filed under the name its verdict
-        states — if it is still held, the pipeline is not paused, and it is still an
-        apply hands filed from a checked kit (`kit_apply_problem`)."""
+        states — if it is still held, the pipeline is not paused, it is still an
+        apply hands filed from a checked kit (`kit_apply_problem`), its stored zip is
+        the one the check passed on (`_kit_bytes_unchanged`, §34), and (§43) that
+        zip carries no playbook (`_carries_no_playbook`). Any other is published
+        with its buttons for the human (`_announce_hold`)."""
         job = self._job(filed.id)
         if job is None or job.state != "held":
             self._deferred_holds.discard(filed.id)
             return  # decided already (by the engine on its hold, or by a human)
         if self.state.paused:
             log.info("playbook: paused; the architect's apply %s stays held (§10, §33)", job.id)
-            self._announce_hold(job, approved=False)  # §36: the hold is the human's
+            # §36: the hold is the human's; §43: its reason names the playbook it carries.
+            reason = await asyncio.to_thread(self.published_hold_reason, job)
+            self._announce_hold(job, approved=False, reason=reason)
             return
         problem = kit_apply_problem(self.spool, job)
         if problem is not None:  # its `job.held` already took the human's path
@@ -2143,6 +2255,11 @@ class PlaybookEngine:
             return
         where = _payload("job.held", job)
         if not await self._kit_bytes_unchanged(job, where):
+            return
+        if not await self._carries_no_playbook(job):
+            # §43: with its buttons and §43's reason (None for a zip that does not read).
+            reason = await asyncio.to_thread(self.published_hold_reason, job)
+            self._announce_hold(job, approved=False, reason=reason)
             return
         if self.approve is None:  # pragma: no cover - wired by the daemon and the tests
             self._announce_hold(job, approved=False)
@@ -2169,6 +2286,84 @@ class PlaybookEngine:
         # carrying `decided_by: playbook` and the reason above — and, as today,
         # a gate decision notifies nobody (`daemon.NOTIFY_KINDS`).
         log.info("playbook: approved the architect's apply %s (decided_by: playbook, §31)", job.id)
+
+    async def _carries_no_playbook(self, job: Job) -> bool:
+        """§43 "A playbook change is the owner's": True when the stored kit of `job`
+        carries neither of `PLAYBOOK_PATHS`, so the engine may approve its apply.
+
+        Asked by `_release_kit` only, after `kit_apply_problem` has accepted the apply
+        and `_kit_bytes_unchanged` has verified the stored zip, so the entries read are
+        those of the bytes the check passed on; never by `kit_apply_problem`, so a kit
+        that carries the playbook stays a filed kit to the `next kit` wait
+        (`_kit_filed_for`), `defer_hold` and the `job.held` path. The playbook's bytes
+        are not judged: a kit that carries it is the human's whatever it says. A zip
+        that does not read as one (the bytes verified, so not expected) is the human's
+        too: the engine approves only what it has read."""
+        assert job.kit_id is not None  # `kit_apply_problem` accepted it
+        record = self.spool.read_kit_record(job.kit_id)
+        assert record is not None  # likewise
+        carried = await asyncio.to_thread(
+            self.spool.stored_kit_playbooks, job.kit_id, record["name"]
+        )
+        if carried is None:
+            log.warning(
+                "playbook: %s is not approved: the stored zip of kit_id %s does not read "
+                "as one; the hold is the human's (§43)", job.id, job.kit_id,
+            )
+            return False
+        if carried:
+            log.info(
+                "playbook: %s is not approved: the kit carries %s, the playbook in force; "
+                "a change of the playbook is the owner's (§43)", job.id, carried[0],
+            )
+            return False
+        return True
+
+    def published_hold_reason(self, job: Job) -> str | None:
+        """§43: the one decision of the reason a published hold of `job` reads — the
+        engine's paths (`_release_kit`) and the daemon's (the hold published at filing
+        over a paused pipeline, §36; the start fold's republish, §34) all ask this.
+
+        §43's sentence (`owner_hold_reason`) when `job` is held because its kit
+        carries the playbook: a held apply `kit_apply_problem` accepts, whose stored
+        zip is the one the check passed on (the sha256 `kit.json` recorded, as
+        `_kit_bytes_unchanged` asks) and carries `PLAYBOOK.toml` or
+        `meta/PLAYBOOK.toml`, under a playbook in force in role mode with
+        `autonomous` (`_book_in_force`). None otherwise: the gate's own reason,
+        `apply <name>`, which stays the gate's either way. Blocking (it reads and
+        hashes the stored zip); the engine asks it in a worker thread. A hold the
+        engine publishes for another cause (§33's escalation, a hash mismatch, a
+        failed approval) does not ask it."""
+        if job.origin != ARCHITECT_ORIGIN or job.state != "held" or job.kit_id is None:
+            return None
+        if kit_apply_problem(self.spool, job) is not None:
+            return None
+        record = self.spool.read_kit_record(job.kit_id)
+        if record is None:  # pragma: no cover - `kit_apply_problem` read it
+            return None
+        carried = self.spool.stored_kit_playbooks(job.kit_id, record["name"])
+        if not carried:
+            return None
+        if self.spool.stored_kit_sha256(job.kit_id, record["name"]) != record["sha256"]:
+            return None
+        book = self._book_in_force()
+        if book is None or not book.architect_is_autonomous:
+            return None
+        return owner_hold_reason(record["name"], carried[0])
+
+    def _book_in_force(self) -> Playbook | None:
+        """The playbook `published_hold_reason` judges under: the one loaded, once the
+        engine has loaded one (`defer_hold` judges the same); before any load (a
+        daemon's start, which loads nothing) the committed file, read as a load reads
+        it but with none of a load's effects — a file that does not load is None."""
+        if self._loaded:
+            return self.playbook
+        try:
+            return load_playbook(
+                playbook_path(self.config), cwd=self.config.role("builder").cwd
+            )
+        except PlaybookError:
+            return None
 
     async def _kit_bytes_unchanged(self, job: Job, where: dict[str, Any]) -> bool:
         """§34: "engine approval re-hashes the stored zip and refuses a mismatch
@@ -2336,17 +2531,20 @@ class PlaybookEngine:
             return
 
         role = self.config.role(job.role)
+        # §43: what the sender sent, without hands' sentences; the resume's own
+        # dispatch decides them again.
+        sent = sent_prompt(job.prompt)
         if is_builder_answer(job):
             # §39 (review 22 should-fix 3): a phone `answer` is re-sent as what it was,
             # its text to the builder's session as a `keep`, never as a clear.
-            prompt, context = job.prompt, "keep"
+            prompt, context = sent, "keep"
         elif job.role == "builder":  # §10/§6: the resume line when configured, else the
-            prompt, context = role.resume_prompt(job.prompt), "clear"  # same prompt (H-008)
+            prompt, context = role.resume_prompt(sent), "clear"  # same prompt (H-008)
         elif job.state == "orphaned":
             # §39 (H-057): an orphaned review's prompt goes to a fresh context.
-            prompt, context = job.prompt, "clear"
+            prompt, context = sent, "clear"
         else:
-            prompt, context = job.prompt, job.context
+            prompt, context = sent, job.context
         try:
             resumed = await self.enqueue(
                 role=job.role,
@@ -2661,8 +2859,8 @@ class PlaybookEngine:
                 said = "`hands send --role builder --context keep`"
             else:
                 continue
-            # §39 (H-060): the journal sentence is hands', not the human's words.
-            words = _JOURNAL_REMINDER_RE.sub("", record.prompt, count=1)
+            # §39 (H-060), §43: hands' sentences are hands', not the human's words.
+            words = sent_prompt(record.prompt)
             blocks.append(f"[{said}: builder job {record.id}, {record.created}]\n{words}")
         blocks.extend(_owner_decisions(self.config.role("builder").cwd, since))
         return "\n\n".join(blocks)
@@ -2693,6 +2891,16 @@ class PlaybookEngine:
         return JOURNAL_REMINDER.format(
             journal=JOURNAL.as_posix(), consultation=" ".join(consultation.split())
         )
+
+    def owner_reminder(self) -> str | None:
+        """§43 (H-073): the sentence naming the owner files with no checkpoint
+        update since in the builder's cwd (`owner_files_pending`), or None when
+        there are none or git cannot answer. Blocking: the daemon runs it in a
+        worker thread at dispatch."""
+        files = owner_files_pending(self.config.role("builder").cwd)
+        if not files:
+            return None
+        return OWNER_REMINDER.format(files=", ".join(files))
 
     def architect_consults_used(self) -> int:
         """§31: the architect consultations of this *series* — architect jobs (a §6
@@ -2735,7 +2943,7 @@ class PlaybookEngine:
         return (
             job.role == "builder"
             and job.resumed_from is None
-            and job.prompt.strip() in self.kickoff_prompts(self.playbook)
+            and sent_prompt(job.prompt).strip() in self.kickoff_prompts(self.playbook)
         )
 
     def consults_used(self, book: Playbook | None) -> int:
@@ -2754,7 +2962,7 @@ class PlaybookEngine:
         for index, record in enumerate(jobs):
             if record.role != "builder" or record.resumed_from is not None:
                 continue
-            if record.prompt.strip() in kickoffs or (
+            if sent_prompt(record.prompt).strip() in kickoffs or (
                 record.origin == KIT_ORIGIN and record.started is not None
             ):
                 start = index + 1

@@ -90,8 +90,15 @@ async def poll(check: Callable[[], Awaitable[Any]], what: str) -> Any:
 
 
 async def running_job(role: str = "builder") -> Any:
+    """The role's running job, once its record is `running`. The worker names the
+    job (`status`) before the dispatch's awaits — the playbook load, the worker
+    threads deciding the journal and owner sentences (§39, §43) — and before the
+    runner moves the record to `running`; a caller asking about a running job
+    must not act inside that window."""
+
     async def check() -> Any:
-        return (await ok("status"))["roles"][role]["running"]
+        row = (await ok("status"))["roles"][role]["running"]
+        return row if row is not None and row["state"] == "running" else None
 
     return await poll(check, f"a running job on {role}")
 
@@ -207,6 +214,48 @@ def passing_kit() -> dict[str, str]:
     return {
         "meta/BUILDER-17-PROMPT.md": PASSING_BRIEF,
         "PLAYBOOK.toml": PASSING_PLAYBOOK,
+        "meta/REVIEW-PROTOCOL.md": PASSING_PROTOCOL,
+        "KIT.md": "plan: mission 17 kit\n",
+    }
+
+
+#: §43: the brief of a kit that carries no playbook. Its final-reply vocabulary is
+#: the one literal a missions playbook in force in the repository matches, so the
+#: kit passes the check against such a repository; its kickoff is not compared.
+PLAYBOOKLESS_BRIEF = """\
+# BUILDER-17-PROMPT — demo mission 17
+
+Kickoff line (the only way this mission is started or resumed):
+
+    Read meta/BUILDER-17-PROMPT.md and execute the mission below its divider.
+
+---
+
+- Your final reply begins with exactly: `VERDICT: mission 17 finished`.
+"""
+
+
+#: §43: a rule for a role-mode playbook whose `aux.done` consult stands first, so it
+#: never fires. Its prompt names the review protocol a `playbookless_kit` carries,
+#: which gives `hands kit check` the review vocabulary to judge that kit by against
+#: the repository's playbook.
+REVIEW_VOCABULARY_RULE = """
+[[rule]]
+on = "aux.done"
+verdict = '^VERDICT: review mission (?P<n>\\d+) blockers='
+then = "send"
+role = "aux"
+context = "clear"
+prompt = "Read meta/REVIEW-PROTOCOL.md and review mission {n}."
+"""
+
+
+def playbookless_kit() -> dict[str, str]:
+    """§43: the entries of a kit that carries no playbook — the one kind of kit the
+    engine approves under an autonomous series. It passes the check against a
+    repository whose playbook has a `^VERDICT: mission (?P<n>\\d+) finished` rule."""
+    return {
+        "meta/BUILDER-17-PROMPT.md": PLAYBOOKLESS_BRIEF,
         "meta/REVIEW-PROTOCOL.md": PASSING_PROTOCOL,
         "KIT.md": "plan: mission 17 kit\n",
     }

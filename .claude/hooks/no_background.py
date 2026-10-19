@@ -32,6 +32,20 @@ the installed binary's own source, 2026-09-12):
 - A matcher made only of `[a-zA-Z0-9_|]` is split on `|` into exact tool
   names, so `.claude/settings.json` matches `Bash|Agent|Task`.
 
+Under `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS` (DESIGN §43 rule 1, H-074; read
+from Claude Code 2.1.300's binary): when its value, trimmed and in any case, is
+`1`, `true`, `yes` or `on` — Claude Code's own set, nothing wider — every
+sub-agent launches in the foreground and the `Agent` schema has no
+`run_in_background`, so a flag the model passes is stripped before this hook
+sees it. Refusing an omitted flag there would refuse every sub-agent call
+(another project's HF-016), so under the variable an omitted or null flag is
+admitted. `true` and every value that is not the boolean `false` stay refused,
+under the variable as without it; without it nothing changes. `main` reads the
+variable once, from the hook's own environment (the session's), and passes its
+state to `check_subagent`, which never reads the environment: each
+`--selftest` case names the state it runs under, so `--selftest` answers the
+same in a session with the variable and in one without it.
+
 Where it stops (docs/INTEGRATION.md, "What the hook cannot see"): the hook reads
 one command line as shell text. It never runs it, never resolves a variable, and
 takes quoted text as text — so `bash -c 'sleep 30 &'`, `eval`, `screen -dmS`,
@@ -60,8 +74,16 @@ hands drives (docs/INTEGRATION.md). Hooks run under
 Self-test: python3 no_background.py --selftest
 """
 import json
+import os
 import re
 import sys
+from collections.abc import Mapping
+
+#: §43 rule 1: the variable, and the values Claude Code counts as set (trimmed,
+#: in any case). Nothing wider, so the hook never admits what the CLI would
+#: still run in the background.
+BG_TASKS_ENV = "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS"
+BG_TASKS_ON = frozenset({"1", "true", "yes", "on"})
 
 #: Words that turn a foreground command into a detached one. A bare token
 #: anywhere counts: a wrapper puts the real command in argument position
@@ -97,9 +119,9 @@ ADVICE = (
     "Role sessions never run background tasks (DESIGN §21): the harness reaps "
     "them, so a long background job can die silently mid-mission and nothing "
     "says so. Run it in the foreground instead, with a timeout — the Bash "
-    "tool's own `timeout` parameter (milliseconds, up to 20 minutes), or "
-    "`timeout <seconds> <command>` — and split work that cannot fit into "
-    "steps that each finish."
+    "tool's own `timeout` parameter (milliseconds, bounded by "
+    "`BASH_MAX_TIMEOUT_MS`), or `timeout <seconds> <command>` — and split "
+    "work that cannot fit into steps that each finish."
 )
 
 #: The sub-agent tool's names in Claude Code 2.1.x: `Agent`, and `Task`, its
@@ -289,14 +311,23 @@ def check(cmd: str, run_in_background: object = False) -> str | None:
     return None
 
 
-def check_subagent(tool_input: dict) -> str | None:
+def background_tasks_disabled(environ: Mapping[str, str]) -> bool:
+    """Whether `environ` sets `BG_TASKS_ENV` the way Claude Code counts it set."""
+    return environ.get(BG_TASKS_ENV, "").strip().lower() in BG_TASKS_ON
+
+
+def check_subagent(tool_input: dict, disabled: bool) -> str | None:
     """Return None if the sub-agent call runs in the foreground, else why not.
 
     Only the JSON boolean `false` is foreground: Claude Code counts a sub-agent
     as background when `run_in_background !== false` (module docstring), so an
     omitted flag is the background default, and `"false"` or `0` are not false.
+    `disabled` is whether background tasks are off in the session (§43 rule 1,
+    `main` reads it once): then an omitted or null flag is foreground too.
     """
     if "run_in_background" not in tool_input or tool_input["run_in_background"] is None:
+        if disabled:
+            return None
         return (
             "run_in_background is omitted, and a sub-agent runs in the background "
             "unless it says false"
@@ -310,24 +341,37 @@ def check_subagent(tool_input: dict) -> str | None:
 
 
 SUBAGENT_SELFTEST = [
-    # (sub-agent tool_input, allowed?)
-    ({"run_in_background": False}, True),
+    # (sub-agent tool_input, background tasks disabled?, allowed?)
+    ({"run_in_background": False}, False, True),
     (
         {"prompt": "Implement U2.", "subagent_type": "general-purpose", "run_in_background": False},
+        False,
         True,
     ),
-    ({"run_in_background": True}, False),
-    ({"prompt": "Implement U2.", "run_in_background": True}, False),
+    ({"run_in_background": True}, False, False),
+    ({"prompt": "Implement U2.", "run_in_background": True}, False, False),
     # --- omitted is the background default ---------------------------------
-    ({}, False),
-    ({"prompt": "Implement U2.", "subagent_type": "general-purpose"}, False),
-    ({"run_in_background": None}, False),
+    ({}, False, False),
+    ({"prompt": "Implement U2.", "subagent_type": "general-purpose"}, False, False),
+    ({"run_in_background": None}, False, False),
     # --- only the boolean false is false -----------------------------------
-    ({"run_in_background": "false"}, False),
-    ({"run_in_background": "true"}, False),
-    ({"run_in_background": 0}, False),
-    ({"run_in_background": 1}, False),
-    ({"run_in_background": ""}, False),
+    ({"run_in_background": "false"}, False, False),
+    ({"run_in_background": "true"}, False, False),
+    ({"run_in_background": 0}, False, False),
+    ({"run_in_background": 1}, False, False),
+    ({"run_in_background": ""}, False, False),
+    # --- §43 rule 1: under the variable an omitted flag is foreground --------
+    ({}, True, True),
+    ({"prompt": "Implement U2.", "subagent_type": "general-purpose"}, True, True),
+    ({"run_in_background": None}, True, True),
+    ({"run_in_background": False}, True, True),
+    # --- ...and `true` and every non-boolean value stay refused --------------
+    ({"run_in_background": True}, True, False),
+    ({"run_in_background": "true"}, True, False),
+    ({"run_in_background": "false"}, True, False),
+    ({"run_in_background": 0}, True, False),
+    ({"run_in_background": 1}, True, False),
+    ({"run_in_background": ""}, True, False),
 ]
 
 
@@ -422,17 +466,21 @@ def selftest() -> int:
         print("FAIL expected block: run_in_background=true")
     print(f"selftest: {len(SELFTEST) + 1 - bad}/{len(SELFTEST) + 1} ok")
     bad_subagent = 0
-    for tool_input, expected in SUBAGENT_SELFTEST:
-        reason = check_subagent(tool_input)
+    for tool_input, disabled, expected in SUBAGENT_SELFTEST:
+        reason = check_subagent(tool_input, disabled)
         if (reason is None) != expected:
             bad_subagent += 1
-            print(f"FAIL expected {'allow' if expected else 'block'}: {tool_input!r} -> {reason}")
+            state = f"{BG_TASKS_ENV} {'set' if disabled else 'unset'}"
+            print(
+                f"FAIL expected {'allow' if expected else 'block'} ({state}): "
+                f"{tool_input!r} -> {reason}"
+            )
     total = len(SUBAGENT_SELFTEST)
     print(f"selftest ({', '.join(SUBAGENT_TOOLS)}): {total - bad_subagent}/{total} ok")
     return 1 if bad or bad_subagent else 0
 
 
-def main_subagent(tool_name: str, tool_input: object) -> int:
+def main_subagent(tool_name: str, tool_input: object, disabled: bool) -> int:
     """The sub-agent half of `main`: exit 2 unless the call stays in the foreground.
 
     A `tool_input` that is not an object, or a flag of a type JSON booleans are
@@ -450,7 +498,7 @@ def main_subagent(tool_name: str, tool_input: object) -> int:
     if background is not None and not isinstance(background, (bool, str, int, float)):
         print("no_background: run_in_background has the wrong type; blocking", file=sys.stderr)
         return 2
-    reason = check_subagent(tool_input)
+    reason = check_subagent(tool_input, disabled)
     if reason is None:
         return 0
     print(
@@ -469,7 +517,9 @@ def main() -> int:
         print(f"no_background: cannot parse hook input ({e}); blocking", file=sys.stderr)
         return 2
     if isinstance(data, dict) and data.get("tool_name") in SUBAGENT_TOOLS:
-        return main_subagent(data["tool_name"], data.get("tool_input"))
+        # §43 rule 1: the one read of the variable; the check is given its state.
+        disabled = background_tasks_disabled(os.environ)
+        return main_subagent(data["tool_name"], data.get("tool_input"), disabled)
     if not isinstance(data, dict) or data.get("tool_name") != "Bash":
         return 0
     # A Bash call whose `tool_input` or `command` is not the shape the tool

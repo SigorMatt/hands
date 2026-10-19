@@ -1031,8 +1031,7 @@ PROTOCOL_38_SENTENCES = {
     "the-schedule-in-the-notes": (
         "one line per sub-agent with its start and end time; the sub-agents run one"
         " at a time so that one `./scripts/check` runs at a time inside the"
-        " 20-minute cap. A review whose Notes lack the schedule is itself a"
-        " should-fix for the next review"
+        " gate's timeout"
     ),
     "the-owner-decisions-commit-is-not-a-unit": (
         "A `plan: decisions <date> (owner)` commit is read for what it says it does"
@@ -3338,3 +3337,314 @@ def test_kit_file_refuses_a_decisions_kit(
     assert "an owner file is the human's word" in strip_paths(said), said
     assert answers["jobs"] == [answers["consultation"]], "a decisions kit was filed"
     assert answers["kits"] == [], "a refused decisions kit stayed in the spool"
+
+
+# ------------- §43: what a report holds, the gate's timeout and the wait rule
+
+#: §43 "H-070 and H-071, built": what a per-commit sub-agent's report holds, and
+#: what the hosted-review sub-agent's holds, in both protocol files, flattened.
+PROTOCOL_43_REPORTS = {
+    "per-commit": "5. Reports the sha, a verdict per point and what is not proven.",
+    "hosted-review": (
+        "It reports the sha, a verdict per point and what is not proven, and every"
+        " finding verbatim with its verdict on the builder's disposition"
+    ),
+}
+
+#: §43 rule 6, the wait rule's three parts, word for word where §43 quotes them;
+#: each file then names its timeout (`WAIT_TIMEOUT`).
+WAIT_RULE = {
+    "a-prevent": (
+        "(a) prevent — a project whose gate can run past its role's"
+        " `BASH_MAX_TIMEOUT_MS` raises `BASH_DEFAULT_TIMEOUT_MS` and"
+        " `BASH_MAX_TIMEOUT_MS` above its worst case, and its briefs name that"
+        " timeout"
+    ),
+    "b-exit-marker": (
+        "(b) a long command ends with an exit marker,"
+        ' `./scripts/check; echo "check-exit=$?"`, so its end shows in its output'
+    ),
+    "c-blocking-wait": (
+        "(c) if a run is moved to the background anyway, wait with one foreground"
+        " command that blocks until the output file shows the marker —"
+        " `until grep -q '^check-exit=' <file>; do sleep 5; done`, with an explicit"
+        " timeout — never a `sleep` of 25 seconds or more as a command's first"
+        " statement, never Monitor or a background task, and never end the turn"
+        " before the run has finished"
+    ),
+}
+
+#: The timeout each file writes, as §43 gives it: 15 minutes in this repository's
+#: protocol, the project's briefs' timeout in the protocol template and the
+#: handbook, a placeholder the brief fills in the brief template.
+WAIT_TIMEOUT = {
+    "meta/REVIEW-PROTOCOL.md": "the gate's timeout, 15 minutes (900000 ms)",
+    "templates/REVIEW-PROTOCOL.md": (
+        "the gate's timeout, the timeout the project's briefs name (hands' default"
+        " 15 minutes)"
+    ),
+    "templates/BUILDER-N-PROMPT.md": "the gate's timeout, `<the gate's timeout, in ms>`",
+    "docs/ARCHITECT-HANDBOOK.md": (
+        "the gate's timeout, the timeout the project's briefs name (hands' default"
+        " 15 minutes)"
+    ),
+}
+
+PROTOCOLS = ("templates/REVIEW-PROTOCOL.md", "meta/REVIEW-PROTOCOL.md")
+
+
+def _flat(rel: str) -> str:
+    path = Path(__file__).resolve().parents[1] / rel
+    return " ".join(path.read_text(encoding="utf-8").split())
+
+
+def _brief_sub_agent_block() -> str:
+    text = _flat("templates/BUILDER-N-PROMPT.md")
+    return text.split("## Sub-agent brief", 1)[1].split("## §R Recovery brief", 1)[0]
+
+
+def _handbook_section_7() -> str:
+    return _flat("docs/ARCHITECT-HANDBOOK.md").split("## 7. The review protocol", 1)[1].split(
+        "## 8. ", 1
+    )[0]
+
+
+@pytest.mark.parametrize("key", sorted(PROTOCOL_43_REPORTS))
+@pytest.mark.parametrize("rel", PROTOCOLS)
+def test_both_protocols_say_what_a_report_holds(rel: str, key: str) -> None:
+    said = PROTOCOL_43_REPORTS[key]
+    assert said in strip_paths(_flat(rel)), f"{rel} does not say {said!r}"
+
+
+@pytest.mark.parametrize("rel", PROTOCOLS)
+def test_both_protocols_drop_the_twelve_line_count_and_the_20_minute_cap(rel: str) -> None:
+    text = _flat(rel)
+    for gone in ("≤12 lines", "≤12-line", "20-minute", "twelve lines"):
+        assert gone not in strip_paths(text), f"{rel} still says {gone!r}"
+
+
+@pytest.mark.parametrize("rel", PROTOCOLS)
+def test_both_protocols_run_one_gate_at_a_time_inside_the_gates_timeout(rel: str) -> None:
+    text = _flat(rel)
+    timeout = WAIT_TIMEOUT[rel]
+    assert f"one run at a time fits inside {timeout}" in strip_paths(text), rel
+    assert f"runs at a time inside {timeout}." in strip_paths(text), rel
+
+
+def _wait_rule_places() -> dict[str, str]:
+    """Each place §43 rule 6 writes the wait rule, by name, as its flattened text."""
+    places = {}
+    for rel in PROTOCOLS:
+        text = _flat(rel)
+        hosted = text.split("## The hosted review", 1)[1]
+        hosted = hosted.split("## The per-commit sub-agents", 1)[0]
+        per_commit = text.split("## The per-commit sub-agents", 1)[1]
+        per_commit = per_commit.split("## The review file", 1)[0]
+        places[f"{rel} hosted-review sub-agent"] = hosted
+        places[f"{rel} per-commit sub-agent"] = per_commit
+    places["templates/BUILDER-N-PROMPT.md sub-agent brief"] = _brief_sub_agent_block()
+    places["docs/ARCHITECT-HANDBOOK.md §7"] = _handbook_section_7()
+    return places
+
+
+@pytest.mark.parametrize("part", sorted(WAIT_RULE))
+@pytest.mark.parametrize(
+    "place",
+    [
+        f"{rel} {who}"
+        for rel in PROTOCOLS
+        for who in ("hosted-review sub-agent", "per-commit sub-agent")
+    ]
+    + ["templates/BUILDER-N-PROMPT.md sub-agent brief", "docs/ARCHITECT-HANDBOOK.md §7"],
+)
+def test_the_wait_rule_is_written_where_section_43_puts_it(place: str, part: str) -> None:
+    text = _wait_rule_places()[place]
+    said = WAIT_RULE[part]
+    assert said in strip_paths(text), f"{place} does not say {said!r}"
+    rel = place.split(" ", 1)[0]
+    assert WAIT_TIMEOUT[rel] in strip_paths(text), f"{place} does not name {WAIT_TIMEOUT[rel]!r}"
+
+
+def test_the_brief_template_keeps_its_twelve_lines() -> None:
+    """§43: the brief template's sub-agent report keeps its twelve lines."""
+    assert "report in ≤12 lines: sha, files, tests added, what is NOT proven" in (
+        strip_paths(_brief_sub_agent_block())
+    )
+
+
+# ------------------------------- §43: a playbook change is the owner's (H-075)
+
+#: §43: `[series] architect = "role"` with `autonomous = true`.
+AUTONOMOUS_PLAYBOOK = ROLE_PLAYBOOK.replace(
+    'architect = "role"\n', 'architect = "role"\nautonomous = true\n'
+)
+
+
+def _warns(out: str) -> list[str]:
+    return [text for text in out.splitlines() if text.startswith("WARN playbook: ")]
+
+
+def _owner_warns(out: str) -> list[str]:
+    return [text for text in _warns(out) if "§43" in strip_paths(text)]
+
+
+@pytest.mark.parametrize("whose", ["the repository's", "the kit's own"])
+def test_kit_check_warns_when_a_kit_carries_a_playbook_under_an_autonomous_series(
+    tmp_home: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, whose: str
+) -> None:
+    """§43: `hands kit check` prints a `WARN playbook:` line for a kit that carries a
+    playbook when the repository's playbook in force before the apply, or the kit's
+    own, sets `architect = "role"` with `autonomous = true`: filed by the role, its
+    apply waits for the human. A WARN fails no check."""
+    monkeypatch.delenv("HANDS_PROJECT", raising=False)
+    _config(tmp_home, tmp_path, architect=True)
+    repo_book, kit_book = (
+        (AUTONOMOUS_PLAYBOOK, PLAYBOOK) if whose == "the repository's"
+        else (PLAYBOOK, AUTONOMOUS_PLAYBOOK)
+    )
+    repo = write_tree(
+        tmp_path / "repo", {"PLAYBOOK.toml": repo_book, "meta/REVIEW-PROTOCOL.md": PROTOCOL}
+    )
+    kit = write_tree(tmp_path / "k", {**good_kit(), "PLAYBOOK.toml": kit_book})
+    code, out, _ = run_check(kit, repo)
+    assert code == 0, out
+    [warn] = _owner_warns(out)
+    said = strip_paths(warn)
+    assert "the kit carries PLAYBOOK.toml" in strip_paths(said), said
+    assert f"{whose.replace(' own', '')} PLAYBOOK.toml" in strip_paths(said), said
+    assert 'architect = "role"' in strip_paths(said), said
+    assert "autonomous = true" in strip_paths(said), said
+    assert "waits for the human" in strip_paths(said), said
+    assert "kit check: pass (6 of 6 checks)" in strip_paths(out), out
+
+
+def test_kit_check_warns_for_a_kit_carrying_meta_playbook_toml(
+    tmp_home: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """§43: the paths are the two `hands kit check` reads (§26)."""
+    monkeypatch.delenv("HANDS_PROJECT", raising=False)
+    _config(tmp_home, tmp_path, architect=True)
+    repo = write_tree(
+        tmp_path / "repo",
+        {"meta/PLAYBOOK.toml": AUTONOMOUS_PLAYBOOK, "meta/REVIEW-PROTOCOL.md": PROTOCOL},
+    )
+    kit = write_tree(
+        tmp_path / "k",
+        {"meta/BUILDER-11-PROMPT.md": BRIEF, "meta/PLAYBOOK.toml": PLAYBOOK},
+    )
+    code, out, _ = run_check(kit, repo)
+    assert code == 0, out
+    [warn] = _owner_warns(out)
+    said = strip_paths(warn)
+    assert "the kit carries meta/PLAYBOOK.toml" in strip_paths(said), said
+    assert "the repository's meta/PLAYBOOK.toml" in strip_paths(said), said
+
+
+@pytest.mark.parametrize("case", ["a kit that carries no playbook", "all in phone mode"])
+def test_kit_check_does_not_warn_of_the_owner_without_a_playbook_or_autonomy(
+    tmp_home: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, case: str
+) -> None:
+    """§43: no WARN for a kit that carries no playbook (its apply is the engine's to
+    approve), even under an autonomous repository playbook; none for a kit whose
+    playbook and the repository's are both judged in phone mode."""
+    monkeypatch.delenv("HANDS_PROJECT", raising=False)
+    _config(tmp_home, tmp_path, architect=True)
+    if case == "a kit that carries no playbook":
+        repo_book, kit_files = AUTONOMOUS_PLAYBOOK, {"meta/BUILDER-11-PROMPT.md": BRIEF}
+    else:
+        repo_book, kit_files = PLAYBOOK, good_kit()
+    repo = write_tree(
+        tmp_path / "repo", {"PLAYBOOK.toml": repo_book, "meta/REVIEW-PROTOCOL.md": PROTOCOL}
+    )
+    code, out, _ = run_check(write_tree(tmp_path / "k", kit_files), repo)
+    assert code == 0, out
+    assert _owner_warns(out) == [], out
+
+
+def test_the_role_mode_missions_templates_warn_of_the_owner_and_pass_six_of_six(
+    tmp_home: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """§43: a kit from the filled missions templates with the architect blocks
+    uncommented carries an autonomous playbook: `kit check` passes it 6 of 6 and
+    prints the owner's WARN; the phone-mode templates print none."""
+    monkeypatch.delenv("HANDS_PROJECT", raising=False)
+    _config(tmp_home, tmp_path, architect=True)
+    lines, inside = [], False
+    for text in template("PLAYBOOK-missions.toml").splitlines():
+        if text.strip() in ("# >>> architect", "# <<< architect"):
+            inside = text.strip() == "# >>> architect"
+            continue
+        lines.append(text[2:] if inside and text.startswith("# ") else text)
+    repo = write_tree(tmp_path / "repo", {"README.md": "x"})
+    for name, book, warned in (
+        ("role", "\n".join(lines) + "\n", 1),
+        ("phone", template("PLAYBOOK-missions.toml"), 0),
+    ):
+        kit = write_tree(
+            tmp_path / name,
+            {
+                "meta/BUILDER-11-PROMPT.md": template("BUILDER-N-PROMPT.md"),
+                "PLAYBOOK.toml": book,
+                "meta/REVIEW-PROTOCOL.md": template("REVIEW-PROTOCOL.md"),
+            },
+        )
+        code, out, err = run_check(kit, repo)
+        assert code == 0, out + err
+        assert "kit check: pass (6 of 6 checks)" in strip_paths(out), out
+        assert len(_owner_warns(out)) == warned, (name, out)
+
+
+@pytest.mark.parametrize(
+    "name", ["templates/PLAYBOOK-missions.toml", "templates/BUILDER-N-PROMPT.md"]
+)
+def test_the_role_mode_templates_name_a_kickoff_that_never_changes(name: str) -> None:
+    """§43: "a series in role mode needs a kickoff line that never changes", stated
+    in the role-mode templates: a kickoff that names the mission would need a
+    playbook in every kit, and every kit would wait for the human."""
+    text = " ".join(strip_paths((ROOT / name).read_text(encoding="utf-8")).split())
+    flat = text.replace("# ", "")
+    assert (
+        "Read the builder prompt with the highest mission number in the meta directory "
+        "and execute the mission below its divider." in strip_paths(flat)
+    ), name
+    assert "never changes" in strip_paths(flat), name
+    assert "wait for the human" in strip_paths(flat), name
+
+
+def test_the_missions_template_says_the_kit_applied_rule_fires_for_a_human_approval() -> None:
+    """§43: the missions playbook template's comment on the `kit applied` rule says it
+    fires for an apply the human approved."""
+    text = " ".join(
+        strip_paths((TEMPLATES / "PLAYBOOK-missions.toml").read_text(encoding="utf-8"))
+        .replace("# ", "").split()
+    )
+    assert "series this rule does not fire" not in strip_paths(text), text
+    assert "fires for an apply the human approved" in strip_paths(text), text
+
+
+def _rule(text: str, number: int) -> str:
+    start = text.index(f"\n{number}. ")
+    return " ".join(text[start:text.index(f"\n{number + 1}. ", start)].split())
+
+
+def test_architect_rules_3_and_8_make_a_playbook_change_the_owners() -> None:
+    """§43: `architect/CLAUDE.md` rule 3 no longer lists `PLAYBOOK.toml` among a
+    kit's entries, and rule 8 says a change of the playbook is the shape the human
+    approved at the switch point."""
+    text = strip_paths((ROOT / "architect" / "CLAUDE.md").read_text(encoding="utf-8"))
+    assert "PLAYBOOK.toml" not in strip_paths(_rule(text, 3).replace("never `PLAYBOOK.toml`", ""))
+    eight = _rule(text, 8)
+    assert "a change of the playbook" in strip_paths(eight), eight
+    assert "the shape the human approved at the switch point" in strip_paths(eight), eight
+
+
+@pytest.mark.parametrize("section", ["## 3. ", "## 6. ", "## 12. "])
+def test_the_handbook_says_a_playbook_change_is_the_owners(section: str) -> None:
+    """§43: the handbook's §3, §6 and §12 say a change of the playbook is the
+    owner's, and that a role-filed kit carrying it waits for the human."""
+    handbook = strip_paths((ROOT / "docs" / "ARCHITECT-HANDBOOK.md").read_text(encoding="utf-8"))
+    start = handbook.index("\n" + section)
+    end = handbook.index("\n## ", start + 1)
+    text = " ".join(handbook[start:end].split())
+    assert "the owner's" in strip_paths(text), section
+    assert "waits for the human" in strip_paths(text), section

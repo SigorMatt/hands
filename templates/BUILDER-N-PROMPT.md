@@ -4,6 +4,14 @@ Kickoff line (the only way this mission is started or resumed):
 
     Read meta/BUILDER-N-PROMPT.md and execute the mission below its divider.
 
+<In role mode (`[series] architect = "role"`, DESIGN §31) the kickoff is a
+line that never changes, such as `Read the builder prompt with the highest
+mission number in the meta directory and execute the mission below its
+divider.`: a change of the playbook is the owner's (§43), so a kit that
+carries the playbook waits for the human, and a kickoff that names the
+mission would need a playbook in every kit, and every kit would wait for
+the human. Keep this line equal to the playbook's `[series] kickoff`.>
+
 You are the builder for the `<project>` repository. Read `DESIGN.md` (<the
 sections this mission implements>), `CLAUDE.md`, `meta/CHECKPOINT.md` (a
 unit in progress means §R first), and `meta/reviews/REVIEW-<N-1>.md` in
@@ -73,7 +81,19 @@ has no `pr=`.
     Rules: the design is the spec — where it is silent, choose the simplest
     thing and say so in the commit body; write the failing test before the
     code and confirm it fails; ./scripts/check green three times before you
-    commit; one commit, `<area>: <one line>` + a body naming the unit, the
+    commit, each run a foreground call by the wait rule, its explicit
+    timeout the gate's timeout, `<the gate's timeout, in ms>`: (a) prevent —
+    a project whose gate can run past its role's `BASH_MAX_TIMEOUT_MS`
+    raises `BASH_DEFAULT_TIMEOUT_MS` and `BASH_MAX_TIMEOUT_MS` above its
+    worst case, and its briefs name that timeout; (b) a long command ends
+    with an exit marker, `./scripts/check; echo "check-exit=$?"`, so its end
+    shows in its output; (c) if a run is moved to the background anyway,
+    wait with one foreground command that blocks until the output file
+    shows the marker — `until grep -q '^check-exit=' <file>; do sleep 5;
+    done`, with an explicit timeout — never a `sleep` of 25 seconds or more
+    as a command's first statement, never Monitor or a background task, and
+    never end the turn before the run has finished; one commit, `<area>:
+    <one line>` + a body naming the unit, the
     DESIGN sections and the item, listing every file, and stating only what
     the tests prove — never a totality claim unless a test enumerates the
     whole space; never `git add -A`; push (to the mission's branch, see

@@ -8,6 +8,7 @@ otherwise, and this file is edited by hand.
 
 from __future__ import annotations
 
+import hashlib
 import math
 import os
 import re
@@ -21,7 +22,9 @@ from urllib.parse import urlsplit
 
 __all__ = [
     "ARCHITECT_ROLE",
+    "BG_TASKS_ENV",
     "BG_WAIT_CEILING_ENV",
+    "BackgroundTasks",
     "CLONE_ENV",
     "BASH_TIMEOUT_ENV",
     "CONSULT_ROLES",
@@ -47,6 +50,7 @@ __all__ = [
     "RunnerConfig",
     "ServerConfig",
     "WhoConfig",
+    "background_tasks",
     "config_path",
     "docs_root",
     "driver_clone",
@@ -114,6 +118,21 @@ BASH_TIMEOUT_ENV: dict[str, str] = {
     BASH_DEFAULT_TIMEOUT_ENV: "900000",
     BASH_MAX_TIMEOUT_ENV: "900000",
 }
+#: §43 (H-074): the variable that turns the harness's background tasks off, and the
+#: values Claude Code counts as set (trimmed, in any case). hands sets it to `1` for a
+#: builder or aux job only when the role's no-background hook is the installed hands'
+#: copy (`background_tasks`); the role's env table decides over that, either way.
+BG_TASKS_ENV = "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS"
+BG_TASKS_ON: frozenset[str] = frozenset({"1", "true", "yes", "on"})
+#: §21: where a role's cwd carries the no-background hook.
+NO_BACKGROUND_HOOK = Path(".claude") / "hooks" / "no_background.py"
+#: §43 rule 2: "the installed hands' copy" of that hook — the copy a wheel carries
+#: (`pyproject.toml` force-includes it), then the repository's own file beside the
+#: source tree `uv sync` installs from, in §34's `SHIPPED_GUARDS` order.
+SHIPPED_HOOKS: tuple[Path, ...] = (
+    Path(__file__).resolve().parent / "shipped" / "no_background.py",
+    Path(__file__).resolve().parents[2] / NO_BACKGROUND_HOOK,
+)
 #: §27: the driver guard's role mode is this name set to `driver` in the environment.
 ROLE_ENV = "HANDS_ROLE"
 #: §28: the role a consultation names, in its driver job's environment (the runner
@@ -467,6 +486,103 @@ def docs_root() -> Path | None:
         if (root / HANDBOOK_PATH).is_file() and (root / TEMPLATES_PATH).is_dir():
             return root
     return None
+
+
+@dataclass(frozen=True)
+class BackgroundTasks:
+    """§43 rules 3–5: what a role's job carries as `BG_TASKS_ENV`, and why.
+
+    `value` is the job's value, None when the job carries none; `source` is why,
+    as doctor prints it; `hook` is rule 3's comparison line (empty for a role
+    hands never compares); `warning` is why doctor's row is a WARN, or None.
+    """
+
+    value: str | None
+    source: str
+    hook: str
+    warning: str | None
+
+
+def _sha256(path: Path) -> str | None:
+    try:
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+    except OSError:
+        return None
+
+
+def _hook_comparison(cwd: Path) -> tuple[bool, str]:
+    """§43 rules 2 and 3: whether `cwd`'s no-background hook is the installed hands'
+    copy, and the line saying so — both files and both sha256 when it is not."""
+    own = cwd / NO_BACKGROUND_HOOK
+    installed = next((path for path in SHIPPED_HOOKS if path.is_file()), None)
+    if installed is None:
+        return False, (
+            f"the installed hands' copy of no_background.py is not found "
+            f"({', '.join(str(path) for path in SHIPPED_HOOKS)}), so {own} is not known "
+            "to be it (§43)"
+        )
+    if own.exists() and os.path.realpath(own) == os.path.realpath(installed):
+        return False, (
+            f"the copy of no_background.py found, {installed}, is the role's own file "
+            f"{own}: a copy compared with itself proves nothing, so there is no installed "
+            "hands' copy for this role (§43)"
+        )
+    theirs = _sha256(installed)
+    if theirs is None:
+        return False, f"the installed hands' copy {installed} cannot be read (§43)"
+    copy_step = (
+        "the project's repository commits its own copy: copy it from the installed one "
+        "at a stop with no job running, commit it, then "
+        f"`python3 -I {NO_BACKGROUND_HOOK} --selftest` (§43)"
+    )
+    if not own.is_file():
+        return False, (
+            f"{own} is absent (no sha256); the installed hands' copy is {installed} "
+            f"sha256 {theirs}: {copy_step}"
+        )
+    mine = _sha256(own)
+    if mine != theirs:
+        return False, (
+            f"{own} sha256 {mine or '(unreadable)'} is not the installed hands' copy "
+            f"{installed} sha256 {theirs}: {copy_step}"
+        )
+    return True, f"{own} sha256 {mine}, the same bytes as the installed hands' copy {installed}"
+
+
+def background_tasks(role: RoleConfig) -> BackgroundTasks:
+    """§43 rules 3–5, decided once for the runner (`job_env`) and doctor alike.
+
+    A builder or aux job carries `BG_TASKS_ENV=1` only when the role's cwd holds
+    the installed hands' copy of the no-background hook (the one that admits an
+    omitted sub-agent flag under the variable); a driver or architect job never
+    gets it by default. `[roles.<r>.env]` decides over that, either way. What
+    handsd itself inherited is no source at all: the caller drops it.
+    """
+    table = role.env.get(BG_TASKS_ENV)
+    where = f"[roles.{role.name}.env]"
+    if role.name not in BASH_TIMEOUT_ROLES:
+        if table is not None:
+            return BackgroundTasks(table, f"set by {where}", "", None)
+        return BackgroundTasks(
+            None, "hands sets it only for builder and aux jobs", "", None
+        )
+    same, hook = _hook_comparison(role.cwd)
+    if table is not None:
+        warning = None if same else hook
+        if not same and table.strip().lower() in BG_TASKS_ON:
+            warning = (
+                f"{where} sets {BG_TASKS_ENV}={table} over a no-background hook that is "
+                "not the installed hands' copy: every sub-agent call the role makes is "
+                "refused (HF-016)"
+            )
+        return BackgroundTasks(table, f"set by {where}", hook, warning)
+    if same:
+        return BackgroundTasks(
+            "1", "hands' default: the hook admits an omitted sub-agent flag", hook, None
+        )
+    return BackgroundTasks(
+        None, "the role's no-background hook is not the installed hands' copy", hook, hook
+    )
 
 
 def hands_dir(*, home: Path | None = None) -> Path:

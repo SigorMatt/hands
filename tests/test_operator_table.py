@@ -13,12 +13,14 @@ sentences and not the ones they replace.
 
 from __future__ import annotations
 
+import ast
 import io
 import re
 import subprocess
 import textwrap
 import tomllib
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -497,3 +499,495 @@ def test_the_integration_doc_states_h_072s_raise_and_the_clis_ceiling() -> None:
         "H-072",
     ):
         assert said in strip_paths(text), f"docs/INTEGRATION.md does not say {said!r}"
+
+
+# ------------------------------------- §43: the operator table follows the code
+
+#: §43: "the engine, the limit manager, the daemon and the phone"; a helper they
+#: call is read in whatever module of `hands` defines it.
+SOURCE = ROOT / "src" / "hands"
+SCANNED = ("playbook", "limits", "daemon", "phone")
+#: A placeholder, as the extraction writes one before the table's `<…>`.
+HOLE = "\x00"
+#: The receivers §43 names, by the name a call is made through: the engine's and
+#: the limit manager's `stop`, the daemon's `_limit_stop`, the notifier's `notify`
+#: and `answer` and the engine's `_notify` — and two more publishes the same
+#: modules make: the notifier's `deliver` (the crash notification) and the engine's
+#: `hold` seam (`Daemon.publish_hold`, whose `reason` §43's hold is). A function by
+#: one of these names is the receiver itself: a reason that is its own parameter
+#: is read at its callers, which are the receivers' calls.
+RECEIVER_DEFS = frozenset(
+    {"stop", "_limit_stop", "notify", "answer", "deliver", "_notify", "publish_hold"}
+)
+#: What a receiver's arguments are, by position and by keyword.
+TITLE, MESSAGE, PAYLOAD = "title", "message", "payload"
+#: A payload's keys whose value is the notification's text (notify.py `_message`).
+TEXT_KEYS = ("reason", "message")
+
+#: (module, function, expression) → why its strings are not read here, and where
+#: they are. An entry nothing matches any more is itself a failure.
+EXEMPT: dict[tuple[str, str, str], str] = {
+    ("playbook", "render", "_PLACEHOLDER_RE.sub(one, text)"):
+        "a playbook rule's own `message`, rendered (`_act_stop`): the template "
+        "rules' rows are pinned by test_every_template_stop_and_notify_message_has_a_row",
+    ("playbook", "_act_notify", "self._fired(rule, event, job, message=message)"):
+        "the payload of a `notify` rule carries the same rendered rule message, "
+        "whose title `hands: <message>` is read; pinned by the template tests",
+    ("daemon", "publish_hold", "gate['reason']"):
+        "a gate's own reason, written by src/hands/gates.py (§8) and shown as "
+        "<reason> in the `hands: a job is held for a human` row",
+    ("daemon", "_on_event", "event.payload"):
+        "an inbox event's payload; NOTIFY_KINDS publishes only `job.held`, whose "
+        "reason is the gate's (gates.py), the `hands: a job is held for a human` row",
+    ("daemon", "_held_reason", "self.playbook.published_hold_reason(job)"):
+        "§43's hold reason at filing and at a start, decided by playbook.py "
+        "`published_hold_reason` (`owner_hold_reason`): the `the kit carries <path>` "
+        "row, pinned by test_section_43s_three_rows_are_in_the_table",
+    ("playbook", "_release_kit", "asyncio.to_thread(self.published_hold_reason, job)"):
+        "the same §43 reason, asked in a worker thread (it hashes the stored zip): "
+        "the `the kit carries <path>` row, pinned by test_section_43s_three_rows_are_in_the_table",
+    ("daemon", "start", "note.title"):
+        "a note held during a start that failed, published as it was raised: its "
+        "title was read at the notify that raised it",
+    ("daemon", "start", "note.payload"):
+        "the same held note's payload, read at the notify that raised it",
+    ("phone", "reply_answer", "job.result"):
+        "the architect's own reply, verbatim (§33): the `architect` row",
+    ("phone", "answer_reply", "job.result"):
+        "the builder's own final reply, verbatim (§36): the `builder` row",
+    ("phone", "command", "words[0].lower()"):
+        "the command word the human typed, echoed as a refusal's title (§39): "
+        "the `<command>` row",
+    ("phone", "command", "self.daemon.api.progress_report()"):
+        "`progress`'s report, built by src/hands/api.py `progress_report` (§38): "
+        "the `progress` row",
+    ("phone", "_digest", "'\\n'.join(await asyncio.to_thread(digest_lines, base))"):
+        "the digest's lines, built by src/hands/digest.py `digest_lines` (§42): "
+        "the `digest` row, whose fields test_the_digest_row_says_what_each_field_means pins",
+    ("phone", "status_summary", "'\\n'.join(lines)"):
+        "`status`'s summary, its lines job states and counts: the `hands: status` row",
+}
+
+_FUNC = (ast.FunctionDef, ast.AsyncFunctionDef)
+
+
+class _Module:
+    """One module of `hands`, parsed: its functions, constants and imports."""
+
+    def __init__(self, name: str) -> None:
+        self.name = name
+        self.tree = ast.parse((SOURCE / f"{name}.py").read_text(encoding="utf-8"))
+        self.parent: dict[ast.AST, ast.AST] = {}
+        self.defs: dict[str, list[ast.FunctionDef | ast.AsyncFunctionDef]] = {}
+        for node in ast.walk(self.tree):
+            for child in ast.iter_child_nodes(node):
+                self.parent[child] = node
+            if isinstance(node, _FUNC):
+                self.defs.setdefault(node.name, []).append(node)
+        self.consts: dict[str, ast.expr] = {}
+        self.imports: dict[str, tuple[str, str | None]] = {}
+        for node in self.tree.body:
+            if isinstance(node, ast.Assign):
+                for target in node.targets:
+                    if isinstance(target, ast.Name):
+                        self.consts[target.id] = node.value
+            elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+                if node.value is not None:
+                    self.consts[node.target.id] = node.value
+            elif isinstance(node, ast.ImportFrom) and node.module is not None:
+                if node.module.startswith("hands."):
+                    for alias in node.names:
+                        self.imports[alias.asname or alias.name] = (node.module[6:], alias.name)
+                elif node.module == "hands":
+                    for alias in node.names:
+                        self.imports[alias.asname or alias.name] = (alias.name, None)
+
+    def function_of(self, node: ast.AST) -> ast.FunctionDef | ast.AsyncFunctionDef | None:
+        while node in self.parent:
+            node = self.parent[node]
+            if isinstance(node, _FUNC):
+                return node
+        return None
+
+
+_MODULES: dict[str, _Module] = {}
+
+
+def _module(name: str) -> _Module | None:
+    if name not in _MODULES:
+        if not (SOURCE / f"{name}.py").is_file():
+            return None
+        _MODULES[name] = _Module(name)
+    return _MODULES[name]
+
+
+Func = ast.FunctionDef | ast.AsyncFunctionDef | None
+#: A found string: ("text", module, line, its text with HOLE for each placeholder),
+#: or ("unread", module, function, the expression) for one this reading cannot follow.
+Found = tuple[str, str, Any, str]
+
+
+def _receiver(mod: _Module, call: ast.Call) -> dict[int | str, str] | None:
+    """What each argument of `call` is, when `call` is one of the receivers."""
+    func = call.func
+    if not isinstance(func, ast.Attribute):
+        return None
+    on, name = ast.unparse(func.value), func.attr
+    reason = {0: MESSAGE, "reason": MESSAGE}
+    if name == "stop" and (
+        (mod.name in ("playbook", "limits") and on == "self") or on.endswith(".playbook")
+    ):
+        return reason  # `self.monitors.stop(job_id)`, `self.phone.stop()` are no stop
+    if name == "_limit_stop" and on == "self":
+        return reason
+    if on == "notifier" or on.endswith(".notifier"):
+        if name == "notify":
+            return {0: TITLE, 1: PAYLOAD, "title": TITLE, "payload": PAYLOAD}
+        if name == "answer":
+            return {0: TITLE, 1: MESSAGE}
+        if name == "deliver":
+            return {0: TITLE, 1: MESSAGE, 2: PAYLOAD}
+    if mod.name == "playbook" and on == "self":
+        if name == "_notify":
+            return {0: TITLE, 1: PAYLOAD}
+        if name == "hold":
+            return {1: MESSAGE, "reason": MESSAGE}
+    return None
+
+
+def _parameters(func: ast.FunctionDef | ast.AsyncFunctionDef) -> tuple[list[str], list[str]]:
+    args = func.args
+    return [a.arg for a in args.posonlyargs + args.args], [a.arg for a in args.kwonlyargs]
+
+
+def _argument(call: ast.Call, position: int | None, keyword: str) -> ast.expr | None:
+    for given in call.keywords:
+        if given.arg == keyword:
+            return given.value
+    if position is not None and position < len(call.args):
+        return call.args[position]
+    return None
+
+
+def _callers(mod: _Module, func: ast.FunctionDef | ast.AsyncFunctionDef, name: str) -> list[
+    tuple[_Module, Func, ast.expr]
+]:
+    """§43 "a reason that arrives as a parameter is read at the callers that pass
+    it": every call of `func` by name in the scanned modules and its own."""
+    positional, _ = _parameters(func)
+    position = positional.index(name) if name in positional else None
+    if position is not None and positional and positional[0] == "self":
+        position -= 1
+    passed = []
+    for other in sorted(set(SCANNED) | {mod.name}):
+        caller = _module(other)
+        assert caller is not None
+        for node in ast.walk(caller.tree):
+            if not isinstance(node, ast.Call):
+                continue
+            called = node.func
+            callee = (called.id if isinstance(called, ast.Name)
+                      else called.attr if isinstance(called, ast.Attribute) else None)
+            if callee == func.name:
+                value = _argument(node, position, name)
+                if value is not None:
+                    passed.append((caller, caller.function_of(node), value))
+    return passed
+
+
+def _definition(mod: _Module, name: str) -> tuple[_Module, list[Any]]:
+    if name in mod.defs:
+        return mod, mod.defs[name]
+    if name in mod.imports:
+        where, real = mod.imports[name]
+        other = _module(where)
+        if other is not None and real is not None and real in other.defs:
+            return other, other.defs[real]
+    return mod, []
+
+
+def _local_values(func: ast.AST, name: str) -> tuple[list[ast.expr], list[ast.expr]]:
+    """The values assigned to `name` in `func` (`=`, `:=`, `+=`), and the values it
+    is unpacked from (`a, b = value`), which are read by `_unpacked`."""
+    values: list[ast.expr] = []
+    unpacked: list[ast.expr] = []
+    for node in ast.walk(func):
+        if isinstance(node, ast.Assign):
+            for target in node.targets:
+                if isinstance(target, ast.Name) and target.id == name:
+                    values.append(node.value)
+                elif isinstance(target, ast.Tuple) and any(
+                    isinstance(item, ast.Name) and item.id == name for item in target.elts
+                ):
+                    index = next(i for i, item in enumerate(target.elts)
+                                 if isinstance(item, ast.Name) and item.id == name)
+                    unpacked.append(ast.Subscript(node.value, ast.Constant(index)))
+        elif isinstance(node, (ast.AnnAssign, ast.NamedExpr, ast.AugAssign)):
+            target = node.target
+            if isinstance(target, ast.Name) and target.id == name and node.value is not None:
+                values.append(node.value)
+    return values, unpacked
+
+
+def _literal_alternatives(mod: _Module, func: Func, value: ast.expr) -> list[str] | None:
+    """A placeholder that is a name assigned only plain strings in its function
+    (`_load`'s `what`) stands for each of them; any other placeholder is `<…>`."""
+    if func is None or not isinstance(value, ast.Name):
+        return None
+    positional, keyword = _parameters(func)
+    if value.id in positional + keyword:
+        return None
+    values, unpacked = _local_values(func, value.id)
+    if unpacked or not values:
+        return None
+    if all(isinstance(v, ast.Constant) and isinstance(v.value, str) for v in values):
+        return [v.value for v in values if isinstance(v, ast.Constant)]
+    return None
+
+
+def _read(mod: _Module, func: Func, expr: ast.expr, seen: frozenset[int] = frozenset()) -> list[
+    Found
+]:
+    """Every string `expr` can be, as §43 reads it."""
+    if id(expr) in seen:
+        return []
+    seen = seen | {id(expr)}
+    where = func.name if func is not None else "<module>"
+    if isinstance(expr, ast.Constant):
+        return [("text", mod.name, expr.lineno, expr.value)] if isinstance(expr.value, str) else []
+    if isinstance(expr, ast.JoinedStr):
+        texts = [""]
+        for part in expr.values:
+            if isinstance(part, ast.Constant):
+                texts = [text + str(part.value) for text in texts]
+                continue
+            assert isinstance(part, ast.FormattedValue)
+            choices = _literal_alternatives(mod, func, part.value) or [HOLE]
+            texts = [text + choice for text in texts for choice in choices]
+        return [("text", mod.name, expr.lineno, text) for text in texts]
+    if isinstance(expr, ast.BinOp) and isinstance(expr.op, ast.Add):
+        left, right = _read(mod, func, expr.left, seen), _read(mod, func, expr.right, seen)
+        joined = [("text", mod.name, a[2], a[3] + b[3])
+                  for a in left if a[0] == "text" for b in right if b[0] == "text"]
+        return joined + [item for item in left + right if item[0] != "text"]
+    if isinstance(expr, ast.IfExp):
+        return _read(mod, func, expr.body, seen) + _read(mod, func, expr.orelse, seen)
+    if isinstance(expr, ast.BoolOp):
+        return [item for value in expr.values for item in _read(mod, func, value, seen)]
+    if isinstance(expr, ast.Await):
+        return _read(mod, func, expr.value, seen)
+    if isinstance(expr, ast.Name):
+        if func is not None:
+            positional, keyword = _parameters(func)
+            if expr.id in positional + keyword:
+                if func.name in RECEIVER_DEFS:
+                    return []  # the receiver's own parameter: its callers are read
+                passed = _callers(mod, func, expr.id)
+                return [item for caller, at, value in passed
+                        for item in _read(caller, at, value, seen)]
+            values, unpacked = _local_values(func, expr.id)
+            if values or unpacked:
+                return [item for value in values for item in _read(mod, func, value, seen)] + [
+                    item for value in unpacked for item in _unpacked(mod, func, value, seen)
+                ]
+        if expr.id in mod.consts:
+            return _read(mod, None, mod.consts[expr.id], seen)
+        if expr.id in mod.imports:
+            where_from, real = mod.imports[expr.id]
+            other = _module(where_from)
+            if other is not None and real in other.consts:
+                return _read(other, None, other.consts[real], seen)
+    if isinstance(expr, ast.Attribute) and isinstance(expr.value, ast.Name):
+        imported = mod.imports.get(expr.value.id)
+        if imported is not None and imported[1] is None:
+            other = _module(imported[0])
+            if other is not None and expr.attr in other.consts:
+                return _read(other, None, other.consts[expr.attr], seen)
+    table = _constant_dict(mod, expr)
+    if table is not None:
+        return [item for value in table for item in _read(mod, None, value, seen)]
+    if isinstance(expr, ast.Call):
+        called = expr.func
+        name = None
+        if isinstance(called, ast.Name):
+            name = called.id
+        elif (isinstance(called, ast.Attribute) and isinstance(called.value, ast.Name)
+              and called.value.id == "self"):
+            name = called.attr
+        if name is not None:
+            # §43: "a helper whose returned string becomes a reason … is read by
+            # its `return` statements".
+            home, defs = _definition(mod, name)
+            if defs:
+                return [item for helper in defs for node in ast.walk(helper)
+                        if isinstance(node, ast.Return) and node.value is not None
+                        and home.function_of(node) is helper
+                        for item in _read(home, helper, node.value, seen)]
+    return [("unread", mod.name, where, ast.unparse(expr))]
+
+
+def _constant_dict(mod: _Module, expr: ast.expr) -> list[ast.expr] | None:
+    """`NOTIFY_KINDS["job.held"]` is its value; `NOTIFY_KINDS.get(kind)` any value."""
+    def table(name: ast.expr) -> ast.Dict | None:
+        if isinstance(name, ast.Name) and isinstance(mod.consts.get(name.id), ast.Dict):
+            found = mod.consts[name.id]
+            assert isinstance(found, ast.Dict)
+            return found
+        return None
+
+    if isinstance(expr, ast.Subscript) and (found := table(expr.value)) is not None:
+        if isinstance(expr.slice, ast.Constant):
+            return [value for key, value in zip(found.keys, found.values, strict=True)
+                    if isinstance(key, ast.Constant) and key.value == expr.slice.value]
+    if (isinstance(expr, ast.Call) and isinstance(expr.func, ast.Attribute)
+            and expr.func.attr == "get" and (found := table(expr.func.value)) is not None):
+        return list(found.values)
+    return None
+
+
+def _unpacked(mod: _Module, func: Func, value: ast.expr, seen: frozenset[int]) -> list[Found]:
+    """`message, held = self._start_pending`: the element at that index of every
+    tuple assigned to `self._start_pending` in the module, read where it is built."""
+    assert isinstance(value, ast.Subscript) and isinstance(value.slice, ast.Constant)
+    source, index = value.value, value.slice.value
+    if isinstance(source, ast.Attribute) and ast.unparse(source.value) == "self":
+        found: list[Found] = []
+        for node in ast.walk(mod.tree):
+            if isinstance(node, ast.Assign) and isinstance(node.value, ast.Tuple) and any(
+                ast.unparse(target) == ast.unparse(source) for target in node.targets
+            ):
+                found += _read(mod, mod.function_of(node), node.value.elts[index], seen)
+        if found:
+            return found
+    return [("unread", mod.name, func.name if func else "<module>", ast.unparse(source))]
+
+
+def _payload_texts(mod: _Module, func: Func, expr: ast.expr) -> list[Found]:
+    """A payload's text: its `reason` or `message` (notify.py `_message`), from a
+    dict written at the call or assigned to the name passed in the same function."""
+    def from_dict(found: ast.Dict) -> list[Found]:
+        return [item for key, value in zip(found.keys, found.values, strict=True)
+                if isinstance(key, ast.Constant) and key.value in TEXT_KEYS
+                for item in _read(mod, func, value)]
+
+    if isinstance(expr, ast.Dict):
+        return from_dict(expr)
+    where = func.name if func is not None else "<module>"
+    if isinstance(expr, ast.Name) and func is not None:
+        positional, keyword = _parameters(func)
+        if expr.id in positional + keyword and func.name in RECEIVER_DEFS:
+            return []
+        found: list[Found] = []
+        assigned = False
+        for node in ast.walk(func):
+            if not isinstance(node, ast.Assign):
+                continue
+            for target in node.targets:
+                if isinstance(target, ast.Name) and target.id == expr.id:
+                    assigned = True
+                    found += (from_dict(node.value) if isinstance(node.value, ast.Dict)
+                              else [("unread", mod.name, where, ast.unparse(node.value))])
+                elif (isinstance(target, ast.Subscript) and isinstance(target.value, ast.Name)
+                      and target.value.id == expr.id and isinstance(target.slice, ast.Constant)
+                      and target.slice.value in TEXT_KEYS):
+                    assigned = True
+                    found += _read(mod, func, node.value)
+        if assigned:
+            return found
+    return [("unread", mod.name, where, ast.unparse(expr))]
+
+
+def code_strings() -> list[Found]:
+    """§43: every string or f-string passed as a stop's reason or a publish's title
+    or message to the receivers, in the engine, the limit manager, the daemon and
+    the phone."""
+    found: list[Found] = []
+    for name in SCANNED:
+        mod = _module(name)
+        assert mod is not None
+        for node in ast.walk(mod.tree):
+            if not isinstance(node, ast.Call):
+                continue
+            kinds = _receiver(mod, node)
+            if kinds is None:
+                continue
+            func = mod.function_of(node)
+            given: list[tuple[str, ast.expr]] = [
+                (kinds[i], arg) for i, arg in enumerate(node.args) if i in kinds
+            ] + [(kinds[k.arg], k.value) for k in node.keywords if k.arg in kinds]
+            for kind, arg in given:
+                found += (_payload_texts(mod, func, arg) if kind == PAYLOAD
+                          else _read(mod, func, arg))
+    return found
+
+
+def _pieces(text: str) -> list[str]:
+    """§43: an f-string "matched on its literal pieces in order". The `: `, `; `
+    or `, ` that joins a piece to a placeholder goes with the placeholder (a row
+    that lists three reasons writes each without its `<event>: `), and a piece
+    with no word left in it says nothing a row could be missing."""
+    pieces = (flat(part).strip(" :;,") for part in text.split(HOLE))
+    return [piece for piece in pieces if re.search(r"\w", piece)]
+
+
+def _in_row(pieces: list[str], row: str) -> bool:
+    at = 0
+    for piece in pieces:
+        found = row.find(piece, at)
+        if found < 0:
+            return False
+        at = found + len(piece)
+    return True
+
+
+def test_every_stop_reason_and_published_line_of_the_code_has_a_row() -> None:
+    """§43 "The operator table follows the code": a string the receivers are given
+    with no row in §19 names itself, its placeholders written `<…>`."""
+    firsts = [flat(row[0]) for row in table_rows(handbook_section(SECTION_19))[1:]]
+    found = code_strings()
+    texts = [item for item in found if item[0] == "text"]
+    assert len(texts) > 60, len(texts)
+    missing = sorted({
+        f"{item[1]}.py:{item[2]}: {flat(item[3].replace(HOLE, '<…>'))!r}"
+        for item in texts
+        if _pieces(item[3]) and not any(_in_row(_pieces(item[3]), row) for row in firsts)
+    })
+    assert not missing, "§19 has no row for:\n" + "\n".join(missing)
+
+
+def test_every_string_the_reading_cannot_follow_is_an_exemption_with_a_reason() -> None:
+    unread = {(item[1], item[2], item[3]) for item in code_strings() if item[0] == "unread"}
+    unexempt = sorted(unread - EXEMPT.keys())
+    assert not unexempt, f"read neither as a string nor exempt: {unexempt}"
+    stale = sorted(EXEMPT.keys() - unread)
+    assert not stale, f"exemptions nothing in the code matches any more: {stale}"
+    assert all(len(reason) > 40 for reason in EXEMPT.values())
+
+
+@pytest.mark.parametrize(
+    ("said", "where"),
+    [
+        ("the playbook is not the committed copy, so no rule can be trusted to fire:",
+         "playbook.py `_load`"),
+        ("apply <name>: <why>; the commit message is the default '<message>'",
+         "phone.py `_file_apply`"),
+        ("apply <name>: the kit carries <path>, the playbook in force; a change of the "
+         "playbook is the owner's (§43)", "playbook.py `published_hold_reason`"),
+    ],
+)
+def test_section_43s_three_rows_are_in_the_table(said: str, where: str) -> None:
+    firsts = " ".join(flat(row[0]) for row in table_rows(handbook_section(SECTION_19))[1:])
+    assert said in strip_paths(firsts), f"§19 has no row for {said!r} ({where})"
+
+
+def test_the_owner_hold_row_is_route_2_then_go() -> None:
+    """§43: the hold of a kit that carries the playbook is the human's, and once the
+    apply is approved no engine kickoff follows — the human sends `go`."""
+    rows = table_rows(handbook_section(SECTION_19))[1:]
+    row = next(row for row in rows if "the kit carries <path>, the playbook in force" in row[0])
+    assert row[0].startswith("`hands: a job is held for a human`"), row
+    assert row[1] == "the human alone — route 2", row
+    assert "`go <secret>`" in strip_paths(row[2]), row
+    assert "`hands go`" in strip_paths(row[3]), row
+    assert "Approve" in strip_paths(row[2]), row
+    assert "`hands approve <job>`" in strip_paths(row[3]), row

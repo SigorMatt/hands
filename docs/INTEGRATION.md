@@ -1290,11 +1290,12 @@ after its command word must be a plain word — no unquoted `*`, `?`, `[`, `!`,
 or `~` after `=` or `:` — because the shell would expand it after the guard
 read it. The table (§12, §31): `hands`, every subcommand but `open`; read-only
 `git`, with only `-C <path>` and `--no-pager` before the subcommand and after it
-only `log --oneline -n --grep --format --stat --name-status`, `show --stat
---name-status`, `fetch -q`, `ls-remote --heads --tags`, `rev-parse --verify
---short`, `diff --stat --name-status --name-only`, `grep -n -c -l -i -e`,
-`cat-file -t -p -e`, `ls-files`, `ls-tree`, `branch --list`, `remote -v` and
-`status`; `cat` (no options), `ls` (`-l -a -la -1`), `head` and `tail` (`-n
+only `log --oneline -n --grep --format --stat --name-status --date=<format>`
+(`--date` only with a value, §43), `show --stat --name-status`, `fetch -q`,
+`ls-remote --heads --tags`, `rev-parse --verify --short`, `diff --stat
+--name-status --name-only`, `grep -n -c -l -i -e`, `cat-file -t -p -e`,
+`ls-files`, `ls-tree --name-only`, `branch --list`, `remote -v` and `status
+--short`; `cat` (no options), `ls` (`-l -a -la -1 -R`), `head` and `tail` (`-n
 <int>`), `wc` (`-l -c -w`), `grep` (`-n -c -i -l -E -F -r -e <pattern>`), `jq`
 (`-r -c -e` and a `.` filter), `pgrep` (`-f -a -l`), `sleep <int>`, `date
 [+FORMAT]`, `echo` (no options) and `kill -0 <pid>`. Any other option (`wc
@@ -1723,6 +1724,40 @@ and `Task`, its alias (matcher `Bash|Agent|Task`; §23, H-014). In Claude Code
 `run_in_background: false`, so the hook exits 2 on every sub-agent call that
 does not carry that boolean: `true`, an omitted flag, or any other value. A
 role session runs its sub-agents in the foreground.
+
+Background tasks off where the role's hook allows it (§43, H-074).
+`CLAUDE_CODE_DISABLE_BACKGROUND_TASKS` counts as set when its value, trimmed
+and in any case, is `1`, `true`, `yes` or `on`; then the harness moves no
+command to the background (one that reaches its timeout ends there), launches
+every sub-agent in the foreground and strips the sub-agent's
+`run_in_background`. (1) Under that variable the hook admits a sub-agent call
+whose flag is omitted or null; `true` and every value that is not the boolean
+`false` stay refused, and without the variable nothing changes. An older copy
+of the hook refuses every sub-agent call under the variable. (2) The wheel
+carries the hook as `hands/shipped/no_background.py`: that file, or for a hands
+run from its source tree this repository's own copy, is the installed hands'
+copy — unless it is the role's own file (the same realpath), when there is no
+installed copy for that role. (3) `hands doctor`'s builder and aux rows compare
+`<cwd>/.claude/hooks/no_background.py` with the installed hands' copy by sha256
+and warn, never fail, on a copy that differs or is absent, or when no installed
+copy is found, naming both files and both hashes. (4) hands sets
+`CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1` in a builder or aux job's environment
+only when the role's copy is the installed hands' copy, decided when the job is
+dispatched; a driver or architect job never gets it by default. (5) A
+`[roles.<r>.env]` that names the variable decides, either way (`0` turns it
+off); a value handsd itself inherited reaches no role's job; doctor prints the
+variable as the job will carry it, with its source, and warns when a table sets
+it on over a copy that is not the installed hands' copy, since every sub-agent
+call would be refused. (6) Where the harness can still background, a long
+command ends with an exit marker (`./scripts/check; echo "check-exit=$?"`), and
+a run moved to the background anyway is waited for with one foreground command
+that blocks until the output file shows the marker (`until grep -q
+'^check-exit=' <file>; do sleep 5; done`, with an explicit timeout), never a
+first-statement `sleep` of 25 seconds or more, never Monitor or a background
+task. A release that changes the hook is copied into each project's repository
+by that project, at a stop with no job running, then checked with `python3 -I
+.claude/hooks/no_background.py --selftest`; until it is, doctor warns and hands
+leaves the variable unset.
 
 A repository that already has a `.claude/settings.json` gets the `PreToolUse`
 entry added to it rather than the file overwritten. Copy the CLAUDE.md line

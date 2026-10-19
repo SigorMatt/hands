@@ -47,11 +47,13 @@ from hands.phone import ARCHITECT_TITLE, BUILDER_TITLE, PhoneChannel, answer_rep
 from hands.playbook import PlaybookEngine, series_roles_problem
 from hands.runner import LINE_LIMIT, Runner, RunnerError, reconcile_orphans
 from hands.spool import (
+    ARCHITECT_ORIGIN,
     ORPHAN_DAEMON_STOP,
     TERMINAL_STATES,
     Event,
     Job,
     Spool,
+    SpoolError,
     flat_layout,
     is_architect_reply,
     is_builder_answer,
@@ -413,17 +415,22 @@ class Daemon:
         """
         held = [job for job in self.spool.list_jobs() if job.state == "held"]
         for job in held:
-            self.publish_hold(job)
+            # §43: a held kit that carries the playbook reads §43's reason here too.
+            self.publish_hold(job, self.playbook.published_hold_reason(job))
         return [job.id for job in held]
 
-    def publish_hold(self, job: Job) -> None:
+    def publish_hold(self, job: Job, reason: str | None = None) -> None:
         """One held job's notification, published at once with §34's buttons (a
         nonce minted now) — its payload rebuilt from the job record as `send`
         shapes it. §36: also the engine's seam for a deferred hold it did not
-        approve (`PlaybookEngine._announce_hold`)."""
+        approve (`PlaybookEngine._announce_hold`). §43: `reason`, when given, is the
+        notification's reason in place of the gate's (which the job keeps): the
+        engine's for the hold of a kit that carries the playbook."""
         gate = job.gate or {}
         payload: dict[str, Any] = {"job": job.id, "role": job.role, "state": "held"}
-        if gate.get("reason"):
+        if reason:
+            payload["reason"] = reason
+        elif gate.get("reason"):
             payload["reason"] = gate["reason"]
         if gate.get("kind"):
             payload["gate"] = gate["kind"]
@@ -661,7 +668,7 @@ class Daemon:
         try:
             # §10: the playbook is the file in the builder's repo as it is *now*.
             await self.playbook.on_job_start(job)
-            preface = await self._journal_sentence(job)
+            preface = await self.dispatch_preface(job)
             log.info("job %s (%s) starting", job_id, role)
             finished = await self.runner.run(job, preface=preface)
             log.info("job %s (%s) %s", job_id, role, finished.state)
@@ -715,6 +722,42 @@ class Daemon:
             and (job.origin == "cli" or is_builder_answer(job))
             and not self.playbook.is_kickoff(job)
         )
+
+    async def dispatch_preface(self, job: Job) -> str | None:
+        """§39, §43: what goes before `job`'s prompt as it is dispatched — the journal
+        sentence, then the owner sentence, joined by a blank line — or None. Both
+        are decided now, each in a worker thread; the runner puts the result and a
+        blank line before the prompt and its cap (§2, §41) counts all of it."""
+        sentences = [await self._journal_sentence(job), await self._owner_sentence(job)]
+        said = [sentence for sentence in sentences if sentence is not None]
+        return "\n\n".join(said) if said else None
+
+    def is_apply(self, job: Job) -> bool:
+        """§43: is `job` an apply — a job with a `kit_id`, or a resume of one? A
+        resume carries no `kit_id` (§6, §10), so `resumed_from` is followed back to
+        the chain's first job, which is asked. A record the chain names that cannot
+        be read ends the walk at the last one read."""
+        current, seen = job, {job.id}
+        while current.resumed_from is not None and current.resumed_from not in seen:
+            seen.add(current.resumed_from)
+            try:
+                current = self.spool.load_job(current.resumed_from)
+            except SpoolError:
+                break
+        return current.kit_id is not None
+
+    def _owner_sentence_now(self, job: Job) -> str | None:
+        if job.role != "builder" or self.is_apply(job):
+            return None
+        return self.playbook.owner_reminder()
+
+    async def _owner_sentence(self, job: Job) -> str | None:
+        """§43 (H-073): the owner sentence for a builder job being dispatched, every
+        builder job but an apply, decided now and never at enqueue, in a worker
+        thread (the chain walk and the git queries block)."""
+        if job.role != "builder":
+            return None
+        return await asyncio.to_thread(self._owner_sentence_now, job)
 
     async def _journal_sentence(self, job: Job) -> str | None:
         """§39 (H-060), review 23 should-fix 6: the journal sentence for a job being
@@ -831,12 +874,31 @@ class Daemon:
             title = None
         if title is not None:
             actions = None
-            if self.phone is not None and event.kind == "job.held" and job_id:
-                actions = self.phone.actions(str(job_id))
+            payload = event.payload
+            if event.kind == "job.held" and job_id:
+                if self.phone is not None:
+                    actions = self.phone.actions(str(job_id))
+                # §43: a hold published at filing (a paused pipeline's, §36) whose kit
+                # carries the playbook reads §43's reason; the event keeps the gate's.
+                reason = self._held_reason(str(job_id))
+                if reason is not None:
+                    payload = {**payload, "reason": reason}
             # §34: a `job.held` is never folded into the start notification.
             self.notifier.notify(
-                title, event.payload, actions=actions, fold=event.kind != "job.held"
+                title, payload, actions=actions, fold=event.kind != "job.held"
             )
+
+    def _held_reason(self, job_id: str) -> str | None:
+        """§43: the reason `PlaybookEngine.published_hold_reason` gives the held job
+        `job_id` at filing, or None (the gate's). Only an apply of origin `architect`
+        is asked; a job the spool cannot read is published as filed."""
+        try:
+            job = self.spool.load_job(job_id)
+        except SpoolError:
+            return None
+        if job.origin != ARCHITECT_ORIGIN:
+            return None
+        return self.playbook.published_hold_reason(job)
 
     async def wait_for_event(
         self, kinds: frozenset[str], *, timeout: float | None = None

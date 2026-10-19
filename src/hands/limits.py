@@ -472,11 +472,17 @@ class LimitManager:
     async def _resume(self, job: Job) -> Job:
         """§6: the builder gets a new `clear` job — `role.resume_line` when the config
         sets one, otherwise the limited job's own prompt (H-008); aux the same prompt."""
+        # §43: what the sender sent, without hands' leading sentences (the journal
+        # and owner sentences); the resume's own dispatch decides them again.
+        # Imported here: `hands.playbook` imports this module.
+        from hands.playbook import sent_prompt
+
         role = self.config.role(job.role)
+        sent = sent_prompt(job.prompt)
         if job.role == "builder":
-            prompt, context = role.resume_prompt(job.prompt), "clear"
+            prompt, context = role.resume_prompt(sent), "clear"
         else:
-            prompt, context = job.prompt, job.context
+            prompt, context = sent, job.context
         resumed = await self.enqueue(
             role=job.role,
             context=context,

@@ -54,7 +54,13 @@ from hands.kit import (
     staged_path,
 )
 from hands.notify import NotifyError, send_test
-from hands.playbook import ConsultRefused, PlaybookError, load_playbook, playbook_path
+from hands.playbook import (
+    ConsultRefused,
+    PlaybookError,
+    load_playbook,
+    playbook_path,
+    sent_prompt,
+)
 from hands.runner import MAX_PROMPT_BYTES, KeepRefused
 from hands.spool import (
     ANSWER_ORIGIN,
@@ -215,9 +221,11 @@ _MIB = 1024 * 1024
 
 
 def job_summary(job: Job) -> dict[str, Any]:
-    """The short form of a job record, for `jobs` and `status` (§4)."""
+    """The short form of a job record, for `jobs` and `status` (§4). §43: its prompt
+    line is the sender's, read without hands' leading sentences (`sent_prompt`)."""
     out: dict[str, Any] = {name: getattr(job, name) for name in _SUMMARY_FIELDS}
-    first = job.prompt.splitlines()[0] if job.prompt else ""
+    sent = sent_prompt(job.prompt)
+    first = sent.splitlines()[0] if sent else ""
     out["prompt_line"] = first[:_PROMPT_LINE_CHARS]
     return out
 
@@ -1034,7 +1042,8 @@ class Api:
         prompt is the work item a human named ("run 3", "Batch 12"), while the
         result is the model's prose, and matching it would answer a search for a
         run with jobs that were never part of it. What a human wants out of the
-        result — the verdict — is on every summary line already.
+        result — the verdict — is on every summary line already. §43: it searches
+        the stored prompt as it is, hands' sentences included: what was delivered.
         """
         cutoff = _since_cutoff(since)
         if origin is not None and origin not in ORIGINS:

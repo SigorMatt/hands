@@ -46,6 +46,7 @@
       "Bash(git -C ./repo ls-tree:*)",
       "Bash(git -C ./repo ls-files:*)",
       "Bash(git -C ./repo rev-parse:*)",
+      "Bash(git -C ./repo status:*)",
       "Bash(cat:*)",
       "Bash(ls:*)",
       "Bash(mkdir:*)",

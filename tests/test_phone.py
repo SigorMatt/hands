@@ -3936,6 +3936,44 @@ def test_a_phone_consult_refused_after_its_fetch_leaves_no_file_in_kit_dir(
     phone_drive(body)
 
 
+def test_a_phone_consult_is_refused_by_a_state_change_while_its_attachment_downloads(
+    consult_project: str, downloads: Path, kit_server: KitServer
+) -> None:
+    """§42, §43 (review 26's NOT PROVEN item): the refusals are asked before the
+    fetch and again by `start_consult` after its awaits. A builder job held while the
+    attachment is in flight — the first asking passed, the second sees the hold —
+    refuses the consult with the hold's reason; no architect job is started, nothing
+    is answered as accepted, and the fetched file is removed from `kit_dir`."""
+    kit_server.release = threading.Event()
+
+    async def body(daemon: Daemon, fake: FakeNtfy) -> None:
+        assert daemon.phone is not None
+        before = daemon.phone.handled
+        attachment = kit_server.attach("notes.md", b"## Ruling\n\nO-3 stands.\n")
+        fake.push(message(f"consult {SECRET} {CONSULT_TEXT}", attachment=attachment))
+
+        async def asked() -> bool:
+            return bool(kit_server.hits)
+
+        await poll(asked, "the attachment's server to be asked")
+        assert consult_refusals(daemon) == []  # the first asking passed
+        busy = await ok("send", "--role", "builder", "--context", "clear", "--gate", "h", "x")
+        assert kit_server.release is not None
+        kit_server.release.set()
+
+        async def done() -> bool:
+            return daemon.phone is not None and daemon.phone.handled > before
+
+        await poll(done, "the consult to be handled")
+        await drained(daemon)
+        assert_consult_refused(daemon, f"the builder has a job held ({busy['id']})")
+        assert sorted(p.name for p in downloads.iterdir()) == []
+        assert "consult.sent" not in [event.kind for event in daemon.spool.events()]
+        await ok("deny", busy["id"])
+
+    phone_drive(body)
+
+
 def test_a_phone_consult_with_an_empty_reason_is_refused(consult_project: str) -> None:
     async def body(daemon: Daemon, fake: FakeNtfy) -> None:
         await say(daemon, fake, f"consult {SECRET}")
