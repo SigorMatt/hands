@@ -1,4 +1,4 @@
-# hands — DESIGN v3.26
+# hands — DESIGN v3.27
 
 Machinery that replaces the human relay between the planning brain and the two
 Claude Code roles (builder, aux) on the Ubuntu laptop, and that keeps a series
@@ -3397,3 +3397,245 @@ names the hook's rule. **No instruction paste is due** after this release:
 `docs/ARCHITECT-INSTRUCTION.md` does not change. The hand-over to each
 project's chat names the fixed hook and the doctor warn, and that project
 commits the installed copy when its chat decides to.
+
+## 44. Changes from v3.26 (mission 27 review; a pause that holds the next step)
+
+REVIEW-27 (`reviewed: 317983b`, `blockers=0 should-fix=3`; the hosted
+review's four findings: two fixed in the pull request, one dismissed, one
+filed as H-077) merged PR #7 itself (d587fa6) on 2026-10-19 at 08:08. The
+install was split per project for the first time, because another project's
+autonomous series is never idle for long: the shared steps and hands' own
+part went in on 2026-10-19 (doctor green, the builder and aux rows carrying
+`CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1` by §43's default), and that
+project's part waits for its own quiet moment. This section holds the
+roadmap as decided on 2026-10-19, a pause that holds the next step instead
+of dropping it (H-078, from that project's HF-017), review 27's three
+should-fix items and the ruling on H-077.
+
+**Roadmap (decided 2026-10-19 01:42 and 19:3x).** At 01:42 the human asked
+for GitHub to enforce a pull-request-only `main` with CI passing, built into
+the next mission "so that we do it the right way and nothing blows up", and
+then applied to another project. At 19:3x he split that next mission:
+mission 28 is this section — the pause, review 27's should-fix items and
+H-077, small, so that the other project's waiting commits and the pause's
+live test come sooner; mission 29 is the pull-request gate; mission 30 is
+M8b, the harness seam with Codex (+ review 25's should-fix 3); mission 31 is
+M8b's second mission, a local-model harness, OpenCode first; mission 32 is
+M9 (+ review 25's should-fix 2). This supersedes §43's numbering (28 the
+seam, 29 the local harness, 30 M9). Everything after M9 is as §42 orders it.
+
+**The pull-request gate (mission 29; decided 2026-10-19 01:42, written in
+full by its kit).** The facts it starts from, read from the branch on
+2026-10-19: nothing stops a direct push to this repository's `main` — every
+kit apply (`plan:`) and every `review: mission N` commit goes straight to
+it; this repository has no CI (no `.github/`), its gate is `./scripts/check`
+on the laptop, and the hosted reviewer posts comments. A ruleset with no
+bypass would therefore refuse the review's own commit and the next kit
+apply, and a required check would never report. The basis is a ruleset
+template proven on another repository (October 2026): `pull_request` with
+0 approvals and `require_extra_approval_for_unattributed_changes: false`,
+`required_status_checks` named from check runs GitHub actually reported
+and pinned to the reporting app, `non_fast_forward`, `deletion`, no bypass
+actors, `~DEFAULT_BRANCH`, verified by `current_user_can_bypass: never`,
+never tested with a direct push. Mission 29 builds, so the gate breaks
+nothing: a CI workflow running `./scripts/check` on pull requests, green on
+GitHub's runner; a per-project setting for how `main` moves, `direct`
+(today, the default) or `pull-request`, under which a kit apply and a
+decisions kit land through a pull request merged once CI passes (the
+approval of the apply is the merge decision), the review commits
+`REVIEW-N.md` to the mission's branch before it merges, and no `journal:`
+line lands on `main` directly; the template in the repository as
+`docs/PR-CI-GATE.md`, with the rule that the hosted reviewer's check is
+never required; doctor's report of the setting against the branch's rules.
+The gate itself is created by the aux after that release is installed. A
+project on the direct shape (another project's missions commit straight to
+`main` and it has no CI) switches at a quiet moment of its own, after
+mission 28's pause has been tested there, so that a failure in either is
+attributable to one change.
+
+**A pause that holds the next step (H-078; another project's HF-017).** In
+an autonomous series a builder job spans a whole mission, so the first job
+boundary is the mission's end, and the review, the consultation, the kit's
+apply and the next kickoff follow each other within moments. A human who
+needs the working tree quiet (for an owner commit) has no way to stop the series at the next boundary: `pause`
+is a stop (§10) and running jobs go on, but a paused pipeline drops every
+event it receives (`on_event` logs "fires nothing" and returns), `resume`
+replays nothing, and nothing says when the series has come to rest.
+Reading the code on 2026-10-19 also showed the sharper case: a daemon
+start feeds each orphan once and marks it fed before the engine hears it,
+so a restart while the pipeline is paused consumes the builder's orphan
+and nothing ever resumes it. Evidence: that project's HF-017 (2026-10-19),
+its builder job 0mve1pq5x-jej2 running a whole mission while three owner
+commits waited from 2026-10-18 21:14, an aux guard replying `VERDICT:
+blocked busy`.
+
+The rule, decided by the human on 2026-10-19 (02:2x: a human pause holds,
+the rest is published, `resume` replays; no new command). A human pause is
+a pause sent by `pause`, from the phone or the laptop (`paused_by` `phone`
+or `cli`); every other stop (`paused_by` `stop`) keeps §10 as it is. What
+a human pause holds is the series' next step, which in every series starts
+from a role's end; everything else under a human pause is as under any
+pause today, with nothing left silent.
+
+1. **A role's end waits.** Under a human pause, the end of a builder, aux
+   or driver job (`<role>.done`) whose decision would do anything but
+   notify — a rule's `send`, `consult` or `stop`, §10's own stop when no
+   rule matches, no verdict matches or there is no `VERDICT:` line, or the
+   engine's kickoff after an apply the engine approved — is kept, not
+   decided: its kind, its job and its verdict line. Kept ends are one per
+   role, in arrival order: a later end of the same role replaces the earlier
+   one and takes the later place (one inbox event, `pipeline.kept_replaced`,
+   names both), since a role's newest end is where the series goes on from.
+   A role's end whose decision is a `notify` fires at once. Whether an end
+   would send, consult, stop or notify is decided at its arrival with the
+   playbook as loaded at that moment — rule matching and the engine's own
+   rule, executed for nothing. §10's load when a job starts is unchanged;
+   what waits is H-044's reload at an engine-approved apply's end (§36),
+   which happens instead in `resume`'s reload (rule 5); so an
+   engine-approved apply's end is kept for the engine's
+   kickoff, which comes before the playbook's `kit applied` notify as it
+   does unpaused. A driver consultation's end that §28's enforced stop
+   covers (an escalation, no verdict, not resolved) is that stop, handled
+   by rule 2, never kept.
+2. **Everything else is as under any pause, and nothing is silent.** A
+   rule whose action is `resume` (on `*.orphaned` or `*.failed`) fires under
+   a human pause, bounded by `max_resumes` as always, so a daemon restart
+   during a human pause resumes the builder it killed — until a stop has
+   been suppressed under that pause: from then on, recorded with the pause,
+   a `resume` rule fires nothing, as under any other stop today, since a
+   tripwire or a failure the human has been told of must not be resumed
+   past without the human. A
+   `*.limited` event is §6's: §6 schedules its resume whatever the pause.
+   A `job.held` or `job.denied` fires nothing: a hold is published with its
+   buttons, as under any pause. An architect consultation that ends under a
+   human pause is decided as under any pause today: the engine approves no
+   kit, so its kit's apply is held for the human, and after the human
+   approves it no engine kickoff follows. Every stop that a paused pipeline
+   suppresses — a `stop` rule on any other event (a monitor tripwire, a
+   `*.failed` with no resume rule), a resume's own stop (`max_resumes`
+   reached, an enqueue that fails), the limit manager's, a driver
+   consultation's enforced stop, a consultation's escalation or its kit
+   wait — is, under a human pause, also notified once, as §29's consult stop
+   over a paused pipeline already is; the human pause and the kept ends
+   stay. Two no-ops are not stops and are not notified: a `pause` over the
+   human pause, and a refused `resume` (rule 5). The step already running
+   finishes: a driver consultation running when the pause was sent makes
+   its own send (in phone mode, a `keep` answer to the builder's question),
+   that builder job runs, and its end is kept in its turn; `at rest` waits
+   for it.
+3. **Only `resume` ends a human pause.** A job of an un-pausing origin
+   (`UNPAUSE_ORIGINS`: a cli send, a phone `answer` or `go`, a kit's apply)
+   that starts under a human pause does not un-pause it, so a decisions kit
+   applied at rest commits and the kept end still waits. `go` and `consult`
+   are refused under a human pause, published titled as their refusals are
+   (§39, H-058), naming `resume`. A `pause` over a human pause is a no-op
+   that keeps `paused_by` and the kept ends; a `pause` over another stop
+   stays a no-op (§19).
+4. **At rest is published.** Under a human pause, the first moment no job
+   is running, queued or held and no §6 resume is scheduled, the engine
+   publishes one notification titled `hands: at rest`, naming each kept end
+   (role, job id, its verdict line cut to 100 characters) or saying none is
+   kept. The moment is checked when the pause is sent and whenever a job
+   reaches a terminal state, however it got there — done, failed, limited,
+   killed, orphaned, cancelled while running or queued, denied, or a job
+   the runner could not spawn — not
+   only on the §10 events. Once per human pause, the mark recorded with the
+   pause so a restart does not publish it again; published again only when
+   a kept end is replaced after it, with the new list. It is the cue a
+   project chat's commit prompts guard on, instead of polling `jobs`.
+5. **`resume` replays.** `resume` reloads the playbook first (`reload()`),
+   so an owner commit made at rest is the playbook replayed under. A
+   playbook file that exists and does not load, or no playbook while ends
+   are kept, refuses the `resume` with the load's reason: the human pause
+   and the kept ends stay until a `resume` that loads. With no playbook and
+   nothing kept, `resume` un-pauses as today (doctor's install check,
+   `pause` then `resume`, runs before any playbook exists). Otherwise
+   `resume` un-pauses and decides the kept ends in order, as if each had
+   just arrived — a rule's action, §10's stop, or the engine's kickoff —
+   up to and including the first whose decision starts a job or stops the
+   pipeline; a replayed send the API refuses (a `keep` to a role whose last
+   job has not ended) is §10's stop for a send that could not be made. The
+   ends after that one are discarded (one inbox event,
+   `pipeline.kept_discarded`) and named in a notification, so one replay
+   starts at most one step and nothing kept outlives the human pause.
+6. **The state persists and shows.** The kept ends, the `at rest` mark and
+   the mark that a stop was suppressed under the pause (rule 2) live in
+   `pipeline.json` with the pause, so a daemon restart forgets
+   neither; an unreadable `pipeline.json` loses them, as it loses the pause
+   today (§10's unreadable-state stop), and that stop says so. `hands
+   pipeline` prints one `kept` line per end, and the phone's `status` names
+   the human pause and the kept ends.
+
+This departs from one line of HF-017's expectations ("a stop that arrives
+first replaces the armed one"): under a human pause, a role's end whose
+rule is `stop` waits and is named in `at rest`, and every other stop is
+notified while the pause holds; the pause stays one state with one way
+out. A consultation that ends under a human pause leaves its kit to the
+human, as any pause does today: after approving the apply, the human sends
+`resume`, then `go`.
+
+**Review 27's should-fix items.**
+1. The daemon computes §43's hold reason on the event loop: `_held_reason`
+   (from `_on_event`, which must be cheap) and `_publish_held` (in `start`)
+   load the job, run `kit_apply_problem` and, for an architect hold, read
+   the stored zip's entries and hash it. The engine's paths use a worker
+   thread; the daemon's must too: no zip read or hash on the event loop.
+   Pinned by a test that fails when the read runs on the loop's thread.
+2. `hands doctor --live` builds its turn's environment as `{**os.environ,
+   **role.spawn_env}`, outside `runner.job_env`, so the live turn carries an
+   inherited `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS` and never §43's default;
+   the architect's live turn (its kits check) builds its own the same way.
+   Both live turns' environments are built by `job_env` (or the one
+   decision it uses), as a real job's is.
+3. The operator table's reader (§43) matches a one-word title by substring
+   over the Notification column, so a new published line titled `go` or
+   `kit` with no row of its own leaves the test green. A title is matched
+   against the start of a row's title.
+
+**`hands show` prints `resumed_from`.** §6 lists `resumed_from` as a job's
+field, and `hands show --json` carries it, but the prose view omits it, so a
+human reading which job a restart's resume came from must ask for JSON
+(found by the aux on 2026-10-19 while checking another project's install).
+The prose view prints it when it is set.
+
+**H-077, ruled (the human, 2026-10-19 19:3x).** A role-filed kit entry naming
+the playbook in another case (`playbook.toml`, `Meta/PLAYBOOK.toml`)
+passed §43's check, and on a case-insensitive filesystem would overwrite
+the playbook in force. Reading the configuration on 2026-10-19 found a
+second gap: the playbook's path is configurable (`[playbook] path`,
+relative to the builder's cwd, read here as a repository path with the
+cwd's own place in the repository before it, as §38 reads the owner
+files), and a kit carrying a configured path other
+than the two fixed names is not caught either. The ruling: an entry counts
+as carrying the playbook when its path, casefolded, equals the casefolded
+configured playbook path or either of the two fixed names
+(`PLAYBOOK.toml`, `meta/PLAYBOOK.toml`). The engine's hold (§43) and `hands
+kit check`'s `WARN playbook:` line use that one test, and the WARN judges
+the repository's playbook at the configured path as well as the fixed
+names; `kit check` without a project configuration knows the two fixed
+names only and says so. `kit check`'s `playbook` check still loads only an
+entry at a fixed name: on the case-sensitive filesystems hands runs on, a
+case-variant entry is another file, not the playbook in force, so it is
+held and warned, not validated.
+
+**The live gate, after the install (decided 2026-10-19 02:26).** Another
+project's three owner commits (HF-017) wait for this release, and are its
+live test there: `pause <secret>` while its builder runs, the `at rest`
+notification naming the kept end, the commits made at rest by that
+project's chat, `resume <secret>`, the kept end decided and its step
+started, all read
+back from that project's branch and `hands pipeline`/`inbox`. Nothing is
+paused there before this release is installed.
+
+**Documentation.** The handbook: §10 (a human pause holds a role's end
+that would start the next step; everything else is as under any pause,
+and notified), §14
+(a ruling committed at rest), §18 (`hands pipeline`'s `kept` lines), §19
+(rows for `at rest`, the `go` and `consult` refusals under a human pause,
+a `resume` refused because the playbook does not load, a stop notified
+under a human pause, and a replay that stopped with ends discarded). docs/PLAYBOOK.md
+(the paused pipeline, the kept ends, `resume`). docs/OPERATIONS.md (a
+quiet moment: `pause`, wait for `at rest`, commit, `resume`). The release
+routine's warning about a project paused at a restart is retired once
+this is installed. No instruction paste is due: `docs/ARCHITECT-INSTRUCTION.md`
+does not change.
