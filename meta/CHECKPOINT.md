@@ -6,21 +6,45 @@ meta/reviews/REVIEW-25.md should-fix 1).
 Branch: `mission-27`, from main 1b822a5; every unit commits and pushes to
 it; U7 opens the PR, reads the hosted review, fixes, returns the tree to main.
 
-Done: U0 (the `plan:` commit) — plan, branch, findings (H-074, H-075, H-076 filed;
+Done: U0 b3e1e76 (`plan:`) — plan, branch, findings (H-074, H-075, H-076 filed;
 H-070/H-071 "decided (DESIGN §42, §43), scheduled for U4"; H-073 "decided
 (DESIGN §43), scheduled for U2"), FINAL-REPORT-25 correction line. Pushed;
 `origin/mission-27` exists.
 
-Next: U1 — the base (DESIGN copies, H-076, review 26's untested refusals).
+Done: U1 f10c020 — §43's DESIGN copies (fixture, PLAYBOOK.md, rule-6 exact),
+H-027/H-034/H-039 resolved; H-076 race found (kit_zip timestamps; tests
+compared a second kit_zip call), fixed in tests, pinned; leads 20/20 green;
+three consult refusal tests; green 3/3 (4839).
 
-Base at U0's start (red, expected): three gate runs at 1b822a5, each
-`1 failed, 4833 passed`, the one red test
-`tests/test_playbook.py::test_the_fixture_is_section_10s_example_verbatim` —
-the kit's DESIGN edit to §10's example (`monitor.task_killed` → notify)
-while `tests/fixtures/playbook_example.toml` still carries the old rule.
-U0 commits only meta/ with it red; U1 turns it green. No other test red in
-any of the three runs (H-076 evidence: none of the intermittent tests
-failed).
+Done: U2 32446f5 — §43's owner sentence at dispatch for every builder job
+but an apply; `sent_prompt` strip helper for every listed reader; handbook
+§4/§14/§19; H-073 resolved; tests/harness.py `running_job` waits for a
+running record (the gap test_open_refuses_a_running_job hit once — H-076's
+lead; to be named in the final report); green 3/3 (4855).
+
+Done: U3 3383ffe — hook rule 1, the wheel ships the hook, one decision
+(`config.background_tasks`) for runner and doctor, rules 3–5; INTEGRATION
+§21; green 3/3 + once with the variable (4937).
+
+Done: U4 4130616 — both protocols' report contents, the gate's timeout and
+the wait rule; brief template and handbook §7; the guard's four options
+(selftest 434/434); allow-list; rule 10; H-070/H-071/H-074 resolved; green
+3/3 (5008).
+
+Done: U5 37bd194 — the engine holds an architect-filed kit carrying the
+playbook (after kit_apply_problem and _kit_bytes_unchanged), §43's published
+reason via publish_hold, no engine kickoff after the human approves; kit
+check WARN; architect rules 3/8; handbook §3/§6/§12; templates; H-075
+resolved; green 3/3 (5041). Not proven: a kit filed while the pipeline is
+already paused is held by the daemon itself, reason `apply <name>` only.
+
+Done: U6 38e44ee — §19 rows (load stop, phone follow-up, U5 hold, a
+no-message stop rule) and the ast test over playbook/limits/daemon/phone
+(12 exemptions; red with each of three rows removed); green 3/3 (5047).
+
+In progress: U7 — final report (drafted in meta/drafts/), the PR, the
+hosted review's findings, the Hosted review table, the archive, the tree
+back to main. Done means: PR open, table committed and pushed, tree on main.
 
 Standing constraints: one foreground sub-agent per unit, commit and push every
 unit to `mission-27`, ./scripts/check green three consecutive runs before each
