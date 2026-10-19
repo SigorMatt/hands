@@ -3470,3 +3470,181 @@ def test_the_brief_template_keeps_its_twelve_lines() -> None:
     assert "report in ≤12 lines: sha, files, tests added, what is NOT proven" in (
         strip_paths(_brief_sub_agent_block())
     )
+
+
+# ------------------------------- §43: a playbook change is the owner's (H-075)
+
+#: §43: `[series] architect = "role"` with `autonomous = true`.
+AUTONOMOUS_PLAYBOOK = ROLE_PLAYBOOK.replace(
+    'architect = "role"\n', 'architect = "role"\nautonomous = true\n'
+)
+
+
+def _warns(out: str) -> list[str]:
+    return [text for text in out.splitlines() if text.startswith("WARN playbook: ")]
+
+
+def _owner_warns(out: str) -> list[str]:
+    return [text for text in _warns(out) if "§43" in strip_paths(text)]
+
+
+@pytest.mark.parametrize("whose", ["the repository's", "the kit's own"])
+def test_kit_check_warns_when_a_kit_carries_a_playbook_under_an_autonomous_series(
+    tmp_home: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, whose: str
+) -> None:
+    """§43: `hands kit check` prints a `WARN playbook:` line for a kit that carries a
+    playbook when the repository's playbook in force before the apply, or the kit's
+    own, sets `architect = "role"` with `autonomous = true`: filed by the role, its
+    apply waits for the human. A WARN fails no check."""
+    monkeypatch.delenv("HANDS_PROJECT", raising=False)
+    _config(tmp_home, tmp_path, architect=True)
+    repo_book, kit_book = (
+        (AUTONOMOUS_PLAYBOOK, PLAYBOOK) if whose == "the repository's"
+        else (PLAYBOOK, AUTONOMOUS_PLAYBOOK)
+    )
+    repo = write_tree(
+        tmp_path / "repo", {"PLAYBOOK.toml": repo_book, "meta/REVIEW-PROTOCOL.md": PROTOCOL}
+    )
+    kit = write_tree(tmp_path / "k", {**good_kit(), "PLAYBOOK.toml": kit_book})
+    code, out, _ = run_check(kit, repo)
+    assert code == 0, out
+    [warn] = _owner_warns(out)
+    said = strip_paths(warn)
+    assert "the kit carries PLAYBOOK.toml" in strip_paths(said), said
+    assert f"{whose.replace(' own', '')} PLAYBOOK.toml" in strip_paths(said), said
+    assert 'architect = "role"' in strip_paths(said), said
+    assert "autonomous = true" in strip_paths(said), said
+    assert "waits for the human" in strip_paths(said), said
+    assert "kit check: pass (6 of 6 checks)" in strip_paths(out), out
+
+
+def test_kit_check_warns_for_a_kit_carrying_meta_playbook_toml(
+    tmp_home: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """§43: the paths are the two `hands kit check` reads (§26)."""
+    monkeypatch.delenv("HANDS_PROJECT", raising=False)
+    _config(tmp_home, tmp_path, architect=True)
+    repo = write_tree(
+        tmp_path / "repo",
+        {"meta/PLAYBOOK.toml": AUTONOMOUS_PLAYBOOK, "meta/REVIEW-PROTOCOL.md": PROTOCOL},
+    )
+    kit = write_tree(
+        tmp_path / "k",
+        {"meta/BUILDER-11-PROMPT.md": BRIEF, "meta/PLAYBOOK.toml": PLAYBOOK},
+    )
+    code, out, _ = run_check(kit, repo)
+    assert code == 0, out
+    [warn] = _owner_warns(out)
+    said = strip_paths(warn)
+    assert "the kit carries meta/PLAYBOOK.toml" in strip_paths(said), said
+    assert "the repository's meta/PLAYBOOK.toml" in strip_paths(said), said
+
+
+@pytest.mark.parametrize("case", ["a kit that carries no playbook", "all in phone mode"])
+def test_kit_check_does_not_warn_of_the_owner_without_a_playbook_or_autonomy(
+    tmp_home: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, case: str
+) -> None:
+    """§43: no WARN for a kit that carries no playbook (its apply is the engine's to
+    approve), even under an autonomous repository playbook; none for a kit whose
+    playbook and the repository's are both judged in phone mode."""
+    monkeypatch.delenv("HANDS_PROJECT", raising=False)
+    _config(tmp_home, tmp_path, architect=True)
+    if case == "a kit that carries no playbook":
+        repo_book, kit_files = AUTONOMOUS_PLAYBOOK, {"meta/BUILDER-11-PROMPT.md": BRIEF}
+    else:
+        repo_book, kit_files = PLAYBOOK, good_kit()
+    repo = write_tree(
+        tmp_path / "repo", {"PLAYBOOK.toml": repo_book, "meta/REVIEW-PROTOCOL.md": PROTOCOL}
+    )
+    code, out, _ = run_check(write_tree(tmp_path / "k", kit_files), repo)
+    assert code == 0, out
+    assert _owner_warns(out) == [], out
+
+
+def test_the_role_mode_missions_templates_warn_of_the_owner_and_pass_six_of_six(
+    tmp_home: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """§43: a kit from the filled missions templates with the architect blocks
+    uncommented carries an autonomous playbook: `kit check` passes it 6 of 6 and
+    prints the owner's WARN; the phone-mode templates print none."""
+    monkeypatch.delenv("HANDS_PROJECT", raising=False)
+    _config(tmp_home, tmp_path, architect=True)
+    lines, inside = [], False
+    for text in template("PLAYBOOK-missions.toml").splitlines():
+        if text.strip() in ("# >>> architect", "# <<< architect"):
+            inside = text.strip() == "# >>> architect"
+            continue
+        lines.append(text[2:] if inside and text.startswith("# ") else text)
+    repo = write_tree(tmp_path / "repo", {"README.md": "x"})
+    for name, book, warned in (
+        ("role", "\n".join(lines) + "\n", 1),
+        ("phone", template("PLAYBOOK-missions.toml"), 0),
+    ):
+        kit = write_tree(
+            tmp_path / name,
+            {
+                "meta/BUILDER-11-PROMPT.md": template("BUILDER-N-PROMPT.md"),
+                "PLAYBOOK.toml": book,
+                "meta/REVIEW-PROTOCOL.md": template("REVIEW-PROTOCOL.md"),
+            },
+        )
+        code, out, err = run_check(kit, repo)
+        assert code == 0, out + err
+        assert "kit check: pass (6 of 6 checks)" in strip_paths(out), out
+        assert len(_owner_warns(out)) == warned, (name, out)
+
+
+@pytest.mark.parametrize(
+    "name", ["templates/PLAYBOOK-missions.toml", "templates/BUILDER-N-PROMPT.md"]
+)
+def test_the_role_mode_templates_name_a_kickoff_that_never_changes(name: str) -> None:
+    """§43: "a series in role mode needs a kickoff line that never changes", stated
+    in the role-mode templates: a kickoff that names the mission would need a
+    playbook in every kit, and every kit would wait for the human."""
+    text = " ".join(strip_paths((ROOT / name).read_text(encoding="utf-8")).split())
+    flat = text.replace("# ", "")
+    assert (
+        "Read the builder prompt with the highest mission number in the meta directory "
+        "and execute the mission below its divider." in strip_paths(flat)
+    ), name
+    assert "never changes" in strip_paths(flat), name
+    assert "wait for the human" in strip_paths(flat), name
+
+
+def test_the_missions_template_says_the_kit_applied_rule_fires_for_a_human_approval() -> None:
+    """§43: the missions playbook template's comment on the `kit applied` rule says it
+    fires for an apply the human approved."""
+    text = " ".join(
+        strip_paths((TEMPLATES / "PLAYBOOK-missions.toml").read_text(encoding="utf-8"))
+        .replace("# ", "").split()
+    )
+    assert "series this rule does not fire" not in strip_paths(text), text
+    assert "fires for an apply the human approved" in strip_paths(text), text
+
+
+def _rule(text: str, number: int) -> str:
+    start = text.index(f"\n{number}. ")
+    return " ".join(text[start:text.index(f"\n{number + 1}. ", start)].split())
+
+
+def test_architect_rules_3_and_8_make_a_playbook_change_the_owners() -> None:
+    """§43: `architect/CLAUDE.md` rule 3 no longer lists `PLAYBOOK.toml` among a
+    kit's entries, and rule 8 says a change of the playbook is the shape the human
+    approved at the switch point."""
+    text = strip_paths((ROOT / "architect" / "CLAUDE.md").read_text(encoding="utf-8"))
+    assert "PLAYBOOK.toml" not in strip_paths(_rule(text, 3).replace("never `PLAYBOOK.toml`", ""))
+    eight = _rule(text, 8)
+    assert "a change of the playbook" in strip_paths(eight), eight
+    assert "the shape the human approved at the switch point" in strip_paths(eight), eight
+
+
+@pytest.mark.parametrize("section", ["## 3. ", "## 6. ", "## 12. "])
+def test_the_handbook_says_a_playbook_change_is_the_owners(section: str) -> None:
+    """§43: the handbook's §3, §6 and §12 say a change of the playbook is the
+    owner's, and that a role-filed kit carrying it waits for the human."""
+    handbook = strip_paths((ROOT / "docs" / "ARCHITECT-HANDBOOK.md").read_text(encoding="utf-8"))
+    start = handbook.index("\n" + section)
+    end = handbook.index("\n## ", start + 1)
+    text = " ".join(handbook[start:end].split())
+    assert "the owner's" in strip_paths(text), section
+    assert "waits for the human" in strip_paths(text), section

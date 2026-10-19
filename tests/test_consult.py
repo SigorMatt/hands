@@ -37,6 +37,7 @@ from hands.runner import job_env
 from hands.spool import Job, Spool
 from harness import (
     PROJECT,
+    REVIEW_VOCABULARY_RULE,
     architect_table,
     cli,
     close_consultation,
@@ -45,7 +46,7 @@ from harness import (
     kit_zip,
     ok,
     open_consultation,
-    passing_kit,
+    playbookless_kit,
     poll,
 )
 
@@ -583,11 +584,13 @@ def test_a_human_consultations_next_kit_is_filed_approved_and_applied_as_any(
     """§42: "read for its verdict (`next kit`, …), its kit filed and applied as any":
     `hands kit file` during it is accepted as a consultation's, the engine approves
     the apply under `autonomous` and the kickoff follows."""
-    role_project(tmp_home, workdir)
+    # §43: a kit that carries no playbook, the one the engine approves; the rule
+    # gives the check its review vocabulary.
+    role_project(tmp_home, workdir, book=ROLE_BOOK + REVIEW_VOCABULARY_RULE)
     kits = tmp_home / "filed"
     kits.mkdir()
     zipped = kits / "mission-18-kit.zip"
-    zipped.write_bytes(kit_zip(passing_kit()))
+    zipped.write_bytes(kit_zip(playbookless_kit()))
     argv = [sys.executable, "-c", FILE_APPLY, str(tmp_home / ".hands" / "handsd.sock"),
             PROJECT, f"mission-18-kit={zipped}"]
     replies = tmp_home / "replies.json"

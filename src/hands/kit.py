@@ -136,7 +136,7 @@ from hands.playbook import (
     orphaned_rule_warnings,
     parse_playbook,
 )
-from hands.spool import PathEscape, resolve_under_roots
+from hands.spool import PLAYBOOK_PATHS, PathEscape, resolve_under_roots
 
 __all__ = [
     "APPLY_EXCEPTION",
@@ -181,8 +181,9 @@ __all__ = [
     "apply_run",
 ]
 
-#: DESIGN §10: `PLAYBOOK.toml` next to `WORKPLAN.md`, or agile-skills' `meta/PLAYBOOK.toml`.
-PLAYBOOK_PATHS = ("PLAYBOOK.toml", "meta/PLAYBOOK.toml")
+#: `PLAYBOOK_PATHS` (imported from `hands.spool`, where the engine's §43 hold reads
+#: it too) is DESIGN §10's: `PLAYBOOK.toml` next to `WORKPLAN.md`, or agile-skills'
+#: `meta/PLAYBOOK.toml`.
 #: The two plan forms of the handbook's §4.
 BRIEF_RE = re.compile(r"^(?:meta/BUILDER-(?P<n>\d+)-PROMPT\.md|WORKPLAN\.md)$")
 #: The reply the apply prompt asks for; the only literal seen outside the brief.
@@ -869,6 +870,36 @@ def _check_playbook(
     return Check("playbook", True, reason), book
 
 
+def _owner_warning(kit: _Kit, repo: Path) -> str | None:
+    """§43 "A playbook change is the owner's": the `WARN playbook:` line for a kit
+    that carries a playbook when the repository's playbook in force before the apply,
+    or the kit's own, sets `architect = "role"` with `autonomous = true` — filed by
+    the role, its apply waits for the human. The engine judges under the playbook in
+    force when the kit is filed, so a kit that switches a series back to phone mode
+    is held too. None for a kit that carries no playbook, or when neither playbook
+    is autonomous (one that does not load is judged by the `playbook` check)."""
+    carried = [name for name in PLAYBOOK_PATHS if name in kit.files]
+    if not carried:
+        return None
+    autonomous: list[str] = []
+    present = [name for name in PLAYBOOK_PATHS if (repo / name).is_file()]
+    if present:
+        with contextlib.suppress(PlaybookError, OSError):
+            if _load((repo / present[0]).read_bytes(), present[0]).architect_is_autonomous:
+                autonomous.append(f"the repository's {present[0]}")
+    with contextlib.suppress(PlaybookError):
+        if _load(kit.files[carried[0]], carried[0]).architect_is_autonomous:
+            autonomous.append(f"the kit's {carried[0]}")
+    if not autonomous:
+        return None
+    return (
+        f"the kit carries {carried[0]}, and {_and(autonomous)} "
+        f"{'sets' if len(autonomous) == 1 else 'set'} [series] architect "
+        '= "role" with autonomous = true: filed by the architect role, its apply waits '
+        "for the human, because a change of the playbook is the owner's (§43)"
+    )
+
+
 def _find_brief(kit: _Kit) -> tuple[Check, str | None, str | None]:
     """The brief check, the brief's name, and its text."""
     briefs = sorted(name for name in kit.files if BRIEF_RE.match(name))
@@ -1420,7 +1451,10 @@ def check_kit(
         kit_md=plan.kit_md,
         kit_md_note=kit_md_note(plan),
         sha256=kit.sha256,
-        warnings=orphaned_rule_warnings(book) if book is not None else [],
+        warnings=[
+            *(orphaned_rule_warnings(book) if book is not None else []),
+            *filter(None, [_owner_warning(kit, repo)]),
+        ],
         decisions=bool(owners),
     )
     if report.ok:

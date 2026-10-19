@@ -1597,7 +1597,8 @@ def test_the_docs_config_error_claims_are_what_handsd_doctor_the_engine_and_kit_
     out = io.StringIO()
     code = main(["kit", "check", str(kit), "--repo", str(work)], stdout=out, stderr=io.StringIO())
     [line] = [
-        text for text in out.getvalue().splitlines() if text.split(":")[0].endswith(" playbook")
+        text for text in out.getvalue().splitlines()
+        if text.split(":")[0] in ("PASS playbook", "FAIL playbook")  # not §43's WARN
     ]
     assert code == 1 and line.startswith("FAIL playbook"), out.getvalue()
     assert "[roles.architect]" in line and "demo.toml" in line, line

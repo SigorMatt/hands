@@ -417,14 +417,18 @@ class Daemon:
             self.publish_hold(job)
         return [job.id for job in held]
 
-    def publish_hold(self, job: Job) -> None:
+    def publish_hold(self, job: Job, reason: str | None = None) -> None:
         """One held job's notification, published at once with §34's buttons (a
         nonce minted now) — its payload rebuilt from the job record as `send`
         shapes it. §36: also the engine's seam for a deferred hold it did not
-        approve (`PlaybookEngine._announce_hold`)."""
+        approve (`PlaybookEngine._announce_hold`). §43: `reason`, when given, is the
+        notification's reason in place of the gate's (which the job keeps): the
+        engine's for the hold of a kit that carries the playbook."""
         gate = job.gate or {}
         payload: dict[str, Any] = {"job": job.id, "role": job.role, "state": "held"}
-        if gate.get("reason"):
+        if reason:
+            payload["reason"] = reason
+        elif gate.get("reason"):
             payload["reason"] = gate["reason"]
         if gate.get("kind"):
             payload["gate"] = gate["kind"]

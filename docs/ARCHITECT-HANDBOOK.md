@@ -47,7 +47,8 @@ A kit is a zip whose entries are repository paths. Typical contents:
     DESIGN.md                       when the design changed (whole file)
     meta/BUILDER-N-PROMPT.md        the mission brief (missions form)
     WORKPLAN.md                     the series plan (runs form)
-    PLAYBOOK.toml                   when rules or kickoff change (whole file)
+    PLAYBOOK.toml                   when rules or kickoff change (whole file;
+                                    the owner's, see below)
     meta/REVIEW-PROTOCOL.md         when the review protocol changes
     decisions-YYYY-MM-DD.md         answers to memos, when any
     meta/BACKLOG.md, meta/ROADMAP.md   when they change
@@ -58,6 +59,16 @@ every file the kit touches and the commit message; `hands kit check` lists
 them for you. A kit that changes `PLAYBOOK.toml` takes effect at the next
 job start, and the daemon refuses a playbook that differs from the
 committed copy, so the apply commit must include it.
+
+A change of the playbook is the owner's (DESIGN §43). Under `[series]
+architect = "role"` with `autonomous = true` the engine does not approve
+the apply of a kit the role filed that carries `PLAYBOOK.toml` or
+`meta/PLAYBOOK.toml`, whatever its bytes: the apply waits for the human,
+published with its Approve and Deny buttons and the reason `apply <name>:
+the kit carries <path>, the playbook in force; a change of the playbook is
+the owner's (§43)`. `hands kit check` prints a `WARN playbook:` line for
+such a kit. So the role's kits carry no playbook (architect rule 3), and a
+change the role would make to it is an escalation (rule 8).
 
 The apply prompt:
 
@@ -190,7 +201,7 @@ together (HF-004):
 - `autonomous` (default `false`): with `architect = "role"`, the engine itself
   approves the apply of the kit the architect role filed (`decided_by:
   playbook`) and then sends `kickoff`. Approving such a playbook is approving
-  every apply it makes.
+  every apply it makes — but not a rewrite of it (below).
 - `gate_failures` (default 2): how many times in a row one roadmap gate may
   fail before the architect escalates; a positive integer, stated in the
   architect's prompt and judged by the architect.
@@ -212,6 +223,17 @@ The review base: the review prompt tells the reviewer that the protocol
 finds the mission's commits itself — its pull request, or `main` since the
 last `review:` commit (the protocol says how; §9); never
 `{job.head_at_start}`, which is wrong after a resume.
+
+**A change of the playbook is the owner's (DESIGN §43).** The human's
+approval of the switch-point playbook covers the applies made under it, not
+a rewrite of it: a change of the budget (`max_architect_consults`), a rule
+or the kickoff is a direct `plan:` commit by the human between jobs, or an
+apply the human approves. A kit the architect role files that carries the
+playbook waits for the human under autonomy, its Approve and Deny buttons
+on the phone; once approved, the engine sends no kickoff of its own, the
+playbook's `kit applied` rule fires, and the human sends `go`. For the role
+it is an escalation: such a change is the shape the human approved at the
+switch point.
 
 Continuing without a human: a rule on `aux.done` with `blockers=0` may
 `send` the next kickoff (`run = "{n+1}"` checked against `auto_runs`). In
@@ -528,10 +550,22 @@ passes.
 
 **The first plan kit's apply is silent.** Under `[series] autonomous` the
 engine's own `builder.done` rule approves the apply of a kit the role filed
-(`decided_by: playbook`), the first plan kit included, so no Approve or
-Deny reaches the phone for it: the first thing the phone sees is the
-kickoff the engine sends after the apply. Approving such a playbook is
-approving that apply too.
+(`decided_by: playbook`) that carries no playbook, the first plan kit
+included, so no Approve or Deny reaches the phone for it: the first thing the
+phone sees is the kickoff the engine sends after the apply. Approving such a
+playbook is approving that apply too.
+
+**A kit that carries the playbook waits for the human (DESIGN §43).** A
+change of the playbook is the owner's: a kit the role files that carries
+`PLAYBOOK.toml` or `meta/PLAYBOOK.toml` is held, published with its Approve
+and Deny buttons and a reason naming the path; the engine does not approve
+it, the consultation still ends as it would, and once the human approves it
+no engine kickoff follows: the playbook's `kit applied` rule fires and the
+human sends `go`. The consequence: a series in role mode needs a kickoff
+line that never changes, such as `Read the builder prompt with the highest
+mission number in the meta directory and execute the mission below its
+divider.`, because a kickoff that names the mission would need a playbook in
+every kit, and every kit would wait for the human.
 
 ### Running as the architect role (DESIGN §31)
 
@@ -568,7 +602,8 @@ under; read it there rather than here. What changes for you:
   stores, against the builder's repository, and refuses a failing kit with the
   check's output (DESIGN §33). Under `[series] autonomous` the engine approves
   that hold itself once your reply names it, and sends the kickoff, so a kit you
-  file is a kit that runs.
+  file is a kit that runs — unless it carries the playbook, which is the
+  owner's: that apply waits for the human (DESIGN §43), so file no playbook.
 - **One kit per consultation, under the name your verdict gives.** File at most
   one kit, and reply `VERDICT: next kit <name>` with exactly its name. A second
   `hands kit file` in the same consultation is refused by handsd as "one kit per

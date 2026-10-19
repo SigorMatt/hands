@@ -4,6 +4,14 @@ Kickoff line (the only way this mission is started or resumed):
 
     Read meta/BUILDER-N-PROMPT.md and execute the mission below its divider.
 
+<In role mode (`[series] architect = "role"`, DESIGN §31) the kickoff is a
+line that never changes, such as `Read the builder prompt with the highest
+mission number in the meta directory and execute the mission below its
+divider.`: a change of the playbook is the owner's (§43), so a kit that
+carries the playbook waits for the human, and a kickoff that names the
+mission would need a playbook in every kit, and every kit would wait for
+the human. Keep this line equal to the playbook's `[series] kickoff`.>
+
 You are the builder for the `<project>` repository. Read `DESIGN.md` (<the
 sections this mission implements>), `CLAUDE.md`, `meta/CHECKPOINT.md` (a
 unit in progress means §R first), and `meta/reviews/REVIEW-<N-1>.md` in

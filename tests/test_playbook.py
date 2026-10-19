@@ -71,7 +71,9 @@ from hands.playbook import (
 )
 from hands.spool import Job, Spool, new_kit_id, now_iso
 from harness import (
+    PASSING_PLAYBOOK,
     PROJECT,
+    REVIEW_VOCABULARY_RULE,
     UNCHECKED_KIT,
     architect_table,
     as_published,
@@ -81,6 +83,7 @@ from harness import (
     kit_zip,
     ok,
     passing_kit,
+    playbookless_kit,
     poll,
     running_job,
     write_project,
@@ -3221,7 +3224,12 @@ KIT_BYTES = b"PK\x05\x06" + bytes(18)
 
 
 def filed_kit(
-    spool: Spool, *, name: str = "m16", during: Job | None = None, **job: Any
+    spool: Spool,
+    *,
+    name: str = "m16",
+    during: Job | None = None,
+    data: bytes = KIT_BYTES,
+    **job: Any,
 ) -> Job:
     """§32: a kit's held apply exactly as `Api.kit_file` leaves it — the zip stored
     under `kits/<kit_id>/` by `Spool.store_kit` and its record (`Spool.record_kit`),
@@ -3237,10 +3245,10 @@ def filed_kit(
     if during is None:
         during = consultation(spool, state="done", verdict=f"VERDICT: next kit {name}")
     kit_id = new_kit_id()
-    spool.store_kit(kit_id, name=name, data=KIT_BYTES)
+    spool.store_kit(kit_id, name=name, data=data)
     spool.record_kit(
         kit_id, name=name, consultation=during.id, check="pass",
-        sha256=hashlib.sha256(KIT_BYTES).hexdigest(),
+        sha256=hashlib.sha256(data).hexdigest(),
     )
     fields: dict[str, Any] = {
         "role": "builder",
@@ -4914,7 +4922,7 @@ def test_a_series_rename_that_restates_the_budget_moves_the_anchor(
 #: (`fake_claude` prefers a `FAKE:` directive and leaves the queue where it was).
 E2E_BOOK = ARCHITECT_BOOK.replace(
     ARCHITECT_KICKOFF, f"{ARCHITECT_KICKOFF}\\nFAKE:result VERDICT: mission 17 finished"
-)
+) + REVIEW_VOCABULARY_RULE  # §43: so a kit without a playbook passes the check here
 
 #: What the scripted architect runs in place of `hands kit file <dir>`: the call
 #: that command makes once its client-side check passes — the daemon's `kit_file`
@@ -4944,7 +4952,7 @@ def file_apply_argv(
     socket, in order; by default one kit, `mission-17-kit`, that passes the check."""
     import sys
 
-    kits = kits if kits is not None else {"mission-17-kit": passing_kit()}
+    kits = kits if kits is not None else {"mission-17-kit": playbookless_kit()}
     where = tmp_home / "filed-kits"
     where.mkdir(exist_ok=True)
     pairs = []
@@ -5385,7 +5393,7 @@ def test_end_to_end_a_kit_filed_after_the_architect_ended_is_waited_for(
     async def body(daemon: Daemon) -> None:
         import base64
 
-        data = base64.b64encode(kit_zip(passing_kit())).decode()
+        data = base64.b64encode(kit_zip(playbookless_kit())).decode()
         filed: list[dict[str, Any]] = []
 
         async def sleep(delay: float) -> None:
@@ -5485,8 +5493,8 @@ def test_end_to_end_a_kit_the_rule_forbids_is_denied_and_the_consultation_escala
     consultation" before it is checked, so it is never filed; `foo`, the one kit
     filed, is denied and the consultation escalates, as §33 requires."""
     architect_project(tmp_home, workdir, ntfy=True)
-    kits = {"foo": passing_kit(), "bar": passing_kit()} if case == "two kits" else {
-        "bar": passing_kit()
+    kits = {"foo": playbookless_kit(), "bar": playbookless_kit()} if case == "two kits" else {
+        "bar": playbookless_kit()
     }
     script(tmp_home, monkeypatch,
            [{"result": "VERDICT: next kit foo", "exec": file_apply_argv(tmp_home, kits)}])
@@ -5574,7 +5582,7 @@ def test_end_to_end_two_concurrent_kit_files_during_the_wait_check_and_file_one(
     monkeypatch.setattr("hands.api.check_kit", checks)
 
     async def body(daemon: Daemon) -> None:
-        data = base64.b64encode(kit_zip(passing_kit())).decode()
+        data = base64.b64encode(kit_zip(playbookless_kit())).decode()
         both: list[asyncio.Future[list[Any]]] = []
 
         async def sleep(delay: float) -> None:
@@ -5628,7 +5636,7 @@ def test_two_concurrent_kit_files_while_the_architect_runs_check_and_file_one(
     monkeypatch.setattr("hands.api.check_kit", checks)
 
     async def body(daemon: Daemon) -> None:
-        data = base64.b64encode(kit_zip(passing_kit())).decode()
+        data = base64.b64encode(kit_zip(playbookless_kit())).decode()
         consulting = open_consultation(daemon)
         try:
             outcomes = await asyncio.gather(
@@ -5666,7 +5674,7 @@ def test_end_to_end_a_byte_flip_between_check_and_approval_is_refused_with_both_
 
     architect_project(tmp_home, workdir)
     script(tmp_home, monkeypatch, ["VERDICT: next kit mission-17-kit"])
-    zipped = kit_zip(passing_kit())
+    zipped = kit_zip(playbookless_kit())
     flipped: list[str] = []
 
     def flip(path: Path) -> None:
@@ -5721,8 +5729,8 @@ def test_end_to_end_a_passing_zip_swapped_in_for_the_check_only_is_refused(
 
     architect_project(tmp_home, workdir)
     script(tmp_home, monkeypatch, ["VERDICT: next kit mission-17-kit"])
-    passing = kit_zip(passing_kit())
-    failing_files = passing_kit()
+    passing = kit_zip(playbookless_kit())
+    failing_files = playbookless_kit()
     del failing_files["meta/BUILDER-17-PROMPT.md"]
     failing = kit_zip(failing_files)
     checked: list[bool] = []
@@ -6544,3 +6552,310 @@ def test_a_resume_rule_resends_the_senders_prompt_without_hands_sentences(
     assert [(e["prompt"], e["context"]) for e in recorder.enqueued] == [
         ("the sender's words", context)
     ]
+
+
+# ---- §43 "A playbook change is the owner's" (H-075)
+
+
+class Holds:
+    """The engine's `hold` seam (`Daemon.publish_hold`): every hold it publishes,
+    with the reason it passes for the notification."""
+
+    def __init__(self) -> None:
+        self.published: list[tuple[str, str | None]] = []
+
+    def __call__(self, job: Job, reason: str | None = None) -> None:
+        self.published.append((job.id, reason))
+
+
+#: §43: the kits whose apply the engine does not approve — the path the stored zip
+#: carries and the playbook there — by the case's name.
+OWNER_KITS: dict[str, tuple[str, str]] = {
+    "PLAYBOOK.toml": ("PLAYBOOK.toml", ARCHITECT_BOOK),
+    "meta/PLAYBOOK.toml": ("meta/PLAYBOOK.toml", ARCHITECT_BOOK),
+    "a playbook that switches the series to phone mode": (
+        "PLAYBOOK.toml", ARCHITECT_BOOK.replace('architect = "role"', 'architect = "phone"')
+    ),
+}
+
+
+def owner_reason(name: str, path: str) -> str:
+    """§43's published reason, word for word."""
+    return (
+        f"apply {name}: the kit carries {path}, the playbook in force; a change of the "
+        "playbook is the owner's (§43)"
+    )
+
+
+def _owner_engine(tmp_home: Path, workdir: Path) -> tuple[PlaybookEngine, Recorder, Holds]:
+    engine, recorder = architect_engine(tmp_home, workdir)
+    engine.sleep = Sleeps()
+    holds = Holds()
+    engine.hold = holds
+    run(engine._load())
+    return engine, recorder, holds
+
+
+def _filed_with(engine: PlaybookEngine, during: Job, entries: dict[str, str]) -> Job:
+    """A kit filed during `during` as `Api.send` files it: deferred (§36), then its
+    `job.held`."""
+    job = filed_kit(engine.spool, during=during, data=kit_zip(entries))
+    assert engine.defer_hold(job)
+    run(engine.on_event("job.held", job=job))
+    return job
+
+
+@pytest.mark.parametrize("case", list(OWNER_KITS))
+@pytest.mark.parametrize(
+    "when", ["at its consultation's end", "on its hold", "over a paused pipeline"]
+)
+def test_an_architect_kit_carrying_the_playbook_is_the_owners_to_approve(
+    tmp_home: Path, workdir: Path, case: str, when: str
+) -> None:
+    """§43: under autonomy the engine does not approve an architect-filed apply whose
+    stored kit carries `PLAYBOOK.toml` or `meta/PLAYBOOK.toml`, whatever its bytes —
+    a playbook that switches the series to phone mode included (judged under the
+    playbook in force when it is filed). The hold is published through the hold seam
+    with §43's reason naming the path; the gate's reason stays `apply <name>`. The
+    consultation's end is not an escalation, and `next kit` does not wait for a kit
+    "not filed". Over a paused pipeline the hold is published with the same reason."""
+    path, book = OWNER_KITS[case]
+    engine, recorder, holds = _owner_engine(tmp_home, workdir)
+    spool = engine.spool
+    entries = {path: book, "meta/BUILDER-17-PROMPT.md": "brief\n"}
+    if when == "on its hold":
+        architect = consultation(spool, state="done", verdict="VERDICT: next kit m16")
+        job = _filed_with(engine, architect, entries)
+    else:
+        architect = consultation(spool)
+        job = _filed_with(engine, architect, entries)
+        assert holds.published == [] and recorder.approved == []
+        if when == "over a paused pipeline":
+            run(engine.pause())
+        architect = spool.transition(
+            architect, "done", verdict="VERDICT: next kit m16", result="VERDICT: next kit m16"
+        )
+        end_consultation(engine, architect)
+    assert recorder.approved == [] and recorder.denied == []
+    record = spool.load_job(job.id)
+    assert record.state == "held"
+    assert record.gate is not None and record.gate["reason"] == "apply m16"
+    assert holds.published == [(job.id, owner_reason("m16", path))]
+    assert all("approved by the playbook" not in strip_paths(title)
+               for title, _ in recorder.notified)
+    assert engine.sleep.delays == [] and engine.kit_wait() is None  # filed, not waited for
+    if when == "over a paused pipeline":
+        assert engine.state.stop_reason == PAUSE_REASON, engine.state.stop_reason
+    else:
+        assert not engine.state.paused, engine.state.stop_reason  # no escalation, no stop
+    assert [e for e in spool.events() if e.kind == "kit.refused"] == []
+
+
+@pytest.mark.parametrize("entries", ["an empty zip", "a brief and a protocol"])
+def test_an_architect_kit_without_a_playbook_is_approved_by_the_engine_as_before(
+    tmp_home: Path, workdir: Path, entries: str
+) -> None:
+    """§43: a kit that carries no playbook is approved by the engine, unchanged:
+    `decided_by: playbook`, one buttonless line, no hold published."""
+    engine, recorder, holds = _owner_engine(tmp_home, workdir)
+    architect = consultation(engine.spool)
+    data = KIT_BYTES if entries == "an empty zip" else kit_zip(playbookless_kit())
+    job = filed_kit(engine.spool, during=architect, data=data)
+    assert engine.defer_hold(job)
+    run(engine.on_event("job.held", job=job))
+    architect = engine.spool.transition(
+        architect, "done", verdict="VERDICT: next kit m16", result="VERDICT: next kit m16"
+    )
+    end_consultation(engine, architect)
+    assert recorder.approved == [{"job": job.id, "reason": AUTONOMOUS_APPROVAL}]
+    assert holds.published == []
+    assert [title for title, _ in recorder.notified] == [
+        "hands: kit m16 filed by the architect; apply approved by the playbook"
+    ]
+
+
+@pytest.mark.parametrize("decided_by", ["cli", "phone"])
+def test_after_the_human_approves_the_owners_kit_no_engine_kickoff_and_the_kit_applied_rule_fires(
+    tmp_home: Path, workdir: Path, decided_by: str
+) -> None:
+    """§43: once the human approves the held apply, the engine's kickoff-after-apply
+    does not fire (it is for applies the engine approved, §32); the playbook's own
+    `kit applied` rule fires."""
+    engine, recorder = architect_engine(tmp_home, workdir, AUTONOMOUS)
+    job = applied_kit(
+        engine.spool, decided_by=decided_by,
+        data=kit_zip({"PLAYBOOK.toml": AUTONOMOUS}),
+    )
+    run(engine.on_job(job))
+    assert recorder.sent == [], "the engine sent a kickoff after a human's approval"
+    assert [title for title, _ in recorder.notified] == [
+        "hands: Kit applied; the next kickoff is the driver's"
+    ]
+    [fired] = [e.payload for e in engine.spool.events() if e.kind == "playbook.rule"]
+    assert fired["rule"] != ENGINE_RULE_INDEX, fired
+
+
+#: §43's e2e playbook: E2E_BOOK with the `kit applied` rule every shipped playbook
+#: carries, so a human-approved apply has a rule of the playbook's own to meet.
+OWNER_BOOK = E2E_BOOK + """
+[[rule]]
+on = "builder.done"
+verdict = '^VERDICT: kit applied'
+then = "notify"
+message = "Kit applied; the next kickoff is the driver's"
+"""
+
+ROLE_KIT_PLAYBOOK = PASSING_PLAYBOOK.replace(
+    'name = "demo-17"\n', 'name = "demo-17"\narchitect = "role"\nautonomous = true\n'
+)
+
+
+def _e2e_owner_kit(case: str) -> dict[str, str]:
+    """§43's kits as the architect files them over the socket — each passes handsd's
+    own check against the e2e repository."""
+    kit = passing_kit()
+    if case == "PLAYBOOK.toml":
+        return {**kit, "PLAYBOOK.toml": ROLE_KIT_PLAYBOOK}
+    if case == "meta/PLAYBOOK.toml":
+        del kit["PLAYBOOK.toml"]
+        return {**kit, "meta/PLAYBOOK.toml": ROLE_KIT_PLAYBOOK}
+    assert case == "a playbook that switches the series to phone mode"
+    return kit  # PASSING_PLAYBOOK sets no `architect`: phone mode
+
+
+#: The scripted architect's `exec` for "over a paused pipeline": file the kit, then
+#: `hands pause` over the same socket, before the consultation ends.
+FILE_THEN_PAUSE = FILE_APPLY + """
+call(sys.argv[1], "pause", {}, project=sys.argv[2])
+"""
+
+
+def _phone_daemon(tmp_home: Path, posts: ActionPosts) -> Daemon:
+    with (tmp_home / ".hands" / f"{PROJECT}.toml").open("a") as config:
+        config.write(f'\n[notify]\ncmd_topic = "hands-cmd-test"\ncmd_secret = "{PHONE_SECRET}"\n')
+    daemon = Daemon(load_config(PROJECT))
+    daemon.notifier.post = posts  # before start(): no test may reach a network
+    assert daemon.phone is not None, "the command channel is on in this config"
+    daemon.phone.stream = SilentStream()
+    return daemon
+
+
+@pytest.mark.parametrize("case", list(OWNER_KITS))
+@pytest.mark.parametrize("paused", [False, True])
+def test_end_to_end_a_role_filed_kit_carrying_the_playbook_is_held_for_the_human(
+    tmp_home: Path, workdir: Path, monkeypatch: pytest.MonkeyPatch, case: str, paused: bool
+) -> None:
+    """§43 under a real daemon: the kit the architect files carries `PLAYBOOK.toml`,
+    `meta/PLAYBOOK.toml`, or a playbook that switches the series to phone mode. The
+    apply is held and published with its Approve/Deny buttons and §43's reason naming
+    the path; the gate's reason stays `apply <name>`; the engine approves nothing;
+    the consultation's end stops nothing. Over a paused pipeline (paused while the
+    consultation ran) the published reason names the path too. Not paused, the human
+    then approves it: the builder applies it, no engine kickoff follows, and the
+    playbook's `kit applied` rule fires."""
+    architect_project(tmp_home, workdir, book=OWNER_BOOK, ntfy=True)
+    argv = file_apply_argv(tmp_home, {"mission-17-kit": _e2e_owner_kit(case)})
+    if paused:
+        argv[2] = FILE_THEN_PAUSE
+    script(tmp_home, monkeypatch, [
+        {"result": "VERDICT: next kit mission-17-kit", "exec": argv},
+        "VERDICT: kit applied abc1234",
+    ])
+    path = OWNER_KITS[case][0]
+    posts = ActionPosts()
+    held_title = as_published(HELD_TITLE)
+
+    async def scenario() -> None:
+        daemon = _phone_daemon(tmp_home, posts)
+        await daemon.start()
+        try:
+            await asyncio.wait_for(body(daemon), 60)
+        finally:
+            await daemon.stop()
+
+    async def body(daemon: Daemon) -> None:
+        review = await ok("send", "--role", "aux", "--context", "clear", fake_result(REVIEW))
+        await ok("wait", review["id"])
+
+        async def held() -> Any:
+            await daemon.notifier.drain()
+            return [note for note in posts.sent if note["title"] == held_title]
+
+        [note] = await poll(held, "the hold to be published")
+        [architect] = [r for r in (await ok("jobs", "-n", "50"))["jobs"] if r["role"] == ARCHITECT]
+        await ok("wait", architect["id"])
+        await daemon.playbook.drain()
+        await daemon.notifier.drain()
+        [apply_row] = [r for r in (await ok("jobs", "-n", "50"))["jobs"]
+                       if r["origin"] == "architect"]
+        assert apply_row["state"] == "held"
+        record = await ok("result", apply_row["id"])
+        assert record["gate"]["reason"] == "apply mission-17-kit", record["gate"]
+        said = strip_paths(note["message"]).splitlines()
+        assert said[0] == owner_reason("mission-17-kit", path), note
+        assert f"job: {apply_row['id']}" in said, note
+        assert [a["label"] for a in note["actions"]] == ["Approve", "Deny"], note
+        assert apply_row["id"] in json.dumps(note["actions"])
+        assert [n for n in posts.sent if n["title"] == held_title] == [note], posts.sent
+        assert [n for n in posts.sent if n["title"] == as_published(APPROVED_TITLE)] == []
+        assert await _events("gate.decided") == []
+        state = await ok("pipeline")
+        if paused:
+            assert state["paused"] and state["stop_reason"] == PAUSE_REASON, state
+            return
+        assert not state["paused"], state  # the consultation's end is no escalation
+
+        await ok("approve", apply_row["id"])
+        await ok("wait", apply_row["id"])
+        kit_applied = as_published("hands: Kit applied; the next kickoff is the driver's")
+
+        async def fired() -> Any:
+            await daemon.notifier.drain()
+            return [n for n in posts.sent if n["title"] == kit_applied]
+
+        await poll(fired, "the playbook's kit applied rule")
+        await daemon.playbook.drain()
+        rows = sorted((await ok("jobs", "-n", "50"))["jobs"], key=lambda row: row["id"])
+        assert [(row["role"], row["origin"]) for row in rows] == [
+            ("aux", "cli"),
+            (ARCHITECT, "playbook"),
+            ("builder", "architect"),
+        ], "the engine sent a kickoff after the human's approval"
+        decided = await ok("result", apply_row["id"])
+        assert decided["gate"]["decided_by"] != "playbook", decided["gate"]
+
+    asyncio.run(scenario())
+
+
+def test_end_to_end_a_denial_of_the_owners_kit_is_a_denial_as_today(
+    tmp_home: Path, workdir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """§43: "A denial takes the path a denial takes today": the held apply is denied
+    by the human, nothing runs, and `job.denied` meets the playbook's rules — none
+    in this playbook, so the pipeline stops, as for any denial."""
+    architect_project(tmp_home, workdir, book=OWNER_BOOK)
+    argv = file_apply_argv(tmp_home, {"mission-17-kit": _e2e_owner_kit("PLAYBOOK.toml")})
+    script(tmp_home, monkeypatch, [{"result": "VERDICT: next kit mission-17-kit", "exec": argv}])
+
+    async def body(daemon: Daemon) -> None:
+        review = await ok("send", "--role", "aux", "--context", "clear", fake_result(REVIEW))
+        await ok("wait", review["id"])
+        await _wait_events("job.held", 1)
+        [architect] = [r for r in (await ok("jobs", "-n", "50"))["jobs"] if r["role"] == ARCHITECT]
+        await ok("wait", architect["id"])
+        await daemon.playbook.drain()
+        [apply_row] = [r for r in (await ok("jobs", "-n", "50"))["jobs"]
+                       if r["origin"] == "architect"]
+        assert apply_row["state"] == "held"
+        assert not (await ok("pipeline"))["paused"]
+        await ok("deny", apply_row["id"])
+        state = await wait_for_stop()
+        assert state["stop_reason"].startswith("job.denied: the playbook has no rule"), state
+        record = await ok("result", apply_row["id"])
+        assert record["state"] == "denied" and record["gate"]["decided_by"] == "cli"
+        rows = (await ok("jobs", "-n", "50"))["jobs"]
+        assert sorted((row["role"], row["origin"]) for row in rows) == sorted([
+            ("aux", "cli"), (ARCHITECT, "playbook"), ("builder", "architect"),
+        ])
+
+    drive(body)

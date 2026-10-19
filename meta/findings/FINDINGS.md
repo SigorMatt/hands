@@ -2834,7 +2834,7 @@ holds such an apply for the human with its buttons and the reason §43
 gives; no engine kickoff after the human approves it, the playbook's `kit
 applied` rule fires; `hands kit check` prints a `WARN playbook:` line.
 
-Status: decided (DESIGN §43), scheduled for U5
+Status: fixed (mission 27 U5, this commit — DESIGN §43: `_release_kit`, after `kit_apply_problem` accepts the apply and `_kit_bytes_unchanged` verifies the stored zip, does not approve an architect-filed apply whose stored kit carries `PLAYBOOK.toml` or `meta/PLAYBOOK.toml` (`Spool.stored_kit_playbooks`, by the zip's central-directory names); `kit_apply_problem` is unchanged, so the kit stays a filed kit to the `next kit` wait, `defer_hold` and the `job.held` path; the hold is published with its buttons and the reason `apply <name>: the kit carries <path>, the playbook in force; a change of the playbook is the owner's (§43)`, passed to `Daemon.publish_hold` as `reason=` wherever the engine publishes a hold it does not approve, a paused pipeline's included; the gate's reason stays `apply <name>`; after a human approval no engine kickoff, the playbook's `kit applied` rule fires; `hands kit check` prints a `WARN playbook:` line when the repository's playbook or the kit's own is role mode with autonomy; architect rules 3 and 8, the handbook's §3, §6 and §12, and the role-mode kickoff notes of the missions playbook and brief templates. Tests: tests/test_playbook.py, tests/test_kit.py, tests/test_consult.py, tests/test_docs.py)
 
 ## H-076 — `test_kit_apply_refuses_a_staged_name_with_dot_dot` fails intermittently
 
