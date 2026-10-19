@@ -47,6 +47,7 @@ from hands.phone import ARCHITECT_TITLE, BUILDER_TITLE, PhoneChannel, answer_rep
 from hands.playbook import PlaybookEngine, series_roles_problem
 from hands.runner import LINE_LIMIT, Runner, RunnerError, reconcile_orphans
 from hands.spool import (
+    ARCHITECT_ORIGIN,
     ORPHAN_DAEMON_STOP,
     TERMINAL_STATES,
     Event,
@@ -414,7 +415,8 @@ class Daemon:
         """
         held = [job for job in self.spool.list_jobs() if job.state == "held"]
         for job in held:
-            self.publish_hold(job)
+            # §43: a held kit that carries the playbook reads §43's reason here too.
+            self.publish_hold(job, self.playbook.published_hold_reason(job))
         return [job.id for job in held]
 
     def publish_hold(self, job: Job, reason: str | None = None) -> None:
@@ -872,12 +874,31 @@ class Daemon:
             title = None
         if title is not None:
             actions = None
-            if self.phone is not None and event.kind == "job.held" and job_id:
-                actions = self.phone.actions(str(job_id))
+            payload = event.payload
+            if event.kind == "job.held" and job_id:
+                if self.phone is not None:
+                    actions = self.phone.actions(str(job_id))
+                # §43: a hold published at filing (a paused pipeline's, §36) whose kit
+                # carries the playbook reads §43's reason; the event keeps the gate's.
+                reason = self._held_reason(str(job_id))
+                if reason is not None:
+                    payload = {**payload, "reason": reason}
             # §34: a `job.held` is never folded into the start notification.
             self.notifier.notify(
-                title, event.payload, actions=actions, fold=event.kind != "job.held"
+                title, payload, actions=actions, fold=event.kind != "job.held"
             )
+
+    def _held_reason(self, job_id: str) -> str | None:
+        """§43: the reason `PlaybookEngine.published_hold_reason` gives the held job
+        `job_id` at filing, or None (the gate's). Only an apply of origin `architect`
+        is asked; a job the spool cannot read is published as filed."""
+        try:
+            job = self.spool.load_job(job_id)
+        except SpoolError:
+            return None
+        if job.origin != ARCHITECT_ORIGIN:
+            return None
+        return self.playbook.published_hold_reason(job)
 
     async def wait_for_event(
         self, kinds: frozenset[str], *, timeout: float | None = None

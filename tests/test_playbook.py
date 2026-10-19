@@ -6729,6 +6729,12 @@ FILE_THEN_PAUSE = FILE_APPLY + """
 call(sys.argv[1], "pause", {}, project=sys.argv[2])
 """
 
+#: The scripted architect's `exec` for "before filing": `hands pause` over the socket,
+#: then file the kit — so the daemon, not the engine, publishes its hold (§36).
+PAUSE_THEN_FILE = FILE_APPLY.replace(
+    "for pair in", 'call(sys.argv[1], "pause", {}, project=sys.argv[2])\nfor pair in', 1
+)
+
 
 def _phone_daemon(tmp_home: Path, posts: ActionPosts) -> Daemon:
     with (tmp_home / ".hands" / f"{PROJECT}.toml").open("a") as config:
@@ -6741,22 +6747,27 @@ def _phone_daemon(tmp_home: Path, posts: ActionPosts) -> Daemon:
 
 
 @pytest.mark.parametrize("case", list(OWNER_KITS))
-@pytest.mark.parametrize("paused", [False, True])
+@pytest.mark.parametrize("pause", ["never", "after filing", "before filing"])
 def test_end_to_end_a_role_filed_kit_carrying_the_playbook_is_held_for_the_human(
-    tmp_home: Path, workdir: Path, monkeypatch: pytest.MonkeyPatch, case: str, paused: bool
+    tmp_home: Path, workdir: Path, monkeypatch: pytest.MonkeyPatch, case: str, pause: str
 ) -> None:
     """§43 under a real daemon: the kit the architect files carries `PLAYBOOK.toml`,
     `meta/PLAYBOOK.toml`, or a playbook that switches the series to phone mode. The
     apply is held and published with its Approve/Deny buttons and §43's reason naming
     the path; the gate's reason stays `apply <name>`; the engine approves nothing;
     the consultation's end stops nothing. Over a paused pipeline (paused while the
-    consultation ran) the published reason names the path too. Not paused, the human
+    consultation ran, after the kit was filed — the engine publishes the hold — or
+    before it — the daemon publishes it at filing, mission 27 U7) the published
+    reason names the path too. Not paused, the human
     then approves it: the builder applies it, no engine kickoff follows, and the
     playbook's `kit applied` rule fires."""
     architect_project(tmp_home, workdir, book=OWNER_BOOK, ntfy=True)
     argv = file_apply_argv(tmp_home, {"mission-17-kit": _e2e_owner_kit(case)})
-    if paused:
+    if pause == "after filing":
         argv[2] = FILE_THEN_PAUSE
+    elif pause == "before filing":
+        argv[2] = PAUSE_THEN_FILE
+    paused = pause != "never"
     script(tmp_home, monkeypatch, [
         {"result": "VERDICT: next kit mission-17-kit", "exec": argv},
         "VERDICT: kit applied abc1234",
@@ -6859,3 +6870,87 @@ def test_end_to_end_a_denial_of_the_owners_kit_is_a_denial_as_today(
         ])
 
     drive(body)
+
+
+# ---- mission 27 U7 (PR #7 hosted findings 3 and 4): §43's reason, for its cause only
+
+
+#: An autonomous playbook a kit carries at `PLAYBOOK.toml`, with a brief.
+OWNER_ENTRIES = {"PLAYBOOK.toml": ARCHITECT_BOOK, "meta/BUILDER-17-PROMPT.md": "brief\n"}
+
+
+@pytest.mark.parametrize("cause", ["a verdict naming another kit", "the hash mismatches"])
+def test_a_hold_for_another_cause_is_published_with_the_gates_reason(
+    tmp_home: Path, workdir: Path, cause: str
+) -> None:
+    """Finding 4: a kit carrying the playbook whose hold has another cause — §33's
+    escalation (the verdict names another kit, so the engine denies it) or §34's hash
+    mismatch (the stored zip is not the one the check passed on) — is published with
+    the gate's reason (`reason=None` to the hold seam), not §43's."""
+    engine, recorder, holds = _owner_engine(tmp_home, workdir)
+    spool = engine.spool
+    architect = consultation(spool)
+    job = _filed_with(engine, architect, OWNER_ENTRIES)
+    verdict = "VERDICT: next kit m16"
+    if cause == "the hash mismatches":
+        assert job.kit_id is not None
+        stored = spool.kit_dir(job.kit_id) / "m16.zip"
+        stored.write_bytes(kit_zip({**OWNER_ENTRIES, "KIT.md": "swapped\n"}))
+    else:
+        verdict = "VERDICT: next kit other"
+    architect = spool.transition(architect, "done", verdict=verdict, result=verdict)
+    end_consultation(engine, architect)
+    assert recorder.approved == []
+    assert holds.published == [(job.id, None)]
+    if cause == "the hash mismatches":
+        assert [e.kind for e in spool.events() if e.kind == "kit.refused"] == ["kit.refused"]
+    else:
+        assert [d["job"] for d in recorder.denied] == [job.id]
+
+
+#: The playbooks in force for the start fold's republish, by case.
+START_BOOKS: dict[str, str] = {
+    "autonomous": OWNER_BOOK,
+    "role, not autonomous": OWNER_BOOK.replace("autonomous = true", "autonomous = false"),
+}
+
+
+@pytest.mark.parametrize(
+    "case", ["autonomous", "role, not autonomous", "the hash mismatches", "no playbook in the kit"]
+)
+def test_the_start_fold_republishes_a_held_owners_kit_with_its_reason(
+    tmp_home: Path, workdir: Path, case: str
+) -> None:
+    """Finding 3, §34's start fold: a held architect apply whose stored kit carries the
+    playbook, republished at a start under an autonomous playbook in force, reads
+    §43's reason naming the path. Under a playbook that is not autonomous, after a
+    hash mismatch, or for a kit without a playbook, it reads the gate's `apply
+    <name>`."""
+    book = START_BOOKS.get(case, OWNER_BOOK)
+    architect_project(tmp_home, workdir, book=book, ntfy=True)
+    posts = ActionPosts()
+    held_title = as_published(HELD_TITLE)
+
+    async def scenario() -> None:
+        daemon = _phone_daemon(tmp_home, posts)
+        entries = playbookless_kit() if case == "no playbook in the kit" else OWNER_ENTRIES
+        job = filed_kit(daemon.spool, data=kit_zip(entries))
+        if case == "the hash mismatches":
+            assert job.kit_id is not None
+            stored = daemon.spool.kit_dir(job.kit_id) / "m16.zip"
+            stored.write_bytes(kit_zip({**entries, "KIT.md": "swapped\n"}))
+        await daemon.start()
+        try:
+            await daemon.notifier.drain()
+            [note] = [n for n in posts.sent if n["title"] == held_title]
+            said = strip_paths(note["message"]).splitlines()
+            expected = owner_reason("m16", "PLAYBOOK.toml") if case == "autonomous" else "apply m16"
+            assert said[0] == expected, note
+            assert f"job: {job.id}" in said, note
+            assert [a["label"] for a in note["actions"]] == ["Approve", "Deny"], note
+            record = daemon.spool.load_job(job.id)
+            assert record.gate is not None and record.gate["reason"] == "apply m16"
+        finally:
+            await daemon.stop()
+
+    asyncio.run(scenario())

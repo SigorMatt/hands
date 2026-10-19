@@ -539,6 +539,13 @@ EXEMPT: dict[tuple[str, str, str], str] = {
     ("daemon", "_on_event", "event.payload"):
         "an inbox event's payload; NOTIFY_KINDS publishes only `job.held`, whose "
         "reason is the gate's (gates.py), the `hands: a job is held for a human` row",
+    ("daemon", "_held_reason", "self.playbook.published_hold_reason(job)"):
+        "§43's hold reason at filing and at a start, decided by playbook.py "
+        "`published_hold_reason` (`owner_hold_reason`): the `the kit carries <path>` "
+        "row, pinned by test_section_43s_three_rows_are_in_the_table",
+    ("playbook", "_release_kit", "asyncio.to_thread(self.published_hold_reason, job)"):
+        "the same §43 reason, asked in a worker thread (it hashes the stored zip): "
+        "the `the kit carries <path>` row, pinned by test_section_43s_three_rows_are_in_the_table",
     ("daemon", "start", "note.title"):
         "a note held during a start that failed, published as it was raised: its "
         "title was read at the notify that raised it",
@@ -965,7 +972,7 @@ def test_every_string_the_reading_cannot_follow_is_an_exemption_with_a_reason() 
         ("apply <name>: <why>; the commit message is the default '<message>'",
          "phone.py `_file_apply`"),
         ("apply <name>: the kit carries <path>, the playbook in force; a change of the "
-         "playbook is the owner's (§43)", "playbook.py `_owner_hold_reason`"),
+         "playbook is the owner's (§43)", "playbook.py `published_hold_reason`"),
     ],
 )
 def test_section_43s_three_rows_are_in_the_table(said: str, where: str) -> None:

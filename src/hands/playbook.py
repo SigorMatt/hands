@@ -2108,11 +2108,16 @@ class PlaybookEngine:
         """§36: True while the notification of the hold `job_id` waits for the engine."""
         return job_id in self._deferred_holds
 
-    def _announce_hold(self, job: Job, *, approved: bool) -> None:
+    def _announce_hold(
+        self, job: Job, *, approved: bool, reason: str | None = None
+    ) -> None:
         """§36 (H-045): the engine decided the deferred hold `job`. Approved: one
         buttonless notification naming the kit. Not approved: the hold, published
-        with its buttons as §34 publishes every hold. A hold that was not deferred
-        was published when it was filed, and nothing more is said here."""
+        with its buttons as §34 publishes every hold, with `reason` (§43's, from
+        `published_hold_reason`) in place of the gate's when given — only a caller
+        that holds `job` because its kit carries the playbook passes one. A hold
+        that was not deferred was published when it was filed, and nothing more is
+        said here."""
         if job.id not in self._deferred_holds:
             return
         self._deferred_holds.discard(job.id)
@@ -2131,9 +2136,7 @@ class PlaybookEngine:
             )
             return
         if self.hold is not None:
-            # §43: the reason of a hold whose stored kit carries the playbook names the
-            # path, wherever the engine publishes it — a paused pipeline's included.
-            outcome = self.hold(job, reason=self._owner_hold_reason(job))
+            outcome = self.hold(job, reason=reason)
             if inspect.isawaitable(outcome):  # pragma: no cover - the daemon's is sync
                 task = asyncio.create_task(_await(outcome), name="hands-playbook-hold")
                 self._tasks.add(task)
@@ -2241,7 +2244,9 @@ class PlaybookEngine:
             return  # decided already (by the engine on its hold, or by a human)
         if self.state.paused:
             log.info("playbook: paused; the architect's apply %s stays held (§10, §33)", job.id)
-            self._announce_hold(job, approved=False)  # §36: the hold is the human's
+            # §36: the hold is the human's; §43: its reason names the playbook it carries.
+            reason = await asyncio.to_thread(self.published_hold_reason, job)
+            self._announce_hold(job, approved=False, reason=reason)
             return
         problem = kit_apply_problem(self.spool, job)
         if problem is not None:  # its `job.held` already took the human's path
@@ -2252,7 +2257,9 @@ class PlaybookEngine:
         if not await self._kit_bytes_unchanged(job, where):
             return
         if not await self._carries_no_playbook(job):
-            self._announce_hold(job, approved=False)  # §43: with its buttons and §43's reason
+            # §43: with its buttons and §43's reason (None for a zip that does not read).
+            reason = await asyncio.to_thread(self.published_hold_reason, job)
+            self._announce_hold(job, approved=False, reason=reason)
             return
         if self.approve is None:  # pragma: no cover - wired by the daemon and the tests
             self._announce_hold(job, approved=False)
@@ -2312,19 +2319,51 @@ class PlaybookEngine:
             return False
         return True
 
-    def _owner_hold_reason(self, job: Job) -> str | None:
-        """§43: the published reason of the hold `job` when its stored kit carries
-        the playbook (`owner_hold_reason`), else None — the gate's own reason, `apply
-        <name>`, which stays the gate's either way (`kit_apply_problem` reads it)."""
-        if job.kit_id is None:
+    def published_hold_reason(self, job: Job) -> str | None:
+        """§43: the one decision of the reason a published hold of `job` reads — the
+        engine's paths (`_release_kit`) and the daemon's (the hold published at filing
+        over a paused pipeline, §36; the start fold's republish, §34) all ask this.
+
+        §43's sentence (`owner_hold_reason`) when `job` is held because its kit
+        carries the playbook: a held apply `kit_apply_problem` accepts, whose stored
+        zip is the one the check passed on (the sha256 `kit.json` recorded, as
+        `_kit_bytes_unchanged` asks) and carries `PLAYBOOK.toml` or
+        `meta/PLAYBOOK.toml`, under a playbook in force in role mode with
+        `autonomous` (`_book_in_force`). None otherwise: the gate's own reason,
+        `apply <name>`, which stays the gate's either way. Blocking (it reads and
+        hashes the stored zip); the engine asks it in a worker thread. A hold the
+        engine publishes for another cause (§33's escalation, a hash mismatch, a
+        failed approval) does not ask it."""
+        if job.origin != ARCHITECT_ORIGIN or job.state != "held" or job.kit_id is None:
+            return None
+        if kit_apply_problem(self.spool, job) is not None:
             return None
         record = self.spool.read_kit_record(job.kit_id)
-        if record is None:
+        if record is None:  # pragma: no cover - `kit_apply_problem` read it
             return None
         carried = self.spool.stored_kit_playbooks(job.kit_id, record["name"])
         if not carried:
             return None
+        if self.spool.stored_kit_sha256(job.kit_id, record["name"]) != record["sha256"]:
+            return None
+        book = self._book_in_force()
+        if book is None or not book.architect_is_autonomous:
+            return None
         return owner_hold_reason(record["name"], carried[0])
+
+    def _book_in_force(self) -> Playbook | None:
+        """The playbook `published_hold_reason` judges under: the one loaded, once the
+        engine has loaded one (`defer_hold` judges the same); before any load (a
+        daemon's start, which loads nothing) the committed file, read as a load reads
+        it but with none of a load's effects — a file that does not load is None."""
+        if self._loaded:
+            return self.playbook
+        try:
+            return load_playbook(
+                playbook_path(self.config), cwd=self.config.role("builder").cwd
+            )
+        except PlaybookError:
+            return None
 
     async def _kit_bytes_unchanged(self, job: Job, where: dict[str, Any]) -> bool:
         """§34: "engine approval re-hashes the stored zip and refuses a mismatch
