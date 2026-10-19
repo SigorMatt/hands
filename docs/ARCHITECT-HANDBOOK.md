@@ -386,6 +386,26 @@ does not fail, without `gh`, because a project may commit direct
 | task_killed / orphan | the job record, the monitor event | a finding; rarely a kit |
 | max_resumes exhausted | the job records | the environment, not the plan |
 
+A pause the human sends (`pause <secret>`, `hands pause`) is a **human pause**
+(DESIGN §44), and it holds the series' next step instead of dropping it. The
+job running when it is sent finishes; a builder, aux or driver end that would
+start the next step — a rule's `send`, `consult` or `stop`, §10's own stop, the
+engine's kickoff after an apply it approved — is kept, one per role (a later
+end of the role replaces the earlier), and `hands pipeline` prints it as a
+`kept` line. Everything else is as under any pause, and nothing is silent: an
+end whose rule is a `notify` fires at once; a `resume` rule (an orphaned or
+failed job) still fires until a stop is suppressed under the pause; every stop
+the pause suppresses is published once, titled `hands: a stop under a human
+pause`; `go` and `consult` are refused naming `resume`; a kit's apply commits
+without ending the pause. Once nothing is running, queued or held and no limit
+resume is scheduled, `hands: at rest` names each kept end (or says none is
+kept). Only `resume` ends it: it reloads the playbook first (a playbook that
+does not load refuses it, and the pause and its kept ends stay), then decides
+the kept ends in order up to the first that starts a job or stops; the rest are
+discarded and named (`hands: resume discarded kept ends`). Each of these
+notifications has its row in §19. A stop by a rule or by hands itself is not a
+human pause, and keeps the table above.
+
 ## 11. `hands kit check`
 
 Run it before emitting any kit; from a fresh sandbox:
@@ -770,6 +790,15 @@ A ruling is a question only the human (the owner) can answer. End to end:
    rules as any builder end does. In role mode the architect's next
    consultation lists the owner file under "Decided by the human since your
    last consultation".
+6. **A ruling committed at rest.** When an autonomous series must not run on
+   while the owner file is committed, the human sends `pause <secret>` (a
+   human pause, §10) and waits for `hands: at rest`: the builder's end that
+   would start the next step is kept, not decided. The owner file is then
+   committed at rest — by the project's chat, or as a decisions kit whose
+   apply commits without ending the pause — and `resume <secret>` (`hands
+   resume`) reloads the playbook and replays the kept end, so the next step
+   starts from the tree with the ruling in it. `go` and `consult` are refused
+   until that `resume`.
 
 ## 15. The separation rule
 
@@ -848,6 +877,11 @@ the human-supplied unit above that would carry the content.
   included (DESIGN §39, H-053): running a job, or idle, and `queued N/M`. It says nothing about how far the work has got.
 - **`hands jobs` lists newest first**, 20 by default (`-n`), filtered by
   `--role`, `--origin`, `--grep` (the prompt) and `--since`.
+- **`hands pipeline` prints one `kept` line per end a human pause keeps**
+  (DESIGN §44): the role, the job id, the event and its verdict line cut to
+  100 characters, in the order the `resume` replays them; `paused yes (cli)`
+  or `(phone)` is a human pause. The phone's `status` names the human pause
+  and the kept ends too.
 - **`hands pipeline`'s `auto-runs` counts only the runs a `send` rule with
   `run =` started** (DESIGN §10). The engine's kickoff, a phone `go`, a resume
   and a human's send are not counted, so `auto-runs 0/3 used` does not mean
@@ -982,7 +1016,7 @@ its consequences.
 | `hands: handsd started` — <project> on <socket>, then `Resumed: <role> job <job>, from job <job> which a daemon stop orphaned` (or `which this start found orphaned (its process was gone)`), one line per resumed job; then `While starting, handsd published <n> notification(s) on their own:` and `While starting, handsd raised <n> more notification(s):`, each followed by the lines it names | nobody — route 1 | nothing; a line folded in under `While starting, handsd raised …` is answered by its own row | `hands status` |
 | `hands: handsd crashed` — <error type>: <message> | the hands Project — route 8 | nothing to send; give it to the hands Project | `journalctl --user -u handsd@<project>` for the hands Project |
 | nothing arrives, or a `digest` line reads `daemon down` | the hands Project — route 8 | `digest <secret>` on another project's `cmd_topic` | `hands digest` |
-| `hands: the pipeline stopped` — paused by human | nobody — route 1 | `resume <secret>` when it should go on | `hands resume` |
+| `hands: the pipeline stopped` — paused by human | nobody — route 1 | `resume <secret>` when it should go on; a human pause holds the series' next step and `hands: at rest` says when nothing runs (§10) | `hands resume` |
 | `hands: the pipeline stopped` — builder.limited: the playbook has no rule for it, and §10 stops for anything it did not pre-plan | the human alone — route 7 | after the capture, `resume <secret>` | `bash scripts/capture-quota-stop.sh <project>` from the hands repository, then `hands resume` |
 | `hands: the pipeline stopped` — limits.max_resumes reached: <role> has been resumed <k> time(s) with no `done` in between and is limited again | the project's chat — route 6 | `progress <secret>`, `status <secret>`. No resume is scheduled for the role and none is re-armed at a restart, so `resume` would only clear the pause; the role's resume count is cleared only by a `done`, so a job limited again before one stops at once. After the limit's reset: for the builder `go <secret>` (it starts from the checkpoint), or route 3, 4 or 5; for the aux, the aux prompt that re-sends the review. The capture is worth keeping for the hands Project (route 7's) | `bash scripts/capture-quota-stop.sh <project>` from the hands repository for the hands Project; `hands jobs --role <role> -n 3`, `hands status`; after the limit's reset `hands go` for the builder, or for the aux the aux prompt: `hands --project <project> send --role aux --context clear "<the playbook's review prompt, <n> filled>"` |
 | `hands: the pipeline stopped` — could not resume <role> after its limit: <error> | the project's chat — route 6 | `status <secret>`; an HF report | `hands jobs --role <role> -n 1` |
@@ -1012,12 +1046,18 @@ its consequences.
 | `hands: the pipeline stopped` — job.held: the architect's apply <job> is not approved: the stored zip of kit_id <kit> has sha256 <a>, and the kit check passed on sha256 <b> (§34); the hold is the human's | the human alone — route 2 | Deny the hold that follows; an HF report | `hands deny <job> --reason "<reason>"` |
 | `hands: a consultation stopped over a paused pipeline` — <reason> | the project's chat — route 6 | the pipeline stays paused; answer the reason by its own row | as the reason's own row |
 | `hands: a stop under a human pause` — <reason> (§44: a stop the human pause suppressed; the pause and its kept ends stay, and no `resume` rule fires until `resume`) | the project's chat — route 6 | the pipeline stays paused; answer the reason by its own row, then `resume <secret>` | as the reason's own row, then `hands resume` |
+| `hands: at rest` — nothing is running, queued or held and no limit resume is scheduled; kept until `resume`: <role> job <job> (<verdict>); … (§44), one per kept end, its verdict line cut to 100 characters; or nothing is running, queued or held and no limit resume is scheduled; no end is kept, so `resume` only un-pauses (§44). Once per human pause, at the first moment nothing runs; again, with the new list, when a kept end is replaced after it | the human alone — route 1 | the work the pause was for (an owner commit, docs/OPERATIONS.md "A quiet moment"), then `resume <secret>`: the kept ends are replayed, the first that starts a step or stops is decided and the rest discarded | `hands pipeline` (its `kept` lines), the commit, then `hands resume` |
 | `hands: resume discarded kept ends` — resume replayed <role> job <job>, which <started a job or stopped the pipeline>; discarded the <n> end(s) kept after it: <role> job <job> (<verdict>) (§44) | the project's chat — route 6 | `status <secret>`; each discarded end is decided by hand once the replayed step is read | `hands pipeline`, `hands show <job>` |
 | `hands: the pipeline stopped` — driver.<state>: the driver escalated: <reason> (§27, §28); the <role>'s question (job <job>), verbatim: … | the project's chat — route 4 | as for "The builder has a question" | as for "The builder has a question" |
 | `hands: the pipeline stopped` — driver.<state>: the consultation's driver job ended <state>, and a consultation that does not end resolved stops (§27, §28); the driver's reply has no VERDICT: line, so it stops (§27, §28); or the driver's verdict '<verdict>' is neither resolved nor escalate, so it stops (§27, §28) | the project's chat — route 6 | `progress <secret>`; then route 3 or 4 | route 3 or 4 |
 | `<command>` — <command> refused: <why> (a refused phone command; `reply refused: <why>` and `answer refused: <why>` are titled `hands: reply` and `hands: answer`) | the project's chat — route 6 | the corrected command, once the reason is read | the laptop form, which refuses the same |
+| `go` — go refused: the pipeline is paused by a human (<cli or phone>), and a human pause holds the series' next step until `resume`; send `resume` first, then `go` (§44). Any other `go` refusal (a builder job running, queued or held; no playbook; no `[series] kickoff`) reads as the `<command>` row | the human alone — route 1 | `resume <secret>` once the work the pause was for is done: the kept end is replayed and starts the next step; `go <secret>` only when no end was kept | `hands resume`; `hands go` only when no end was kept |
+| `consult` — consult refused: the pipeline is paused by a human (<cli or phone>), and a human pause holds the series' next step until `resume`; send `resume` first, then `consult` (§44). Any other `consult` refusal reads as the `<command>` row | the human alone — route 5 | `resume <secret>` first; then `consult <secret> <reason>` once no builder job is queued, running or held | `hands resume`, then `hands consult` once no builder job is queued, running or held |
+| `kit` — kit refused: <why> (a `kit` whose zip hands refused; also filed as `kit.refused`) | the project's chat — route 3 | the corrected kit: `kit <secret>` with the zip attached | `hands kit check <zip>`, then `hands kit apply <zip>` |
+| `resume` — resume refused: the playbook cannot be read, so no rule can be trusted to fire: <error> (or another reason the playbook does not load); the human pause and its <n> kept end(s) stay until a `resume` whose playbook loads (§44); or there is no playbook (<path>) to decide the <n> kept end(s) with; the human pause and the kept ends stay until a `resume` whose playbook loads (§44) | the project's chat — route 3 | a kit whose playbook loads (`kit <secret>` with the zip attached, Approve; its apply does not end the pause), then `resume <secret>` | `hands kit apply <zip>`, `hands approve <job>`, then `hands resume` |
 | `hands: go`, `hands: answer`, `hands: reply`, `hands: consult` — go: builder job <job> <state>; answer: builder job <job> <state>; reply: architect job <job> <state>; consult: architect job <job> <state> | nobody — route 1 | nothing: the job's end is its own row | nothing |
-| `architect` — the architect's reply to a `reply`, or architect job <job> ended <state> with no reply; `builder` — the builder's final reply to an `answer`, or builder job <job> ended <state> with no reply | nobody — route 1 | nothing: the builder's verdict fires the playbook's rules | nothing |
+| `architect` — the architect's reply to a `reply`, or architect job <job> ended <state> with no reply | nobody — route 1 | nothing: the reply is the architect's answer to the human | nothing |
+| `builder` — the builder's final reply to an `answer`, or builder job <job> ended <state> with no reply | nobody — route 1 | nothing: the builder's verdict fires the playbook's rules | nothing |
 | `hands: status`, `progress` — the answer to `status <secret>`, `progress <secret>` | nobody — route 1 | nothing | nothing |
 | `hands: notify --test` — <message> | nobody — route 1 | nothing: it proves the topic | nothing |
 | `digest` — one line per project: `<project> \| daemon up\|down \| pipeline running\|paused \| mission <n>\|- \| builder running <job> <age>\|idle, verdict <line>\|none \| architect\|driver <used>/<budget> \| stop <time> <reason>\|no stop`; a config that does not load is one line, `<file>: does not load` | nobody — route 1 | `digest <secret>` asks for it. The fields: the daemon is `up` when its socket answers `status` within two seconds, else `down`; the pipeline `running` or `paused`; the mission the number on the first `Mission:` line of the builder's `meta/CHECKPOINT.md`, else `-`; the builder `running <job> <age>` or `idle`, with the newest builder job's verdict cut to 60 characters; the consultations `architect <used>/<budget>` in role mode, else `driver <used>/<budget>`; the last stop's time and the first line of its reason cut to 100 characters, or `no stop`. Every project's `cmd_secret` and `ntfy_token` is redacted before a field is cut | `hands digest` |

@@ -114,6 +114,7 @@ __all__ = [
     "ORIGIN",
     "UNPAUSE_ORIGINS",
     "HUMAN_PAUSERS",
+    "AT_REST_TITLE",
     "KEPT_DISCARDED_TITLE",
     "ROLE_ENDS",
     "SUPPRESSED_HUMAN_TITLE",
@@ -351,6 +352,8 @@ ROLE_ENDS = frozenset({"builder.done", "aux.done", "driver.done"})
 SUPPRESSED_HUMAN_TITLE = "hands: a stop under a human pause"
 #: §44 rule 5: the notification naming the kept ends a `resume` discarded.
 KEPT_DISCARDED_TITLE = "hands: resume discarded kept ends"
+#: §44 rule 4: the notification that a human pause has come to rest.
+AT_REST_TITLE = "hands: at rest"
 
 TOP_KEYS: tuple[str, ...] = ("version", "series", "limits", "rule")
 LIMIT_KEYS: tuple[str, ...] = (
@@ -1583,6 +1586,10 @@ class PipelineState:
     #: §44 rule 2: the reason of the first stop suppressed under the human pause, or
     #: None. Once set, a `resume` rule fires nothing until the pause ends.
     suppressed_stop: str | None = None
+    #: §44 rule 4: when `hands: at rest` was published under this human pause, or
+    #: None. Persisted so a restart does not publish it again; cleared when a kept
+    #: end is replaced after it, so it is published again with the new list.
+    at_rest: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -1602,6 +1609,7 @@ class PipelineState:
             ),
             "kept": [dict(entry) for entry in self.kept],
             "suppressed_stop": self.suppressed_stop,
+            "at_rest": self.at_rest,
         }
 
     @classmethod
@@ -1632,6 +1640,7 @@ class PipelineState:
             suppressed_stop=(
                 data["suppressed_stop"] if isinstance(data.get("suppressed_stop"), str) else None
             ),
+            at_rest=data["at_rest"] if isinstance(data.get("at_rest"), str) else None,
         )
 
 
@@ -1902,7 +1911,16 @@ class PlaybookEngine:
         §33: a phone `reply` to the architect is not a consultation. Its end is
         nothing here — no `consult.done`, no journal line, no verdict read, no stop;
         the daemon publishes its answer (`Daemon._reply_ended`).
+
+        §44 rule 4: every terminal job that reaches the engine is a moment `at rest`
+        is checked, once the end has been decided (`check_at_rest`).
         """
+        try:
+            await self._on_job(job)
+        finally:
+            self.check_at_rest()
+
+    async def _on_job(self, job: Job) -> None:
         if is_architect_reply(job):
             return
         if job.role in CONSULT_ROLES:
@@ -2084,6 +2102,10 @@ class PlaybookEngine:
         self.state.kept = [
             kept for kept in self.state.kept if kept.get("role") != job.role
         ] + [entry]
+        if replaced and self.state.at_rest is not None:
+            # §44 rule 4: a kept end replaced after `at rest` publishes it again, with
+            # the new list, at the next moment nothing runs.
+            self.state.at_rest = None
         self._save()
         log.info("playbook: paused by a human; %s of job %s is kept until `resume` (§44)",
                  event, job.id)
@@ -3429,9 +3451,12 @@ class PlaybookEngine:
         # kept ends, and is not a stop: never notified, never the suppressed mark.
         await self.stop(PAUSE_REASON, {"by": "hands pause" if by == "cli" else by}, quiet=True)
         if already:
+            self.check_at_rest()
             return {**self.pipeline(), "already_stopped": True}
         self.state.paused_by = by  # `hands pipeline` still says who paused it
         self._save()
+        # §44 rule 4: a human pause over a pipeline with nothing running is at rest at once.
+        self.check_at_rest()
         return self.pipeline()
 
     async def resume(self) -> dict[str, Any]:
@@ -3510,6 +3535,31 @@ class PlaybookEngine:
         log.info("playbook: %s", reason)
         self._notify(KEPT_DISCARDED_TITLE, payload)
 
+    def check_at_rest(self) -> None:
+        """§44 rule 4: under a human pause, at the first moment no job is running,
+        queued or held and no §6 resume is scheduled, publish `hands: at rest` once,
+        naming each kept end or saying none is kept, and record the mark with the
+        pause (`at_rest`). Called when the pause is sent and whenever a job reaches a
+        terminal state: here from `on_job`, and by the daemon and the API for the
+        ends that do not reach `on_job` (a job denied, cancelled while queued, or one
+        the runner could not spawn). Over an unpaused pipeline, another stop, or a
+        pause already at rest it does nothing."""
+        if not self.human_paused or self.state.at_rest is not None:
+            return
+        busy = [job.id for job in self.spool.list_jobs() if job.state not in TERMINAL_STATES]
+        if busy:
+            log.debug("playbook: not at rest: job(s) %s not ended", ", ".join(busy))
+            return
+        if self.limits is not None and self.limits.resume_scheduled():
+            log.debug("playbook: not at rest: a §6 resume is scheduled")
+            return
+        kept = [dict(entry) for entry in self.state.kept]
+        self.state.at_rest = now_iso()
+        self._save()
+        payload = {"message": _at_rest_message(kept), "kept": kept}
+        log.info("playbook: at rest under a human pause (%d kept end(s))", len(kept))
+        self._notify(AT_REST_TITLE, payload)
+
     def human_pause_refusal(self, command: str) -> str | None:
         """§44 rule 3: why `command` (`go`, `consult`) is refused now — the pipeline
         is paused by a human, which only `resume` ends — or None."""
@@ -3542,6 +3592,7 @@ class PlaybookEngine:
         # §44: nothing kept outlives the pause, and neither does its suppressed mark.
         self.state.kept = []
         self.state.suppressed_stop = None
+        self.state.at_rest = None
         self._save()
         self.spool.append_event("pipeline.resumed", {"by": by, "was": was})
         log.info("playbook: un-paused by %s (was: %s)", by, was)
@@ -3582,6 +3633,7 @@ class PlaybookEngine:
             "human_pause": self.human_paused,
             "kept": [dict(entry) for entry in self.state.kept],
             "suppressed_stop": self.state.suppressed_stop,
+            "at_rest": self.state.at_rest,
             "auto_runs": {
                 "allowed": list(book.auto_runs) if book else [],
                 "used": list(self.state.auto_runs_used),
@@ -3708,6 +3760,24 @@ def _no_rule_reason(candidates: list[Rule], event: str, job: Job | None) -> str:
             "§10 stops on a missing or unparseable VERDICT:"
         )
     return f"{event}: no rule matches the verdict {verdict!r}"
+
+
+def _at_rest_message(kept: list[dict[str, Any]]) -> str:
+    """§44 rule 4: the body of `hands: at rest` — each kept end (role, job id, its
+    verdict line cut to 100 characters), in the order kept, or that none is kept."""
+    if not kept:
+        return (
+            "nothing is running, queued or held and no limit resume is scheduled; "
+            "no end is kept, so `resume` only un-pauses (§44)"
+        )
+    named = "; ".join(
+        f"{entry.get('role')} job {entry.get('job')} ({_cut(entry.get('verdict'))})"
+        for entry in kept
+    )
+    return (
+        "nothing is running, queued or held and no limit resume is scheduled; "
+        f"kept until `resume`: {named} (§44)"
+    )
 
 
 def _cut(verdict: Any, size: int = 100) -> str:

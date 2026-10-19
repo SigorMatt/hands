@@ -397,6 +397,10 @@ class LimitManager:
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
 
+    def resume_scheduled(self) -> bool:
+        """§44 rule 4: is a §6 resume scheduled in this process and not yet made?"""
+        return any(not task.done() for task in self._tasks)
+
     def pending_resumes(self) -> list[Job]:
         """`limited` jobs whose resume never happened (§6, and the daemon of §3).
 

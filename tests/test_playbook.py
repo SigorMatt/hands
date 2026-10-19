@@ -1220,7 +1220,10 @@ def test_a_hand_pause_files_a_stop_event_and_notifies(tmp_home: Path, workdir: P
     assert event.payload["reason"] == PAUSE_REASON
     assert event.payload["by"] == "hands pause"
     assert state["paused"] is True and state["stop_reason"] == PAUSE_REASON
-    assert [title for title, _ in recorder.notified] == ["hands: the pipeline stopped"]
+    # §44 rule 4: a human pause over an idle pipeline is at rest at once.
+    assert [title for title, _ in recorder.notified] == [
+        "hands: the pipeline stopped", "hands: at rest",
+    ]
 
 
 def test_pausing_an_already_paused_pipeline_files_one_event(
@@ -1232,7 +1235,8 @@ def test_pausing_an_already_paused_pipeline_files_one_event(
     run(engine.pause())
     run(engine.pause())
     assert [e.kind for e in engine.spool.events()] == ["stop", "pipeline.stop_suppressed"]
-    assert len(recorder.notified) == 1
+    # the pause's stop and its `at rest` (§44 rule 4); the second pause adds nothing
+    assert len(recorder.notified) == 2
 
 
 def test_a_pause_works_with_no_playbook_at_all(tmp_home: Path, workdir: Path) -> None:
@@ -1253,7 +1257,8 @@ def test_a_resume_files_a_pipeline_resumed_event(tmp_home: Path, workdir: Path) 
     (event,) = [e for e in engine.spool.events() if e.kind == "pipeline.resumed"]
     assert event.payload["by"] == "resume"  # §10: `resume`, or `start` for a job
     assert event.payload["was"] == PAUSE_REASON
-    assert len(recorder.notified) == 1, "a resume is not on §11's notification list"
+    # the pause's stop and its `at rest` (§44 rule 4), and nothing for the resume
+    assert len(recorder.notified) == 2, "a resume is not on §11's notification list"
 
 
 def test_resuming_a_pipeline_that_is_not_paused_files_nothing(
@@ -2600,7 +2605,10 @@ def test_a_consult_stop_over_a_paused_pipeline_is_suppressed_with_its_reason_and
     and no playbook rule fires."""
     engine, recorder = engine_for(tmp_home, workdir, body, driver=workdir.parent / "d")
     run(engine.pause())
-    assert [title for title, _ in recorder.notified] == ["hands: the pipeline stopped"]
+    # §44 rule 4: a human pause over an idle pipeline is at rest at once.
+    assert [title for title, _ in recorder.notified] == [
+        "hands: the pipeline stopped", "hands: at rest",
+    ]
     about = finished(engine.spool, verdict="VERDICT: question x")
     run(engine.on_job(_driver_job(engine.spool, state=state, verdict=verdict, about=about)))
 
@@ -2611,7 +2619,7 @@ def test_a_consult_stop_over_a_paused_pipeline_is_suppressed_with_its_reason_and
     assert suppressed.payload["kept"] == PAUSE_REASON
     assert suppressed.payload["event"] == f"driver.{state}"
     titles = [title for title, _ in recorder.notified]
-    assert titles == ["hands: the pipeline stopped", SUPPRESSED_CONSULT], titles
+    assert titles == ["hands: the pipeline stopped", "hands: at rest", SUPPRESSED_CONSULT], titles
     assert reason in strip_paths(recorder.notified[-1][1]["reason"])
     assert len([e for e in engine.spool.events() if e.kind == "stop"]) == 1  # the pause's
     assert [e for e in engine.spool.events() if e.kind == "playbook.rule"] == []

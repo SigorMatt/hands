@@ -701,6 +701,7 @@ class Daemon:
                 # consultation: consult.done, the journal line, the stop (§28).
                 await self._consultation_ended(killed)
                 self._reply_ended(killed)
+                self.playbook.check_at_rest()  # §44 rule 4: a job that could not spawn
             log.warning("job %s (%s) could not run: %s", job_id, role, exc)
         except Exception:  # pragma: no cover - a bug here must not kill the worker
             log.exception("job %s (%s) raised", job_id, role)
@@ -975,6 +976,7 @@ class Daemon:
                 {"job": job.id, "role": job.role, "state": "killed", "reason": reason},
             )
             await self._consultation_ended(killed)  # §28: a consultation cancelled queued
+            self.playbook.check_at_rest()  # §44 rule 4: a job cancelled while queued
             await self._announce()
             return killed
 

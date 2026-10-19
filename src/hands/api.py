@@ -1476,6 +1476,7 @@ class Api:
                 {"job": record.id, "role": record.role, "state": "denied", "reason": reason},
             )
             await self.daemon.playbook.on_event("job.denied", job=out)  # §10
+            self.daemon.playbook.check_at_rest()  # §44 rule 4: a denied job has ended
         self._gate_decided(out, gate)
         return out.to_dict()
 

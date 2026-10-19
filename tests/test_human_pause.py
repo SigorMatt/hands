@@ -154,6 +154,14 @@ def ended(spool: Spool, role: str, verdict: str | None, *, origin: str = "playbo
 
 
 def titles(recorder: Recorder) -> list[str]:
+    """What was published, but `hands: at rest` (§44 rule 4), which the engine-level
+    tests of rules 1-3, 5 and 6 leave aside: their recording `enqueue` files no
+    spool job, so a fired resume leaves the spool idle. Rule 4's tests read every
+    title (`all_titles`) and the `at rest` payloads (`rests`)."""
+    return [title for title, _ in recorder.notified if title != "hands: at rest"]
+
+
+def all_titles(recorder: Recorder) -> list[str]:
     return [title for title, _ in recorder.notified]
 
 
@@ -716,8 +724,8 @@ class Posts:
         return 200
 
 
-def life(body: Any) -> Posts:
-    posts = Posts()
+def life(body: Any, posts: Posts | None = None) -> Posts:
+    posts = Posts() if posts is None else posts
 
     async def scenario() -> None:
         daemon = Daemon(load_config(PROJECT))
@@ -778,3 +786,238 @@ def test_a_daemon_restart_under_a_human_pause_resumes_the_builder_it_killed(
         await running_job("builder")
 
     life(second)
+
+
+# ------------------------------------------------- rule 4: at rest is published
+
+
+AT_REST = "hands: at rest"
+
+
+def rests(recorder: Recorder) -> list[dict[str, Any]]:
+    """The `hands: at rest` notifications' payloads, in order."""
+    return [payload for title, payload in recorder.notified if title == AT_REST]
+
+
+def running_on(spool: Spool, role: str) -> Job:
+    """A job of `role` that is running now, as the runner leaves one (§6)."""
+    job = spool.create_job(role=role, context="clear", prompt="p", origin="cli")
+    return spool.transition(job, "running")
+
+
+def test_at_rest_is_published_once_when_the_kept_builder_end_arrives_and_nothing_runs(
+    tmp_home: Path, workdir: Path
+) -> None:
+    engine, recorder = held_engine(tmp_home, workdir)
+    builder = running_on(engine.spool, "builder")
+    run(engine.pause())
+    assert rests(recorder) == [], "the builder runs: not at rest when the pause is sent"
+    done = engine.spool.transition(builder, "done", verdict=FINISHED, result=FINISHED)
+    run(engine.on_job(done))
+    (note,) = rests(recorder)
+    assert f"builder job {done.id} ({FINISHED})" in strip_paths(note["message"])
+    assert [entry["job"] for entry in note["kept"]] == [done.id]
+    assert all_titles(recorder) == [STOPPED, AT_REST]
+    # once per human pause: a later end that replaces nothing publishes nothing more
+    run(engine.on_job(ended(engine.spool, "builder", "VERDICT: note the tree is clean")))
+    assert len(rests(recorder)) == 1
+    assert engine.state.at_rest is not None and engine.pipeline()["at_rest"] is not None
+
+
+def test_at_rest_names_each_kept_end_with_its_verdict_line_cut_to_100_characters(
+    tmp_home: Path, workdir: Path
+) -> None:
+    engine, recorder = held_engine(tmp_home, workdir)
+    review = running_on(engine.spool, "aux")
+    run(engine.pause())
+    long = "VERDICT: question " + "y" * 200
+    asked = ended(engine.spool, "builder", long)
+    run(engine.on_job(asked))
+    assert rests(recorder) == [], "the review runs: not at rest"
+    reviewed = engine.spool.transition(review, "done", verdict=REVIEWED, result=REVIEWED)
+    run(engine.on_job(reviewed))
+    (note,) = rests(recorder)
+    message = strip_paths(note["message"])
+    cut = long[:99] + "…"
+    assert f"builder job {asked.id} ({cut})" in message, message
+    assert "y" * 100 not in strip_paths(message)
+    assert f"aux job {reviewed.id} ({REVIEWED})" in message
+    assert message.index(asked.id) < message.index(reviewed.id), "in the order kept"
+
+
+def test_at_rest_is_not_published_while_a_hold_waits_on_the_human(
+    tmp_home: Path, workdir: Path
+) -> None:
+    engine, recorder = held_engine(tmp_home, workdir)
+    engine.spool.create_job(role="builder", context="clear", prompt="p", origin="kit",
+                            state="held")
+    run(engine.pause())
+    run(engine.on_job(ended(engine.spool, "aux", REVIEWED)))
+    assert rests(recorder) == []
+
+
+def test_at_rest_is_not_published_while_a_section_6_resume_is_scheduled(
+    tmp_home: Path, workdir: Path
+) -> None:
+    engine, recorder = held_engine(tmp_home, workdir)
+
+    async def scenario() -> None:
+        reset = asyncio.Event()
+
+        async def until_reset(_: float) -> None:
+            await reset.wait()
+
+        limits = LimitManager(engine.config, engine.spool, enqueue=recorder.enqueue,
+                              sleep=until_reset, on_stop=engine.stop)
+        engine.limits = limits
+        builder = running_on(engine.spool, "builder")
+        await engine.pause()
+        limited = engine.spool.transition(builder, "limited")
+        await limits.on_job_finished(limited)
+        await engine.on_job(limited)
+        assert rests(recorder) == [], "§6's resume is scheduled: not at rest"
+        limits.cancel_all()
+
+    run(scenario())
+
+
+def test_at_rest_is_published_at_once_for_a_pause_over_an_idle_pipeline(
+    tmp_home: Path, workdir: Path
+) -> None:
+    engine, recorder = held_engine(tmp_home, workdir)
+    run(engine.pause(by="phone"))
+    (note,) = rests(recorder)
+    assert "no end is kept" in strip_paths(note["message"]) and note["kept"] == []
+    assert all_titles(recorder) == [STOPPED, AT_REST]
+    # a second pause is a no-op: no second `at rest`
+    run(engine.pause())
+    assert len(rests(recorder)) == 1
+
+
+def test_at_rest_after_a_job_fails_with_no_resume_rule(tmp_home: Path, workdir: Path) -> None:
+    engine, recorder = held_engine(tmp_home, workdir)
+    builder = running_on(engine.spool, "builder")
+    run(engine.pause())
+    failed = engine.spool.transition(builder, "failed")
+    run(engine.on_job(failed))
+    assert all_titles(recorder) == [STOPPED, SUPPRESSED_HUMAN_TITLE, AT_REST]
+    assert "no end is kept" in strip_paths(rests(recorder)[0]["message"])
+
+
+def test_at_rest_is_not_published_again_after_a_restart(tmp_home: Path, workdir: Path) -> None:
+    engine, recorder = held_engine(tmp_home, workdir)
+    run(engine.pause())
+    assert len(rests(recorder)) == 1
+    again, after = restarted(tmp_home, workdir)
+    assert again.pipeline()["at_rest"] == engine.state.at_rest
+    run(again.on_job(ended(again.spool, "builder", "VERDICT: note the tree is clean")))
+    run(again.on_job(ended(again.spool, "aux", REVIEWED)))
+    assert rests(after) == [], "the mark is in pipeline.json"
+
+
+def test_at_rest_is_published_again_with_the_new_list_when_a_kept_end_is_replaced(
+    tmp_home: Path, workdir: Path
+) -> None:
+    engine, recorder = held_engine(tmp_home, workdir)
+    builder = running_on(engine.spool, "builder")
+    run(engine.pause())
+    first = engine.spool.transition(builder, "done", verdict=FINISHED, result=FINISHED)
+    run(engine.on_job(first))
+    review = ended(engine.spool, "aux", REVIEWED)
+    run(engine.on_job(review))
+    assert len(rests(recorder)) == 1, "a kept end that replaces nothing: not again"
+    # the human's own send under the pause, whose end replaces the builder's
+    sent = engine.spool.create_job(role="builder", context="keep", prompt="go on", origin="cli")
+    run(engine.on_job_start(sent))
+    engine.spool.transition(sent, "running")
+    later = engine.spool.transition(sent.id, "done", verdict=QUESTION, result=QUESTION)
+    run(engine.on_job(later))
+    first_note, second_note = rests(recorder)
+    assert first.id in strip_paths(first_note["message"])
+    message = strip_paths(second_note["message"])
+    assert first.id not in strip_paths(message)
+    assert f"aux job {review.id} ({REVIEWED})" in message
+    assert f"builder job {later.id} ({QUESTION})" in message
+    assert [entry["job"] for entry in second_note["kept"]] == [review.id, later.id]
+
+
+def test_at_rest_is_not_published_under_a_stop_that_is_not_a_human_pause(
+    tmp_home: Path, workdir: Path
+) -> None:
+    engine, recorder = held_engine(tmp_home, workdir)
+    run(engine.stop("because", {}))
+    run(engine.on_job(ended(engine.spool, "builder", FINISHED)))
+    run(engine.pause())  # a pause over that stop is a no-op, and no human pause
+    run(engine.on_job(ended(engine.spool, "aux", REVIEWED)))
+    assert rests(recorder) == [] and engine.pipeline()["at_rest"] is None
+
+
+def rest_posts(posts: Posts) -> list[dict[str, Any]]:
+    return [sent for sent in posts.sent if sent["title"] == f"{PROJECT}: {AT_REST}"]
+
+
+#: A held job is published, not a stop, so the pause sent after it is a human one.
+HOLD_NOTIFIED = DAEMON_BOOK + """
+[[rule]]
+on = "job.held"
+then = "notify"
+message = "A job is held"
+"""
+
+
+def daemon_home(tmp_home: Path, workdir: Path) -> None:
+    (tmp_home / ".hands" / f"{PROJECT}.toml").write_text(
+        config_body(tmp_home, workdir, builder="cancel_gated = false", extra=NOTIFY)
+    )
+    commit_file(workdir, "PLAYBOOK.toml", HOLD_NOTIFIED)
+
+
+async def published_rest(posts: Posts) -> list[dict[str, Any]]:
+    async def check() -> Any:
+        return rest_posts(posts) or None
+
+    return await poll(check, "the `at rest` notification")  # type: ignore[no-any-return]
+
+
+def test_at_rest_after_a_held_job_is_denied_and_nothing_runs(
+    tmp_home: Path, workdir: Path
+) -> None:
+    daemon_home(tmp_home, workdir)
+    posts = Posts()
+
+    async def body(daemon: Daemon) -> None:
+        held = await ok("send", "--role", "builder", "--context", "clear", "--gate", "hold", "x")
+        assert (await ok("pause"))["human_pause"] is True
+        await asyncio.sleep(0.2)
+        assert rest_posts(posts) == [], "a hold waits on the human: not at rest"
+        await ok("deny", held["id"])
+        (note,) = await published_rest(posts)
+        assert "no end is kept" in strip_paths(note["message"])
+
+    life(body, posts)
+
+
+@pytest.mark.parametrize("where", ["running", "queued"])
+def test_at_rest_after_the_humans_own_job_is_cancelled_and_nothing_else_runs(
+    tmp_home: Path, workdir: Path, where: str
+) -> None:
+    daemon_home(tmp_home, workdir)
+    posts = Posts()
+
+    async def body(daemon: Daemon) -> None:
+        if where == "running":
+            job = await ok("send", "--role", "builder", "--context", "clear", BLOCK)
+            await running_job("builder")
+            job_id = job["id"]
+        else:
+            # filed queued and not yet picked up by the builder's worker
+            job_id = daemon.spool.create_job(role="builder", context="clear", prompt="p",
+                                             origin="cli").id
+        await ok("pause")
+        await asyncio.sleep(0.2)
+        assert rest_posts(posts) == [], f"a job is {where}: not at rest"
+        cancelled = await ok("cancel", job_id)
+        assert cancelled["state"] == "killed"
+        await published_rest(posts)
+
+    life(body, posts)
