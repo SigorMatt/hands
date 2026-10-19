@@ -1,0 +1,69 @@
+{
+  "url": "https://api.github.com/repos/SigorMatt/hands/pulls/comments/4309801214",
+  "pull_request_review_id": 5566268293,
+  "id": 4309801214,
+  "node_id": "PRRC_kwDOUVwTn88AAAABAOJY_g",
+  "diff_hunk": "@@ -2029,7 +2131,9 @@ def _announce_hold(self, job: Job, *, approved: bool) -> None:\n             )\n             return\n         if self.hold is not None:\n-            outcome = self.hold(job)\n+            # §43: the reason of a hold whose stored kit carries the playbook names the\n+            # path, wherever the engine publishes it — a paused pipeline's included.\n+            outcome = self.hold(job, reason=self._owner_hold_reason(job))",
+  "path": "src/hands/playbook.py",
+  "commit_id": "94f709cece66a748cebc16ad2632f4a9d2cabdfc",
+  "original_commit_id": "94f709cece66a748cebc16ad2632f4a9d2cabdfc",
+  "user": {
+    "login": "qodo-code-review[bot]",
+    "id": 151058649,
+    "node_id": "BOT_kgDOCQD42Q",
+    "avatar_url": "https://avatars.githubusercontent.com/in/484649?v=4",
+    "gravatar_id": "",
+    "url": "https://api.github.com/users/qodo-code-review%5Bbot%5D",
+    "html_url": "https://github.com/apps/qodo-code-review",
+    "followers_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/followers",
+    "following_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/following{/other_user}",
+    "gists_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/gists{/gist_id}",
+    "starred_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/starred{/owner}{/repo}",
+    "subscriptions_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/subscriptions",
+    "organizations_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/orgs",
+    "repos_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/repos",
+    "events_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/events{/privacy}",
+    "received_events_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/received_events",
+    "type": "Bot",
+    "user_view_type": "public",
+    "site_admin": false
+  },
+  "body": "<img src=\"https://img.shields.io/badge/Medium-634FD1?style=flat-square\" height=\"20px\" alt=\"Remediation recommended\">\n\n3\\. Paused playbook kits lose hold reasons <code>🐞 Bug</code> <code>◔ Observability</code>\n\n<pre>\n<b><i>_owner_hold_reason</i></b> reaches notifications only through <b><i>_announce_hold</i></b>, while <b><i>defer_hold</i></b> skips\nholds filed during a pause and startup republishes held jobs without a reason override. When either\npath handles a role-filed kit carrying a playbook, the human sees only <b><i>apply &lt;name&gt;</i></b>, not the\nplaybook path and ownership reason.\n</pre>\n\n\n<details>\n<summary><strong>Agent Prompt</strong></summary>\n\n```\n## Issue description\nPlaybook-bearing kits filed while the pipeline is paused, or republished as held after restart, bypass the new reason override and show only the gate's generic apply reason.\n\n## Fix Focus Areas\n- src/hands/playbook.py[2087-2100]\n- src/hands/playbook.py[2134-2136]\n- src/hands/daemon.py[407-436]\n- src/hands/daemon.py[861-879]\n\n## Recommended Fix\nDerive and publish the playbook-specific reason for qualifying architect-filed holds on immediate and startup publication paths as well as deferred publication. Preserve the gate's stored reason and add tests for a kit filed during a pause and one republished after restart.\n```\n\n<code>ⓘ Copy this prompt and use it to remediate the issue with your preferred AI generation tools</code>\n</details>\n\n[Dismiss ↗](https://app.qodo.ai/findings/3ab62326-22f1-48e8-ae21-67219a5a4381?action=dismiss&origin=git) | [View ↗](https://app.qodo.ai/findings/3ab62326-22f1-48e8-ae21-67219a5a4381)",
+  "created_at": "2026-10-19T02:14:23Z",
+  "updated_at": "2026-10-19T02:14:23Z",
+  "html_url": "https://github.com/SigorMatt/hands/pull/7#discussion_r4309801214",
+  "pull_request_url": "https://api.github.com/repos/SigorMatt/hands/pulls/7",
+  "_links": {
+    "self": {
+      "href": "https://api.github.com/repos/SigorMatt/hands/pulls/comments/4309801214"
+    },
+    "html": {
+      "href": "https://github.com/SigorMatt/hands/pull/7#discussion_r4309801214"
+    },
+    "pull_request": {
+      "href": "https://api.github.com/repos/SigorMatt/hands/pulls/7"
+    }
+  },
+  "reactions": {
+    "url": "https://api.github.com/repos/SigorMatt/hands/pulls/comments/4309801214/reactions",
+    "total_count": 0,
+    "+1": 0,
+    "-1": 0,
+    "laugh": 0,
+    "hooray": 0,
+    "confused": 0,
+    "heart": 0,
+    "rocket": 0,
+    "eyes": 0
+  },
+  "start_line": 2134,
+  "original_start_line": 2134,
+  "start_side": "RIGHT",
+  "line": 2136,
+  "original_line": 2136,
+  "side": "RIGHT",
+  "author_association": "NONE",
+  "original_position": 164,
+  "position": 164,
+  "subject_type": "line"
+}

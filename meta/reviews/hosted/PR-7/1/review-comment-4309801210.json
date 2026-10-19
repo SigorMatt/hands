@@ -1,0 +1,69 @@
+{
+  "url": "https://api.github.com/repos/SigorMatt/hands/pulls/comments/4309801210",
+  "pull_request_review_id": 5566268293,
+  "id": 4309801210,
+  "node_id": "PRRC_kwDOUVwTn88AAAABAOJY-g",
+  "diff_hunk": "@@ -0,0 +1,139 @@\n+# FINAL-REPORT-27 — mission 27: the separation follow-up\n+\n+VERDICT: mission 27 finished pr=7\n+\n+Source: meta/BUILDER-27-PROMPT.md, DESIGN v3.26 §43 (with §10, §12, §14,\n+§23, §24, §32, §33, §34, §36, §39, §41, §42), meta/reviews/REVIEW-26.md,\n+meta/reviews/REVIEW-25.md (should-fix 1). Branch `mission-27`, from main\n+1b822a5. Gate: `./scripts/check` green three consecutive runs before every\n+unit commit (U0 excepted, red as the kit made it); at the tip\n+(38e44ee) 5047 tests, three consecutive green runs and a fourth with\n+`CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1` in its environment.",
+  "path": "meta/FINAL-REPORT-27.md",
+  "commit_id": "94f709cece66a748cebc16ad2632f4a9d2cabdfc",
+  "original_commit_id": "94f709cece66a748cebc16ad2632f4a9d2cabdfc",
+  "user": {
+    "login": "qodo-code-review[bot]",
+    "id": 151058649,
+    "node_id": "BOT_kgDOCQD42Q",
+    "avatar_url": "https://avatars.githubusercontent.com/in/484649?v=4",
+    "gravatar_id": "",
+    "url": "https://api.github.com/users/qodo-code-review%5Bbot%5D",
+    "html_url": "https://github.com/apps/qodo-code-review",
+    "followers_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/followers",
+    "following_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/following{/other_user}",
+    "gists_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/gists{/gist_id}",
+    "starred_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/starred{/owner}{/repo}",
+    "subscriptions_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/subscriptions",
+    "organizations_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/orgs",
+    "repos_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/repos",
+    "events_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/events{/privacy}",
+    "received_events_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/received_events",
+    "type": "Bot",
+    "user_view_type": "public",
+    "site_admin": false
+  },
+  "body": "<img src=\"https://img.shields.io/badge/Medium-634FD1?style=flat-square\" height=\"20px\" alt=\"Remediation recommended\">\n\n2\\. Reviewers cannot verify the reported run <code>📘 Rule violation</code> <code>✧ Quality</code>\n\n<pre>\nThe new <b><i>meta/FINAL-REPORT-27.md</i></b> records only seven-character commit prefixes and summarizes the\ngate without embedding its raw output. Because the report is the artifact reviewers use to validate\nthe tip and tool claims, they cannot independently match the cited commits, counts, or messages to\nthe run.\n</pre>\n\n\n<details>\n<summary><strong>Agent Prompt</strong></summary>\n\n```\n## Issue description\n`meta/FINAL-REPORT-27.md` uses shortened commit identifiers and narrative test results without including the exact tool output, so reviewers cannot independently verify the reported run.\n\n## Fix Focus Areas\n- meta/FINAL-REPORT-27.md[8-11]\n- meta/FINAL-REPORT-27.md[15-24]\n\n## Recommended Fix\nReplace shortened commit identifiers with full commit SHAs, retain explicit integer metrics for every reported check, and add clearly marked raw-output sections containing the verbatim output from each discussed tool invocation.\n```\n\n<code>ⓘ Copy this prompt and use it to remediate the issue with your preferred AI generation tools</code>\n</details>\n\n[Dismiss ↗](https://app.qodo.ai/findings/018c7020-5097-44de-82c4-cf0a5493b712?action=dismiss&origin=git) | [View ↗](https://app.qodo.ai/findings/018c7020-5097-44de-82c4-cf0a5493b712)",
+  "created_at": "2026-10-19T02:14:23Z",
+  "updated_at": "2026-10-19T02:14:23Z",
+  "html_url": "https://github.com/SigorMatt/hands/pull/7#discussion_r4309801210",
+  "pull_request_url": "https://api.github.com/repos/SigorMatt/hands/pulls/7",
+  "_links": {
+    "self": {
+      "href": "https://api.github.com/repos/SigorMatt/hands/pulls/comments/4309801210"
+    },
+    "html": {
+      "href": "https://github.com/SigorMatt/hands/pull/7#discussion_r4309801210"
+    },
+    "pull_request": {
+      "href": "https://api.github.com/repos/SigorMatt/hands/pulls/7"
+    }
+  },
+  "reactions": {
+    "url": "https://api.github.com/repos/SigorMatt/hands/pulls/comments/4309801210/reactions",
+    "total_count": 0,
+    "+1": 0,
+    "-1": 0,
+    "laugh": 0,
+    "hooray": 0,
+    "confused": 0,
+    "heart": 0,
+    "rocket": 0,
+    "eyes": 0
+  },
+  "start_line": 8,
+  "original_start_line": 8,
+  "start_side": "RIGHT",
+  "line": 11,
+  "original_line": 11,
+  "side": "RIGHT",
+  "author_association": "NONE",
+  "original_position": 11,
+  "position": 11,
+  "subject_type": "line"
+}

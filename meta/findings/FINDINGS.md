@@ -2901,3 +2901,33 @@ uid 0.
 Status: resolved (test: mission 27 U1 — the race found and fixed in
 tests/test_operations.py, pinned there); the two leads not reproduced, no
 cause found, open as leads only (§43).
+
+## H-077 — a role-filed kit entry naming the playbook in another case passes the engine's playbook check
+
+Severity: low · Component: src/hands/spool.py (`stored_kit_playbooks`),
+src/hands/kit.py (the `WARN playbook:` line); DESIGN §43, §26
+Filed by: mission 27 orchestrator, U7 (2026-10-19), from PR #7's hosted
+review (finding 1, "Role kits can rewrite the playbook by changing its
+case").
+Evidence: meta/reviews/hosted/PR-7/1/review-comment-4309801219.md — the
+check recognises only the exact entries `PLAYBOOK.toml` and
+`meta/PLAYBOOK.toml`; an entry `playbook.toml`, `Playbook.toml` or
+`Meta/PLAYBOOK.toml` is approved by the engine, and on a case-insensitive
+filesystem the apply's `unzip -o` would write it over the playbook in
+force.
+
+Problem. §43 names the two paths `hands kit check` reads and the engine
+loads. On the case-sensitive filesystems hands runs on (Linux; the
+systemd units of §14), such an entry is a different file from the
+playbook in force and changes no rule; on a case-insensitive filesystem
+(a casefolded directory, a macOS clone) it would replace it, past the
+human.
+
+Decision needed. Whether §43's check matches the two paths
+case-insensitively (any entry whose casefolded path is `playbook.toml` or
+`meta/playbook.toml`), or refuses such an entry outright at `kit check`,
+or stands as written for a case-sensitive filesystem. Not changed in
+mission 27: §43 names the paths exactly, and widening them is the
+design's.
+
+Status: open

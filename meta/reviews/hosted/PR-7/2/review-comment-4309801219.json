@@ -1,0 +1,69 @@
+{
+  "url": "https://api.github.com/repos/SigorMatt/hands/pulls/comments/4309801219",
+  "pull_request_review_id": 5566268293,
+  "id": 4309801219,
+  "node_id": "PRRC_kwDOUVwTn88AAAABAOJZAw",
+  "diff_hunk": "@@ -565,6 +571,17 @@ def stored_kit_sha256(self, kit_id: str, name: str) -> str | None:\n             return None\n         return digest.hexdigest()\n \n+    def stored_kit_playbooks(self, kit_id: str, name: str) -> tuple[str, ...] | None:\n+        \"\"\"§43: which of `PLAYBOOK_PATHS` the zip stored for `kit_id` carries, by its\n+        central-directory names (the names `hands kit check` judges, §33), or None\n+        when the zip cannot be read as one.\"\"\"\n+        try:\n+            with zipfile.ZipFile(self.kit_dir(kit_id) / f\"{name}.zip\") as archive:\n+                names = set(archive.namelist())\n+        except (SpoolError, OSError, zipfile.BadZipFile, ValueError):\n+            return None\n+        return tuple(path for path in PLAYBOOK_PATHS if path in names)",
+  "path": "src/hands/spool.py",
+  "commit_id": "3ad66dd7898abd463a2e9ba7ba09851da4a1e601",
+  "original_commit_id": "94f709cece66a748cebc16ad2632f4a9d2cabdfc",
+  "user": {
+    "login": "qodo-code-review[bot]",
+    "id": 151058649,
+    "node_id": "BOT_kgDOCQD42Q",
+    "avatar_url": "https://avatars.githubusercontent.com/in/484649?v=4",
+    "gravatar_id": "",
+    "url": "https://api.github.com/users/qodo-code-review%5Bbot%5D",
+    "html_url": "https://github.com/apps/qodo-code-review",
+    "followers_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/followers",
+    "following_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/following{/other_user}",
+    "gists_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/gists{/gist_id}",
+    "starred_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/starred{/owner}{/repo}",
+    "subscriptions_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/subscriptions",
+    "organizations_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/orgs",
+    "repos_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/repos",
+    "events_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/events{/privacy}",
+    "received_events_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/received_events",
+    "type": "Bot",
+    "user_view_type": "public",
+    "site_admin": false
+  },
+  "body": "<img src=\"https://img.shields.io/badge/High-634FD1?style=flat-square\" height=\"20px\" alt=\"Action required\">\n\n1\\. Role kits can rewrite the playbook by changing its case <code>🐞 Bug</code> <code>⛨ Security</code>\n\n<pre>\n<b><i>Spool.stored_kit_playbooks</i></b> (and <b><i>kit._owner_warning</i></b>) recognise only the exact names\n<b><i>PLAYBOOK.toml</i></b> and <b><i>meta/PLAYBOOK.toml</i></b>, so an entry such as <b><i>playbook.toml</i></b>, <b><i>Playbook.toml</i></b> or\n<b><i>Meta/PLAYBOOK.toml</i></b> passes <b><i>_carries_no_playbook</i></b> and the engine approves the apply. On a\ncase-insensitive filesystem the apply&#x27;s <b><i>unzip -o</i></b> writes that entry over the real playbook, which\nthe apply then commits. The role can therefore raise its own <b><i>max_architect_consults</i></b>, drop a stop\nrule or change the kickoff without the human seeing it, which is exactly what H-075 was meant to\nstop.\n</pre>\n\n\n<details>\n<summary><strong>Agent Prompt</strong></summary>\n\n```\n## Issue description\nThe §43 hold detects a carried playbook by exact name, so a kit entry like `playbook.toml` or `Meta/PLAYBOOK.toml` is approved by the engine. On a case-folding filesystem it then overwrites the playbook in force.\n\n## Fix Focus Areas\n- src/hands/spool.py[574-583]\n- src/hands/kit.py[873-900]\n\n## Recommended Fix\nCompare each zip name with `name.casefold()` against `{p.casefold() for p in PLAYBOOK_PATHS}`, and return the entry name actually found. Apply the same case-folded match in `_owner_warning`. Add tests for `playbook.toml` and `Meta/PLAYBOOK.toml` being held.\n```\n\n<code>ⓘ Copy this prompt and use it to remediate the issue with your preferred AI generation tools</code>\n</details>\n\n[Dismiss ↗](https://app.qodo.ai/findings/b1cbd300-c9c9-450a-a5a8-75fb851d03f8?action=dismiss&origin=git) | [View ↗](https://app.qodo.ai/findings/b1cbd300-c9c9-450a-a5a8-75fb851d03f8)",
+  "created_at": "2026-10-19T02:14:23Z",
+  "updated_at": "2026-10-19T02:14:23Z",
+  "html_url": "https://github.com/SigorMatt/hands/pull/7#discussion_r4309801219",
+  "pull_request_url": "https://api.github.com/repos/SigorMatt/hands/pulls/7",
+  "_links": {
+    "self": {
+      "href": "https://api.github.com/repos/SigorMatt/hands/pulls/comments/4309801219"
+    },
+    "html": {
+      "href": "https://github.com/SigorMatt/hands/pull/7#discussion_r4309801219"
+    },
+    "pull_request": {
+      "href": "https://api.github.com/repos/SigorMatt/hands/pulls/7"
+    }
+  },
+  "reactions": {
+    "url": "https://api.github.com/repos/SigorMatt/hands/pulls/comments/4309801219/reactions",
+    "total_count": 0,
+    "+1": 0,
+    "-1": 0,
+    "laugh": 0,
+    "hooray": 0,
+    "confused": 0,
+    "heart": 0,
+    "rocket": 0,
+    "eyes": 0
+  },
+  "start_line": 578,
+  "original_start_line": 578,
+  "start_side": "RIGHT",
+  "line": 583,
+  "original_line": 583,
+  "side": "RIGHT",
+  "author_association": "NONE",
+  "original_position": 40,
+  "position": 40,
+  "subject_type": "line"
+}

@@ -39,7 +39,7 @@ blocked (two failures) or refused.
       FINDINGS, tests; never PLAYBOOK.toml
 - [x] U6 38e44ee The operator table follows the code (§43; review 26 should-fix 2)
       — docs/ARCHITECT-HANDBOOK.md §19, tests/test_operator_table.py
-- [x] U7 (this commit), later Final report, the pull request and the hosted review's findings —
+- [x] U7 94f709c, 3ad66dd, (this commit) Final report, the pull request and the hosted review's findings —
       meta/FINAL-REPORT-27.md (drafted under meta/drafts/),
       meta/reviews/hosted/PR-<pr>/
 

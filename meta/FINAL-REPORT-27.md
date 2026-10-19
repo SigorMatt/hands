@@ -6,8 +6,9 @@ Source: meta/BUILDER-27-PROMPT.md, DESIGN v3.26 §43 (with §10, §12, §14,
 §23, §24, §32, §33, §34, §36, §39, §41, §42), meta/reviews/REVIEW-26.md,
 meta/reviews/REVIEW-25.md (should-fix 1). Branch `mission-27`, from main
 1b822a5. Gate: `./scripts/check` green three consecutive runs before every
-unit commit (U0 excepted, red as the kit made it); at the tip
-(38e44ee) 5047 tests, three consecutive green runs and a fourth with
+unit commit (U0 excepted, red as the kit made it); at 38e44ee
+5047 tests, and at the final tip (3ad66dd plus this report's commit) 5056
+tests, three consecutive green runs and a fourth with
 `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1` in its environment.
 
 ## 1. What changed (sha per unit)
@@ -21,7 +22,7 @@ unit commit (U0 excepted, red as the kit made it); at the tip
 | U4 The protocols, the template and the guard's read set | 4130616 | both review protocols: what a report holds, "inside the gate's timeout", the wait rule; the brief template's sub-agent brief and handbook §7 carry the wait rule; the guard admits `ls -R`, `git ls-tree --name-only`, `git status --short`, `git log --date=<format>` (selftest 434/434); `git -C ./repo status` in the architect allow-list; rule 10 names Grep and Read; H-070, H-071, H-074 resolved |
 | U5 A playbook change is the owner's | 37bd194 | `_release_kit` holds an architect-filed apply whose stored kit carries `PLAYBOOK.toml` or `meta/PLAYBOOK.toml` (after `kit_apply_problem` and `_kit_bytes_unchanged`), published with buttons and §43's reason through `publish_hold`; no engine kickoff after the human's approval; `hands kit check`'s `WARN playbook:`; architect/CLAUDE.md rules 3, 8; handbook §3, §6, §12; the templates' role-mode kickoff notes; H-075 resolved |
 | U6 The operator table follows the code | 38e44ee | §19 gains the "not the committed copy" load stop, the phone's default-message follow-up, U5's hold (route 2, then `go`) and the no-message `stop` rule; fifteen rows reworded to the code's text; `tests/test_operator_table.py` reads the stop reasons and published lines of playbook/limits/daemon/phone by `ast` |
-| U7 Final report | (this commit), <later> | this file; the hosted review's dispositions and archive |
+| U7 Final report | 94f709c, 3ad66dd, (this commit) | this file (94f709c); `playbook:` 3ad66dd (hosted findings 3, 4: one function, `published_hold_reason`, decides §43's reason for its cause only, on every path that publishes the hold, the start fold's republish and a hold filed over a paused pipeline included); H-077 filed (finding 1); the Hosted review table and archive meta/reviews/hosted/PR-7/1..3 (this commit) |
 
 ## 2. What the tests prove
 
@@ -82,9 +83,13 @@ unit commit (U0 excepted, red as the kit made it); at the tip
   `hands doctor --live`'s turn uses doctor's own environment plus the
   role's env table, not the new decision (U3).
 - No real role-filed kit carrying a playbook has been held; no real
-  architect session ran. A kit filed while the pipeline is already paused
-  is held by the daemon itself, published with `apply <name>` only, not
-  §43's reason (the engine never publishes that hold) (U5).
+  architect session ran (U5). A kit filed over a paused pipeline and the
+  start fold's republish read §43's reason since 3ad66dd; phone mode in
+  force at filing is not tested, only role mode without `autonomous` at a
+  start; a kit filed while paused that later breaks §33 has already been
+  published with §43's reason, which cannot be known at filing (3ad66dd).
+- A kit entry naming the playbook in another case (`playbook.toml`) is
+  not held (H-077, open).
 - No real decisions kit and `go` has run on a brief that predates the
   template; a phone `go` and the engine's kickoff after an apply carrying
   the owner sentence end to end; the apply-resume exemption was tested on
@@ -136,4 +141,18 @@ unit commit (U0 excepted, red as the kit made it); at the tip
 
 ## Hosted review
 
-Pending: the pull request is opened by this commit's push; the table follows.
+PR #7, `qodo-code-review[bot]`, read with `hands hosted-review 7`. Fetch 1
+(Code Review comment 6258210146, updated 2026-10-19T02:14:21Z, at
+94f709c): Bugs 3, Rule violations 1, Cross-repo conflicts 0, Skill
+insights 0; 4 of 4 open. Fetch 2 (after 3ad66dd was pushed, before the bot
+re-read it): the comment unchanged, the inline comments' line metadata
+moved. Fetch 3 (updated 2026-10-19T02:51:32Z, at 3ad66dd): Bugs 1, Rule
+violations 1; 2 of 4 open, findings 3 and 4 marked resolved. Archive
+meta/reviews/hosted/PR-7/1..3. Numbers are fetch 1's.
+
+| # | Finding (verbatim, as the bot wrote it) | Disposition |
+|---|---|---|
+| 1 | Role kits can rewrite the playbook by changing its case — Spool.stored_kit_playbooks (and kit._owner_warning) recognise only the exact names PLAYBOOK.toml and meta/PLAYBOOK.toml, so an entry such as playbook.toml, Playbook.toml or Meta/PLAYBOOK.toml passes _carries_no_playbook and the engine approves the apply. On a case-insensitive filesystem the apply's unzip -o writes that entry over the real playbook, which the apply then commits. The role can therefore raise its own max_architect_consults, drop a stop rule or change the kickoff without the human seeing it, which is exactly what H-075 was meant to stop. | finding H-077 filed |
+| 2 | Reviewers cannot verify the reported run — The new meta/FINAL-REPORT-27.md records only seven-character commit prefixes and summarizes the gate without embedding its raw output. Because the report is the artifact reviewers use to validate the tip and tool claims, they cannot independently match the cited commits, counts, or messages to the run. | dismissed: every final report in this repository cites seven-character shas, which resolve uniquely in it and which the pull request links in full; the gate's form (`./scripts/check`, three runs, the test count) is the one the brief and REVIEW-PROTOCOL.md specify, and the reviewer re-runs the gate at each commit rather than reading pasted output |
+| 3 | Paused playbook kits lose hold reasons — _owner_hold_reason reaches notifications only through _announce_hold, while defer_hold skips holds filed during a pause and startup republishes held jobs without a reason override. When either path handles a role-filed kit carrying a playbook, the human sees only apply <name>, not the playbook path and ownership reason. | fixed in 3ad66dd |
+| 4 | Holds with other causes show the playbook-owner reason — _announce_hold now always passes reason=self._owner_hold_reason(job), so every buttoned hold of a kit that contains a playbook gets §43's "a change of the playbook is the owner's" reason. That includes kits that _escalate_kits is about to deny for a §33 violation, and kits that _kit_bytes_unchanged refused because the hash did not match. In those cases the human sees Approve/Deny buttons with a wrong reason for the hold, and the real cause shows only in a separate stop message. | fixed in 3ad66dd |

@@ -42,9 +42,11 @@ Done: U6 38e44ee — §19 rows (load stop, phone follow-up, U5 hold, a
 no-message stop rule) and the ast test over playbook/limits/daemon/phone
 (12 exemptions; red with each of three rows removed); green 3/3 (5047).
 
-In progress: U7 — final report (drafted in meta/drafts/), the PR, the
-hosted review's findings, the Hosted review table, the archive, the tree
-back to main. Done means: PR open, table committed and pushed, tree on main.
+Done: U7 94f709c (report), 3ad66dd (playbook: hosted findings 3, 4), (this
+commit) the Hosted review table + archive PR-7/1..3; H-077 filed (finding
+1); finding 2 dismissed; fetch 3: 2 of 4 open (1 and 2). Final tip gate
+green 3/3 + once with CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1 (5056).
+Mission 27 — FINISHED after this push; PR #7 open; tree returns to main.
 
 Standing constraints: one foreground sub-agent per unit, commit and push every
 unit to `mission-27`, ./scripts/check green three consecutive runs before each
