@@ -448,6 +448,18 @@ class WhoConfig:
     grace_s: float = DEFAULT_WHO_GRACE_S
 
 
+#: §45: how `main` moves for hands, `[repository] main`; the first is the default.
+MAIN_SETTINGS: tuple[str, ...] = ("direct", "pull-request")
+
+
+@dataclass(frozen=True)
+class RepositoryConfig:
+    """`[repository]` (§45). `main`: `direct`, as before, or `pull-request`, `main`
+    moving only through pull requests merged once their checks have passed."""
+
+    main: str = MAIN_SETTINGS[0]
+
+
 @dataclass(frozen=True)
 class Config:
     project: str
@@ -465,6 +477,8 @@ class Config:
     notify: NotifyConfig = field(default_factory=NotifyConfig)
     #: `[who]` (§29). Defaulted for the same reason.
     who: WhoConfig = field(default_factory=WhoConfig)
+    #: `[repository]` (§45). Defaulted for the same reason.
+    repository: RepositoryConfig = field(default_factory=RepositoryConfig)
 
     @property
     def spool_root(self) -> Path:
@@ -686,7 +700,7 @@ def parse_config(data: dict[str, Any], *, project: str, path: Path) -> Config:
     _check_keys(
         data,
         ("server", "notify", "who", "roles", "ops", "monitor", "limits", "playbook", "files",
-         "gates", "runner"),
+         "gates", "runner", "repository"),
         "config",
         path,
     )
@@ -917,6 +931,18 @@ def parse_config(data: dict[str, Any], *, project: str, path: Path) -> Config:
     _check_keys(who_t, ("grace_s",), "[who]", path)
     who = WhoConfig(grace_s=_number(who_t, "grace_s", DEFAULT_WHO_GRACE_S, "[who]", path))
 
+    repository_t = _table(data, "repository", path)
+    _check_keys(repository_t, ("main",), "[repository]", path)
+    # §45: any value but the two refuses to load, naming them; an empty one too,
+    # so `blank=None` here leaves that refusal to the check below.
+    main = _str(repository_t, "main", MAIN_SETTINGS[0], "[repository]", path, blank=None)
+    if main not in MAIN_SETTINGS:
+        raise ConfigError(
+            f'{path}: [repository] main must be "direct" or "pull-request", got {main!r} '
+            '(§45; "direct" when the key is left out)'
+        )
+    repository = RepositoryConfig(main=main)
+
     return Config(
         project=project,
         path=path,
@@ -931,6 +957,7 @@ def parse_config(data: dict[str, Any], *, project: str, path: Path) -> Config:
         runner=runner,
         notify=notify,
         who=who,
+        repository=repository,
     )
 
 

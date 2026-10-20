@@ -30,3 +30,10 @@ cwd = "~/hands-architect/<project>"  # the architect directory, its repo/ clone 
 
 [files]
 allowed_roots = ["~/git/<project>", "~/Downloads"]
+
+# How `main` moves for hands (DESIGN §45): "direct", as before, or
+# "pull-request", only through pull requests merged once their checks have
+# passed (docs/PR-CI-GATE.md gives the order a project switches in). handsd
+# reads it at start; doctor's `main` row compares it with `main`'s rules.
+# [repository]
+# main = "direct"                  # default; or "pull-request"

@@ -24,7 +24,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, TextIO
 
-from hands import __version__, doctor
+from hands import __version__, doctor, forge
 from hands import digest as digest_mod
 from hands import hosted as hosted_mod
 from hands import kit as kit_mod
@@ -182,6 +182,89 @@ def _common() -> argparse.ArgumentParser:
         "--socket", default=argparse.SUPPRESS, help="override server.socket from the config"
     )
     return common
+
+
+#: §45: one `hands ci-wait` call waits at most nine minutes, so that it fits one
+#: foreground tool call under any role's bash timeout (§36), polling every thirty
+#: seconds. Read when the command runs, so a test can shorten them.
+CI_WAIT_LIMIT_S = 540.0
+CI_WAIT_INTERVAL_S = 30.0
+#: §45: the buckets of `gh pr checks` that end an awaited check.
+CI_PASSED = ("pass", "skipping")
+CI_FAILED = ("fail", "cancel")
+
+
+def ci_wait(
+    pr: int,
+    names: Sequence[str],
+    *,
+    out: TextIO,
+    cwd: Path | None = None,
+    limit_s: float = CI_WAIT_LIMIT_S,
+    interval_s: float = CI_WAIT_INTERVAL_S,
+    clock: Callable[[], float] = time.monotonic,
+    sleep: Callable[[float], None] = time.sleep,
+) -> int:
+    """`hands ci-wait <pr> [--check <name>]…` (§45): 0 passed, 1 failed, 3 still
+    waiting at the limit, 2 nothing to wait for or a read that failed. Prints
+    nothing until the end: one line per awaited check, then the last line (an
+    error prints the last line only)."""
+
+    def error(reason: str) -> int:
+        print(f"ci-wait: error: {reason}", file=out)
+        return 2
+
+    where = Path.cwd() if cwd is None else cwd
+    try:
+        gh = forge.gh_path()
+        forge.signed_in(gh)
+        repo = forge.origin_repo(where)
+        base, _head = forge.pr_branches(gh, repo, pr)
+        awaited = forge.required_checks(forge.branch_rules(gh, repo, base))
+    except forge.ForgeError as exc:
+        return error(str(exc))
+    if not awaited:
+        awaited = list(dict.fromkeys(name for name in names if name))
+    if not awaited:
+        return error(
+            f"no check to wait for: {base}'s rules require none and no --check was given"
+        )
+    deadline = clock() + limit_s
+    while True:
+        try:
+            reported = forge.pr_checks(gh, repo, pr)
+        except forge.ForgeError as exc:
+            return error(str(exc))
+        rows: list[tuple[str, str, str]] = []
+        for name in awaited:
+            mine = [entry for entry in reported if entry["name"] == name]
+            if not mine:
+                rows.append((name, "pending", "(not reported yet)"))
+                continue
+            # gh may report a name once per workflow: any of them failing fails it,
+            # any not ended (pending, or a bucket 2.89 does not name) keeps it waiting.
+            shown = (
+                next((e for e in mine if e["bucket"] in CI_FAILED), None)
+                or next((e for e in mine if e["bucket"] not in CI_PASSED), None)
+                or mine[-1]
+            )
+            rows.append((name, shown["bucket"], shown["link"] or "-"))
+        failed_names = [name for name, bucket, _ in rows if bucket in CI_FAILED]
+        pending_names = [name for name, bucket, _ in rows if bucket not in CI_PASSED + CI_FAILED]
+        remaining = deadline - clock()
+        if failed_names or not pending_names or remaining <= 0:
+            break
+        sleep(min(interval_s, remaining))
+    for name, bucket, link in rows:
+        print(f"{name}  {bucket}  {link}", file=out)
+    if failed_names:
+        print(f"ci-wait: failed: {', '.join(failed_names)}", file=out)
+        return 1
+    if pending_names:
+        print(f"ci-wait: waiting: {', '.join(pending_names)}", file=out)
+        return 3
+    print("ci-wait: passed", file=out)
+    return 0
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -450,6 +533,29 @@ def build_parser() -> argparse.ArgumentParser:
         default=hosted_mod.DEFAULT_BOT,
         metavar="LOGIN",
         help=f"the reviewer bot's login (default: {hosted_mod.DEFAULT_BOT})",
+    )
+    # §45: answered by the client with no daemon and no config, like
+    # `hosted-review`: it reads the pull request's checks through `gh`, read-only.
+    ci_wait_p = command(
+        "ci-wait",
+        "wait for a pull request's checks (§45), run in a clone whose origin is the pull "
+        "request's github.com repository: the checks awaited are the contexts of the "
+        "required_status_checks rule of the base branch's effective rules, else the names "
+        "given with --check; polls every thirty seconds for at most nine minutes, then "
+        "prints one line per awaited check (name, bucket, link) and a last line "
+        "`ci-wait: passed | failed: <names> | waiting: <names> | error: <reason>`; exit 0 "
+        "passed (every awaited check pass or skipping), 1 failed (fail or cancel), 3 still "
+        "waiting at the limit (call it again; never a pass), 2 no check to wait for or the "
+        "pull request, the rules or the checks could not be read",
+    )
+    ci_wait_p.add_argument("pr", type=int, help="the pull request number")
+    ci_wait_p.add_argument(
+        "--check",
+        action="append",
+        default=[],
+        metavar="NAME",
+        help="a check to wait for by name when the base branch's rules require none "
+        "(repeatable; ignored when the rules have a required_status_checks rule)",
     )
     check = command("doctor", "check the install end to end (§4, §14)")
     check.add_argument(
@@ -895,6 +1001,11 @@ def main(
             return _handbook(args.templates, out=out, err=err, as_json=as_json)
         if command == "hosted-review":
             return hosted_mod.run(args.pr, args.bot, out=out, err=err)
+        if command == "ci-wait":
+            return ci_wait(
+                args.pr, args.check, out=out,
+                limit_s=CI_WAIT_LIMIT_S, interval_s=CI_WAIT_INTERVAL_S,
+            )  # fmt: skip
         if command == "project":
             return project_mod.add(args.name, args.repo, dry_run=args.dry_run, out=out, err=err)
         if command == "send":
