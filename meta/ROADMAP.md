@@ -315,19 +315,33 @@ then an install (`uv tool install --force`) and a driver-kit refresh.
   on the other project, `pause` while its builder runs, `at rest` naming
   the kept end, its three waiting owner commits made at rest, `resume`,
   the kept end's step starting — read back from its branch; a restart
-  under a human pause resuming the builder.
+  under a human pause resuming the builder. DONE 2026-10-20 (review 28:
+  blockers=0, should-fix=2, carried to mission 29; PR #8 merged by the
+  review, 1acc9e0; installed on both daemons 2026-10-20, both projects
+  stopped with no job running). The gate's live part on the other project
+  waits for its builder to run again, and is declared met from its branch
+  and the notifications, never from memory.
 - **Pull requests only, CI required** — mission 29 (decided 2026-10-19
-  01:42; DESIGN §44 records the facts, its kit writes the design). A CI
-  workflow running `./scripts/check` on pull requests; a per-project
-  setting for how `main` moves (`direct`, the default, or
-  `pull-request`), under which kit applies and decisions kits land through
-  pull requests merged once CI passes and the review commits its file to
-  the mission's branch; docs/PR-CI-GATE.md (a ruleset template proven on
-  another repository); doctor's report of the setting against the
-  branch's rules. Gate: after its install the aux creates the ruleset for
-  this repository, and mission 30 runs entirely under it. The other
-  project switches to the pull-request shape at a later quiet moment of
-  its own, after mission 28's pause has been tested there.
+  01:42; DESIGN §45, written 2026-10-20). A CI workflow running
+  `./scripts/check` on pull requests and on pushes to `main`; a
+  per-project setting, `[repository] main` (`direct`, the default, or
+  `pull-request`), under which a kit's apply goes through a pull request
+  of its own merged once its checks pass, a resumed apply finding it
+  again; `hands ci-wait <pr>`, the checks read mechanically; the engine's
+  stop for an apply that did not land, never kept under a human pause
+  (H-080); a role-filed kit that carries `.github/` held for the human;
+  no test sending a request off the machine; the review protocol
+  committing its file to the mission's branch and merging on green checks
+  wherever `main`'s rules take pull requests only; docs/PR-CI-GATE.md (a
+  ruleset template proven on another repository, with the order a project
+  switches in); doctor's `main` row, the setting against the branch's
+  rules; review 28's should-fix 1 (H-079). Gate: after its install the
+  human sets this repository's `main` to `pull-request` and the aux
+  creates the ruleset (`current_user_can_bypass: never`); kit 30's apply
+  merges through a pull request on green checks, and mission 30's review
+  commits to its branch and merges on green checks. The other project
+  switches at a later quiet moment of its own, after mission 28's pause
+  has been tested there.
 - **M8b The harness seam** — mission 30 with Codex (DESIGN §46, written
   from docs/HARNESS-PROBE.md); a harness for a local model (OpenCode or dsh,
   or both) is mission 31, M8b's second, kept separate under the

@@ -1,8 +1,10 @@
-plan: mission 28 kit (DESIGN v3.27, a pause that holds the next step)
+plan: mission 29 kit (DESIGN v3.28, main by pull requests only)
 
-Mission 28: a human pause holds the next step, at rest is published,
-resume replays (H-078); review 27's three should-fix items; H-077 ruled
-(DESIGN v3.27 §44). Replaces DESIGN.md, KIT.md, meta/BACKLOG.md and
-meta/ROADMAP.md; adds meta/BUILDER-28-PROMPT.md. Records the 2026-10-19
-renumbering: 28 the pause, 29 the pull-request gate, 30 the harness seam,
-31 the local-model harness, 32 M9.
+DESIGN v3.28 §45: the per-project `[repository] main` setting, `hands
+ci-wait`, a kit's apply through its own pull request, the engine's stop for
+an apply that did not land (H-080), the review on the mission's branch and
+the merge on green checks, doctor's `main` row, CI on GitHub's runner, and
+review 28's should-fix 1 (H-079). docs/PR-CI-GATE.md (added) is the ruleset
+template the aux follows after the install. meta/BUILDER-29-PROMPT.md is the
+brief; meta/ROADMAP.md and meta/BACKLOG.md record mission 28 done and
+mission 29's shape.

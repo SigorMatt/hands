@@ -1,4 +1,4 @@
-# hands — DESIGN v3.27
+# hands — DESIGN v3.28
 
 Machinery that replaces the human relay between the planning brain and the two
 Claude Code roles (builder, aux) on the Ubuntu laptop, and that keeps a series
@@ -3639,3 +3639,447 @@ quiet moment: `pause`, wait for `at rest`, commit, `resume`). The release
 routine's warning about a project paused at a restart is retired once
 this is installed. No instruction paste is due: `docs/ARCHITECT-INSTRUCTION.md`
 does not change.
+
+## 45. Changes from v3.27 (mission 28 review; a `main` that takes pull requests only)
+
+REVIEW-28 (`reviewed: 45ed9c9`, `blockers=0 should-fix=2`; the hosted
+review's seven findings: six fixed in the pull request, one dismissed)
+merged PR #8 itself (1acc9e0) on 2026-10-20 at 05:12. The release was
+installed on both daemons at 22:10 the same day in one step, both projects
+being stopped with no job running (the review's rule-9 stop here, an
+escalation there). This section holds the pull-request gate decided on
+2026-10-19 at 01:42 and written here, review 28's two should-fix items,
+and a gap in how an apply that fails is decided (H-080).
+
+**Review 28's should-fix items.**
+1. §44 rule 4 publishes `hands: at rest` again only "when a kept end is
+   replaced after it". An end of a role with nothing kept yet, kept after
+   the mark (a laptop `hands send` to the aux under the pause, whose
+   `aux.done` is then kept), publishes nothing, and the list the human or a
+   project chat guards on is stale (H-079). Rule 4 now reads: once per human
+   pause at the first moment nothing runs, and **again, with the new list,
+   at the first such moment after the kept list has changed** — an end kept
+   or an end replaced after the last publication. The mark records when it
+   was last published; a restart publishes nothing unless an end was kept
+   after the mark.
+2. FINAL-REPORT-28 §4 lists U1–U4's readings and omits one made by 58deee7:
+   under a human pause, with the playbook file present and not loading
+   (`load_error` set), a role's end is kept, its §10 decision being the
+   load's stop. That reading is the design: §10's stop for a playbook that
+   does not load is a stop like any other, and rule 1 keeps a role's end
+   whose decision is a stop. Nothing to change.
+
+**The facts the gate starts from (read from the branch on 2026-10-20).**
+Every change reaches this repository's `main` by one of five commits, and
+the pull-request gate (a GitHub ruleset with `pull_request` and
+`required_status_checks`, no bypass, docs/PR-CI-GATE.md) refuses every one
+of them pushed directly:
+- a kit's apply (`plan:`, and `plan: decisions <date> (owner)`): a builder
+  job in the builder's tree, on whatever branch it is on, which commits and
+  pushes (§27, §42) — on `main` for every kit sent between missions;
+- the review's file (`review: mission N`, with the hosted review's archive):
+  the aux commits it to `main` before any merge (§35, §39);
+- the merge of a mission's pull request (`gh pr merge --merge`), which the
+  gate allows once the required checks have passed;
+- a `journal:` commit: every consultation appends one line to
+  `meta/journal.md` in the builder's tree (§27), committed by the builder
+  when hands' sentence (§39, H-060) or its brief's §R tells it to — on
+  `main` when the consultation came between missions, as every architect
+  consultation does in role mode;
+- a mission whose brief says "Direct" (§35), whose unit commits go to `main`.
+This repository has no CI (no `.github/`); its gate is `./scripts/check`
+on the laptop. And a kit can turn the gate red on purpose: kit 27 reworded
+DESIGN text a test pins (H-034's fixture), and its mission's U1 made the
+test green again.
+
+So the gate breaks nothing only when, before it exists, hands can do each of
+those five things through a pull request whose CI has passed. This section
+builds that, behind a per-project setting that defaults to today's shape:
+installing this release changes nothing until the human switches a project.
+
+**The setting.** `[repository] main = "direct" | "pull-request"` in the
+project's config (`~/.hands/<project>.toml`), `direct` by default; any
+other value refuses to load, naming the two. It says how `main` moves for
+hands: `direct`, as today; `pull-request`, only through pull requests,
+merged once their checks have passed. handsd reads it at start, like every
+key, so a change takes a restart. It decides the apply's prompt and the
+journal sentence below, and doctor's `main` row compares it with `main`'s
+rules on GitHub. Nothing else in hands reads it: the review protocol, a
+project file, reads `main`'s rules from GitHub itself (below). A project
+whose setting and rules disagree is warned by doctor, and an apply whose
+push is refused stops (below).
+
+**`hands ci-wait <pr> [--check <name>]…` (the checks, read mechanically).**
+A client command, like `hands hosted-review` (§39), run in a clone whose
+`origin` is the pull request's repository, through `gh` only, read-only.
+The checks it waits for, by name: the `context` of each entry of the
+`required_status_checks` rule in the base branch's effective rules (`gh api
+repos/<owner>/<repo>/rules/branches/<base>`); with no such rule, the names
+given with `--check`; with neither, it waits for nothing and exits 2 ("no
+check to wait for: <base>'s rules require none and no --check was given"),
+so a merge never follows a guess. It reads the pull request's checks with
+`gh pr checks <pr> --json name,bucket,link`, which exits 0 whatever the
+checks' buckets are, and exits 1 with "no checks reported on the
+'<branch>' branch" until the first check registers: `ci-wait` reads that
+message as none reported yet, and any other failure as an error. An awaited
+check not reported yet is pending. One call waits at most nine minutes, so
+that it fits one foreground tool call under any role's bash timeout (§36),
+polling every thirty seconds, and exits:
+- `0` — passed: every awaited check has completed as `pass` or
+  `skipping`;
+- `1` — failed: an awaited check completed as `fail` or `cancel`;
+- `3` — still waiting at the end of the nine minutes (an awaited check
+  pending or not reported yet): the wait, never a pass; the caller calls it
+  again;
+- `2` — no check to wait for, or it could not read the pull request, the
+  rules or the checks (no `gh`, not signed in, no such pull request).
+At the end of the call it prints one line per awaited check (name, bucket,
+link), then a last line `ci-wait: passed | failed: <name> | waiting:
+<names> | error: <reason>`. A check the rules do not require (a hosted
+reviewer's, if one posts one) is never awaited and never decides.
+
+**The apply (§27), by the setting.** Under `direct` the prompt is today's
+with one sentence added before "Change nothing else.": `If the push is
+refused, undo that commit (git reset --keep HEAD~1) and reply instead with
+one line: VERDICT: kit not applied pr=none <why, in one line>.` — so a
+refused push leaves no unpushed commit behind. Under `pull-request` it is,
+word for word, with `{location}`, `{touched}` and `{message}` as today,
+`{branch}`, `{title}` the commit message shell-quoted, `{body}` and
+`{subject}` below:
+
+    Apply {location} to this repository, whose `main` takes pull requests
+    only (DESIGN §45). First, where the working tree is. (a) On `{branch}`,
+    this kit's own branch: go on below from the step not done yet (`gh pr
+    list --head {branch} --state all --json number,state` names its pull
+    request and whether it merged). (b) On another branch, not a `kit/` one,
+    that is on `origin` (`git ls-remote --exit-code --heads origin <that
+    branch>`) and whose pull requests, if it has any, are all open (`gh pr
+    list --head <that branch> --state all --json state` names none `MERGED`
+    or `CLOSED`), a mission is in flight on it: unzip
+    -o into the repo root (it {touched}), then one plan-only sub-agent makes
+    a single commit {message} listing those files in its body, and pushes
+    that branch; reply with one line: VERDICT: kit applied <sha>; if that
+    push is refused, undo the commit (`git reset --keep HEAD~1`) and reply
+    with one line: VERDICT: kit not applied pr=none <why, in one line>. (c)
+    On any other branch: `git checkout main`. Then, on `main`: `git pull
+    --ff-only`, and the first of these that holds. If `gh pr list --head
+    {branch} --state merged --json number,mergeCommit` names a merged pull
+    request, the kit is on `main` already: reply with one line: VERDICT: kit
+    applied <its merge commit's sha>. If `gh pr list --head {branch} --state
+    open --json number` names an open one: `git checkout {branch}` and go on
+    below from the step not done yet. If `git ls-remote --exit-code --heads
+    origin {branch}` finds the branch: `git checkout -B {branch}
+    origin/{branch}` and go on below from the step not done yet. Else: `git
+    checkout -B {branch}`, unzip -o into the repo root (it {touched}), one
+    plan-only sub-agent makes a single commit {message} listing those files
+    in its body, `git push -u origin {branch}`, and `gh pr create --base
+    main --head {branch} --title {title} --body {body}`. Then wait for its
+    checks: `hands ci-wait <pr>; echo "ci-wait-exit=$?"`, one foreground
+    call at a time, again while it exits 3, at most seven calls. When it
+    exits 0: `gh pr merge <pr> --merge --delete-branch --subject {subject}`,
+    then `git checkout main && git pull --ff-only`, and reply with one line:
+    VERDICT: kit applied <sha>, the merge commit's sha. If it exits 1 or 2,
+    if the seventh call still exits 3, or if the push, the pull request or
+    the merge is refused: leave the pull request, if there is one, open,
+    `git checkout main`, and reply with one line: VERDICT: kit not applied
+    pr=<pr, or none> <why, in one line>. If `gh` or `git` cannot answer one
+    of the questions above, reply with one line: VERDICT: kit not applied
+    pr=none <its error, in one line>. Change nothing else.
+
+- `{branch}` is `kit/<stem>-<hash>`: `<stem>` the kit's file name without
+  `.zip`, each character outside `A-Z a-z 0-9 _ -` replaced by `-` (a dot
+  too, so the branch is always a valid ref name), cut to 40 characters;
+  `<hash>` the first 12 hexadecimal digits of the zip's sha256. Two kits of
+  one name never share a branch, and the same bytes sent again find their
+  own pull request, merged or open, or their own branch.
+- `{body}` is `Kit <file name> (sha256 <the whole digest>), applied by
+  hands (DESIGN §45): it {touched}.`, shell-quoted.
+- `{subject}` is `merge: kit <stem> (PR #<pr>)`, `<stem>` as in `{branch}`,
+  shell-quoted, with `<pr>` left for the builder to fill.
+- `hands kit check` prints the kit's sha256 — of the zip, or, for a
+  directory kit, of the zip `hands kit file` builds from it (`build_zip`:
+  the same bytes for the same files on the machine that files it) — and
+  the prompt of the shape the project's configuration gives when it knows
+  the project, else the `direct` one, saying which.
+- A mission in flight is the branch case (b): a decisions kit sent while a
+  mission's builder asked a question lands on the mission's branch, as it
+  does today, and reaches `main` with the mission's pull request — a branch
+  U0 has pushed with no commit of its own yet included. A branch that was
+  never pushed, a branch whose pull request has merged (a finished
+  mission's, left checked out) or was closed (an abandoned one), and another
+  kit's are left for `main` (c).
+- **A resume of an apply** — after a restart (`builder.orphaned`), a
+  failure (`builder.failed`) or a usage limit (§6) — re-sends the apply's
+  own prompt, never `[roles.builder] resume_line`, and is an apply as §43
+  counts one (a job with a `kit_id`, or a resume of one, the chain followed
+  back by `resumed_from`). The prompt above finds the kit's branch, its
+  pull request open or merged, and goes on from there; it never starts a
+  second pull request for the same bytes. §32's test of an apply the engine
+  approved is asked of the chain's first job, so a resumed apply that lands
+  is followed by the engine's kickoff as the first would have been.
+- The gate's patterns (§8) are unchanged: the apply is filed held as
+  today, and its prompt naming `gh pr create` changes nothing.
+
+**A kit that carries the CI is the owner's.** Under the gate, a pull
+request's check runs the workflow, and the gate script it calls, from the
+pull request's own branch, so a kit that rewrote either could weaken the
+check its own pull request is merged on. §43's hold extends to them: a
+role-filed kit with an entry whose casefolded path begins `.github/` or
+equals `scripts/check` (the gate every hands brief names) is not approved
+by the engine; its apply is held for the human with the reason `apply
+<name>: the kit carries <path>, the repository's CI; a change of the CI is
+the owner's (§45)` — or §43's playbook reason when it carries the playbook
+too — and `hands kit check` prints a `WARN ci:` line for any kit that
+carries one. In a mission, a unit commit that changes a file under
+`.github/` or `scripts/check` that no unit of the brief names is a blocker
+for the review (below).
+
+**An apply that did not land (H-080).** An apply's end goes to the
+playbook's rules like any `builder.done`. When it did not land, this
+repository's catch-all `^VERDICT:` consults the driver about a "question"
+that is not one, and the templates' last rule stops with "Builder finished
+without a recognised verdict", which says nothing of the kit; and under a
+human pause, §44 rule 1 keeps that end as the builder's, replacing the kept
+end of the mission it was sent beside. Under the gate the case becomes
+ordinary (a red check, a refused push or merge). The rule, for both shapes:
+the `builder.done` of an apply as §43 counts one (above) whose reply does
+not begin `VERDICT: kit applied` is the engine's to decide, before any
+playbook rule. On an unpaused pipeline it stops it: `the kit's apply did
+not land: <its VERDICT: line cut to 200 characters, or "no VERDICT:
+line"> (§45)`, titled as every engine stop is, with a row of its own in the
+operator table. Over a pipeline already paused it does not stop it again:
+it publishes that reason once — under a human pause as §44 rule 2's `hands:
+a stop under a human pause`, under any other pause titled as a stop — and
+the pause, its reason and any kept ends stay. It is the engine's own, like
+the limit manager's stop: never kept, and it never replaces a kept end. An
+apply that landed is decided as today: the playbook's `kit applied` rule,
+or the engine's kickoff after an apply it approved (§31; kept under a human
+pause, §44 rule 1).
+
+**The journal under a `main` that takes pull requests only.** A commit
+made on `main` and never pushed would break every later `git pull
+--ff-only` once `origin/main` moves without it, so under `pull-request` the
+consultation's line is committed only on a branch. hands' sentence (§39,
+put before a cli send or an `answer` to the builder while
+`meta/journal.md` is dirty) reads, word for word, under `pull-request`:
+
+    [hands: meta/journal.md is uncommitted in your working tree (`git
+    status --porcelain` shows it): on a branch other than `main`, commit it
+    first, on its own, as `journal: <consultation>`; this repository's
+    `main` takes pull requests only, so on `main` leave it uncommitted for
+    the next mission's branch. Then do what follows.]
+
+(one line in the prompt; wrapped here). Under `direct` it is unchanged, and
+§36's reader recognises both. The brief template's §R gains the same rule
+for the kickoff, which hands' sentence never precedes: a dirty
+`meta/journal.md` at the start is committed, on its own, as `journal:
+consultation lines` on the mission's branch — on `main`, after U0 has
+created or checked out that branch — and never pushed to `main` unless the
+brief's Branch section says Direct.
+
+A dirty `meta/journal.md` also stops `git checkout` of a branch whose
+journal differs from `main`'s — a closer's open branch, or the review's
+checkout of the mission's branch — since every unit appended to it there.
+So the template's Branch section (a closer's `git checkout <branch> && git
+merge main`) and the review protocol (its `git checkout <branch>`) carry
+the lines over first: the lines `git diff -U0 -- meta/journal.md` adds are
+kept, `git checkout -- meta/journal.md` restores the file, the branch is
+checked out, the kept lines are appended to its `meta/journal.md`, and they
+are committed, on their own, as `journal: consultation lines`. When the file
+is untracked on `main` (a project's first consultation created it), its
+whole content is the kept lines and it is removed before the checkout. A
+new branch made from `main` needs none of it: its journal is `main`'s.
+
+**The review (the review protocol, the template and this repository's
+copy).** The protocol's first step, before it reads the brief, reads once
+whether `main` takes pull requests only, from GitHub, not from hands: `gh
+api repos/<owner>/<repo>/rules/branches/main --jq '[.[].type] | join(" ")'`
+names `pull_request` when it does. If the read fails, it is tried once more
+a minute later; if that fails too, the review goes no further: one blocker,
+"`main`'s rules could not be read: <the error>", the review file committed
+to the mission's branch when it exists (a push to a branch is never refused
+by the gate) and otherwise nowhere, and the reply carries the blocker.
+- Without `pull_request`, the review is committed as today: to `main`,
+  before any merge.
+- With it:
+  - a brief that says "Direct" is a blocker, "a direct mission on a `main`
+    that takes pull requests only", and the review goes no further; with no
+    open pull request for the brief's branch, the `reviewed: none` review is
+    committed nowhere (`main` refuses it, and the branch may not exist), and
+    the reply carries its blocker;
+  - before writing, the reviewer waits for the pull request's checks at the
+    reviewed tip (`hands ci-wait <number>`, as the merge below does): an
+    end other than exit 0 is a blocker (a failed gate, or a gate not shown
+    green), and the command's last line goes in `## Notes`;
+  - the review file and the hosted review's archive are committed to the
+    mission's branch, never to `main`: `git checkout <branch> && git pull
+    --ff-only`, the archive copied in, one commit `review: mission N`,
+    pushed to the branch, before any merge. A clean review lands on `main`
+    with the merge; a review with blockers stays on the open branch, which
+    the closer continues, so the closer's review finds it there;
+  - the merge, with `blockers=0`: the review's own commit has started the
+    checks again, so the reviewer first waits for them — `hands ci-wait
+    <number>; echo "ci-wait-exit=$?"`, one foreground call at a time, again
+    while it exits 3, at most seven calls — and merges only on exit 0, as
+    today (`gh pr merge <number> --merge --subject "merge: mission N (PR
+    #<number>)"`, then `git checkout main && git pull --ff-only`). On any
+    other end it does not merge: it adds a blocker to `REVIEW-N.md`, `the
+    merge was not made: <the command's last line>`, commits it to the
+    branch as `review: mission N (not merged)`, pushes, and replies with
+    that blocker counted. A clean verdict always means a merged mission;
+  - with blockers, the reviewer returns the tree to `main` (`git checkout
+    main && git pull --ff-only`), so the next kit's apply runs on `main`.
+- With or without it, a unit commit that changes a file under `.github/`
+  or `scripts/check` which no unit of the brief names is a blocker (read
+  with `git show --stat`, like a forbidden edit).
+
+**The brief template and the architect.** The template's Direct paragraph
+says that a repository whose `main` takes pull requests only never takes
+that shape, and its §R says the journal rule above. Its last unit carries a
+sentence the architect keeps on such a repository: after the hosted
+review's fixes are pushed, the unit waits for the pull request's checks
+(`hands ci-wait <pr>`, as above) and fixes a failed check within the design
+as it fixes a hosted finding, before the `## Hosted review` table; the
+final report names each awaited check and its result. For the architect,
+phone or role, on a repository whose `main` takes pull requests only:
+- A kit must leave the gate green, because its apply merges only on green
+  checks and nothing bypasses the gate. Where the architect can run the
+  gate (the phone architect's sandbox), it runs it on the kit applied to a
+  clone before sending it. A kit never rewords design text a test pins: the
+  new wording is written in the kit's own section, and the mission's units
+  move the code, its copies and the pinning tests to it. A kit carries no
+  file under `.github/` and no `scripts/check` unless the human asked for
+  it (it is held for the human, above).
+- A review with blockers is on the mission's branch. The architect role's
+  clone is whole and fetched before every job (§36), so its rule 1 in
+  `architect/CLAUDE.md` gives `git show
+  origin/<branch>:meta/reviews/REVIEW-N.md`, for such a repository only (on
+  any other, the review is on `main` as today); its guard allows no other
+  form of `git fetch`. The phone architect, from a shallow single-branch
+  clone, runs `git fetch --depth 1 origin <branch>`, then `git show
+  FETCH_HEAD:meta/reviews/REVIEW-N.md` (the handbook's §19 row).
+
+**doctor's `main` row.** `hands doctor` prints one row, `main`: the setting,
+and `main`'s effective rules read through `gh api
+repos/<owner>/<repo>/rules/branches/main` (a GET; `<owner>/<repo>` from the
+builder's clone's `origin`, a github.com URL in https or ssh form), each
+rule type named. The row is ok when they agree: `direct` with none of the
+rules below, or `pull-request` with `pull_request` and
+`required_status_checks` (naming the required checks). It warns, never
+fails, on:
+- `direct` with a `pull_request` or `required_status_checks` rule — a
+  direct push is refused, so applies stop and reviews go to branches: set
+  `pull-request`;
+- `pull-request` with no `pull_request` rule — `main` is not protected yet:
+  docs/PR-CI-GATE.md;
+- `pull-request` with `pull_request` and no `required_status_checks` —
+  pull requests merge without CI, and `hands ci-wait` has no check to wait
+  for, so every apply stops;
+- either setting with `required_linear_history`, `update` or
+  `merge_queue` — hands' merge commits and pull-request merges are refused
+  or queued by it.
+With no `gh`, no sign-in, an `origin` that is not on github.com, or a
+failed read, the row is skipped, naming why; the `gh` row already warns
+about `gh`.
+
+**CI.** `.github/workflows/check.yml` runs `./scripts/check` on every pull
+request and on every push to `main`, on GitHub's hosted Ubuntu runner, in
+one job whose id and `name:` are both `check`, so the check it reports is
+named `check`. Other than the triggers it holds: `permissions: contents:
+read`; a `concurrency` group per ref that cancels a superseded run;
+`timeout-minutes: 30`; `actions/checkout` and `astral-sh/setup-uv`, each
+pinned to the full commit sha of its latest release with the version in a
+comment. A test that fails only on the runner is made hermetic; a test that
+needs what the runner lacks is skipped by a condition naming that lack
+(never by a CI variable), named in the commit body and the final report;
+and no test sends a request off the machine. An autouse fixture of the
+suite sets `HTTPS_PROXY` and `HTTP_PROXY` to a port nothing listens on,
+with `NO_PROXY` naming only `localhost` and `127.0.0.1`, so a request to any
+other host fails at once in every run, on the laptop and on the runner; and
+a test whose configuration leaves `ntfy_url` at its public default (the
+doctor live tests among them) and means to publish is pointed at a local
+stub. The check's reported name is read from a real run, never from the
+YAML: docs/PR-CI-GATE.md step 3. The git user that pushes the workflow file
+needs GitHub's `workflow` scope when it pushes over HTTPS with the `gh`
+token (`gh auth status` lists the scopes; `gh auth refresh -s workflow`
+adds it); docs/INTEGRATION.md's `gh` paragraph says so.
+
+**docs/PR-CI-GATE.md.** The ruleset template proven on another repository
+in October 2026 (rules, defaults, the procedure and its pitfalls), carried
+into this repository whole by this section's kit with two additions: the
+hosted reviewer's check, if it reports one, is never required (its verdict
+is read by the review, not by the gate, and a reviewer that is slow or down
+would block every merge); and a section for hands that gives the order a
+project switches in, with no job of the project running, queued or held
+(`hands jobs`; an apply filed before the switch keeps the prompt it was
+filed with):
+1. the CI workflow on `main`, its check green on a pull request;
+2. `[repository] main = "pull-request"` and a restart of the project's
+   `handsd` (doctor's row then warns that `main` is not protected yet);
+3. the procedure, requiring the CI workflow's check only (doctor's row is
+   then ok).
+Undoing it is the owner's: the ruleset disabled in GitHub's settings, then
+the setting set back to `direct` and the daemon restarted, with no apply in
+between (the setting still `pull-request` and no rule to wait for, an apply
+would stop).
+
+**This repository, and the other project.** Mission 29 runs as missions
+have run: its kit's apply commits to `main`, its review commits to `main`
+and merges mission 29's pull request — the gate does not exist yet, and the
+review that runs is the protocol on `main` when it starts. That pull request
+is the first whose CI runs, and its last unit waits for the `check` check by
+name (`hands ci-wait <pr> --check check`, no rules existing yet) and makes
+it green. After its install, with no job running, queued or held: the human
+sets `main = "pull-request"` for this repository and restarts
+`handsd@hands`; the aux runs docs/PR-CI-GATE.md for `SigorMatt/hands`,
+requiring the `check` check only, from the check runs the merge's push to
+`main` reported. The next kit's apply is the first through a pull request,
+and mission 30 is the first mission whose review commits to its branch and
+merges on green checks. The other project, whose missions commit straight
+to `main` and which has no CI, switches at a later quiet moment of its own,
+after mission 28's pause has been tested there, in the same order (its CI,
+then its missions in the pull-request shape and its review protocol from the
+installed template, then the setting, then the procedure), so that a
+failure in either is attributable to one change. Until then it is on
+`direct`, and of this release only these reach it: an apply that did not
+land stops with its reason (H-080), a resumed apply re-sends its own prompt
+and is followed by the engine's kickoff when it lands, a role-filed kit
+that carries `.github/` or `scripts/check` waits for the human, and the
+`direct` apply prompt's added sentence.
+
+**Documentation.** The handbook: §3 (the apply's two prompts; the kit's
+branch; a kit that keeps its gate green; a kit that carries `.github/` or
+`scripts/check`),
+§9 (a `main` that takes pull requests only: what moves `main`, the review
+on the branch, the waits, the journal), §10 (the stop for an apply that did
+not land), §12 (a project switching, the order), §18 (`hands ci-wait`), §19
+(the row for the apply that did not land: the project's chat's, route 3 —
+read the pull request's checks; a flaky check re-run and, once green, the
+pull request merged and `go` sent; a kit that breaks the gate closed and
+corrected; the review-with-blockers row saying where the review is on such
+a repository, both `git show` forms; the CI hold in the hold row). docs/INTEGRATION.md (the
+`[repository]` key in step 3, the `workflow` scope, doctor's `main` row).
+docs/OPERATIONS.md (a runbook, "Switching `main` to pull requests only",
+and "A quiet moment" step 3: under `pull-request` a commit at rest is a
+decisions kit, whose apply goes through its own pull request).
+docs/PLAYBOOK.md (the engine's stop for an apply that did not land).
+`templates/config.toml` (the key, commented, with its default). This
+repository's `CLAUDE.md` (`main` moves by merges, and by plan and review
+commits only while the setting is `direct`; branch protection follows
+docs/PR-CI-GATE.md). `architect/CLAUDE.md` rules 1 and 3, so the install
+refreshes the architect's `CLAUDE.md`. `docs/ARCHITECT-INSTRUCTION.md`
+does not change: no instruction paste is due.
+
+**Not changed.** The engine's rules beyond an apply's end; the kickoff;
+§35's mission shape (a branch per mission, the review merging a clean
+one); the gate's patterns; the driver and architect guards; how a
+consultation is started. hands never creates, edits or reads back a
+ruleset by any call but doctor's and `ci-wait`'s GETs: the gate is the
+human's, made by the aux from docs/PR-CI-GATE.md.
+
+**The gate of the mission (after its install; the human's and the aux's).**
+The setting and the ruleset for this repository, doctor's `main` row ok,
+`current_user_can_bypass: never`; then kit 30's apply through a pull
+request merged on green checks, and mission 30's review committed to its
+branch and its merge made on green checks — read back from the branch and
+the pull requests. Declared met from the branch, never from memory.

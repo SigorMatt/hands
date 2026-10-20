@@ -115,7 +115,7 @@ item names the mission it is scheduled for; unscheduled items say so.
    proxy are the checklist; its four integration tiers name the level a
    harness must reach (their Tier 3). Cited, never imported.
 
-## Order (2026-10-18: 01:33 project separation first; 03:08–03:12 the rest; small missions; renumbered 18:52, kept one mission at 19:22, DESIGN §43; renumbered 2026-10-19 01:42 and 19:3x, DESIGN §44) — 26 the separation (DONE); 27 the separation follow-up (DONE); 28 a pause that holds the next step (H-078) + review 27's should-fix 1–3 + H-077; 29 the pull-request gate (CI, the per-project `main` setting, applies and the review's commit through pull requests, docs/PR-CI-GATE.md, doctor); 30 M8b the harness seam with Codex (+ review 25's should-fix 3); 31 M8b's second mission, a local-model harness (OpenCode first); 32 M9 (+ review 25's should-fix 2); then M5b, a project from scratch (after 26), agile-skills migrated (after M9). Supersedes 2026-10-18 18:52's numbering (28 the seam, 29 the local harness, 30 M9), its 11:41 numbering and 2026-10-17 20:27's order. The 2026-10-17 23:25 kit for mission 26 (separation and profiles together) was never sent.
+## Order (2026-10-18: 01:33 project separation first; 03:08–03:12 the rest; small missions; renumbered 18:52, kept one mission at 19:22, DESIGN §43; renumbered 2026-10-19 01:42 and 19:3x, DESIGN §44) — 26 the separation (DONE); 27 the separation follow-up (DONE); 28 a pause that holds the next step (H-078) + review 27's should-fix 1–3 + H-077 (DONE); 29 the pull-request gate (CI, the per-project `main` setting, applies and the review's commit through pull requests, docs/PR-CI-GATE.md, doctor); 30 M8b the harness seam with Codex (+ review 25's should-fix 3); 31 M8b's second mission, a local-model harness (OpenCode first); 32 M9 (+ review 25's should-fix 2); then M5b, a project from scratch (after 26), agile-skills migrated (after M9). Supersedes 2026-10-18 18:52's numbering (28 the seam, 29 the local harness, 30 M9), its 11:41 numbering and 2026-10-17 20:27's order. The 2026-10-17 23:25 kit for mission 26 (separation and profiles together) was never sent.
 
 ## Mission 26 — DONE 2026-10-18 (the project separation; review 26: blockers=0, should-fix=2, carried to mission 27; PR #6 merged by the review, f16d6d1; installed on both daemons 19:34). A project operated from its own chat and the phone. Spec: DESIGN v3.25 §42.
 
@@ -173,7 +173,7 @@ item names the mission it is scheduled for; unscheduled items say so.
    with the old hook keeps working, with the warn and without the
    variable; a role-filed kit carrying the playbook held for the human.
 
-## Mission 28 (a pause that holds the next step; decided 2026-10-19 02:2x, split out 19:3x) — Spec: DESIGN v3.27 §44.
+## Mission 28 — DONE 2026-10-20 (a pause that holds the next step; decided 2026-10-19 02:2x, split out 19:3x; review 28: blockers=0, should-fix=2, carried to mission 29; PR #8 merged by the review, 1acc9e0; installed on both daemons 2026-10-20). Spec: DESIGN v3.27 §44.
 
 1. U0 the branch `mission-28`; H-078 filed (from another project's HF-017;
    evidence only); H-077's status set to the ruling.
@@ -199,23 +199,36 @@ item names the mission it is scheduled for; unscheduled items say so.
    made at rest, `resume`, the kept end's step starting, read back from its
    branch; a restart under a human pause resuming the builder.
 
-## Mission 29 (pull requests only, CI required; decided 2026-10-19 01:42) — DESIGN §44 records the facts; the kit writes the design (§45).
+## Mission 29 (a `main` that takes pull requests only; decided 2026-10-19 01:42) — Spec: DESIGN v3.28 §45.
 
-1. A CI workflow running `./scripts/check` on pull requests, green on
-   GitHub's runner; its check's name read from a real run.
-2. A per-project setting for how `main` moves: `direct` (the default) or
-   `pull-request`. Under `pull-request`, a kit apply and a decisions kit land
-   through a pull request merged once CI passes (the approval of the apply
-   is the merge decision); the review commits `REVIEW-N.md` to the mission's
-   branch before it merges; no `journal:` line lands on `main` directly;
-   both protocols and the brief template carry the two shapes.
-3. docs/PR-CI-GATE.md (the ruleset template; the hosted reviewer's check is
-   never required; the order CI, setting, gate; at a stop with no job
-   running); the handbook's onboarding and §19; doctor's report of the
-   setting against the branch's rules.
-4. Gate: after its install the aux creates the ruleset for this repository
-   (`current_user_can_bypass: never`), and mission 30 runs entirely under
-   it. The other project switches at a later quiet moment of its own.
+1. U0 the branch `mission-29`; H-079 (review 28's should-fix 1) and H-080
+   (an apply that did not land) filed. U1 CI: `.github/workflows/check.yml`
+   running `./scripts/check` on pull requests and pushes to `main`, one job
+   named `check`, actions pinned by sha; no test sending a request off the
+   machine; the gate green in a bare environment as GitHub's runner sees it.
+2. U2 `[repository] main` (`direct` | `pull-request`); `hands ci-wait
+   <pr> [--check <name>]` (the required checks from `main`'s rules, else the
+   named ones, nine minutes a call, exits 0/1/3/2); doctor's `main` row (the
+   setting against the rules).
+3. U3 the apply through a pull request of its own under `pull-request`
+   (`kit/<stem>-<hash>`, merged on green checks, `VERDICT: kit not
+   applied` otherwise; the `direct` prompt's refused-push sentence); a
+   resumed apply re-sending its own prompt; `kit check` printing the sha256.
+4. U4 the engine's stop for an apply that did not land, never kept (H-080),
+   with its operator-table row; a role-filed kit carrying `.github/` held for
+   the human; the journal sentence's `pull-request` wording.
+5. U5 the review protocol (both copies): the rules read first, the review on
+   the mission's branch and the merge on green checks where `main` takes pull
+   requests only, a `.github/` change no unit names a blocker; the brief
+   template, `architect/CLAUDE.md`, the handbook, INTEGRATION, OPERATIONS,
+   PLAYBOOK, `CLAUDE.md`. docs/PR-CI-GATE.md comes in the kit.
+6. U6 `at rest` again after the kept list changed (H-079). U7 the report,
+   the pull request, its CI check made green, the hosted review.
+7. Gate, after its install: this repository's setting `pull-request`, the
+   ruleset by docs/PR-CI-GATE.md requiring `check` only, doctor's `main`
+   row ok; kit 30's apply merged through a pull request and mission 30's
+   review committed to its branch and merged on green checks. The other
+   project switches at a later quiet moment of its own.
 
 ## Mission 30 (M8b, the harness seam with Codex; renumbered several times — 25, then 26, then 27 in 2026-10-17 20:27's order and at 2026-10-18 03:08, 28 at 18:52 — and mission 30 since 2026-10-19 19:3x) — DESIGN §46 from docs/HARNESS-PROBE.md.
 
