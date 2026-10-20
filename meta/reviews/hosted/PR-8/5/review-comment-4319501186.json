@@ -1,0 +1,69 @@
+{
+  "url": "https://api.github.com/repos/SigorMatt/hands/pulls/comments/4319501186",
+  "pull_request_review_id": 5578511208,
+  "id": 4319501186,
+  "node_id": "PRRC_kwDOUVwTn88AAAABAXZbgg",
+  "diff_hunk": "@@ -3280,18 +3475,130 @@ async def pause(self, *, by: str = \"cli\") -> dict[str, Any]:\n         `pipeline.stop_suppressed` record and changes nothing else.\n         \"\"\"\n         already = self.state.paused\n-        await self.stop(PAUSE_REASON, {\"by\": \"hands pause\" if by == \"cli\" else by})\n+        # §44 rule 3: over a human pause too, a no-op that keeps `paused_by` and the\n+        # kept ends, and is not a stop: never notified, never the suppressed mark.\n+        await self.stop(PAUSE_REASON, {\"by\": \"hands pause\" if by == \"cli\" else by}, quiet=True)\n         if already:\n+            self.check_at_rest()\n             return {**self.pipeline(), \"already_stopped\": True}\n         self.state.paused_by = by  # `hands pipeline` still says who paused it\n         self._save()\n+        # §44 rule 4: a human pause over a pipeline with nothing running is at rest at once.\n+        self.check_at_rest()\n         return self.pipeline()\n \n     async def resume(self) -> dict[str, Any]:\n-        \"\"\"`hands resume` (§4, §10's stop → resume cycle).\"\"\"\n+        \"\"\"`hands resume` (§4, §10's stop → resume cycle).\n+\n+        §44 rule 5: a human pause is resumed by reloading the playbook first, so a\n+        commit made at rest is the playbook replayed under. Refused\n+        (`ResumeRefused`, with the load's reason; the pause and the kept ends stay)\n+        when a playbook file exists and does not load, or when ends are kept and\n+        there is no playbook. With no playbook and nothing kept it un-pauses as\n+        today. Otherwise it un-pauses and replays the kept ends (`_replay`). Any\n+        other stop is un-paused as §10 has it.\"\"\"\n+        if not self.human_paused:\n+            self._unpause(\"resume\")\n+            return self.pipeline()\n+        problem = await self._load(stop_on_error=False)\n+        if problem is not None:\n+            raise ResumeRefused(\n+                f\"{problem}; the human pause and its {len(self.state.kept)} kept end(s) stay \"\n+                \"until a `resume` whose playbook loads (§44)\"\n+            )\n+        kept = list(self.state.kept)\n+        if self.playbook is None and kept:\n+            raise ResumeRefused(\n+                f\"there is no playbook ({playbook_path(self.config)}) to decide the \"\n+                f\"{len(kept)} kept end(s) with; the human pause and the kept ends stay \"\n+                \"until a `resume` whose playbook loads (§44)\"\n+            )\n         self._unpause(\"resume\")\n+        await self._replay(kept)\n         return self.pipeline()\n \n+    async def _replay(self, kept: list[dict[str, Any]]) -> None:\n+        \"\"\"§44 rule 5: decide the kept ends in order as if each had just arrived, up\n+        to and including the first whose decision starts a job (a rule that fired a\n+        job: a send, a consult, a resume) or stops the pipeline; the ends after it\n+        are discarded, with one `pipeline.kept_discarded` inbox event and one\n+        notification naming them.\"\"\"\n+        for index, entry in enumerate(kept):\n+            job = self._job(entry.get(\"job\"))\n+            if job is None:  # pragma: no cover - the spool keeps every job\n+                log.warning(\"playbook: the kept end of job %s is gone; skipped\",\n+                            entry.get(\"job\"))\n+                continue\n+            before = self.state.last_rule\n+            await self.on_event(str(entry.get(\"event\")), job=job)\n+            after = self.state.last_rule\n+            started = after is not before and bool((after or {}).get(\"fired_job\"))\n+            if not (started or self.state.paused):\n+                continue\n+            rest = kept[index + 1:]\n+            if rest:\n+                self._discard(entry, rest, stopped=self.state.paused)\n+            return\n+\n+    def _discard(\n+        self, decided: dict[str, Any], rest: list[dict[str, Any]], *, stopped: bool\n+    ) -> None:\n+        \"\"\"§44 rule 5: one replay starts at most one step; what was kept after it is\n+        discarded, and the human is told which ends those were.\"\"\"\n+        named = \"; \".join(\n+            f\"{entry.get('role')} job {entry.get('job')} ({_cut(entry.get('verdict'))})\"\n+            for entry in rest\n+        )\n+        what = \"stopped the pipeline\" if stopped else \"started a job\"\n+        reason = (\n+            f\"resume replayed {decided.get('role')} job {decided.get('job')}, which {what}; \"\n+            f\"discarded the {len(rest)} end(s) kept after it: {named} (§44)\"\n+        )\n+        payload = {\n+            \"after\": decided.get(\"job\"),\n+            \"discarded\": [dict(entry) for entry in rest],\n+            \"reason\": reason,\n+        }\n+        self.spool.append_event(\"pipeline.kept_discarded\", payload)\n+        log.info(\"playbook: %s\", reason)\n+        self._notify(KEPT_DISCARDED_TITLE, payload)\n+\n+    def check_at_rest(self) -> None:\n+        \"\"\"§44 rule 4: under a human pause, at the first moment no job is running,\n+        queued or held and no §6 resume is scheduled, publish `hands: at rest` once,\n+        naming each kept end or saying none is kept, and record the mark with the\n+        pause (`at_rest`). Called when the pause is sent and whenever a job reaches a\n+        terminal state: here from `on_job`, and by the daemon and the API for the\n+        ends that do not reach `on_job` (a job denied, cancelled while queued, or one\n+        the runner could not spawn). Over an unpaused pipeline, another stop, or a\n+        pause already at rest it does nothing.\"\"\"\n+        if not self.human_paused or self.state.at_rest is not None:\n+            return\n+        busy = [job.id for job in self.spool.list_jobs() if job.state not in TERMINAL_STATES]\n+        if busy:\n+            log.debug(\"playbook: not at rest: job(s) %s not ended\", \", \".join(busy))\n+            return\n+        if self.limits is not None and self.limits.resume_scheduled():\n+            log.debug(\"playbook: not at rest: a §6 resume is scheduled\")",
+  "path": "src/hands/playbook.py",
+  "commit_id": "45ed9c90002079771b7009cab92137618d4e0576",
+  "original_commit_id": "8453b8a046986edf29f2127aa7f816a6779011f5",
+  "user": {
+    "login": "qodo-code-review[bot]",
+    "id": 151058649,
+    "node_id": "BOT_kgDOCQD42Q",
+    "avatar_url": "https://avatars.githubusercontent.com/in/484649?v=4",
+    "gravatar_id": "",
+    "url": "https://api.github.com/users/qodo-code-review%5Bbot%5D",
+    "html_url": "https://github.com/apps/qodo-code-review",
+    "followers_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/followers",
+    "following_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/following{/other_user}",
+    "gists_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/gists{/gist_id}",
+    "starred_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/starred{/owner}{/repo}",
+    "subscriptions_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/subscriptions",
+    "organizations_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/orgs",
+    "repos_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/repos",
+    "events_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/events{/privacy}",
+    "received_events_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/received_events",
+    "type": "Bot",
+    "user_view_type": "public",
+    "site_admin": false
+  },
+  "body": "<img src=\"https://img.shields.io/badge/Medium-634FD1?style=flat-square\" height=\"20px\" alt=\"Remediation recommended\">\n\n3\\. Restarts can miss the quiet moment <code>🐞 Bug</code> <code>≡ Correctness</code>\n\n<pre>\n<b><i>check_at_rest</i></b> runs when a pause is sent or a job ends, but startup does not run it for a restored\nhuman pause after resolving pending retries. If a pending limited job is not rescheduled and all\npersisted jobs are terminal, the unset at-rest mark has no subsequent job transition to trigger the\nnotification.\n</pre>\n\n\n<details>\n<summary><strong>Agent Prompt</strong></summary>\n\n```\n## Issue description\nRestoring an idle human pause does not announce rest when startup declines to reschedule its pending limit retry.\n## Fix Focus Areas\n- src/hands/daemon.py[283-300]\n- src/hands/playbook.py[3566-3589]\n## Recommended Fix\nAfter startup restores and reconciles jobs and pending limit retries, call `check_at_rest` for the restored pause. Preserve the persisted mark so an already-announced pause is not announced twice.\n```\n\n<code>ⓘ Copy this prompt and use it to remediate the issue with your preferred AI generation tools</code>\n</details>\n\n[Dismiss ↗](https://app.qodo.ai/findings/248439d7-efd8-4334-bfde-4a2a57f6588a?action=dismiss&origin=git) | [View ↗](https://app.qodo.ai/findings/248439d7-efd8-4334-bfde-4a2a57f6588a)",
+  "created_at": "2026-10-19T22:26:19Z",
+  "updated_at": "2026-10-19T22:26:19Z",
+  "html_url": "https://github.com/SigorMatt/hands/pull/8#discussion_r4319501186",
+  "pull_request_url": "https://api.github.com/repos/SigorMatt/hands/pulls/8",
+  "_links": {
+    "self": {
+      "href": "https://api.github.com/repos/SigorMatt/hands/pulls/comments/4319501186"
+    },
+    "html": {
+      "href": "https://github.com/SigorMatt/hands/pull/8#discussion_r4319501186"
+    },
+    "pull_request": {
+      "href": "https://api.github.com/repos/SigorMatt/hands/pulls/8"
+    }
+  },
+  "reactions": {
+    "url": "https://api.github.com/repos/SigorMatt/hands/pulls/comments/4319501186/reactions",
+    "total_count": 0,
+    "+1": 0,
+    "-1": 0,
+    "laugh": 0,
+    "hooray": 0,
+    "confused": 0,
+    "heart": 0,
+    "rocket": 0,
+    "eyes": 0
+  },
+  "start_line": 3591,
+  "original_start_line": 3575,
+  "start_side": "RIGHT",
+  "line": 3598,
+  "original_line": 3582,
+  "side": "RIGHT",
+  "author_association": "NONE",
+  "original_position": 582,
+  "position": 590,
+  "subject_type": "line"
+}
