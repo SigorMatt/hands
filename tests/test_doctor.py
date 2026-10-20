@@ -19,6 +19,10 @@ import os
 import re
 import shutil
 import subprocess
+import threading
+from collections.abc import Iterator
+from contextlib import contextmanager
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 
@@ -3021,6 +3025,36 @@ LIVE_KIT = "hands-doctor-live-0123abcd"
 LIVE_FILE = "DOCTOR-LIVE.md"
 
 
+@contextmanager
+def _local_ntfy() -> Iterator[str]:
+    """DESIGN §45 "CI": a local stand-in for ntfy that takes every publish (200), so
+    a test whose daemon publishes never sends a request off the machine."""
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self) -> None:  # noqa: N802
+            self.rfile.read(int(self.headers.get("Content-Length") or 0))
+            self.send_response(200)
+            self.send_header("Content-Length", "2")
+            self.end_headers()
+            self.wfile.write(b"{}")
+
+        do_PUT = do_POST  # noqa: N815
+
+        def log_message(self, format: str, *args: Any) -> None:  # noqa: A002
+            pass
+
+    httpd = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    httpd.daemon_threads = True
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield f"http://127.0.0.1:{httpd.server_address[1]}"
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+        thread.join(timeout=5)
+
+
 def _live_architect(
     tmp_home: Path,
     tmp_path: Path,
@@ -3047,7 +3081,8 @@ def _live_architect(
         fetch_only_clone(d)
     if setup is not None:
         setup(d)
-    add_architect(write_config(tmp_home, tmp_path), d)
+    config = write_config(tmp_home, tmp_path)
+    add_architect(config, d)
     kit_file = d / "kits" / LIVE_KIT / LIVE_FILE
     seen: dict[str, Any] = {}
 
@@ -3071,7 +3106,10 @@ def _live_architect(
         seen["found"] = {c["name"]: c for c in json.loads(out.getvalue())["checks"]}
         seen["job"] = job_id
 
-    drive(body)
+    with _local_ntfy() as ntfy:
+        # The daemon publishes while the turns run: to the stub, never ntfy.sh.
+        with_ntfy_url(config, ntfy)
+        drive(body)
     return seen["found"], kit_file, seen["job"]
 
 
