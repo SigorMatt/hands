@@ -66,6 +66,7 @@ from hands.playbook import (
     owner_files_pending,
     parse_playbook,
     playbook_path,
+    playbook_repo_path,
     render,
     sent_prompt,
 )
@@ -1192,10 +1193,12 @@ def test_a_refused_send_stops_rather_than_losing_the_step(
 
 
 def test_while_paused_no_rule_fires_and_resume_unpauses(tmp_home: Path, workdir: Path) -> None:
+    """§10, under a stop: the end is dropped and `resume` replays nothing. (§44: a
+    human pause keeps it instead — tests/test_human_pause.py.)"""
     engine, recorder = engine_for(tmp_home, workdir)
     job = finished(engine.spool, verdict="VERDICT: run 2 finished", head_at_start="abc")
     run(engine.on_job_start(job))
-    run(engine.pause())
+    run(engine.stop("because", {}))
     assert engine.pipeline()["paused"] is True
     run(engine.on_job(job))
     assert recorder.sent == []
@@ -1218,19 +1221,24 @@ def test_a_hand_pause_files_a_stop_event_and_notifies(tmp_home: Path, workdir: P
     assert event.payload["reason"] == PAUSE_REASON
     assert event.payload["by"] == "hands pause"
     assert state["paused"] is True and state["stop_reason"] == PAUSE_REASON
-    assert [title for title, _ in recorder.notified] == ["hands: the pipeline stopped"]
+    # §44 rule 4: a human pause over an idle pipeline is at rest at once.
+    assert [title for title, _ in recorder.notified] == [
+        "hands: the pipeline stopped", "hands: at rest",
+    ]
 
 
 def test_pausing_an_already_paused_pipeline_files_one_event(
     tmp_home: Path, workdir: Path
 ) -> None:
-    """One stop, one notification: the second pause is a
-    `pipeline.stop_suppressed` record in the inbox and nothing else (§10)."""
+    """One stop, one notification: the second pause, over the human pause, is a
+    no-op and not a stop — nothing in the inbox (§44 rules 2 and 3; over any other
+    stop it is still §10's `pipeline.stop_suppressed`, tests/test_human_pause.py)."""
     engine, recorder = engine_for(tmp_home, workdir)
     run(engine.pause())
     run(engine.pause())
-    assert [e.kind for e in engine.spool.events()] == ["stop", "pipeline.stop_suppressed"]
-    assert len(recorder.notified) == 1
+    assert [e.kind for e in engine.spool.events()] == ["stop"]
+    # the pause's stop and its `at rest` (§44 rule 4); the second pause adds nothing
+    assert len(recorder.notified) == 2
 
 
 def test_a_pause_works_with_no_playbook_at_all(tmp_home: Path, workdir: Path) -> None:
@@ -1251,7 +1259,8 @@ def test_a_resume_files_a_pipeline_resumed_event(tmp_home: Path, workdir: Path) 
     (event,) = [e for e in engine.spool.events() if e.kind == "pipeline.resumed"]
     assert event.payload["by"] == "resume"  # §10: `resume`, or `start` for a job
     assert event.payload["was"] == PAUSE_REASON
-    assert len(recorder.notified) == 1, "a resume is not on §11's notification list"
+    # the pause's stop and its `at rest` (§44 rule 4), and nothing for the resume
+    assert len(recorder.notified) == 2, "a resume is not on §11's notification list"
 
 
 def test_resuming_a_pipeline_that_is_not_paused_files_nothing(
@@ -2598,7 +2607,10 @@ def test_a_consult_stop_over_a_paused_pipeline_is_suppressed_with_its_reason_and
     and no playbook rule fires."""
     engine, recorder = engine_for(tmp_home, workdir, body, driver=workdir.parent / "d")
     run(engine.pause())
-    assert [title for title, _ in recorder.notified] == ["hands: the pipeline stopped"]
+    # §44 rule 4: a human pause over an idle pipeline is at rest at once.
+    assert [title for title, _ in recorder.notified] == [
+        "hands: the pipeline stopped", "hands: at rest",
+    ]
     about = finished(engine.spool, verdict="VERDICT: question x")
     run(engine.on_job(_driver_job(engine.spool, state=state, verdict=verdict, about=about)))
 
@@ -2609,7 +2621,7 @@ def test_a_consult_stop_over_a_paused_pipeline_is_suppressed_with_its_reason_and
     assert suppressed.payload["kept"] == PAUSE_REASON
     assert suppressed.payload["event"] == f"driver.{state}"
     titles = [title for title, _ in recorder.notified]
-    assert titles == ["hands: the pipeline stopped", SUPPRESSED_CONSULT], titles
+    assert titles == ["hands: the pipeline stopped", "hands: at rest", SUPPRESSED_CONSULT], titles
     assert reason in strip_paths(recorder.notified[-1][1]["reason"])
     assert len([e for e in engine.spool.events() if e.kind == "stop"]) == 1  # the pause's
     assert [e for e in engine.spool.events() if e.kind == "playbook.rule"] == []
@@ -2619,9 +2631,10 @@ def test_a_consult_stop_over_a_paused_pipeline_is_suppressed_with_its_reason_and
 def test_a_resolved_consultation_over_a_paused_pipeline_files_and_notifies_nothing(
     tmp_home: Path, workdir: Path
 ) -> None:
-    """§10: paused, no rule fires; a resolved consultation is no stop to suppress."""
+    """§10: paused, no rule fires; a resolved consultation is no stop to suppress.
+    (Under a stop: §44 fires a role end's `notify` under a human pause.)"""
     engine, recorder = engine_for(tmp_home, workdir, CARRY_ON, driver=workdir.parent / "d")
-    run(engine.pause())
+    run(engine.stop("because", {}))
     about = finished(engine.spool, verdict="VERDICT: question x")
     verdict = "VERDICT: resolved sent keep, §27"
     run(engine.on_job(_driver_job(engine.spool, state="done", verdict=verdict, about=about)))
@@ -2633,9 +2646,10 @@ def test_a_resolved_consultation_over_a_paused_pipeline_files_and_notifies_nothi
 def test_a_non_consult_stop_over_a_paused_pipeline_still_notifies_nobody(
     tmp_home: Path, workdir: Path
 ) -> None:
-    """§10's rule for every other stop is unchanged: suppressed, not notified."""
+    """§10's rule for every other stop is unchanged: suppressed, not notified —
+    over a stop. (§44: under a human pause it is notified; test_human_pause.py.)"""
     engine, recorder = engine_for(tmp_home, workdir, EXAMPLE)
-    run(engine.pause())
+    run(engine.stop("because"))
     run(engine.stop("some other stop"))
     [suppressed] = [e for e in engine.spool.events() if e.kind == "pipeline.stop_suppressed"]
     assert suppressed.payload["reason"] == "some other stop"
@@ -6951,6 +6965,323 @@ def test_the_start_fold_republishes_a_held_owners_kit_with_its_reason(
             record = daemon.spool.load_job(job.id)
             assert record.gate is not None and record.gate["reason"] == "apply m16"
         finally:
+            await daemon.stop()
+
+    asyncio.run(scenario())
+
+
+# ---- mission 28 U4: §44 "H-077, ruled" — the playbook in any letter case, and at the
+# configured path
+
+
+def _configured_owner_engine(
+    tmp_home: Path, workdir: Path, configured: str
+) -> tuple[PlaybookEngine, Recorder, Holds]:
+    """`_owner_engine` under `[playbook] path = configured`, the autonomous playbook
+    committed there and nowhere else."""
+    import dataclasses
+
+    from hands.config import PlaybookConfig
+
+    engine, recorder = engine_for(tmp_home, workdir, None, architect=architect_dir(tmp_home))
+    commit_file(workdir, configured, ARCHITECT_BOOK)
+    commit_file(workdir, str(ROADMAP), ROADMAP_TEXT)
+    engine.config = dataclasses.replace(engine.config, playbook=PlaybookConfig(configured))
+    engine.sleep = Sleeps()
+    holds = Holds()
+    engine.hold = holds
+    run(engine._load())
+    assert engine.playbook is not None and engine.playbook.architect_is_autonomous
+    return engine, recorder, holds
+
+
+def _held_for_the_owner(
+    engine: PlaybookEngine, recorder: Recorder, holds: Holds, entry: str
+) -> None:
+    """A kit carrying `entry` filed during a consultation that ends naming it: not
+    approved, held with §43's reason naming `entry`, and the same reason from
+    `published_hold_reason` (the daemon's `decide_held_reason` and start fold)."""
+    architect = consultation(engine.spool)
+    entries = {entry: ARCHITECT_BOOK, "meta/BUILDER-17-PROMPT.md": "b\n"}
+    job = _filed_with(engine, architect, entries)
+    architect = engine.spool.transition(
+        architect, "done", verdict="VERDICT: next kit m16", result="VERDICT: next kit m16"
+    )
+    end_consultation(engine, architect)
+    assert recorder.approved == [] and recorder.denied == []
+    assert engine.spool.load_job(job.id).state == "held"
+    assert holds.published == [(job.id, owner_reason("m16", entry))]
+    assert engine.published_hold_reason(engine.spool.load_job(job.id)) == owner_reason(
+        "m16", entry
+    )
+
+
+@pytest.mark.parametrize(
+    "entry", ["playbook.toml", "Playbook.toml", "meta/playbook.toml", "Meta/PLAYBOOK.toml"]
+)
+def test_a_kit_carrying_the_playbook_in_another_letter_case_is_the_owners(
+    tmp_home: Path, workdir: Path, entry: str
+) -> None:
+    """§44 "H-077, ruled": an entry carries the playbook when its path, casefolded,
+    equals either fixed name casefolded: the engine does not approve it, and the
+    published reason names the entry as the kit carries it."""
+    engine, recorder, holds = _owner_engine(tmp_home, workdir)
+    _held_for_the_owner(engine, recorder, holds, entry)
+
+
+@pytest.mark.parametrize("entry", ["ops/rules.toml", "OPS/Rules.toml"])
+def test_a_kit_carrying_the_configured_playbook_path_is_the_owners(
+    tmp_home: Path, workdir: Path, entry: str
+) -> None:
+    """§44 "H-077, ruled": under `[playbook] path = "ops/rules.toml"` an entry at that
+    path, in any letter case, carries the playbook in force: held for the human."""
+    engine, recorder, holds = _configured_owner_engine(tmp_home, workdir, "ops/rules.toml")
+    _held_for_the_owner(engine, recorder, holds, entry)
+
+
+def test_a_kit_carrying_a_fixed_name_is_the_owners_under_a_configured_path(
+    tmp_home: Path, workdir: Path
+) -> None:
+    """§44: the configured path is judged as well as the two fixed names, not in
+    their place."""
+    engine, recorder, holds = _configured_owner_engine(tmp_home, workdir, "ops/rules.toml")
+    _held_for_the_owner(engine, recorder, holds, "meta/PLAYBOOK.toml")
+
+
+def test_an_entry_at_another_projects_configured_path_is_approved_as_before(
+    tmp_home: Path, workdir: Path
+) -> None:
+    """§44: without that configuration `ops/rules.toml` is an ordinary file: the
+    engine approves the kit, one buttonless line, no hold published."""
+    engine, recorder, holds = _owner_engine(tmp_home, workdir)
+    architect = consultation(engine.spool)
+    job = _filed_with(
+        engine, architect, {"ops/rules.toml": ARCHITECT_BOOK, "meta/BUILDER-17-PROMPT.md": "b\n"}
+    )
+    architect = engine.spool.transition(
+        architect, "done", verdict="VERDICT: next kit m16", result="VERDICT: next kit m16"
+    )
+    end_consultation(engine, architect)
+    assert recorder.approved == [{"job": job.id, "reason": AUTONOMOUS_APPROVAL}]
+    assert holds.published == []
+
+
+def test_the_configured_playbook_path_is_read_as_a_repository_path(
+    tmp_home: Path, tmp_path: Path
+) -> None:
+    """§44 with §38: `[playbook] path` is read with the builder cwd's own place in the
+    repository before it, normalised; a path that leaves the repository is None."""
+    import dataclasses
+
+    from hands.config import PlaybookConfig
+
+    root = tmp_path / "root"
+    commit_file(root, "README.md", "x\n")
+    cwd = root / "sub" / "dir"
+    cwd.mkdir(parents=True)
+    config = make_config(tmp_home, cwd)
+    for configured, expected in (
+        ("PLAYBOOK.toml", "sub/dir/PLAYBOOK.toml"),
+        ("ops/rules.toml", "sub/dir/ops/rules.toml"),
+        ("../rules.toml", "sub/rules.toml"),
+        ("../../../rules.toml", None),
+    ):
+        judged = dataclasses.replace(config, playbook=PlaybookConfig(configured))
+        assert playbook_repo_path(judged) == expected, configured
+    at_root = make_config(tmp_home, root)
+    assert playbook_repo_path(at_root) == "PLAYBOOK.toml"
+
+
+# ---- mission 28 U3 (review 27 should-fix 1): §43's hold reason off the event loop
+
+
+def _zip_reads(monkeypatch: pytest.MonkeyPatch) -> list[int]:
+    """Every read and hash of a stored kit's zip, by the thread that ran it: the two
+    `Spool` methods `published_hold_reason` reads the zip through."""
+    import threading
+
+    threads: list[int] = []
+    for name in ("stored_kit_playbooks", "stored_kit_sha256"):
+        real = getattr(Spool, name)
+
+        def spy(self: Spool, *args: Any, _real: Any = real) -> Any:
+            threads.append(threading.get_ident())
+            return _real(self, *args)
+
+        monkeypatch.setattr(Spool, name, spy)
+    return threads
+
+
+def test_the_start_folds_hold_reason_reads_the_zip_off_the_event_loop(
+    tmp_home: Path, workdir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Review 27 should-fix 1 (§44): the start's republish of a held architect apply
+    (`Daemon._publish_held`) reads and hashes the stored zip in a worker thread, never
+    on the loop's; the published hold still reads §43's reason."""
+    import threading
+
+    architect_project(tmp_home, workdir, book=OWNER_BOOK, ntfy=True)
+    posts = ActionPosts()
+    threads = _zip_reads(monkeypatch)
+
+    async def scenario() -> None:
+        loop_thread = threading.get_ident()
+        daemon = _phone_daemon(tmp_home, posts)
+        job = filed_kit(daemon.spool, data=kit_zip(OWNER_ENTRIES))
+        await daemon.start()
+        try:
+            await daemon.notifier.drain()
+            [note] = [n for n in posts.sent if n["title"] == as_published(HELD_TITLE)]
+            said = strip_paths(note["message"]).splitlines()
+            assert said[0] == owner_reason("m16", "PLAYBOOK.toml"), note
+            assert f"job: {job.id}" in said, note
+            assert threads, "the zip was never read"
+            assert threads.count(loop_thread) == 0, "the zip was read on the event loop"
+        finally:
+            await daemon.stop()
+
+    asyncio.run(scenario())
+
+
+def test_the_filing_hold_reason_reads_the_zip_off_the_event_loop(
+    tmp_home: Path, workdir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Review 27 should-fix 1 (§44): a hold the daemon publishes at filing (the
+    pipeline paused before the architect filed its kit, §36) has §43's reason computed
+    in a worker thread before the notification is published, never on the loop's; the
+    published hold reads §43's reason with its buttons."""
+    import threading
+
+    architect_project(tmp_home, workdir, book=OWNER_BOOK, ntfy=True)
+    argv = file_apply_argv(tmp_home, {"mission-17-kit": _e2e_owner_kit("PLAYBOOK.toml")})
+    argv[2] = PAUSE_THEN_FILE
+    script(tmp_home, monkeypatch, [{"result": "VERDICT: next kit mission-17-kit", "exec": argv}])
+    posts = ActionPosts()
+    held_title = as_published(HELD_TITLE)
+    threads = _zip_reads(monkeypatch)
+
+    async def scenario() -> None:
+        loop_thread = threading.get_ident()
+        daemon = _phone_daemon(tmp_home, posts)
+        await daemon.start()
+        try:
+            await asyncio.wait_for(body(daemon, loop_thread), 60)
+        finally:
+            await daemon.stop()
+
+    async def body(daemon: Daemon, loop_thread: int) -> None:
+        review = await ok("send", "--role", "aux", "--context", "clear", fake_result(REVIEW))
+        await ok("wait", review["id"])
+
+        async def held() -> Any:
+            await daemon.notifier.drain()
+            return [note for note in posts.sent if note["title"] == held_title]
+
+        [note] = await poll(held, "the hold to be published")
+        said = strip_paths(note["message"]).splitlines()
+        assert said[0] == owner_reason("mission-17-kit", "PLAYBOOK.toml"), note
+        assert [a["label"] for a in note["actions"]] == ["Approve", "Deny"], note
+        assert threads, "the zip was never read"
+        assert threads.count(loop_thread) == 0, "the zip was read on the event loop"
+
+    asyncio.run(scenario())
+
+
+# ---- mission 28 U5 (PR #8 hosted finding 2): no late hold notice for a decided job
+
+
+def _held_notes(posts: ActionPosts) -> list[dict[str, Any]]:
+    return [note for note in posts.sent if note["title"] == as_published(HELD_TITLE)]
+
+
+async def _decide(daemon: Daemon, job_id: str, decision: str) -> None:
+    """Another client deciding the held job: the driver's `--human-confirmed` path."""
+    method = daemon.api.approve if decision == "approved" else daemon.api.deny
+    await method(job=job_id, human_confirmed=True, quote="decided while the reason ran")
+
+
+@pytest.mark.parametrize("decision", ["approved", "denied"])
+def test_a_send_decided_while_its_hold_reason_is_computed_is_not_announced(
+    tmp_home: Path, workdir: Path, decision: str
+) -> None:
+    """PR #8 hosted finding 2 (§43, §44 review 27 should-fix 1, §34): `Api.send` awaits
+    the hold reason (`Daemon.decide_held_reason`) before it files `job.held`. A job
+    another client approves or denies during that wait gets no `job.held` event, no
+    held notification and no Approve/Deny buttons (no nonce is minted for it)."""
+    architect_project(tmp_home, workdir, book=OWNER_BOOK, ntfy=True)
+    posts = ActionPosts()
+
+    async def scenario() -> None:
+        daemon = _phone_daemon(tmp_home, posts)
+        real = daemon.decide_held_reason
+
+        async def racing(job: Job) -> None:
+            await _decide(daemon, job.id, decision)
+            await real(job)
+
+        daemon.decide_held_reason = racing  # type: ignore[method-assign]
+        await daemon.start()
+        try:
+            job = await daemon.api.send(
+                role="builder", context="clear", prompt=fake_result("done"), gate="why"
+            )
+            await daemon.notifier.drain()
+            kinds = [e.kind for e in daemon.spool.events() if e.payload.get("job") == job["id"]]
+            assert "gate.decided" in kinds, kinds
+            assert "job.held" not in kinds, kinds
+            assert _held_notes(posts) == [], posts.sent
+            assert daemon.phone is not None
+            assert daemon.phone.nonces.get(job["id"]) is None, "buttons were minted for it"
+        finally:
+            await daemon.stop()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("decision", ["approved", "denied"])
+def test_a_held_job_decided_while_the_start_computes_its_reason_is_not_republished(
+    tmp_home: Path, workdir: Path, decision: str
+) -> None:
+    """PR #8 hosted finding 2 (§34, §43, §44 review 27 should-fix 1): the start's
+    republish of a held architect apply (`Daemon._publish_held`) computes §43's reason
+    in a worker thread. A job another client approves or denies during that wait is not
+    published as held, mints no buttons, and is not among the start's held jobs."""
+    import threading
+
+    architect_project(tmp_home, workdir, book=OWNER_BOOK, ntfy=True)
+    posts = ActionPosts()
+    entered, release = threading.Event(), threading.Event()
+
+    async def scenario() -> None:
+        daemon = _phone_daemon(tmp_home, posts)
+        job = filed_kit(daemon.spool, data=kit_zip(OWNER_ENTRIES))
+        real = daemon.playbook.published_hold_reason
+
+        def blocking(held: Job) -> str | None:
+            entered.set()
+            assert release.wait(30), "the decision never came"
+            return real(held)
+
+        daemon.playbook.published_hold_reason = blocking  # type: ignore[method-assign]
+        starting = asyncio.create_task(daemon.start())
+        try:
+            async def reading() -> bool:
+                return entered.is_set()
+
+            await poll(reading, "the start to compute the hold reason")
+            await _decide(daemon, job.id, decision)
+            release.set()
+            await starting
+            await daemon.notifier.drain()
+            assert _held_notes(posts) == [], posts.sent
+            assert daemon.phone is not None
+            assert daemon.phone.nonces.get(job.id) is None, "buttons were minted for it"
+            listed = [] if daemon._start_pending is None else daemon._start_pending[1]
+            assert listed.count(job.id) == 0, listed
+        finally:
+            release.set()
+            if not starting.done():
+                await starting
             await daemon.stop()
 
     asyncio.run(scenario())

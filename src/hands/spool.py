@@ -45,6 +45,7 @@ __all__ = [
     "KIT_CHECK_PASSED",
     "ORPHAN_DAEMON_STOP",
     "PLAYBOOK_PATHS",
+    "carries_playbook",
     "ANSWER_ORIGIN",
     "REPLY_ORIGIN",
     "STATES",
@@ -150,6 +151,20 @@ KIT_CHECK_PASSED = "pass"
 #: reads (§26). §43: the engine does not approve an architect-filed apply whose
 #: stored kit carries either.
 PLAYBOOK_PATHS = ("PLAYBOOK.toml", "meta/PLAYBOOK.toml")
+
+
+def carries_playbook(entry: str, configured: str | None) -> bool:
+    """§44 "H-077, ruled": the one test of whether a kit entry carries the playbook —
+    its path, casefolded, equals the casefolded `configured` playbook path (`[playbook]
+    path` read as a repository path, `hands.playbook.playbook_repo_path`) or either of
+    `PLAYBOOK_PATHS`. `configured` is None where no project configuration names one
+    (`hands kit check` without one): the two fixed names only. The engine's §43 hold
+    (`Spool.stored_kit_playbooks`) and `hands kit check`'s `WARN playbook:` line ask
+    this; the `playbook` check does not (it loads an entry at a fixed name only)."""
+    known = {path.casefold() for path in PLAYBOOK_PATHS}
+    if configured is not None:
+        known.add(configured.casefold())
+    return entry.casefold() in known
 #: `new_kit_id`'s shape: 16 lowercase hex digits.
 KIT_ID_RE = re.compile(r"[0-9a-f]{16}")
 #: §34: `kit.json`'s `sha256`: 64 lowercase hex digits, as `hashlib` writes them.
@@ -181,6 +196,10 @@ EVENT_KINDS = frozenset(
         # driver on a stop that was deliberately not notified.
         "pipeline.stop_suppressed",
         "pipeline.resumed",  # the other half of §10's stop → resume cycle (H-007)
+        # §44: under a human pause, a role's later end replaced the one kept for it;
+        # and the kept ends a `resume`'s replay discarded after the one it decided.
+        "pipeline.kept_replaced",
+        "pipeline.kept_discarded",
         "gate.decided",
         "limit",
         "resume",
@@ -571,16 +590,19 @@ class Spool:
             return None
         return digest.hexdigest()
 
-    def stored_kit_playbooks(self, kit_id: str, name: str) -> tuple[str, ...] | None:
-        """§43: which of `PLAYBOOK_PATHS` the zip stored for `kit_id` carries, by its
-        central-directory names (the names `hands kit check` judges, §33), or None
-        when the zip cannot be read as one."""
+    def stored_kit_playbooks(
+        self, kit_id: str, name: str, configured: str | None
+    ) -> tuple[str, ...] | None:
+        """§43, §44: the entries of the zip stored for `kit_id` that carry the playbook
+        (`carries_playbook`, against the `configured` repository path and the two fixed
+        names), sorted, by its central-directory names (the names `hands kit check`
+        judges, §33), or None when the zip cannot be read as one."""
         try:
             with zipfile.ZipFile(self.kit_dir(kit_id) / f"{name}.zip") as archive:
                 names = set(archive.namelist())
         except (SpoolError, OSError, zipfile.BadZipFile, ValueError):
             return None
-        return tuple(path for path in PLAYBOOK_PATHS if path in names)
+        return tuple(sorted(entry for entry in names if carries_playbook(entry, configured)))
 
     # ---------------------------------------------------------------- jobs
 

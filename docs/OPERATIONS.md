@@ -70,7 +70,7 @@ where it stopped.
 | `roles/<role>.json` | must-carry | The role's last session and last job, which `--context keep`, the phone's `answer` and `reply` resume, and §6's count of consecutive resumes against `max_resumes`. Lost: the count restarts at zero and a `keep` send is refused until a `clear` job records a session. A session is resumable only beside the harness session store it names (§1, "The harness sign-ins"). |
 | `inbox.jsonl` | must-carry | The append-only event list. `hands inbox` and `hands wait --for` read it, and so does the engine: the head a consultation was sent at, and the last consultation, which the journal sentence names. |
 | `inbox.acks.jsonl` | safe to drop | Ack markers. Lost: every event reads as unread again. |
-| `pipeline.json` | must-carry | The engine's state: paused and the stop reason, the last rule fired, the run numbers `auto_runs` already used, every kickoff line seen, and the two anchors the consultation budgets count from. Lost: both counts restart and a run number the playbook lists can start on its own again ("A disaster", below). |
+| `pipeline.json` | must-carry | The engine's state: paused and the stop reason (who paused; under a human pause its kept ends, the mark of a stop it suppressed and its `at rest` mark), the last rule fired, the run numbers `auto_runs` already used, every kickoff line seen, and the two anchors the consultation budgets count from. Lost: both counts restart and a run number the playbook lists can start on its own again ("A disaster", below). |
 | `kits/<kit_id>/` | must-carry | A kit the architect role filed: `<name>.zip` and `kit.json` (its name, the job it was filed during, its sha256 and the check result). The engine approves an apply only while this record says the check passed and the zip still has its sha256; once the apply has run, the kit is a `plan: kit` commit on the branch and its directory is history. |
 | `handsd.sock` | regenerable | The daemon's socket (the default `server.socket`). handsd binds it at start. |
 
@@ -254,6 +254,27 @@ consultation stop is (docs/ARCHITECT-HANDBOOK.md §10).
 **After M8b.** Sign in each credential profile once; the daemon marks a
 profile exhausted at its limit and re-sends the job from its checkpoint on the
 next profile of the role's list (§40). This section is rewritten then.
+
+### A quiet moment
+
+When the builder's tree must stay still for a commit of your own (an owner
+file, a playbook change) while an autonomous series runs (DESIGN §44):
+
+1. `pause <secret>` (at the laptop `hands pause`). The job running now
+   finishes; the end that would start the next step is kept, not decided.
+2. Wait for `hands: at rest`: nothing is running, queued or held, and it names
+   the kept end, if any. `hands pipeline` prints the same as its `kept` lines.
+   `go` and `consult` are refused until step 4.
+3. Commit, in the builder's repository — the project's chat, or a decisions
+   kit whose apply (`kit <secret>`, Approve) commits without ending the pause.
+4. `resume <secret>` (`hands resume`): the playbook is reloaded, so the commit
+   is in force, and the kept end is decided as if it had just arrived, starting
+   the next step. A playbook that does not load refuses the `resume`, naming
+   why, and the pause and its kept end stay until a `resume` that loads.
+
+A daemon restart meanwhile keeps the pause, the kept end and the `at rest`
+mark (`pipeline.json`), and a builder the restart killed is resumed by the
+playbook's `builder.orphaned` rule as when nothing is paused.
 
 ### No phone
 

@@ -52,8 +52,11 @@ The checks, in order (docs/ARCHITECT-HANDBOOK.md §11 says the same):
   too when no config can be judged here (none, several and no `--project` /
   `$HANDS_PROJECT`, or one that does not load), naming why; the passing line says
   which config it was judged against. handsd itself passes its own config
-  (`check_kit(config=…)`). No config is read for any other kit, so a phone-mode
-  kit still needs none.
+  (`check_kit(config=…)`). No config is required for any other kit, so a
+  phone-mode kit still needs none. §44 ("H-077, ruled"): the config that resolves,
+  when one does, names the `[playbook] path` the `WARN playbook:` line of §43
+  judges too (`_configured_playbook`); none resolving fails nothing, and that line
+  then says it knows only the two fixed names.
 * `brief` — the kit carries exactly one brief, `meta/BUILDER-<N>-PROMPT.md`
   (missions form) or `WORKPLAN.md` (runs form); its kickoff line is the first
   indented line after "Kickoff line"; its final-reply vocabulary is the
@@ -135,8 +138,9 @@ from hands.playbook import (
     check_series_roles,
     orphaned_rule_warnings,
     parse_playbook,
+    playbook_repo_path,
 )
-from hands.spool import PLAYBOOK_PATHS, PathEscape, resolve_under_roots
+from hands.spool import PLAYBOOK_PATHS, PathEscape, carries_playbook, resolve_under_roots
 
 __all__ = [
     "APPLY_EXCEPTION",
@@ -870,33 +874,90 @@ def _check_playbook(
     return Check("playbook", True, reason), book
 
 
-def _owner_warning(kit: _Kit, repo: Path) -> str | None:
+def _configured_playbook(project: str | None, config: Config | None) -> tuple[bool, str | None]:
+    """§44 "H-077, ruled": whether a project configuration is known here, and its
+    `[playbook] path` read as a repository path (`playbook_repo_path`; None when it
+    leaves the repository). The config is `config` when the caller has one (handsd's
+    `kit_file`), else the one every `hands` command resolves; one that does not
+    resolve or load is no configuration — a WARN fails nothing, so this never fails
+    the check."""
+    if config is None:
+        try:
+            config = config_mod.load_config(config_mod.resolve_project(project))
+        except config_mod.ConfigError:
+            return False, None
+    return True, playbook_repo_path(config)
+
+
+def _repository_root(repo: Path) -> Path:
+    """The top level of the git repository `repo` is in, or `repo` itself where git
+    cannot say (the design is silent there; `playbook_repo_path` reads such a cwd as
+    the root too)."""
+    try:
+        return git_toplevel(repo)
+    except KitError:
+        return repo
+
+
+def _owner_warning(
+    kit: _Kit, repo: Path, configured: str | None, known: bool
+) -> str | None:
     """§43 "A playbook change is the owner's": the `WARN playbook:` line for a kit
     that carries a playbook when the repository's playbook in force before the apply,
     or the kit's own, sets `architect = "role"` with `autonomous = true` — filed by
     the role, its apply waits for the human. The engine judges under the playbook in
     force when the kit is filed, so a kit that switches a series back to phone mode
     is held too. None for a kit that carries no playbook, or when neither playbook
-    is autonomous (one that does not load is judged by the `playbook` check)."""
-    carried = [name for name in PLAYBOOK_PATHS if name in kit.files]
+    is autonomous (one that does not load is judged by the `playbook` check).
+
+    §44 "H-077, ruled": an entry carries the playbook by the engine's one test
+    (`carries_playbook`): the `configured` repository path or either fixed name, in
+    any letter case. The repository's playbook is judged at the configured path as
+    well as the fixed names. Without a project configuration (`known` False) only
+    the fixed names are known, and the line ends saying so; with one, it ends naming
+    the configured path."""
+    carried = sorted(name for name in kit.files if carries_playbook(name, configured))
     if not carried:
         return None
     autonomous: list[str] = []
-    present = [name for name in PLAYBOOK_PATHS if (repo / name).is_file()]
-    if present:
+    candidates = [*([configured] if configured is not None else []), *PLAYBOOK_PATHS]
+    # PR #8 hosted finding 5: `configured` is a repository path, so it is read under
+    # the repository's root — handsd passes the builder's cwd, which may sit below it.
+    # The fixed names are read under `repo`, as the `playbook` check reads them.
+    root = _repository_root(repo) if configured is not None else repo
+    files: dict[Path, str] = {}
+    for name in candidates:
+        files.setdefault((root if name == configured else repo) / name, name)
+    for file, name in files.items():
+        if not file.is_file():
+            continue
         with contextlib.suppress(PlaybookError, OSError):
-            if _load((repo / present[0]).read_bytes(), present[0]).architect_is_autonomous:
-                autonomous.append(f"the repository's {present[0]}")
-    with contextlib.suppress(PlaybookError):
-        if _load(kit.files[carried[0]], carried[0]).architect_is_autonomous:
-            autonomous.append(f"the kit's {carried[0]}")
+            if _load(file.read_bytes(), name).architect_is_autonomous:
+                autonomous.append(f"the repository's {name}")
+    for name in carried:
+        with contextlib.suppress(PlaybookError):
+            if _load(kit.files[name], name).architect_is_autonomous:
+                autonomous.append(f"the kit's {name}")
     if not autonomous:
         return None
+    if not known:
+        names = (
+            "; with no project configuration to name a [playbook] path, kit check knows "
+            f"only {_and(list(PLAYBOOK_PATHS))}, in any letter case (§44)"
+        )
+    else:
+        judged: dict[str, str] = {}
+        for path in candidates:
+            judged.setdefault(path.casefold(), path)
+        names = f"; kit check knows {_and(list(judged.values()))}, in any letter case"
+        names += " (§44)" if configured is not None else (
+            ", the configured [playbook] path leaving the repository (§44)"
+        )
     return (
-        f"the kit carries {carried[0]}, and {_and(autonomous)} "
+        f"the kit carries {_and(carried)}, and {_and(autonomous)} "
         f"{'sets' if len(autonomous) == 1 else 'set'} [series] architect "
         '= "role" with autonomous = true: filed by the architect role, its apply waits '
-        "for the human, because a change of the playbook is the owner's (§43)"
+        "for the human, because a change of the playbook is the owner's (§43)" + names
     )
 
 
@@ -1430,6 +1491,7 @@ def check_kit(
         review = _review_vocabulary(book, kit, repo)
         verdicts_check = _check_verdicts(book, literals, review)
         wording_check = _check_wording(brief_name, brief_text)
+    known, configured = _configured_playbook(project, config)
     checks = [
         _check_paths(kit, repo),
         playbook_check,
@@ -1453,7 +1515,7 @@ def check_kit(
         sha256=kit.sha256,
         warnings=[
             *(orphaned_rule_warnings(book) if book is not None else []),
-            *filter(None, [_owner_warning(kit, repo)]),
+            *filter(None, [_owner_warning(kit, repo, configured, known)]),
         ],
         decisions=bool(owners),
     )

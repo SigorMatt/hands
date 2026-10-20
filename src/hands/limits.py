@@ -328,6 +328,7 @@ class LimitManager:
         sleep: Callable[[float], Awaitable[None]] | None = None,
         max_resumes: int | None = None,
         on_stop: Callable[[str, dict[str, Any]], Any] | None = None,
+        on_no_resume: Callable[[], Any] | None = None,
     ) -> None:
         self.config = config
         self.spool = spool
@@ -343,7 +344,10 @@ class LimitManager:
         #: role. It is the playbook engine's `stop()` (§10), which records the
         #: `stop` event of §11 and notifies; unwired, a stop is logged only.
         self.on_stop = on_stop
-        self._tasks: set[asyncio.Task[None]] = set()
+        #: §44 rule 4: called when a scheduled resume ended without a job, once its
+        #: task is no longer scheduled — the engine's `check_at_rest`.
+        self.on_no_resume = on_no_resume
+        self._tasks: set[asyncio.Task[bool]] = set()
 
     # --------------------------------------------------------------- hooks
 
@@ -391,11 +395,31 @@ class LimitManager:
                 {"role": job.role, "job": job.id, "resumes": resumes},
             )
             return
+        self._schedule(job, delay)
+
+    def _schedule(self, job: Job, delay: float) -> None:
         task = asyncio.create_task(
             self._resume_after(job, delay), name=f"hands-resume-{job.role}"
         )
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
+        task.add_done_callback(self._resume_ended)
+
+    def _resume_ended(self, task: asyncio.Task[bool]) -> None:
+        """§44 rule 4: a scheduled resume that ended without a job (it failed, and
+        stopped) leaves nothing whose end would check `at rest`, so it is checked
+        here, the task being done and no longer counted by `resume_scheduled`. A
+        cancelled task (the daemon going down) checks nothing."""
+        if task.cancelled():
+            return
+        if task.exception() is None and task.result():
+            return  # a job was made: its own end is the next moment checked
+        if self.on_no_resume is not None:
+            self.on_no_resume()
+
+    def resume_scheduled(self) -> bool:
+        """§44 rule 4: is a §6 resume scheduled in this process and not yet made?"""
+        return any(not task.done() for task in self._tasks)
 
     def pending_resumes(self) -> list[Job]:
         """`limited` jobs whose resume never happened (§6, and the daemon of §3).
@@ -431,11 +455,7 @@ class LimitManager:
                 job, now=self.clock(), backoff_minutes=self.config.limits.backoff_minutes
             )
             log.info("job %s: re-scheduling the resume this daemon owes in %.0fs", job.id, delay)
-            task = asyncio.create_task(
-                self._resume_after(job, delay), name=f"hands-resume-{job.role}"
-            )
-            self._tasks.add(task)
-            task.add_done_callback(self._tasks.discard)
+            self._schedule(job, delay)
             owed.append(job)
         return owed
 
@@ -456,10 +476,12 @@ class LimitManager:
 
     # ---------------------------------------------------------- the resume
 
-    async def _resume_after(self, job: Job, delay: float) -> None:
+    async def _resume_after(self, job: Job, delay: float) -> bool:
+        """Sleep, then resume; True when the resume job was made."""
         try:
             await self.sleep(delay)
             await self._resume(job)
+            return True
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # a full queue, a bad role, a broken spool file
@@ -468,6 +490,7 @@ class LimitManager:
                 f"could not resume {job.role} after its limit: {exc}",
                 {"role": job.role, "job": job.id},
             )
+            return False
 
     async def _resume(self, job: Job) -> Job:
         """§6: the builder gets a new `clear` job — `role.resume_line` when the config

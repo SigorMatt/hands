@@ -133,7 +133,8 @@ class Daemon:
         #: §6's limits: it is handed every terminal job and schedules the resume.
         #: Its `sleep` and `clock` are attributes so a test never waits one out.
         self.limits = LimitManager(
-            config, self.spool, enqueue=self._enqueue_resume, on_stop=self._limit_stop
+            config, self.spool, enqueue=self._enqueue_resume, on_stop=self._limit_stop,
+            on_no_resume=self._limit_no_resume,
         )
         #: §5's watch: one per builder job, started with the job and stopped with
         #: it. It reports to the inbox and never touches a job (§1 invariant 4).
@@ -215,6 +216,10 @@ class Daemon:
         #: daemon about every event it appends, so a wait is a subscription and
         #: never a poll of the inbox file.
         self._subscribers: set[asyncio.Queue[Event]] = set()
+        # §43, review 27 should-fix 1 (§44): a hold's published reason, decided in a
+        # worker thread before its `job.held` is filed (`decide_held_reason`) and
+        # taken by `_on_event`, which reads no zip.
+        self._held_reasons: dict[str, str] = {}
         self.spool.listeners.append(self._on_event)
 
     # ------------------------------------------------------------- lifecycle
@@ -286,11 +291,15 @@ class Daemon:
         # §38 (H-047): every orphan owed to the engine — reconciled above, or recorded
         # by the daemon whose stop ended it — is fed now, once, the workers being up.
         resumed = await self._feed_orphans()
+        # §44 rule 4: a human pause restored here, its orphans fed and its §6 resumes
+        # decided, may be at rest already with no job left to end; a set mark is not
+        # published again.
+        self.playbook.check_at_rest()
         if self.phone is not None:
             self.phone.start()
         # §34: every job still held is published at once with fresh buttons, and the
         # start notification names each by title.
-        still_held = self._publish_held()
+        still_held = await self._publish_held()
         message = f"{self.config.project} on {self.socket_path}"
         for job in resumed:  # §38: the start notification names what was resumed
             message += f"\nResumed: {job.role} job {job.id}, from job {job.resumed_from} "
@@ -400,7 +409,7 @@ class Daemon:
                 return False
         return True
 
-    def _publish_held(self) -> list[str]:
+    async def _publish_held(self) -> list[str]:
         """Every job still `held` at this start, by id, each published at once.
 
         §25 re-minted a nonce per held job; §31 (review 14 should-fix 1) listed the
@@ -412,12 +421,35 @@ class Daemon:
         and its buttons carrying the nonce minted now — and the start notification
         names it by title (`_publish_start`). Without the command channel there is
         nothing to mint, and the notification goes out without buttons.
+
+        §43: a held kit that carries the playbook reads §43's reason here too, decided
+        in a worker thread (review 27 should-fix 1, §44: it reads and hashes the
+        stored zip, which never happens on the event loop).
         """
-        held = [job for job in self.spool.list_jobs() if job.state == "held"]
-        for job in held:
-            # §43: a held kit that carries the playbook reads §43's reason here too.
-            self.publish_hold(job, self.playbook.published_hold_reason(job))
-        return [job.id for job in held]
+        published: list[str] = []
+        for job in [job for job in self.spool.list_jobs() if job.state == "held"]:
+            reason = await asyncio.to_thread(self.playbook.published_hold_reason, job)
+            # PR #8 hosted finding 2: a job decided while its reason was computed is
+            # no longer held, and its hold is neither published nor listed.
+            current = self.still_held(job.id)
+            if current is None:
+                continue
+            self.publish_hold(current, reason)
+            published.append(current.id)
+        return published
+
+    def still_held(self, job_id: str) -> Job | None:
+        """The job `job_id` as it is now, when it is still `held` and its gate still
+        waits for a decision; None once anyone approved, denied or cancelled it (PR #8
+        hosted finding 2: an await between the hold and its notice lets another client
+        decide it, and a decided hold is never announced)."""
+        try:
+            job = self.spool.load_job(job_id)
+        except SpoolError:
+            return None
+        if job.state != "held" or (job.gate or {}).get("decided_by") is not None:
+            return None
+        return job
 
     def publish_hold(self, job: Job, reason: str | None = None) -> None:
         """One held job's notification, published at once with §34's buttons (a
@@ -701,6 +733,7 @@ class Daemon:
                 # consultation: consult.done, the journal line, the stop (§28).
                 await self._consultation_ended(killed)
                 self._reply_ended(killed)
+                self.playbook.check_at_rest()  # §44 rule 4: a job that could not spawn
             log.warning("job %s (%s) could not run: %s", job_id, role, exc)
         except Exception:  # pragma: no cover - a bug here must not kill the worker
             log.exception("job %s (%s) raised", job_id, role)
@@ -820,6 +853,11 @@ class Daemon:
         """
         await self.playbook.stop(reason, payload)
 
+    def _limit_no_resume(self) -> None:
+        """§44 rule 4: a scheduled §6 resume ended without a job; no job end will
+        follow it, so `at rest` is checked now."""
+        self.playbook.check_at_rest()
+
     def _monitor_event(self, kind: str, payload: dict[str, Any]) -> None:
         """§5's watch speaks to §10: `monitor.stall`, `monitor.tripwire` and §24's
         `monitor.task_killed` and `monitor.orphan_processes` are events."""
@@ -879,8 +917,9 @@ class Daemon:
                 if self.phone is not None:
                     actions = self.phone.actions(str(job_id))
                 # §43: a hold published at filing (a paused pipeline's, §36) whose kit
-                # carries the playbook reads §43's reason; the event keeps the gate's.
-                reason = self._held_reason(str(job_id))
+                # carries the playbook reads §43's reason, decided before the event
+                # was filed (`decide_held_reason`); the event keeps the gate's.
+                reason = self._held_reasons.pop(str(job_id), None)
                 if reason is not None:
                     payload = {**payload, "reason": reason}
             # §34: a `job.held` is never folded into the start notification.
@@ -888,17 +927,23 @@ class Daemon:
                 title, payload, actions=actions, fold=event.kind != "job.held"
             )
 
-    def _held_reason(self, job_id: str) -> str | None:
+    async def decide_held_reason(self, job: Job) -> None:
         """§43: the reason `PlaybookEngine.published_hold_reason` gives the held job
-        `job_id` at filing, or None (the gate's). Only an apply of origin `architect`
-        is asked; a job the spool cannot read is published as filed."""
-        try:
-            job = self.spool.load_job(job_id)
-        except SpoolError:
-            return None
-        if job.origin != ARCHITECT_ORIGIN:
-            return None
-        return self.playbook.published_hold_reason(job)
+        `job` at filing, decided before `Api.send` files its `job.held` and kept for
+        `_on_event` to publish; none kept is the gate's. Only an apply of origin
+        `architect` whose hold the engine did not defer (§36) is asked, in a worker
+        thread: it reads and hashes the stored zip, which review 27 should-fix 1 (§44)
+        keeps off the event loop."""
+        if job.origin != ARCHITECT_ORIGIN or self.playbook.hold_deferred(job.id):
+            return
+        reason = await asyncio.to_thread(self.playbook.published_hold_reason, job)
+        if reason is not None:
+            self._held_reasons[job.id] = reason
+
+    def discard_held_reason(self, job_id: str) -> None:
+        """Forget the reason `decide_held_reason` kept for a hold that is never filed
+        (PR #8 hosted finding 2: the job was decided while the reason was computed)."""
+        self._held_reasons.pop(job_id, None)
 
     async def wait_for_event(
         self, kinds: frozenset[str], *, timeout: float | None = None
@@ -975,6 +1020,7 @@ class Daemon:
                 {"job": job.id, "role": job.role, "state": "killed", "reason": reason},
             )
             await self._consultation_ended(killed)  # §28: a consultation cancelled queued
+            self.playbook.check_at_rest()  # §44 rule 4: a job cancelled while queued
             await self._announce()
             return killed
 

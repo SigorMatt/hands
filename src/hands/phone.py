@@ -843,7 +843,17 @@ def status_summary(daemon: Daemon) -> str:
     held = [job.id for job in daemon.spool.list_jobs() if job.state == "held"]
     lines.append(f"held: {', '.join(held) if held else 'none'}")
     pipeline = daemon.playbook.pipeline()
-    lines.append(f"pipeline: {'paused' if pipeline.get('paused') else 'running'}")
+    if pipeline.get("human_pause"):
+        # §44 rule 6: the human pause and the ends it keeps, by role and job id.
+        kept = ", ".join(
+            f"{entry.get('role')} {entry.get('job')}" for entry in pipeline.get("kept") or []
+        )
+        lines.append(
+            f"pipeline: paused by a human ({pipeline.get('paused_by')}); "
+            f"kept: {kept or 'none'}"
+        )
+    else:
+        lines.append(f"pipeline: {'paused' if pipeline.get('paused') else 'running'}")
     lines.append(f"inbox: {status['inbox']['unacked']} unacked")
     return "\n".join(lines)
 

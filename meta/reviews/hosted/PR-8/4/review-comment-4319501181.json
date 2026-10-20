@@ -1,0 +1,69 @@
+{
+  "url": "https://api.github.com/repos/SigorMatt/hands/pulls/comments/4319501181",
+  "pull_request_review_id": 5578511208,
+  "id": 4319501181,
+  "node_id": "PRRC_kwDOUVwTn88AAAABAXZbfQ",
+  "diff_hunk": "@@ -440,6 +441,9 @@ async def _send(\n             # §36 (H-045): the hold of a kit the role filed, under `autonomous`, is\n             # decided by the engine before anything is published.\n             self.daemon.playbook.defer_hold(job)\n+            # §43: a hold published at filing reads §43's reason when its kit carries\n+            # the playbook — decided now, off the event loop (§44).\n+            await self.daemon.decide_held_reason(job)\n             self.spool.append_event(",
+  "path": "src/hands/api.py",
+  "commit_id": "885f07c303503a8c482a70590464790ae8b9e919",
+  "original_commit_id": "8453b8a046986edf29f2127aa7f816a6779011f5",
+  "user": {
+    "login": "qodo-code-review[bot]",
+    "id": 151058649,
+    "node_id": "BOT_kgDOCQD42Q",
+    "avatar_url": "https://avatars.githubusercontent.com/in/484649?v=4",
+    "gravatar_id": "",
+    "url": "https://api.github.com/users/qodo-code-review%5Bbot%5D",
+    "html_url": "https://github.com/apps/qodo-code-review",
+    "followers_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/followers",
+    "following_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/following{/other_user}",
+    "gists_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/gists{/gist_id}",
+    "starred_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/starred{/owner}{/repo}",
+    "subscriptions_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/subscriptions",
+    "organizations_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/orgs",
+    "repos_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/repos",
+    "events_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/events{/privacy}",
+    "received_events_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/received_events",
+    "type": "Bot",
+    "user_view_type": "public",
+    "site_admin": false
+  },
+  "body": "<img src=\"https://img.shields.io/badge/Medium-634FD1?style=flat-square\" height=\"20px\" alt=\"Remediation recommended\">\n\n2\\. Decided jobs receive late hold notices <code>🐞 Bug</code> <code>☼ Reliability</code>\n\n<pre>\n<b><i>Api.send</i></b> and <b><i>_publish_held</i></b> await held-reason computation, then announce a hold without\nrechecking the job’s gate or current state. If another client approves or denies the job during that\nwait, the later notification describes a hold that no longer exists and can create new approval\nbuttons.\n</pre>\n\n\n<details>\n<summary><strong>Agent Prompt</strong></summary>\n\n```\n## Issue description\nA client can approve or deny a held job while `Api.send` or startup hold publication awaits reason computation, leaving a stale hold event or notification to be published.\n\n## Fix Focus Areas\n- src/hands/api.py[440-451]\n- src/hands/daemon.py[424-428]\n- src/hands/daemon.py[430-451]\n- src/hands/daemon.py[901-912]\n\n## Recommended Fix\nAfter reason computation, reload the job before filing `job.held` or publishing a startup hold. File the event only if the gate is still pending, and publish the startup hold only if the job is still held; keep the startup list consistent with that check and clear any cached reason when the gate has already been decided.\n```\n\n<code>ⓘ Copy this prompt and use it to remediate the issue with your preferred AI generation tools</code>\n</details>\n\n[Dismiss ↗](https://app.qodo.ai/findings/04de2b51-3613-401b-a417-6d2712b88ac7?action=dismiss&origin=git) | [View ↗](https://app.qodo.ai/findings/04de2b51-3613-401b-a417-6d2712b88ac7)",
+  "created_at": "2026-10-19T22:26:19Z",
+  "updated_at": "2026-10-19T22:26:19Z",
+  "html_url": "https://github.com/SigorMatt/hands/pull/8#discussion_r4319501181",
+  "pull_request_url": "https://api.github.com/repos/SigorMatt/hands/pulls/8",
+  "_links": {
+    "self": {
+      "href": "https://api.github.com/repos/SigorMatt/hands/pulls/comments/4319501181"
+    },
+    "html": {
+      "href": "https://github.com/SigorMatt/hands/pull/8#discussion_r4319501181"
+    },
+    "pull_request": {
+      "href": "https://api.github.com/repos/SigorMatt/hands/pulls/8"
+    }
+  },
+  "reactions": {
+    "url": "https://api.github.com/repos/SigorMatt/hands/pulls/comments/4319501181/reactions",
+    "total_count": 0,
+    "+1": 0,
+    "-1": 0,
+    "laugh": 0,
+    "hooray": 0,
+    "confused": 0,
+    "heart": 0,
+    "rocket": 0,
+    "eyes": 0
+  },
+  "start_line": 446,
+  "original_start_line": 446,
+  "start_side": "RIGHT",
+  "line": 452,
+  "original_line": 447,
+  "side": "RIGHT",
+  "author_association": "NONE",
+  "original_position": 15,
+  "position": 20,
+  "subject_type": "line"
+}

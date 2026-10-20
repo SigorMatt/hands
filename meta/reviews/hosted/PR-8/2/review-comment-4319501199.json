@@ -1,0 +1,69 @@
+{
+  "url": "https://api.github.com/repos/SigorMatt/hands/pulls/comments/4319501199",
+  "pull_request_review_id": 5578511208,
+  "id": 4319501199,
+  "node_id": "PRRC_kwDOUVwTn88AAAABAXZbjw",
+  "diff_hunk": "@@ -870,33 +874,72 @@ def _check_playbook(\n     return Check(\"playbook\", True, reason), book\n \n \n-def _owner_warning(kit: _Kit, repo: Path) -> str | None:\n+def _configured_playbook(project: str | None, config: Config | None) -> tuple[bool, str | None]:\n+    \"\"\"§44 \"H-077, ruled\": whether a project configuration is known here, and its\n+    `[playbook] path` read as a repository path (`playbook_repo_path`; None when it\n+    leaves the repository). The config is `config` when the caller has one (handsd's\n+    `kit_file`), else the one every `hands` command resolves; one that does not\n+    resolve or load is no configuration — a WARN fails nothing, so this never fails\n+    the check.\"\"\"\n+    if config is None:\n+        try:\n+            config = config_mod.load_config(config_mod.resolve_project(project))\n+        except config_mod.ConfigError:\n+            return False, None\n+    return True, playbook_repo_path(config)\n+\n+\n+def _owner_warning(\n+    kit: _Kit, repo: Path, configured: str | None, known: bool\n+) -> str | None:\n     \"\"\"§43 \"A playbook change is the owner's\": the `WARN playbook:` line for a kit\n     that carries a playbook when the repository's playbook in force before the apply,\n     or the kit's own, sets `architect = \"role\"` with `autonomous = true` — filed by\n     the role, its apply waits for the human. The engine judges under the playbook in\n     force when the kit is filed, so a kit that switches a series back to phone mode\n     is held too. None for a kit that carries no playbook, or when neither playbook\n-    is autonomous (one that does not load is judged by the `playbook` check).\"\"\"\n-    carried = [name for name in PLAYBOOK_PATHS if name in kit.files]\n+    is autonomous (one that does not load is judged by the `playbook` check).\n+\n+    §44 \"H-077, ruled\": an entry carries the playbook by the engine's one test\n+    (`carries_playbook`): the `configured` repository path or either fixed name, in\n+    any letter case. The repository's playbook is judged at the configured path as\n+    well as the fixed names. Without a project configuration (`known` False) only\n+    the fixed names are known, and the line ends saying so; with one, it ends naming\n+    the configured path.\"\"\"\n+    carried = sorted(name for name in kit.files if carries_playbook(name, configured))\n     if not carried:\n         return None\n     autonomous: list[str] = []\n-    present = [name for name in PLAYBOOK_PATHS if (repo / name).is_file()]\n-    if present:\n+    candidates = [*([configured] if configured is not None else []), *PLAYBOOK_PATHS]\n+    present = [name for name in dict.fromkeys(candidates) if (repo / name).is_file()]\n+    for name in present:\n         with contextlib.suppress(PlaybookError, OSError):\n-            if _load((repo / present[0]).read_bytes(), present[0]).architect_is_autonomous:\n-                autonomous.append(f\"the repository's {present[0]}\")\n-    with contextlib.suppress(PlaybookError):\n-        if _load(kit.files[carried[0]], carried[0]).architect_is_autonomous:\n-            autonomous.append(f\"the kit's {carried[0]}\")\n+            if _load((repo / name).read_bytes(), name).architect_is_autonomous:",
+  "path": "src/hands/kit.py",
+  "commit_id": "58deee7644ae42cb175ddecd0d57404f427f9578",
+  "original_commit_id": "8453b8a046986edf29f2127aa7f816a6779011f5",
+  "user": {
+    "login": "qodo-code-review[bot]",
+    "id": 151058649,
+    "node_id": "BOT_kgDOCQD42Q",
+    "avatar_url": "https://avatars.githubusercontent.com/in/484649?v=4",
+    "gravatar_id": "",
+    "url": "https://api.github.com/users/qodo-code-review%5Bbot%5D",
+    "html_url": "https://github.com/apps/qodo-code-review",
+    "followers_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/followers",
+    "following_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/following{/other_user}",
+    "gists_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/gists{/gist_id}",
+    "starred_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/starred{/owner}{/repo}",
+    "subscriptions_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/subscriptions",
+    "organizations_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/orgs",
+    "repos_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/repos",
+    "events_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/events{/privacy}",
+    "received_events_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/received_events",
+    "type": "Bot",
+    "user_view_type": "public",
+    "site_admin": false
+  },
+  "body": "<img src=\"https://img.shields.io/badge/Medium-634FD1?style=flat-square\" height=\"20px\" alt=\"Remediation recommended\">\n\n5\\. Nested builders miss a playbook warning <code>🐞 Bug</code> <code>≡ Correctness</code>\n\n<pre>\n<b><i>_owner_warning</i></b> joins the repository-relative configured playbook path to its <b><i>repo</i></b> argument, but\ndaemon-side kit filing passes the builder&#x27;s working directory rather than the repository root. When\nthat directory is below the root and the kit changes a custom-path playbook, the check looks beneath\nthe directory twice and can omit the warning that the current autonomous playbook requires human\nownership.\n</pre>\n\n\n<details>\n<summary><strong>Agent Prompt</strong></summary>\n\n```\n## Issue description\nThe configured playbook path includes the builder directory's Git prefix, while daemon-side checks use that directory as their repository argument.\n## Fix Focus Areas\n- src/hands/kit.py[877-889]\n- src/hands/kit.py[909-918]\n- src/hands/api.py[823-827]\n## Recommended Fix\nResolve the repository-relative configured path against the actual Git root, or derive a path relative to the supplied check directory. Cover a builder cwd below the root with a configured custom playbook path.\n```\n\n<code>ⓘ Copy this prompt and use it to remediate the issue with your preferred AI generation tools</code>\n</details>\n\n[Dismiss ↗](https://app.qodo.ai/findings/edf2367a-322f-49a3-89a7-631f50453b68?action=dismiss&origin=git) | [View ↗](https://app.qodo.ai/findings/edf2367a-322f-49a3-89a7-631f50453b68)",
+  "created_at": "2026-10-19T22:26:19Z",
+  "updated_at": "2026-10-19T22:26:19Z",
+  "html_url": "https://github.com/SigorMatt/hands/pull/8#discussion_r4319501199",
+  "pull_request_url": "https://api.github.com/repos/SigorMatt/hands/pulls/8",
+  "_links": {
+    "self": {
+      "href": "https://api.github.com/repos/SigorMatt/hands/pulls/comments/4319501199"
+    },
+    "html": {
+      "href": "https://github.com/SigorMatt/hands/pull/8#discussion_r4319501199"
+    },
+    "pull_request": {
+      "href": "https://api.github.com/repos/SigorMatt/hands/pulls/8"
+    }
+  },
+  "reactions": {
+    "url": "https://api.github.com/repos/SigorMatt/hands/pulls/comments/4319501199/reactions",
+    "total_count": 0,
+    "+1": 0,
+    "-1": 0,
+    "laugh": 0,
+    "hooray": 0,
+    "confused": 0,
+    "heart": 0,
+    "rocket": 0,
+    "eyes": 0
+  },
+  "start_line": null,
+  "original_start_line": 913,
+  "start_side": "RIGHT",
+  "line": null,
+  "original_line": 917,
+  "side": "RIGHT",
+  "author_association": "NONE",
+  "original_position": 79,
+  "position": 1,
+  "subject_type": "line"
+}

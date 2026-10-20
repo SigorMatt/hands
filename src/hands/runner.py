@@ -1134,7 +1134,21 @@ def job_env(job: Job, role: RoleConfig, project: str) -> dict[str, str]:
     holds the installed hands' copy of the no-background hook, the env table's value
     for any role that sets it, and otherwise absent — never handsd's own value.
     """
-    env = {**os.environ, **role.spawn_env, JOB_ENV: job.id, PROJECT_ENV: project}
+    env = turn_env(role, project, role_name=job.role, prompt=job.prompt)
+    env[JOB_ENV] = job.id
+    return env
+
+
+def turn_env(
+    role: RoleConfig, project: str, *, role_name: str | None = None, prompt: str = ""
+) -> dict[str, str]:
+    """`job_env`'s whole decision for one turn of `role` (`role_name`, default the
+    role's own name, with `prompt`), less the job: `HANDS_JOB` is absent, whatever
+    the caller inherited. Review 27 should-fix 2 (§44): `hands doctor --live` builds
+    both of its turns' environments here, so each carries what a real job carries."""
+    name = role.name if role_name is None else role_name
+    env = {**os.environ, **role.spawn_env, PROJECT_ENV: project}
+    env.pop(JOB_ENV, None)
     env.pop(BG_TASKS_ENV, None)
     background = background_tasks(role)
     if background.value is not None:
@@ -1143,16 +1157,16 @@ def job_env(job: Job, role: RoleConfig, project: str) -> dict[str, str]:
     docs = docs_root()
     if docs is not None:
         env[DOCS_ENV] = str(docs)
-    if job.role in (DRIVER_ROLE, ARCHITECT_ROLE):
+    if name in (DRIVER_ROLE, ARCHITECT_ROLE):
         env.pop(CONSULT_ROLE_ENV, None)
-        head = consult_head(job.prompt)
+        head = consult_head(prompt)
         if head is not None:
             env[CONSULT_ROLE_ENV] = head["role"]
         env.pop(CLONE_ENV, None)
         clone = driver_clone(role.cwd)
         if clone is not None:
             env[CLONE_ENV] = str(clone)
-    if job.role == ARCHITECT_ROLE:
+    if name == ARCHITECT_ROLE:
         env[KITS_ENV] = str(role.cwd / "kits")
     return env
 

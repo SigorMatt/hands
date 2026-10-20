@@ -57,6 +57,7 @@ from hands.notify import NotifyError, send_test
 from hands.playbook import (
     ConsultRefused,
     PlaybookError,
+    ResumeRefused,
     load_playbook,
     playbook_path,
     sent_prompt,
@@ -440,6 +441,14 @@ class Api:
             # §36 (H-045): the hold of a kit the role filed, under `autonomous`, is
             # decided by the engine before anything is published.
             self.daemon.playbook.defer_hold(job)
+            # §43: a hold published at filing reads §43's reason when its kit carries
+            # the playbook — decided now, off the event loop (§44).
+            await self.daemon.decide_held_reason(job)
+            if self.daemon.still_held(job.id) is None:
+                # PR #8 hosted finding 2: another client decided the job during that
+                # wait; its hold is over, so nothing is filed or published for it.
+                self.daemon.discard_held_reason(job.id)
+                return self._job(job.id).to_dict()
             self.spool.append_event(
                 "job.held",
                 {"job": job.id, "role": role, "state": "held", "reason": reason, "gate": "send"},
@@ -530,6 +539,10 @@ class Api:
         files a stop. Gated by §8 as `send` is. Not reachable with `origin: phone`
         from a socket client: `go` is the socket's method and passes `cli` (§37).
         """
+        # §44 rule 3: only `resume` ends a human pause; `go` is refused under one.
+        paused = self.daemon.playbook.human_pause_refusal("go")
+        if paused is not None:
+            raise ApiError(paused)
         busy = self.builder_busy()
         if busy is not None:
             raise ApiError(busy)
@@ -578,6 +591,10 @@ class Api:
         budget is spent. Nothing is awaited after the load, so `start_consult`'s
         enqueue follows these checks in one step of the event loop."""
         engine = self.daemon.playbook
+        # §44 rule 3: only `resume` ends a human pause; `consult` is refused under one.
+        paused = engine.human_pause_refusal("consult")
+        if paused is not None:
+            return paused
         if ARCHITECT_ROLE in self.config.roles:
             why = self._role_busy(ARCHITECT_ROLE)
             if why is not None:
@@ -1467,6 +1484,7 @@ class Api:
                 {"job": record.id, "role": record.role, "state": "denied", "reason": reason},
             )
             await self.daemon.playbook.on_event("job.denied", job=out)  # §10
+            self.daemon.playbook.check_at_rest()  # §44 rule 4: a denied job has ended
         self._gate_decided(out, gate)
         return out.to_dict()
 
@@ -1542,8 +1560,14 @@ class Api:
         return await self.daemon.playbook.pause()
 
     async def resume(self) -> dict[str, Any]:
-        """Un-pause the playbook engine and clear the stop reason (§4, §10)."""
-        return await self.daemon.playbook.resume()
+        """Un-pause the playbook engine and clear the stop reason (§4, §10).
+
+        §44 rule 5: a human pause's `resume` replays the kept ends, and is refused
+        (`ApiError`, the load's reason) when the playbook does not load."""
+        try:
+            return await self.daemon.playbook.resume()
+        except ResumeRefused as exc:
+            raise ApiError(str(exc)) from exc
 
     # ---------------------------------------------------------- notify (§4)
 

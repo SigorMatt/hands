@@ -2930,4 +2930,40 @@ or stands as written for a case-sensitive filesystem. Not changed in
 mission 27: §43 names the paths exactly, and widening them is the
 design's.
 
-Status: open
+Status: resolved (mission 28 U4, this commit — DESIGN §44 "H-077, ruled": one test, `spool.carries_playbook`, counts an entry as carrying the playbook when its casefolded path equals the casefolded configured playbook path (`[playbook] path` read as a repository path with the builder cwd's own place before it, `playbook.playbook_repo_path`) or either fixed name; the engine's hold and published reason (`stored_kit_playbooks`, also asked by the daemon's `decide_held_reason`) and `hands kit check`'s `WARN playbook:` line use it; the WARN judges the repository's playbook at the configured path as well as the fixed names and ends naming the names it knows — without a project configuration, the two fixed names only; the `playbook` check is unchanged. Tests: tests/test_playbook.py, tests/test_kit.py)
+
+## H-078 — a human pause drops the event that would start the next step
+
+Severity: medium · Component: src/hands/playbook.py (`on_event`'s paused
+branch, `pause`, `resume`, `_unpause`), src/hands/daemon.py
+(`_feed_orphans`); DESIGN §10, §44
+Filed by: mission 28 orchestrator, U0 (2026-10-19).
+Evidence: another project's ledger (discotrade), its HF-017 (2026-10-19):
+its builder job 0mve1pq5x-jej2 ran a whole mission while three owner
+commits waited from 2026-10-18 21:14, and its aux guard replied `VERDICT:
+blocked busy`. The code read at f16d6d1 and d587fa6: `playbook.py`
+`on_event`'s paused branch logs "fires nothing" and returns, so a paused
+pipeline drops every event it receives; `pause` is a stop and `resume`
+un-pauses (`_unpause`) without replaying anything; nothing publishes the
+moment the series has come to rest; `daemon.py` `_feed_orphans` feeds each
+orphan once and marks it fed before the engine hears it, so a restart while
+the pipeline is paused consumes the builder's orphan and nothing ever
+resumes it.
+
+Problem. In an autonomous series a builder job spans a whole mission, so
+the first job boundary is the mission's end. A human who needs the working
+tree quiet for an owner commit cannot stop the series at the next
+boundary: `pause` lets the running job finish and then drops its end, so
+the series is lost rather than held, `resume` does not take it up again,
+and the human must poll `jobs` to learn when the tree is quiet.
+
+Direction. DESIGN §44 "A pause that holds the next step", rules 1-6: under
+a human pause (`paused_by` `cli` or `phone`) a role's end that would start
+the next step is kept, one per role; everything else is as under any pause
+and every suppressed stop is notified; `resume` rules fire until a stop is
+suppressed under the pause; only `resume` ends a human pause, reloading the
+playbook and replaying the kept ends up to the first that starts a job or
+stops; `hands: at rest` is published once nothing runs; the state lives in
+`pipeline.json`.
+
+Status: resolved (mission 28 U1 d367373, rules 1, 2, 3, 5 and 6; mission 28 U2, this commit, rule 4 and the documentation — DESIGN §44: under a human pause a role's end that would start the next step is kept, one per role, in `pipeline.json`; a `notify` end fires; a `resume` rule fires until a stop is suppressed under the pause, and every suppressed stop is notified; `go` and `consult` are refused naming `resume`; `resume` reloads, refuses on a playbook that does not load, replays the kept ends up to the first that starts a job or stops and discards the rest; `hands: at rest` is published once per human pause (the mark in `pipeline.json`) at the first moment no job is running, queued or held and no §6 resume is scheduled, checked when the pause is sent, on every job end the engine hears, a denial, a cancel while queued and a job that could not spawn, naming each kept end or that none is kept, and again with the new list when a kept end is replaced after it; the handbook's §10, §14, §18 and §19, docs/PLAYBOOK.md and docs/OPERATIONS.md say so. Tests: tests/test_human_pause.py, tests/test_playbook.py, tests/test_phone.py, tests/test_operator_table.py)

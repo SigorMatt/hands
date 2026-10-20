@@ -3594,6 +3594,150 @@ def test_the_role_mode_missions_templates_warn_of_the_owner_and_pass_six_of_six(
         assert len(_owner_warns(out)) == warned, (name, out)
 
 
+# ---- §44 "H-077, ruled": the playbook in any letter case, and at the configured path
+
+
+def _configured(tmp_home: Path, tmp_path: Path, path: str) -> None:
+    """A project configuration with the architect role and `[playbook] path`."""
+    config = _config(tmp_home, tmp_path, architect=True)
+    with config.open("a", encoding="utf-8") as out:
+        out.write(f'\n[playbook]\npath = "{path}"\n')
+
+
+@pytest.mark.parametrize(
+    "entry", ["playbook.toml", "Playbook.toml", "meta/playbook.toml", "Meta/PLAYBOOK.toml"]
+)
+@pytest.mark.parametrize("configured", [True, False], ids=["configured", "no configuration"])
+def test_kit_check_warns_for_a_playbook_entry_in_another_letter_case(
+    tmp_home: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, entry: str,
+    configured: bool,
+) -> None:
+    """§44: an entry carries the playbook when its casefolded path equals a fixed name
+    casefolded, by the engine's one test; the WARN names the entry. The `playbook`
+    check is unchanged: it loads only an entry at a fixed name, so the repo's playbook
+    is the one judged and the kit passes. Without a project configuration the WARN
+    says kit check knows only the two fixed names; with one it names what it knows."""
+    monkeypatch.delenv("HANDS_PROJECT", raising=False)
+    if configured:
+        _config(tmp_home, tmp_path, architect=True)
+    repo = write_tree(
+        tmp_path / "repo",
+        {"PLAYBOOK.toml": AUTONOMOUS_PLAYBOOK, "meta/REVIEW-PROTOCOL.md": PROTOCOL},
+    )
+    kit = write_tree(tmp_path / "k", {"meta/BUILDER-11-PROMPT.md": BRIEF, entry: PLAYBOOK})
+    code, out, _ = run_check(kit, repo)
+    assert code == 0, out
+    assert "the repo's PLAYBOOK.toml is in force" in strip_paths(line(out, "playbook")), out
+    [warn] = _owner_warns(out)
+    said = strip_paths(warn)
+    assert f"the kit carries {entry}, and the repository's PLAYBOOK.toml sets" in said, said
+    only = (
+        "with no project configuration to name a [playbook] path, kit check knows only "
+        "PLAYBOOK.toml and meta/PLAYBOOK.toml, in any letter case (§44)"
+    )
+    known = "kit check knows PLAYBOOK.toml and meta/PLAYBOOK.toml, in any letter case (§44)"
+    assert said.endswith("; " + (known if configured else only)), said
+
+
+@pytest.mark.parametrize("entry", ["ops/rules.toml", "OPS/Rules.toml"])
+def test_kit_check_warns_for_the_configured_playbook_path_judging_the_repos_there(
+    tmp_home: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, entry: str
+) -> None:
+    """§44: under `[playbook] path = "ops/rules.toml"` an entry at that path, in any
+    letter case, carries the playbook; the WARN is given because the repository's
+    playbook at `ops/rules.toml` is role mode with autonomy (its `PLAYBOOK.toml`, and
+    the kit's own, are phone mode), and names the configured path among those known.
+    Without that configuration the same kit draws no owner's WARN."""
+    monkeypatch.delenv("HANDS_PROJECT", raising=False)
+    repo = write_tree(
+        tmp_path / "repo",
+        {
+            "PLAYBOOK.toml": PLAYBOOK,
+            "ops/rules.toml": AUTONOMOUS_PLAYBOOK,
+            "meta/REVIEW-PROTOCOL.md": PROTOCOL,
+        },
+    )
+    kit = write_tree(tmp_path / "k", {"meta/BUILDER-11-PROMPT.md": BRIEF, entry: PLAYBOOK})
+    _config(tmp_home, tmp_path, architect=True)
+    code, out, _ = run_check(kit, repo)
+    assert code == 0, out
+    assert _owner_warns(out) == [], out
+    _configured(tmp_home, tmp_path, "ops/rules.toml")
+    code, out, _ = run_check(kit, repo)
+    assert code == 0, out
+    [warn] = _owner_warns(out)
+    said = strip_paths(warn)
+    assert said.startswith(
+        f"WARN playbook: the kit carries {entry}, and the repository's ops/rules.toml sets "
+        '[series] architect = "role" with autonomous = true'
+    ), said
+    assert said.endswith(
+        "; kit check knows ops/rules.toml, PLAYBOOK.toml and meta/PLAYBOOK.toml, in any "
+        "letter case (§44)"
+    ), said
+
+
+def test_the_daemons_kit_check_from_a_builder_cwd_below_the_root_warns_for_the_configured_path(
+    tmp_home: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Mission 28 U5, PR #8 hosted finding 5 (§44 "H-077, ruled", §38): handsd's
+    `kit_file` runs `check_kit` with the builder's cwd as its repo argument. With that
+    cwd at `sub/dir` below the repository root and `[playbook] path = "ops/rules.toml"`
+    (the repository path `sub/dir/ops/rules.toml`), a kit carrying that entry draws the
+    owner's WARN because the repository's playbook there is role mode with autonomy —
+    the configured path is resolved against the repository root, not joined beneath
+    the cwd a second time."""
+    from conftest import commit_file
+    from hands.config import load_config
+
+    monkeypatch.delenv("HANDS_PROJECT", raising=False)
+    root = tmp_path / "root"
+    commit_file(root, "sub/dir/ops/rules.toml", AUTONOMOUS_PLAYBOOK)
+    commit_file(root, "sub/dir/meta/REVIEW-PROTOCOL.md", PROTOCOL)
+    cwd = root / "sub" / "dir"
+    architect = tmp_path / "hands-architect"
+    architect.mkdir()
+    (tmp_home / ".hands" / "demo.toml").write_text(
+        f'[roles.builder]\ncwd = "{cwd}"\n\n[roles.architect]\ncwd = "{architect}"\n'
+        '\n[playbook]\npath = "ops/rules.toml"\n',
+        encoding="utf-8",
+    )
+    kit = write_tree(
+        tmp_path / "k",
+        {"meta/BUILDER-11-PROMPT.md": BRIEF, "sub/dir/ops/rules.toml": PLAYBOOK},
+    )
+    report = kit_mod.check_kit(kit, cwd, config=load_config("demo"))
+    owner = [text for text in report.warnings if "§43" in strip_paths(text)]
+    assert len(owner) == 1, report.warnings
+    said = strip_paths(owner[0])
+    assert said.startswith(
+        "the kit carries sub/dir/ops/rules.toml, and the repository's sub/dir/ops/rules.toml "
+        'sets [series] architect = "role" with autonomous = true'
+    ), said
+
+
+def test_an_ordinary_kit_is_unchanged_under_a_configured_playbook_path(
+    tmp_home: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """§44: a kit that carries no playbook draws no owner's WARN under a configured
+    path whose repository playbook is autonomous, and passes as before."""
+    monkeypatch.delenv("HANDS_PROJECT", raising=False)
+    _configured(tmp_home, tmp_path, "ops/rules.toml")
+    repo = write_tree(
+        tmp_path / "repo",
+        {
+            "PLAYBOOK.toml": AUTONOMOUS_PLAYBOOK,
+            "ops/rules.toml": AUTONOMOUS_PLAYBOOK,
+            "meta/REVIEW-PROTOCOL.md": PROTOCOL,
+        },
+    )
+    kit = write_tree(tmp_path / "k", {"meta/BUILDER-11-PROMPT.md": BRIEF})
+    code, out, _ = run_check(kit, repo)
+    assert code == 0, out
+    assert _owner_warns(out) == [], out
+    assert "kit check: pass (6 of 6 checks)" in strip_paths(out), out
+
+
 @pytest.mark.parametrize(
     "name", ["templates/PLAYBOOK-missions.toml", "templates/BUILDER-N-PROMPT.md"]
 )

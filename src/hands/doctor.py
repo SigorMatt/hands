@@ -61,7 +61,6 @@ from hands.config import (
     BASH_TIMEOUT_ENV,
     BG_TASKS_ENV,
     BG_WAIT_CEILING_ENV,
-    CLONE_ENV,
     DRIVER_ROLE,
     GUARDED_ROLES,
     KITS_ENV,
@@ -80,7 +79,7 @@ from hands.playbook import (
     load_playbook,
     playbook_path,
 )
-from hands.runner import build_argv
+from hands.runner import build_argv, turn_env
 from hands.spool import Spool, SpoolError, resolve_under_roots
 
 __all__ = [
@@ -2100,8 +2099,9 @@ def _live_check(config: Config, role: RoleConfig, *, live: bool) -> Check:
         )
     if role.name == ARCHITECT_ROLE:
         return _architect_live(config, role)
-    # the environment a role job gets (§23)
-    turn = _live_turn(config, role, LIVE_PROMPT, {**os.environ, **role.spawn_env})
+    # the environment a role job gets (§23), built by the runner's own decision
+    # (`turn_env`, `job_env`'s; review 27 should-fix 2, §44)
+    turn = _live_turn(config, role, LIVE_PROMPT, turn_env(role, config.project))
     if isinstance(turn, Check):
         return turn
     result, _ = turn
@@ -2194,9 +2194,11 @@ def _architect_live(config: Config, role: RoleConfig) -> Check:
     `kits/hands-doctor-live-<8 hex>`; doctor creates that directory (exclusively, so
     an existing path FAILS the row and the turn is not run) and removes only it.
 
-    The turn's environment is an architect job's (`hands.runner.job_env`: the role's
-    `spawn_env`, `HANDS_CLONE`, `HANDS_KITS`) plus `HANDS_PROJECT`, the config's
-    project, so `hands show` reaches this project's daemon. The design is silent on
+    The turn's environment is an architect job's, built by `hands.runner.turn_env`
+    (`job_env`'s one decision, review 27 should-fix 2, §44): the role's `spawn_env`,
+    `HANDS_CLONE`, `HANDS_KITS`, §43's `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS` and
+    `HANDS_PROJECT`, the config's project, so `hands show` reaches this project's
+    daemon; no `HANDS_JOB`, since the turn is no job. The design is silent on
     who removes the file; the role cannot (its settings deny `rm`), so doctor does.
     """
     name = f"live {role.name}"
@@ -2250,8 +2252,7 @@ def _architect_live(config: Config, role: RoleConfig) -> Check:
         "Do not remove the file; hands doctor removes it. Then reply with exactly this "
         "line and nothing else:\nVERDICT: doctor ok\n"
     )
-    env = {**os.environ, **role.spawn_env, KITS_ENV: str(kits_dir), "HANDS_PROJECT": config.project}
-    env[CLONE_ENV] = str(clone)
+    env = turn_env(role, config.project, prompt=prompt)
     turn = _live_turn(config, role, prompt, env)
     if isinstance(turn, Check):
         _remove_live_kit(kit)

@@ -539,10 +539,11 @@ EXEMPT: dict[tuple[str, str, str], str] = {
     ("daemon", "_on_event", "event.payload"):
         "an inbox event's payload; NOTIFY_KINDS publishes only `job.held`, whose "
         "reason is the gate's (gates.py), the `hands: a job is held for a human` row",
-    ("daemon", "_held_reason", "self.playbook.published_hold_reason(job)"):
-        "§43's hold reason at filing and at a start, decided by playbook.py "
-        "`published_hold_reason` (`owner_hold_reason`): the `the kit carries <path>` "
-        "row, pinned by test_section_43s_three_rows_are_in_the_table",
+    ("daemon", "_on_event", "self._held_reasons.pop(str(job_id), None)"):
+        "§43's hold reason at filing, decided by playbook.py `published_hold_reason` "
+        "(`owner_hold_reason`) in a worker thread before the `job.held` is filed "
+        "(`Daemon.decide_held_reason`): the `the kit carries <path>` row, pinned by "
+        "test_section_43s_three_rows_are_in_the_table",
     ("playbook", "_release_kit", "asyncio.to_thread(self.published_hold_reason, job)"):
         "the same §43 reason, asked in a worker thread (it hashes the stored zip): "
         "the `the kit carries <path>` row, pinned by test_section_43s_three_rows_are_in_the_table",
@@ -897,10 +898,11 @@ def _payload_texts(mod: _Module, func: Func, expr: ast.expr) -> list[Found]:
     return [("unread", mod.name, where, ast.unparse(expr))]
 
 
-def code_strings() -> list[Found]:
+def code_strings(*, titles: bool | None = None) -> list[Found]:
     """§43: every string or f-string passed as a stop's reason or a publish's title
     or message to the receivers, in the engine, the limit manager, the daemon and
-    the phone."""
+    the phone. `titles=True` keeps only what is passed as a title, `False` only the
+    rest (§44, review 27 should-fix 3: a title is matched otherwise)."""
     found: list[Found] = []
     for name in SCANNED:
         mod = _module(name)
@@ -916,6 +918,8 @@ def code_strings() -> list[Found]:
                 (kinds[i], arg) for i, arg in enumerate(node.args) if i in kinds
             ] + [(kinds[k.arg], k.value) for k in node.keywords if k.arg in kinds]
             for kind, arg in given:
+                if titles is not None and (kind == TITLE) != titles:
+                    continue
                 found += (_payload_texts(mod, func, arg) if kind == PAYLOAD
                           else _read(mod, func, arg))
     return found
@@ -940,19 +944,82 @@ def _in_row(pieces: list[str], row: str) -> bool:
     return True
 
 
+#: A row's titles: the backticked titles its Notification cell begins with, before
+#: the ` — ` that starts the message (`hands: go`, `hands: answer` — …).
+_ROW_TITLES = re.compile(r"`([^`]+)`(?:, |$| — )")
+
+
+def row_titles(first: str) -> list[str]:
+    """§44 (review 27 should-fix 3): the titles a row of §19 is for — the leading
+    run of backticked titles in its Notification cell, comma-separated, up to its
+    ` — `. A title written anywhere else in the cell is not the row's."""
+    found: list[str] = []
+    at = 0
+    while True:
+        match = _ROW_TITLES.match(first, at)
+        if match is None:
+            return found
+        found.append(match.group(1))
+        if not match.group(0).endswith(", "):
+            return found
+        at = match.end()
+
+
+def title_has_row(text: str, firsts: list[str]) -> bool:
+    """A published title is matched against the start of a row's title, its
+    placeholders as `_pieces` reads them: the first piece starts the row's title
+    and the rest follow in order."""
+    pieces = _pieces(text)
+    return any(
+        title.startswith(pieces[0]) and _in_row(pieces, title)
+        for first in firsts for title in row_titles(first)
+    )
+
+
+def _missing(found: list[Found], firsts: list[str], *, titles: bool) -> list[str]:
+    return sorted({
+        f"{item[1]}.py:{item[2]}: {flat(item[3].replace(HOLE, '<…>'))!r}"
+        for item in found
+        if item[0] == "text" and _pieces(item[3])
+        and not (title_has_row(item[3], firsts) if titles
+                 else any(_in_row(_pieces(item[3]), row) for row in firsts))
+    })
+
+
 def test_every_stop_reason_and_published_line_of_the_code_has_a_row() -> None:
     """§43 "The operator table follows the code": a string the receivers are given
-    with no row in §19 names itself, its placeholders written `<…>`."""
+    with no row in §19 names itself, its placeholders written `<…>`. A title is
+    matched against the start of a row's title (§44), any other string anywhere in
+    the Notification column."""
     firsts = [flat(row[0]) for row in table_rows(handbook_section(SECTION_19))[1:]]
-    found = code_strings()
-    texts = [item for item in found if item[0] == "text"]
+    texts = [item for item in code_strings(titles=False) if item[0] == "text"]
     assert len(texts) > 60, len(texts)
-    missing = sorted({
-        f"{item[1]}.py:{item[2]}: {flat(item[3].replace(HOLE, '<…>'))!r}"
-        for item in texts
-        if _pieces(item[3]) and not any(_in_row(_pieces(item[3]), row) for row in firsts)
-    })
+    titles = [item for item in code_strings(titles=True) if item[0] == "text"]
+    assert len(titles) > 20, len(titles)
+    missing = _missing(texts, firsts, titles=False) + _missing(titles, firsts, titles=True)
     assert not missing, "§19 has no row for:\n" + "\n".join(missing)
+
+
+def test_a_one_word_title_needs_a_row_of_its_own() -> None:
+    """Review 27 should-fix 3: `go` written inside another row (`hands: go`, a
+    route's text) is no row for the title `go`; a row that begins `go` is."""
+    firsts = [
+        "`hands: go`, `hands: answer` — go: builder job <job> <state>",
+        "`<command>` — <command> refused: <why> (`go`, `consult`)",
+        "`hands: the pipeline stopped` — then `go <secret>`",
+    ]
+    assert not title_has_row("go", firsts)
+    assert title_has_row("hands: go", firsts) and title_has_row("hands: answer", firsts)
+    assert title_has_row("go", [*firsts, "`go` — go refused: <why>"])
+    assert row_titles("`hands: status`, `progress` — the answer") == ["hands: status", "progress"]
+    assert row_titles("nothing arrives, or a `digest` line reads `daemon down`") == []
+
+
+def test_the_reader_finds_the_published_titles_of_go_and_consult() -> None:
+    """The phone's refusals are titled by their command word (§39): the reader reads
+    `go` and `consult` as titles, so the table's rows for them are required."""
+    titles = {item[3] for item in code_strings(titles=True) if item[0] == "text"}
+    assert {"go", "consult", "hands: at rest"} <= titles, titles
 
 
 def test_every_string_the_reading_cannot_follow_is_an_exemption_with_a_reason() -> None:

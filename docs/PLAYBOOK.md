@@ -94,7 +94,8 @@ H-019). Any other key in `[series]` is refused, naming it. An empty `name` or
 
 A `go` job or a kit's apply (`origin: kit`), like a `cli` send, un-pauses a
 stopped pipeline when it starts, not when it is filed or held (DESIGN §27). A stopped pipeline still has its playbook, so `go` is accepted
-while it is paused.
+while it is paused. A human pause is the exception (below, "A human pause"):
+no job un-pauses it, and `go` is refused under it naming `resume`.
 
 Once a series runs, `progress <secret>` on the same topic (DESIGN §38) says
 where it is without starting anything: the builder's running job and its age
@@ -297,7 +298,7 @@ missing or unparseable `VERDICT:` line, an exhausted resume count, and any
 failure inside the engine itself.
 
 `hands resume` un-pauses the pipeline — whatever stopped it. So does a send you
-make yourself, but only when that job **starts**: a send held at a gate or
+make yourself, except under a human pause (below), but only when that job **starts**: a send held at a gate or
 waiting in the queue changes nothing, and a job the playbook or the limit
 manager started never clears a stop. The `pipeline.resumed` event in the inbox
 says which it was, `by = "resume"` or `by = "start"`.
@@ -321,7 +322,53 @@ stopped over a paused pipeline`; no playbook rule fires for it.
 notification check (§11) uses to put an event on your phone. Over a pipeline that is
 *already* stopped it is that later stop: it prints the reason it is already
 stopped for, keeps that reason and its timestamp in `hands pipeline`, notifies
-nobody, and leaves only the `pipeline.stop_suppressed` record.
+nobody, and leaves only the `pipeline.stop_suppressed` record. Over a human
+pause (below) it records nothing at all: no `pipeline.stop_suppressed`, no
+notification (DESIGN §44).
+
+### A human pause (DESIGN §44)
+
+A pause sent by `hands pause` or the phone's `pause <secret>` (`paused_by`
+`cli` or `phone`) is a human pause: it holds the series' next step instead of
+dropping the event that would start it. Every other stop (`paused_by` `stop`)
+is as above.
+
+- **The kept ends.** The job running when the pause is sent finishes. A
+  `builder.done`, `aux.done` or `driver.done` whose decision would `send`,
+  `consult` or `stop` — a rule's, §10's own stop when no rule or verdict
+  matches, or the engine's kickoff after an apply it approved — is kept, not
+  decided, with the playbook as loaded when it arrives: its event, its job and
+  its verdict line, one per role, in arrival order; a later end of a role
+  replaces the earlier (one `pipeline.kept_replaced` inbox event). An end whose
+  rule is a `notify` fires at once. The kept ends live in `pipeline.json`, so a
+  restart keeps them, and `hands pipeline` prints one `kept` line per end.
+- **The rest is as under any pause, and notified.** A `resume` rule (on
+  `*.orphaned` or `*.failed`) fires, bounded by `max_resumes`, so a restart
+  resumes the builder it killed — until a stop has been suppressed under the
+  pause. Every stop the pause suppresses (a tripwire, a `*.failed` with no
+  resume rule, `max_resumes` reached, a consultation's stop) is published once,
+  `hands: a stop under a human pause` (a consultation's under `hands: a
+  consultation stopped over a paused pipeline`). `*.limited` is §6's, whose
+  resume is scheduled whatever the pause; `job.held` and `job.denied` fire
+  nothing. A job of any origin that starts under the pause — a send of yours, a
+  kit's apply — leaves it in place; `go` and `consult` are refused naming
+  `resume`; a second `pause` is a no-op.
+- **At rest.** The first moment no job is running, queued or held and no §6
+  resume is scheduled — checked when the pause is sent and whenever a job ends,
+  however it ends — handsd publishes `hands: at rest`, naming each kept end
+  (role, job id, its verdict line cut to 100 characters) or saying none is
+  kept. Once per pause (the mark is in `pipeline.json`, so a restart does not
+  publish it again), and again with the new list when a kept end is replaced
+  after it.
+- **`resume`.** It reloads the playbook first, so what was committed at rest is
+  the playbook the replay uses. A playbook file that does not load, or no
+  playbook while ends are kept, refuses the `resume` with the load's reason, and
+  the pause and its kept ends stay. Otherwise it un-pauses and decides the kept
+  ends in order, as if each had just arrived, up to the first that starts a job
+  or stops the pipeline; the ends after it are discarded (one
+  `pipeline.kept_discarded` inbox event and the notification `hands: resume
+  discarded kept ends` naming them). With no playbook and nothing kept it only
+  un-pauses.
 
 ## Consult (`then = "consult"`, DESIGN §27, §31)
 
