@@ -2967,3 +2967,56 @@ stops; `hands: at rest` is published once nothing runs; the state lives in
 `pipeline.json`.
 
 Status: resolved (mission 28 U1 d367373, rules 1, 2, 3, 5 and 6; mission 28 U2, this commit, rule 4 and the documentation — DESIGN §44: under a human pause a role's end that would start the next step is kept, one per role, in `pipeline.json`; a `notify` end fires; a `resume` rule fires until a stop is suppressed under the pause, and every suppressed stop is notified; `go` and `consult` are refused naming `resume`; `resume` reloads, refuses on a playbook that does not load, replays the kept ends up to the first that starts a job or stops and discards the rest; `hands: at rest` is published once per human pause (the mark in `pipeline.json`) at the first moment no job is running, queued or held and no §6 resume is scheduled, checked when the pause is sent, on every job end the engine hears, a denial, a cancel while queued and a job that could not spawn, naming each kept end or that none is kept, and again with the new list when a kept end is replaced after it; the handbook's §10, §14, §18 and §19, docs/PLAYBOOK.md and docs/OPERATIONS.md say so. Tests: tests/test_human_pause.py, tests/test_playbook.py, tests/test_phone.py, tests/test_operator_table.py)
+
+## H-079 — `hands: at rest` is not published again when an end of another role is kept after it
+
+Severity: low · Component: src/hands/playbook.py (`_keep`, the at-rest
+mark); DESIGN §44 rule 4, §45
+Filed by: mission 29 orchestrator, U0 (2026-10-21), from REVIEW-28
+should-fix 1 (2026-10-20).
+Evidence: meta/reviews/REVIEW-28.md should-fix 1; the code read at adb061b:
+`_keep` clears the at-rest mark only when a kept end is replaced, so an end
+of a role with nothing kept yet, kept after the mark (a laptop `hands send`
+to the aux under the pause, whose `aux.done` is then kept), publishes
+nothing.
+
+Problem. The kept list the human or a project chat guards on is stale:
+`hands: at rest` named the builder's end only, while the aux's end is kept
+too and `resume` will replay it.
+
+Direction. DESIGN §45 "Review 28's should-fix items" 1: rule 4 publishes
+`hands: at rest` once per human pause at the first moment nothing runs, and
+again, with the new list, at the first such moment after the kept list has
+changed (an end kept or replaced after the last publication); the mark
+records when it was last published; a restart publishes nothing unless an
+end was kept after the mark.
+
+Status: decided (DESIGN §45: again at the first moment nothing runs after
+the kept list changed), scheduled for U6.
+
+## H-080 — an apply that did not land meets the playbook's rules
+
+Severity: medium · Component: src/hands/playbook.py (`_engine_rules`,
+`_under_human_pause`); DESIGN §27, §31, §43, §44, §45
+Filed by: mission 29 orchestrator, U0 (2026-10-21), from the architect's
+reading of 1acc9e0 (2026-10-20).
+Evidence: the code at 1acc9e0: an apply's `builder.done` goes to the
+playbook's rules like any builder end — this repository's catch-all
+`^VERDICT:` consults the driver about a "question" that is not one, the
+templates' last rule stops with "Builder finished without a recognised
+verdict", which says nothing of the kit; and under a human pause §44 rule 1
+keeps it as the builder's end, replacing the kept end of the mission it was
+sent beside.
+
+Problem. Under the pull-request gate an apply that does not land (a red
+check, a refused push or merge) becomes ordinary, and its end is decided by
+rules written for a mission's builder.
+
+Direction. DESIGN §45 "An apply that did not land (H-080)": the
+`builder.done` of an apply as §43 counts one whose reply does not begin
+`VERDICT: kit applied` is the engine's to decide, before any playbook rule:
+over an unpaused pipeline a stop with §45's reason, over a paused one one
+publication; never kept, never replacing a kept end.
+
+Status: decided (DESIGN §45: the engine's own stop, never kept), scheduled
+for U4.
