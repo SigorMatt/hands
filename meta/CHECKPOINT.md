@@ -46,9 +46,11 @@ cwd is below the root; git unable to name the prefix; a real
 case-insensitive filesystem; the handbook's §43 lines still name the two
 exact paths.
 
-In progress: U5 — final report (drafted in meta/drafts/), the PR, the hosted
-review, return to main. Done means: meta/FINAL-REPORT-28.md with NOT PROVEN,
-Review items and Hosted review table; PR open; tree on main.
+Done: U5 8453b8a (report), 58deee7 (playbook: hosted findings 1, 3, 4, 6),
+885f07c (daemon: hosted findings 2, 5; docs/PLAYBOOK.md), (this commit) the
+Hosted review table + archive PR-8/1..4; finding 7 dismissed (§44 rule 3);
+fetch 4: 1 of 7 open (7). Final tip gate green 3/3 (5137).
+Mission 28 — FINISHED after this push; PR #8 open; tree returns to main.
 
 Standing constraints: one foreground sub-agent per unit, commit and push every
 unit to `mission-28`, ./scripts/check green three consecutive runs before each

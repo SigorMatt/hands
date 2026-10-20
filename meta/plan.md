@@ -27,7 +27,7 @@ blocked (two failures) or refused.
 - [x] U4 d20e511 H-077, ruled (§44; §26, §43) — src/hands/spool.py,
       src/hands/playbook.py, src/hands/kit.py, FINDINGS (H-077 resolved),
       tests
-- [x] U5 (this commit) Final report, the pull request and the hosted review's findings —
+- [x] U5 8453b8a, 58deee7, 885f07c, (this commit) Final report, the pull request and the hosted review's findings —
       meta/FINAL-REPORT-28.md (drafted under meta/drafts/),
       meta/reviews/hosted/PR-<pr>/
 
