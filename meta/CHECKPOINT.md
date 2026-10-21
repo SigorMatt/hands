@@ -57,9 +57,13 @@ new list at the next quiet moment; restart publishes only an unpublished
 change; §19 row, PLAYBOOK.md, OPERATIONS.md; H-079 resolved. Not proven:
 daemon-level republish path, orphan-feed/check order at restart.
 
-In progress: U7 final report, PR, ci-wait, hosted review. Done means: report
-moved in, PR open, `check` passed at the last commit, `## Hosted review` and
-`## CI` written, tree on main.
+Done: U7 9fa853c (report), PR #9; b3f5b91 (tests: zipfile Unicode path per
+Python version — the runner's 3.11 failed it, product safe); e375630 (cli:
+hosted findings 3, 4); H-081, H-082 (high, blocks the switch to
+pull-request), H-083 filed for findings 1, 2, 6; 5 and 7 dismissed; fetch 2:
+5 of 7 open; check passed at e375630 (github-actions 15368); (this commit)
+the Hosted review and CI sections + archive PR-9/1..2.
+Mission 29 — FINISHED after this push and its check; tree returns to main.
 
 Standing constraints: one foreground sub-agent per unit, commit and push every
 unit to `mission-29` (never `main`), ./scripts/check green three consecutive

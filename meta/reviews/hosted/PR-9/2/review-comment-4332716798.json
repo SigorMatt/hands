@@ -1,0 +1,69 @@
+{
+  "url": "https://api.github.com/repos/SigorMatt/hands/pulls/comments/4332716798",
+  "pull_request_review_id": 5594593245,
+  "id": 4332716798,
+  "node_id": "PRRC_kwDOUVwTn88AAAABAkAC_g",
+  "diff_hunk": "@@ -209,6 +272,19 @@ bring the local tree level: `git checkout main && git pull --ff-only`. With\n blockers, the review leaves the PR open; say so in the reply, after the\n verdict line. Without a PR there is nothing to merge.\n \n+With `pull_request` and `blockers=0`, the review's own commit has started\n+the checks again, so first wait for them — `hands ci-wait <number>; echo\n+\"ci-wait-exit=$?\"`, one foreground call at a time, again while it exits 3,\n+at most seven calls — and merge only on exit 0, as above (`gh pr merge\n+<number> --merge --subject \"merge: mission N (PR #<number>)\"`, then `git",
+  "path": "templates/REVIEW-PROTOCOL.md",
+  "commit_id": "e3756303fbb6dc0a7d21ddd365f7c81357b7fd14",
+  "original_commit_id": "9fa853c749b7866ad39a2b9f73e1a8851558f910",
+  "user": {
+    "login": "qodo-code-review[bot]",
+    "id": 151058649,
+    "node_id": "BOT_kgDOCQD42Q",
+    "avatar_url": "https://avatars.githubusercontent.com/in/484649?v=4",
+    "gravatar_id": "",
+    "url": "https://api.github.com/users/qodo-code-review%5Bbot%5D",
+    "html_url": "https://github.com/apps/qodo-code-review",
+    "followers_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/followers",
+    "following_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/following{/other_user}",
+    "gists_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/gists{/gist_id}",
+    "starred_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/starred{/owner}{/repo}",
+    "subscriptions_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/subscriptions",
+    "organizations_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/orgs",
+    "repos_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/repos",
+    "events_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/events{/privacy}",
+    "received_events_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/received_events",
+    "type": "Bot",
+    "user_view_type": "public",
+    "site_admin": false
+  },
+  "body": "<img src=\"https://img.shields.io/badge/High-634FD1?style=flat-square\" height=\"20px\" alt=\"Action required\">\n\n1\\. A review can merge unreviewed commits <code>🐞 Bug</code> <code>≡ Correctness</code>\n\n<pre>\nThe review protocol waits for checks by pull request number and merges without verifying that the\nhead still matches the commit its sub-agents reviewed. If the mission branch advances during the\nreview, the review can record the earlier <b><i>headRefOid</i></b> while the later commit passes checks and is\nmerged.\n</pre>\n\n\n<details>\n<summary><strong>Agent Prompt</strong></summary>\n\n```\n## Issue description\nThe pull-request review can merge a branch head that changed after the reviewed commit was selected.\n## Fix Focus Areas\n- templates/REVIEW-PROTOCOL.md[203-217]\n- templates/REVIEW-PROTOCOL.md[275-283]\n- meta/REVIEW-PROTOCOL.md[275-283]\n## Recommended Fix\nRequire the fetched review tip to match the pull request head, recheck that head before accepting checks, and merge with a head-commit match condition. If it changed, stop for another review; update both protocol copies.\n```\n\n<code>ⓘ Copy this prompt and use it to remediate the issue with your preferred AI generation tools</code>\n</details>\n\n[Dismiss ↗](https://app.qodo.ai/findings/774fdc0f-39ba-41cc-8ce2-f710d331c7d6?action=dismiss&origin=git) | [View ↗](https://app.qodo.ai/findings/774fdc0f-39ba-41cc-8ce2-f710d331c7d6)",
+  "created_at": "2026-10-21T03:24:22Z",
+  "updated_at": "2026-10-21T03:24:22Z",
+  "html_url": "https://github.com/SigorMatt/hands/pull/9#discussion_r4332716798",
+  "pull_request_url": "https://api.github.com/repos/SigorMatt/hands/pulls/9",
+  "_links": {
+    "self": {
+      "href": "https://api.github.com/repos/SigorMatt/hands/pulls/comments/4332716798"
+    },
+    "html": {
+      "href": "https://github.com/SigorMatt/hands/pull/9#discussion_r4332716798"
+    },
+    "pull_request": {
+      "href": "https://api.github.com/repos/SigorMatt/hands/pulls/9"
+    }
+  },
+  "reactions": {
+    "url": "https://api.github.com/repos/SigorMatt/hands/pulls/comments/4332716798/reactions",
+    "total_count": 0,
+    "+1": 0,
+    "-1": 0,
+    "laugh": 0,
+    "hooray": 0,
+    "confused": 0,
+    "heart": 0,
+    "rocket": 0,
+    "eyes": 0
+  },
+  "start_line": 275,
+  "original_start_line": 275,
+  "start_side": "RIGHT",
+  "line": 279,
+  "original_line": 279,
+  "side": "RIGHT",
+  "author_association": "NONE",
+  "original_position": 130,
+  "position": 130,
+  "subject_type": "line"
+}

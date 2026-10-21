@@ -3018,3 +3018,82 @@ over an unpaused pipeline a stop with §45's reason, over a paused one one
 publication; never kept, never replacing a kept end.
 
 Status: resolved (mission 29 U4, this commit — DESIGN §45 "An apply that did not land (H-080)": the `builder.done` of an apply as §43 counts one (`chain_first`: a job with a `kit_id`, or a resume of one) whose VERDICT: line does not begin `VERDICT: kit applied` is decided by the engine before any playbook rule (`PlaybookEngine._apply_not_landed`): over an unpaused pipeline a stop, `the kit's apply did not land: <its VERDICT: line cut to 200 characters, or "no VERDICT: line"> (§45)`, titled `hands: the pipeline stopped`; over a paused one the reason is published once — under a human pause as `hands: a stop under a human pause`, under any other pause titled as a stop — and the pause, its reason and the kept ends stay; never kept. A landed apply and a `hands send` are decided as before. With it, §45's CI hold (`spool.carries_ci`, `ci_hold_reason`, `hands kit check`'s `WARN ci:` line) and the `pull-request` journal sentence (`JOURNAL_REMINDER_PULL_REQUEST`); the handbook's §19 rows. Tests: tests/test_apply_not_landed.py, tests/test_operator_table.py)
+
+## H-081 — the review's merge does not tie the merged head to the reviewed one
+
+Severity: medium · Component: meta/REVIEW-PROTOCOL.md,
+templates/REVIEW-PROTOCOL.md (the merge under `pull_request`); DESIGN §35,
+§45 "The review"
+Filed by: mission 29 orchestrator, U7 (2026-10-21), from PR #9's hosted
+review (finding 1, "A review can merge unreviewed commits").
+Evidence: meta/reviews/hosted/PR-9/1/ — the protocol waits for the checks
+by pull request number (`hands ci-wait <number>`) and merges with `gh pr
+merge <number> --merge --subject …`; nothing checks that the head merged is
+the review's own commit on top of the reviewed tip. A commit pushed to the
+branch during the review would pass the checks and be merged unreviewed.
+
+Problem. §45 gives the merge command word for word, and the protocols and
+their pins quote it; adding a guard changes that text.
+
+Decision needed. Whether the merge carries `--match-head-commit <the
+review commit's sha>` (gh refuses the merge when the head moved), and the
+`not merged` blocker then covers a moved head. Not changed in mission 29:
+the command is §45's.
+
+Status: open (needs a design decision).
+
+## H-082 — the `pull-request` apply prompt's case (b) matches `main` itself
+
+Severity: high · Component: src/hands/kit.py (`PULL_REQUEST_APPLY`); DESIGN
+§45 "The apply (§27), by the setting"
+Filed by: mission 29 orchestrator, U7 (2026-10-21), from PR #9's hosted
+review (finding 2, "Applies from main take the mission-branch path and
+fail").
+Evidence: meta/reviews/hosted/PR-9/1/ and §45's prompt, which the code
+quotes word for word (cd0e13f): case (b) is "On another branch, not a
+`kit/` one, that is on `origin` … and whose pull requests, if it has any,
+are all open". `main` is on `origin`, is not a `kit/` branch, and no pull
+request has `main` as its head, so a builder on `main` between missions —
+the usual place of an apply — takes (b): it commits on `main` and pushes,
+the gate refuses the push, it replies `VERDICT: kit not applied pr=none`,
+and the engine stops (U4). Case (c) "On any other branch: `git checkout
+main`. Then, on `main`: …" and the bullet "A mission in flight is the
+branch case (b) … left for `main` (c)" show the intent: `main` is (c).
+
+Problem. Under `[repository] main = "pull-request"` every apply started on
+`main` would stop without a pull request. Nothing reaches it while the
+setting is `direct` (the `direct` prompt is another text), so this
+repository is safe until the switch of docs/PR-CI-GATE.md's "hands"
+section step 2 — which must not be made before this is decided.
+
+Decision needed. Proposed: case (b) reads "On another branch, not `main`
+and not a `kit/` one, …" (the code, handbook §3's quotation and the
+pinning tests moved to it by the next mission). Not changed in mission 29:
+the prompt is §45's word for word.
+
+Status: open (needs a design decision; blocks the switch to
+`pull-request`).
+
+## H-083 — the CI hold names `.github/` and `scripts/check`, not the gate's other inputs
+
+Severity: medium · Component: src/hands/spool.py (`carries_ci`); DESIGN
+§43, §45 "A kit that carries the CI is the owner's"
+Filed by: mission 29 orchestrator, U7 (2026-10-21), from PR #9's hosted
+review (finding 6, "Kits can still weaken the gate their PR merges on").
+Evidence: meta/reviews/hosted/PR-9/1/ — `scripts/check` runs `uv sync`,
+`ruff check .` and `pytest`, which `pyproject.toml`, `uv.lock` and
+`tests/conftest.py` (and any test file) configure; a role-filed kit that
+changes `addopts`, a ruff exclude or a conftest is approved by the engine,
+and its own pull request's check runs the gate it changed.
+
+Problem. §45 names the two paths exactly; the gate's configuration is
+wider, and a kit's tests are its own to change (kits add tests every
+mission), so no path list closes it whole.
+
+Decision needed. Whether the hold widens to the gate's configuration files
+(`pyproject.toml`, `uv.lock`, `tests/conftest.py`, a project-configured
+list), or stands, the review's forbidden-edit blocker and the human's
+reading of the pull request being the rest. Not changed in mission 29: the
+paths are §45's.
+
+Status: open (needs a design decision).

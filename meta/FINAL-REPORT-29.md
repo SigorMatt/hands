@@ -1,6 +1,6 @@
 # FINAL-REPORT-29 — mission 29: a `main` that takes pull requests only
 
-VERDICT: mission 29 finished pr=<pr>
+VERDICT: mission 29 finished pr=9
 
 Source: meta/BUILDER-29-PROMPT.md, DESIGN v3.28 §45 (with §4, §6, §8, §10,
 §13, §27, §31, §32, §35, §36, §39, §43, §44), meta/reviews/REVIEW-28.md,
@@ -8,8 +8,10 @@ meta/findings/FINDINGS.md (H-079, H-080), docs/PR-CI-GATE.md. Branch
 `mission-29`, from main f7d61c8. Gate: `./scripts/check` green three
 consecutive runs before every unit commit: 5137 tests at U0, 5143 at U1,
 5216 at U2, 5237 at U3, 5274 at U4, 5353 at U5, 5357 at U6 (the tip
-7e0914e, three consecutive green runs), and the bare-environment run (U1's
-`env -i`, a fresh home) green once at 7e0914e (5354 passed, 3 skipped).
+7e0914e), 5357 at b3f5b91 and 5366 at e375630 (the last code commit,
+three consecutive green runs), and the bare-environment run (U1's `env -i`,
+a fresh home) green once at 7e0914e (5354 passed, 3 skipped). The pull
+request's `check` check passed on GitHub's runner at b3f5b91 and e375630.
 
 ## 1. What changed (sha per unit)
 
@@ -22,7 +24,7 @@ consecutive runs before every unit commit: 5137 tests at U0, 5143 at U1,
 | U4 An apply that did not land, the CI's hold, the journal sentence | 39e7976 | an apply's `builder.done` not beginning `VERDICT: kit applied` is the engine's stop before any rule (`the kit's apply did not land: … (§45)`), published once over a paused pipeline, never kept, never replacing a kept end; `spool.carries_ci` (casefolded `.github/` prefix or `scripts/check`) holds a role-filed kit with §45's reason (§43's when it carries the playbook too); `kit check`'s `WARN ci:`; the `pull-request` journal sentence; handbook §19 rows (the apply that did not land; the CI hold) with the operator table's pins; H-080 resolved; tests/test_apply_not_landed.py added |
 | U5 The review protocol, the brief template, the architect, the documents | 897ec34 | both review protocols (the rules read first, retried once, the failure's blocker; under `pull_request` the Direct blocker, `reviewed: none` committed nowhere, the checks wait at the reviewed tip, review and archive on the branch, the merge's wait and `not merged` blocker, the return to `main`, the journal carried over; the `.github/`/`scripts/check` blocker); templates/BUILDER-N-PROMPT.md; architect/CLAUDE.md rules 1 and 3; handbook §3, §9, §10, §12, §18, §19; docs/INTEGRATION.md, docs/OPERATIONS.md, docs/PLAYBOOK.md, CLAUDE.md; tests/test_docs_45.py added |
 | U6 At rest after the kept list changed | 7e0914e | a `kept_since_rest` flag in `pipeline.json`, set when an end is kept or replaced after the at-rest mark; `hands: at rest` published again with the new list at the next moment nothing runs; a restart publishes only a change never published; the §19 `at rest` row, docs/PLAYBOOK.md, docs/OPERATIONS.md; H-079 resolved |
-| U7 Final report, the pull request, its checks and the hosted review | (this commit and those after it) | this file; the pull request; the `## Hosted review` table, the `## CI` section and the archive under meta/reviews/hosted/PR-<pr>/ |
+| U7 Final report, the pull request, its checks and the hosted review | 9fa853c, b3f5b91, e375630, (this commit) | this file (9fa853c); PR #9; `tests:` b3f5b91 (the first CI run failed one test on the runner's Python 3.11, whose `zipfile` does not read the Unicode Path Extra Field that 3.12+ honours; hands' own kit check reads the field itself and was safe on 3.11, so the test now asserts `ZipInfo.filename` per Python version); `cli:` e375630 (hosted findings 3, 4: `ci-wait`'s nine minutes count from the call's start and every read is bounded by the time left; explicit timeouts on the new tests' `git`/`gh` calls); H-081, H-082, H-083 filed; the `## Hosted review` table, the `## CI` section and the archive meta/reviews/hosted/PR-9/1..2 (this commit) |
 
 ## 2. What the tests prove
 
@@ -74,6 +76,12 @@ consecutive runs before every unit commit: 5137 tests at U0, 5143 at U1,
 
 ## 3. NOT PROVEN
 
+- **H-082 (open, high): the `pull-request` apply prompt's case (b), §45
+  word for word, matches `main` itself**, so an apply started on `main`
+  under `pull-request` would commit there, have its push refused and stop.
+  The switch of docs/PR-CI-GATE.md §5 step 2 (`[repository] main =
+  "pull-request"`) must wait for the design's decision on H-082.
+
 - No ruleset exists, so no apply has merged through a pull request under
   the gate, and `hands ci-wait` has never read required checks from real
   rules: it has waited only by name (`--check check`) on this pull request.
@@ -118,3 +126,34 @@ consecutive runs before every unit commit: 5137 tests at U0, 5143 at U1,
   kept under rule 1); nothing changed.
 - H-079: closed by U6 (7e0914e).
 - H-080: closed by U4 (39e7976).
+
+## Hosted review
+
+PR #9, qodo-code-review[bot]; Code Review comment 6307244055. Fetch 1 (meta/reviews/hosted/PR-9/1/, at 9fa853c/b3f5b91,
+7 of 7 open) and fetch 2 (meta/reviews/hosted/PR-9/2/, at e375630, 5 of 7
+open; 3 and 4 marked resolved by the bot).
+
+| # | Finding (verbatim) | Disposition |
+|---|---|---|
+| 1 | A review can merge unreviewed commits | finding H-081 filed |
+| 2 | Applies from main take the mission-branch path and fail | finding H-082 filed |
+| 3 | Stalled checks can exceed the tool timeout | fixed in e375630 |
+| 4 | Test subprocesses can hang indefinitely | fixed in e375630 |
+| 5 | A missing pull request hides its review | dismissed: §45 "The review" says the `reviewed: none` review with no open pull request is committed nowhere, and the reply carries its blocker |
+| 6 | Kits can still weaken the gate their PR merges on | finding H-083 filed |
+| 7 | Mission metadata breaks its own edit rule | dismissed: the rule binds sub-agents; meta/plan.md and meta/CHECKPOINT.md are the orchestrator's (CLAUDE.md "meta/ is the builder's state") and no sub-agent edited them |
+
+## CI
+
+The check as GitHub reported it at the last code commit, e375630 (`gh api
+repos/SigorMatt/hands/commits/<sha>/check-runs`):
+
+| name | app | app id | conclusion | run |
+|---|---|---|---|---|
+| check | github-actions | 15368 | success | https://github.com/SigorMatt/hands/actions/runs/39545100168/job/119041379824 |
+
+Awaited by name (`uv run hands ci-wait 9 --check check`, no rules on
+`main` yet): failed at 9fa853c (run 39537905841, the Python 3.11 zipfile
+test), passed at b3f5b91 (run 39540903955) and at e375630. The name
+docs/PR-CI-GATE.md will require is `check`, reported by the
+`github-actions` app (id 15368).

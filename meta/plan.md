@@ -33,7 +33,7 @@ waits for its `check` check and the hosted review, and returns the tree to
 - [x] U6 7e0914e At rest after the kept list changed (§45 item 1; §44 rule 4;
       H-079) — src/hands/playbook.py (daemon.py), handbook §19,
       docs/PLAYBOOK.md, docs/OPERATIONS.md, FINDINGS (H-079 resolved), tests
-- [x] U7 (this commit) Final report, the pull request, its checks and the hosted review's
+- [x] U7 9fa853c, b3f5b91, e375630, (this commit) Final report, the pull request, its checks and the hosted review's
       findings — meta/FINAL-REPORT-29.md (drafted under meta/drafts/),
       meta/reviews/hosted/PR-<pr>/
 
