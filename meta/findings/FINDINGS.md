@@ -3040,7 +3040,7 @@ review commit's sha>` (gh refuses the merge when the head moved), and the
 `not merged` blocker then covers a moved head. Not changed in mission 29:
 the command is §45's.
 
-Status: open (needs a design decision).
+Status: decided (DESIGN §46: the moved-branch blocker and `--match-head-commit`, in every review of a pull request), scheduled for U3.
 
 ## H-082 — the `pull-request` apply prompt's case (b) matches `main` itself
 
@@ -3071,8 +3071,8 @@ and not a `kit/` one, …" (the code, handbook §3's quotation and the
 pinning tests moved to it by the next mission). Not changed in mission 29:
 the prompt is §45's word for word.
 
-Status: open (needs a design decision; blocks the switch to
-`pull-request`).
+Status: decided (DESIGN §46: case (b) begins `On a branch that is neither
+main nor a kit/ one`), scheduled for U1.
 
 ## H-083 — the CI hold names `.github/` and `scripts/check`, not the gate's other inputs
 
@@ -3096,4 +3096,48 @@ list), or stands, the review's forbidden-edit blocker and the human's
 reading of the pull request being the rest. Not changed in mission 29: the
 paths are §45's.
 
-Status: open (needs a design decision).
+Status: decided (DESIGN §46: the engine approves plan files only, replacing
+§45's CI hold; the human, 2026-10-21), scheduled for U2.
+
+## H-084 — the review's file on its failure paths: committed nowhere, read from the branch
+
+Severity: medium · Component: meta/REVIEW-PROTOCOL.md,
+templates/REVIEW-PROTOCOL.md ("`main`'s rules", "The commits under
+review"); DESIGN §45 "The review"
+Filed by: mission 30 orchestrator, U0 (2026-10-22), from REVIEW-29
+should-fix 2 (PR #9's hosted finding 5, 2026-10-21).
+Evidence: meta/REVIEW-PROTOCOL.md at 4d32d35, "`main`'s rules" and "The
+commits under review": under `pull_request` the `reviewed: none` review of
+a missing pull request, and of a Direct brief, is committed nowhere, while
+the review of a failed rules read goes to the mission's branch when it
+exists; and the architect is told to read a review with blockers from the
+branch.
+
+Problem. A review the architect is told to read from the branch is, on two
+of the three failure paths, committed nowhere, so the architect finds
+nothing there to read.
+
+Direction. DESIGN §46 "Review 29's should-fix items" 2.
+
+Status: decided (DESIGN §46: a failed rules read's review, and under
+`pull_request` a missing pull request's, to the brief's branch when it
+exists on origin, never `main`, else nowhere; a Direct brief's under
+`pull_request` nowhere), scheduled for U3.
+
+## H-085 — nothing returns the tree to `main` after the review commits to the branch on a failure path
+
+Severity: medium · Component: meta/REVIEW-PROTOCOL.md,
+templates/REVIEW-PROTOCOL.md; DESIGN §45 "The review"
+Filed by: mission 30 orchestrator, U0 (2026-10-22), from REVIEW-29
+should-fix 4 (2026-10-21).
+Evidence: both protocols at 4d32d35: a review that commits its file to the
+mission's branch on a failure path checks that branch out, and no step
+returns the tree to `main` after it.
+
+Problem. The next kit's apply runs in this tree and expects `main`; a tree
+left on the mission's branch takes another case of the apply prompt.
+
+Direction. DESIGN §46 "Review 29's should-fix items" 4.
+
+Status: decided (DESIGN §46: a review that checked out the branch ends on
+`main`), scheduled for U3.
