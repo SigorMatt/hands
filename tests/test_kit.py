@@ -16,6 +16,7 @@ import json
 import re
 import shutil
 import subprocess
+import sys
 import warnings
 import zipfile
 from pathlib import Path
@@ -510,12 +511,16 @@ def test_apply_from_zip_refuses_an_entry_whose_names_disagree(
 @pytest.mark.skipif(shutil.which("unzip") is None, reason="needs Info-ZIP unzip")
 def test_unzip_writes_the_unicode_path_of_the_crafted_zip(tmp_path: Path) -> None:
     """The crafted zip is the attack: `unzip -o` writes `.git/hooks/pre-commit`,
-    not `docs/notes.md`, and `ZipInfo.filename` says the same."""
+    not `docs/notes.md`. hands reads the Unicode Path field itself (`_unicode_paths`),
+    so it sees the target on every Python; `ZipInfo.filename` takes the field only
+    from CPython 3.12 — 3.11's zipfile ignores it and keeps the header's name."""
     kit = tmp_path / "evil.zip"
     kit.write_bytes(crafted_zip(dict(good_kit()), "unicode"))
     with zipfile.ZipFile(kit) as archive:
         (info,) = [each for each in archive.infolist() if each.orig_filename == CRAFTED_NAME]
-        assert info.filename == CRAFTED_TARGET
+        assert kit_mod._unicode_paths(info.extra) == [CRAFTED_TARGET]
+        honoured = sys.version_info >= (3, 12)
+        assert info.filename == (CRAFTED_TARGET if honoured else CRAFTED_NAME)
     into = tmp_path / "into"
     into.mkdir()
     subprocess.run(["unzip", "-q", "-o", str(kit)], cwd=into, check=True)
