@@ -3071,8 +3071,7 @@ and not a `kit/` one, …" (the code, handbook §3's quotation and the
 pinning tests moved to it by the next mission). Not changed in mission 29:
 the prompt is §45's word for word.
 
-Status: decided (DESIGN §46: case (b) begins `On a branch that is neither
-main nor a kit/ one`), scheduled for U1.
+Status: resolved (mission 30 U1, this commit — DESIGN §46 "H-082": `PULL_REQUEST_APPLY`'s case (b) begins "(b) On a branch that is neither `main` nor a `kit/` one, that is on `origin`", the rest of §45's prompt unchanged, so a builder on `main` is not case (b)'s; the handbook's §3 quotes it. With it, review 29's should-fix 3: `[repository] main` of any other value, whatever its type (`true`, `1`, `"squash"`), refuses to load as `[repository] main must be "direct" or "pull-request", got <the value>` (`config._choice`). Tests: tests/test_apply_shape.py, tests/test_docs_45.py, tests/test_config.py)
 
 ## H-083 — the CI hold names `.github/` and `scripts/check`, not the gate's other inputs
 

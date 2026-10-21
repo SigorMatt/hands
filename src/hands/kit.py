@@ -215,7 +215,8 @@ DIRECT_REFUSED_PUSH = (
     "If the push is refused, undo that commit (git reset --keep HEAD~1) and reply "
     "instead with one line: VERDICT: kit not applied pr=none <why, in one line>."
 )
-#: §45: the `pull-request` prompt, word for word; DESIGN.md wraps it, and it is one
+#: §45: the `pull-request` prompt, word for word, its case (b) beginning as §46
+#: (H-082) says; DESIGN.md wraps it, and it is one
 #: paragraph, so its lines are joined here with single spaces, as the `direct`
 #: prompt's pieces are. `str.format` fills `{location}`, `{touched}`, `{message}`
 #: (as today), `{branch}`, `{title}`, `{body}` and `{subject}` (`apply_prompt`).
@@ -224,9 +225,10 @@ PULL_REQUEST_APPLY = " ".join((
     "(DESIGN §45). First, where the working tree is. (a) On `{branch}`, this kit's",
     "own branch: go on below from the step not done yet (`gh pr list --head {branch}",
     "--state all --json number,state` names its pull request and whether it merged).",
-    "(b) On another branch, not a `kit/` one, that is on `origin` (`git ls-remote",
-    "--exit-code --heads origin <that branch>`) and whose pull requests, if it has",
-    "any, are all open (`gh pr list --head <that branch> --state all --json state`",
+    "(b) On a branch that is neither `main` nor a `kit/` one, that is on `origin`",
+    "(`git ls-remote --exit-code --heads origin <that branch>`) and whose pull",
+    "requests, if it has any, are all open (`gh pr list --head <that branch> --state",
+    "all --json state`",
     "names none `MERGED` or `CLOSED`), a mission is in flight on it: unzip -o into",
     "the repo root (it {touched}), then one plan-only sub-agent makes a single commit",
     "{message} listing those files in its body, and pushes that branch; reply with",

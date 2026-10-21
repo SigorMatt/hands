@@ -997,8 +997,9 @@ HELPER_WHERE = {
     "_number": 3,
     "_bool": 3,
     "_str_table": 2,
+    "_choice": 3,
 }
-STRING_HELPERS = ("_str", "_opt_str", "_path", "_str_list", "_str_table")
+STRING_HELPERS = ("_str", "_opt_str", "_path", "_str_list", "_str_table", "_choice")
 #: `_role` and `_resume_line` take `where` as a parameter (`[roles.builder]` or
 #: `[roles.aux]`, decided at run time), so every such call shares one scope here.
 ROLE_SCOPE = "[roles.<name>]"
@@ -1299,6 +1300,24 @@ def test_any_other_repository_main_is_refused_naming_the_two(write_config, value
     said = str(caught.value)
     assert "[repository] main" in strip_paths(said)
     assert '"direct"' in strip_paths(said) and '"pull-request"' in strip_paths(said)
+
+
+@pytest.mark.parametrize(
+    ("written", "value"), [("true", True), ("1", 1), ('"squash"', "squash")]
+)
+def test_a_repository_main_of_any_type_is_refused_naming_the_two(
+    write_config, written: str, value: object
+) -> None:
+    """§45 "The setting": any other value refuses to load, naming the two —
+    whatever the value's type (review 29's should-fix 3: a non-string was
+    refused as "must be a string", naming neither)."""
+    write_config(f'[roles.builder]\ncwd = "~/g"\n[repository]\nmain = {written}\n')
+    with pytest.raises(ConfigError) as caught:
+        load_config("demo")
+    said = str(caught.value)
+    named = f'[repository] main must be "direct" or "pull-request", got {value!r}'
+    assert named in strip_paths(said)
+    assert "must be a string" not in strip_paths(said)
 
 
 def test_repository_admits_no_other_key(write_config) -> None:

@@ -92,11 +92,11 @@ shell-quoted:
     only (DESIGN §45). First, where the working tree is. (a) On `{branch}`,
     this kit's own branch: go on below from the step not done yet
     (`gh pr list --head {branch} --state all --json number,state` names its
-    pull request and whether it merged). (b) On another branch, not a `kit/`
-    one, that is on `origin` (`git ls-remote --exit-code --heads origin
-    <that branch>`) and whose pull requests, if it has any, are all open
-    (`gh pr list --head <that branch> --state all --json state` names none
-    `MERGED` or `CLOSED`), a mission is in flight on it: unzip -o into the
+    pull request and whether it merged). (b) On a branch that is neither
+    `main` nor a `kit/` one, that is on `origin` (`git ls-remote --exit-code
+    --heads origin <that branch>`) and whose pull requests, if it has any,
+    are all open (`gh pr list --head <that branch> --state all --json state`
+    names none `MERGED` or `CLOSED`), a mission is in flight on it: unzip -o into the
     repo root (it {touched}), then one plan-only sub-agent makes a single
     commit {message} listing those files in its body, and pushes that
     branch; reply with one line: VERDICT: kit applied <sha>; if that push is
