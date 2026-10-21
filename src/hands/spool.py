@@ -45,6 +45,7 @@ __all__ = [
     "KIT_CHECK_PASSED",
     "ORPHAN_DAEMON_STOP",
     "PLAYBOOK_PATHS",
+    "carries_ci",
     "carries_playbook",
     "ANSWER_ORIGIN",
     "REPLY_ORIGIN",
@@ -165,6 +166,21 @@ def carries_playbook(entry: str, configured: str | None) -> bool:
     if configured is not None:
         known.add(configured.casefold())
     return entry.casefold() in known
+
+
+#: §45 "A kit that carries the CI is the owner's": an entry whose casefolded path
+#: begins this carries the repository's CI (its workflows)…
+CI_PREFIX = ".github/"
+#: …and so does the gate script every hands brief names.
+CI_GATE = "scripts/check"
+
+
+def carries_ci(entry: str) -> bool:
+    """§45: the one test of whether a kit entry carries the repository's CI — its
+    path, casefolded, begins `.github/` or equals `scripts/check`. The engine's hold
+    (`Spool.stored_kit_ci`) and `hands kit check`'s `WARN ci:` line ask this."""
+    folded = entry.casefold()
+    return folded.startswith(CI_PREFIX) or folded == CI_GATE
 #: `new_kit_id`'s shape: 16 lowercase hex digits.
 KIT_ID_RE = re.compile(r"[0-9a-f]{16}")
 #: §34: `kit.json`'s `sha256`: 64 lowercase hex digits, as `hashlib` writes them.
@@ -597,12 +613,26 @@ class Spool:
         (`carries_playbook`, against the `configured` repository path and the two fixed
         names), sorted, by its central-directory names (the names `hands kit check`
         judges, §33), or None when the zip cannot be read as one."""
-        try:
-            with zipfile.ZipFile(self.kit_dir(kit_id) / f"{name}.zip") as archive:
-                names = set(archive.namelist())
-        except (SpoolError, OSError, zipfile.BadZipFile, ValueError):
+        names = self._stored_kit_names(kit_id, name)
+        if names is None:
             return None
         return tuple(sorted(entry for entry in names if carries_playbook(entry, configured)))
+
+    def stored_kit_ci(self, kit_id: str, name: str) -> tuple[str, ...] | None:
+        """§45: the entries of the zip stored for `kit_id` that carry the repository's
+        CI (`carries_ci`), sorted, by its central-directory names, or None when the
+        zip cannot be read as one."""
+        names = self._stored_kit_names(kit_id, name)
+        if names is None:
+            return None
+        return tuple(sorted(entry for entry in names if carries_ci(entry)))
+
+    def _stored_kit_names(self, kit_id: str, name: str) -> set[str] | None:
+        try:
+            with zipfile.ZipFile(self.kit_dir(kit_id) / f"{name}.zip") as archive:
+                return set(archive.namelist())
+        except (SpoolError, OSError, zipfile.BadZipFile, ValueError):
+            return None
 
     # ---------------------------------------------------------------- jobs
 

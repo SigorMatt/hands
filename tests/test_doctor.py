@@ -19,6 +19,10 @@ import os
 import re
 import shutil
 import subprocess
+import threading
+from collections.abc import Iterator
+from contextlib import contextmanager
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 
@@ -3021,6 +3025,36 @@ LIVE_KIT = "hands-doctor-live-0123abcd"
 LIVE_FILE = "DOCTOR-LIVE.md"
 
 
+@contextmanager
+def _local_ntfy() -> Iterator[str]:
+    """DESIGN §45 "CI": a local stand-in for ntfy that takes every publish (200), so
+    a test whose daemon publishes never sends a request off the machine."""
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self) -> None:  # noqa: N802
+            self.rfile.read(int(self.headers.get("Content-Length") or 0))
+            self.send_response(200)
+            self.send_header("Content-Length", "2")
+            self.end_headers()
+            self.wfile.write(b"{}")
+
+        do_PUT = do_POST  # noqa: N815
+
+        def log_message(self, format: str, *args: Any) -> None:  # noqa: A002
+            pass
+
+    httpd = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    httpd.daemon_threads = True
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield f"http://127.0.0.1:{httpd.server_address[1]}"
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+        thread.join(timeout=5)
+
+
 def _live_architect(
     tmp_home: Path,
     tmp_path: Path,
@@ -3047,7 +3081,8 @@ def _live_architect(
         fetch_only_clone(d)
     if setup is not None:
         setup(d)
-    add_architect(write_config(tmp_home, tmp_path), d)
+    config = write_config(tmp_home, tmp_path)
+    add_architect(config, d)
     kit_file = d / "kits" / LIVE_KIT / LIVE_FILE
     seen: dict[str, Any] = {}
 
@@ -3071,7 +3106,10 @@ def _live_architect(
         seen["found"] = {c["name"]: c for c in json.loads(out.getvalue())["checks"]}
         seen["job"] = job_id
 
-    drive(body)
+    with _local_ntfy() as ntfy:
+        # The daemon publishes while the turns run: to the stub, never ntfy.sh.
+        with_ntfy_url(config, ntfy)
+        drive(body)
     return seen["found"], kit_file, seen["job"]
 
 
@@ -3508,3 +3546,193 @@ def test_doctor_reports_a_worktrees_dir_that_vanishes_during_the_check_as_a_warn
     assert "No such file or directory" in strip_paths(row["detail"]), row
     assert {"daemon"} <= set(found), sorted(found)
     assert code == 0
+
+
+# ---------------------------------------------- doctor's `main` row (§45, mission 29 U2)
+
+PR_RULE = {"type": "pull_request", "parameters": {"required_approving_review_count": 0}}
+CHECKS_RULE = {
+    "type": "required_status_checks",
+    "parameters": {
+        "required_status_checks": [{"context": "check"}, {"context": "lint"}],
+        "strict_required_status_checks_policy": False,
+    },
+}
+
+
+def _main_row(
+    tmp_home: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    setting: str | None = None,
+    rules: list[dict[str, Any]] | None = None,
+    origin: str = "https://github.com/o/r.git",
+) -> dict[str, Any]:
+    """Doctor's `main` row, the builder's clone a local repository whose `origin`
+    is `origin` (never contacted: the fake `gh` answers the rules)."""
+    path = write_config(tmp_home, tmp_path)
+    if setting is not None:
+        with path.open("a", encoding="utf-8") as handle:
+            handle.write(f'\n[repository]\nmain = "{setting}"\n')
+    work = tmp_path / "work"
+    shutil.rmtree(work / ".git")
+    subprocess.run(["git", "init", "-q", str(work)], check=True, timeout=30)
+    subprocess.run(
+        ["git", "-C", str(work), "remote", "add", "origin", origin], check=True, timeout=30
+    )
+    if rules is not None:
+        monkeypatch.setenv("FAKE_GH_RULES", json.dumps(rules))
+    monkeypatch.setenv("FAKE_GH_API_LOG", str(tmp_path / "gh.log"))
+    _, found = checks()
+    return found["main"]
+
+
+def test_main_row_is_ok_for_direct_with_no_rules(
+    tmp_home: Path, tmp_path: Path, fake_mode: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    row = _main_row(tmp_home, tmp_path, monkeypatch, rules=[])
+    assert row["status"] == "ok", row
+    for said in ("setting: direct", "o/r", "rules: none"):
+        assert said in strip_paths(row["detail"]), said
+    log = (tmp_path / "gh.log").read_text(encoding="utf-8").splitlines()
+    assert log == ["api repos/o/r/rules/branches/main"]
+
+
+def test_main_row_is_ok_for_pull_request_with_both_rules_naming_the_checks(
+    tmp_home: Path, tmp_path: Path, fake_mode: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    row = _main_row(
+        tmp_home, tmp_path, monkeypatch, setting="pull-request", rules=[PR_RULE, CHECKS_RULE]
+    )
+    assert row["status"] == "ok", row
+    assert "setting: pull-request" in strip_paths(row["detail"])
+    assert "pull_request, required_status_checks" in strip_paths(row["detail"])
+    assert "required checks: check, lint" in strip_paths(row["detail"])
+
+
+def test_main_row_is_ok_for_direct_with_an_unrelated_rule(
+    tmp_home: Path, tmp_path: Path, fake_mode: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    row = _main_row(tmp_home, tmp_path, monkeypatch, rules=[{"type": "deletion"}])
+    assert row["status"] == "ok", row
+    assert "deletion" in strip_paths(row["detail"])
+
+
+@pytest.mark.parametrize("rules", [[PR_RULE], [CHECKS_RULE], [PR_RULE, CHECKS_RULE]])
+def test_main_row_warns_for_direct_with_a_pull_request_gate(
+    tmp_home: Path,
+    tmp_path: Path,
+    fake_mode: None,
+    monkeypatch: pytest.MonkeyPatch,
+    rules: list[dict[str, Any]],
+) -> None:
+    row = _main_row(tmp_home, tmp_path, monkeypatch, setting="direct", rules=rules)
+    assert row["status"] == "warn", row
+    said = "a direct push is refused, so applies stop and reviews go to branches"
+    assert said in strip_paths(row["detail"])
+    assert 'set `[repository] main = "pull-request"`' in strip_paths(row["detail"])
+
+
+def test_main_row_warns_for_pull_request_with_no_pull_request_rule(
+    tmp_home: Path, tmp_path: Path, fake_mode: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    row = _main_row(tmp_home, tmp_path, monkeypatch, setting="pull-request", rules=[])
+    assert row["status"] == "warn", row
+    assert "`main` is not protected yet: docs/PR-CI-GATE.md" in strip_paths(row["detail"])
+
+
+def test_main_row_warns_for_pull_request_without_required_checks(
+    tmp_home: Path, tmp_path: Path, fake_mode: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    row = _main_row(tmp_home, tmp_path, monkeypatch, setting="pull-request", rules=[PR_RULE])
+    assert row["status"] == "warn", row
+    assert (
+        "pull requests merge without CI, and `hands ci-wait` has no check to wait for, "
+        "so every apply stops" in strip_paths(row["detail"])
+    )
+
+
+@pytest.mark.parametrize("kind", ["required_linear_history", "update", "merge_queue"])
+@pytest.mark.parametrize("setting", ["direct", "pull-request"])
+def test_main_row_warns_for_a_rule_that_refuses_or_queues_hands_merges(
+    tmp_home: Path,
+    tmp_path: Path,
+    fake_mode: None,
+    monkeypatch: pytest.MonkeyPatch,
+    kind: str,
+    setting: str,
+) -> None:
+    rules = [{"type": kind}] if setting == "direct" else [PR_RULE, CHECKS_RULE, {"type": kind}]
+    row = _main_row(tmp_home, tmp_path, monkeypatch, setting=setting, rules=rules)
+    assert row["status"] == "warn", row
+    said = f"`{kind}`: hands' merge commits and pull-request merges are refused or queued"
+    assert said in strip_paths(row["detail"])
+
+
+def test_main_row_never_fails_doctor(
+    tmp_home: Path, tmp_path: Path, fake_mode: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _main_row(tmp_home, tmp_path, monkeypatch, setting="pull-request", rules=[])
+    code, found = checks()
+    assert found["main"]["status"] == "warn"
+    assert all(c["status"] != "fail" for c in found.values()), found
+    assert code == 0
+
+
+@pytest.mark.parametrize(
+    "origin", ["git@github.com:o/r.git", "ssh://git@github.com/o/r", "https://github.com/o/r"]
+)
+def test_main_row_reads_the_repository_of_an_ssh_or_https_origin(
+    tmp_home: Path, tmp_path: Path, fake_mode: None, monkeypatch: pytest.MonkeyPatch, origin: str
+) -> None:
+    row = _main_row(tmp_home, tmp_path, monkeypatch, rules=[], origin=origin)
+    assert row["status"] == "ok", row
+    log = (tmp_path / "gh.log").read_text(encoding="utf-8").splitlines()
+    assert log == ["api repos/o/r/rules/branches/main"]
+
+
+def test_main_row_is_skipped_with_no_gh(
+    tmp_home: Path, tmp_path: Path, fake_mode: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    bindir = tmp_path / "bin-without-gh"
+    bindir.mkdir()
+    for tool in ("python3", "git", "sh", "env"):
+        found = shutil.which(tool)
+        if found:
+            (bindir / tool).symlink_to(found)
+    monkeypatch.setenv("PATH", str(bindir))
+    row = _main_row(tmp_home, tmp_path, monkeypatch, rules=[])
+    assert row["status"] == "skip", row
+    assert "no `gh` on PATH" in strip_paths(row["detail"])
+
+
+def test_main_row_is_skipped_when_gh_is_not_signed_in(
+    tmp_home: Path, tmp_path: Path, fake_mode: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("FAKE_GH_MODE", "unauth")
+    row = _main_row(tmp_home, tmp_path, monkeypatch, rules=[])
+    assert row["status"] == "skip", row
+    assert "not signed in to github.com" in strip_paths(row["detail"])
+
+
+def test_main_row_is_skipped_for_an_origin_not_on_github_com(
+    tmp_home: Path, tmp_path: Path, fake_mode: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    row = _main_row(
+        tmp_home, tmp_path, monkeypatch, rules=[], origin="https://x:tk_SECRET0@gitlab.com/o/r"
+    )
+    assert row["status"] == "skip", row
+    assert "not a github.com repository" in strip_paths(row["detail"])
+    assert "tk_SECRET0" not in strip_paths(row["detail"])
+    assert not (tmp_path / "gh.log").exists()
+
+
+def test_main_row_is_skipped_when_the_read_fails(
+    tmp_home: Path, tmp_path: Path, fake_mode: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("FAKE_GH_MODE", "rulesfail")
+    row = _main_row(tmp_home, tmp_path, monkeypatch, rules=[])
+    assert row["status"] == "skip", row
+    assert "could not be read" in strip_paths(row["detail"])
+    assert "HTTP 502" in strip_paths(row["detail"])

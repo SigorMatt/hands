@@ -75,10 +75,91 @@ The apply prompt:
     Apply ~/Downloads/<kit>.zip to this repository: unzip -o into the repo
     root (it replaces A and B and adds C), then one plan-only sub-agent
     makes a single commit '<message>' listing those files in its body, and
-    pushes. Change nothing else. Reply with one line: VERDICT: kit applied <sha>.
+    pushes. If the push is refused, undo that commit (git reset --keep
+    HEAD~1) and reply instead with one line: VERDICT: kit not applied
+    pr=none <why, in one line>. Change nothing else. Reply with one line:
+    VERDICT: kit applied <sha>.
 
 The kit's file name and the message are shell-quoted (`shlex.quote`): a name
 such as `a b.zip` is written `~/Downloads/'a b.zip'`; `m-12.zip` is unchanged.
+
+Under `[repository] main = "pull-request"` (DESIGN §45: the project's `main`
+takes pull requests only) the apply prompt is instead, with `{location}`,
+`{touched}` and `{message}` as above and `{title}` the commit message
+shell-quoted:
+
+    Apply {location} to this repository, whose `main` takes pull requests
+    only (DESIGN §45). First, where the working tree is. (a) On `{branch}`,
+    this kit's own branch: go on below from the step not done yet
+    (`gh pr list --head {branch} --state all --json number,state` names its
+    pull request and whether it merged). (b) On another branch, not a `kit/`
+    one, that is on `origin` (`git ls-remote --exit-code --heads origin
+    <that branch>`) and whose pull requests, if it has any, are all open
+    (`gh pr list --head <that branch> --state all --json state` names none
+    `MERGED` or `CLOSED`), a mission is in flight on it: unzip -o into the
+    repo root (it {touched}), then one plan-only sub-agent makes a single
+    commit {message} listing those files in its body, and pushes that
+    branch; reply with one line: VERDICT: kit applied <sha>; if that push is
+    refused, undo the commit (`git reset --keep HEAD~1`) and reply with one
+    line: VERDICT: kit not applied pr=none <why, in one line>. (c) On any
+    other branch: `git checkout main`. Then, on `main`: `git pull
+    --ff-only`, and the first of these that holds. If `gh pr list --head
+    {branch} --state merged --json number,mergeCommit` names a merged pull
+    request, the kit is on `main` already: reply with one line: VERDICT: kit
+    applied <its merge commit's sha>. If `gh pr list --head {branch} --state
+    open --json number` names an open one: `git checkout {branch}` and go on
+    below from the step not done yet. If `git ls-remote --exit-code --heads
+    origin {branch}` finds the branch: `git checkout -B {branch}
+    origin/{branch}` and go on below from the step not done yet. Else: `git
+    checkout -B {branch}`, unzip -o into the repo root (it {touched}), one
+    plan-only sub-agent makes a single commit {message} listing those files
+    in its body, `git push -u origin {branch}`, and `gh pr create --base
+    main --head {branch} --title {title} --body {body}`. Then wait for its
+    checks: `hands ci-wait <pr>; echo "ci-wait-exit=$?"`, one foreground
+    call at a time, again while it exits 3, at most seven calls. When it
+    exits 0: `gh pr merge <pr> --merge --delete-branch --subject {subject}`,
+    then `git checkout main && git pull --ff-only`, and reply with one line:
+    VERDICT: kit applied <sha>, the merge commit's sha. If it exits 1 or 2,
+    if the seventh call still exits 3, or if the push, the pull request or
+    the merge is refused: leave the pull request, if there is one, open,
+    `git checkout main`, and reply with one line: VERDICT: kit not applied
+    pr=<pr, or none> <why, in one line>. If `gh` or `git` cannot answer one
+    of the questions above, reply with one line: VERDICT: kit not applied
+    pr=none <its error, in one line>. Change nothing else.
+
+`{branch}` is `kit/<stem>-<hash>`: `<stem>` the kit's file name without
+`.zip`, each character outside `A-Z a-z 0-9 _ -` replaced by `-`, cut to 40
+characters; `<hash>` the first 12 hexadecimal digits of the zip's sha256. Two
+kits of one name never share a branch, and the same bytes sent again find
+their own pull request, merged or open, or their own branch. `{body}` is `Kit
+<file name> (sha256 <the whole digest>), applied by hands (DESIGN §45): it
+{touched}.`, and `{subject}` is `merge: kit <stem> (PR #<pr>)`, both
+shell-quoted, `<pr>` left for the builder to fill. `hands kit check` prints the
+kit's sha256 and the prompt of the shape the project's configuration gives
+when it knows the project, else the `direct` one, saying which. A mission in
+flight is case (b): a decisions kit sent while a mission's builder asked a
+question lands on the mission's branch and reaches `main` with the mission's
+pull request. A resume of an apply — after a restart, a failure or a usage
+limit — re-sends the apply's own prompt, never `[roles.builder] resume_line`,
+so it finds the kit's branch and its pull request and never opens a second
+one for the same bytes. The apply is filed held as before.
+
+**A kit on such a repository (DESIGN §45).** A kit must leave the gate green,
+because its apply merges only on green checks and nothing bypasses the gate:
+where you can run the gate (the phone architect's sandbox), run it on the kit
+applied to a clone before sending it. A kit never rewords design text a test
+pins: the new wording is written in the kit's own section, and the mission's
+units move the code, its copies and the pinning tests to it. And a kit carries
+no file under `.github/` and no `scripts/check` unless the human asked for it:
+a pull request's check runs the workflow and the gate script from the pull
+request's own branch, so a kit that rewrote either could weaken the check its
+own pull request is merged on. A role-filed kit with such an entry (its
+casefolded path beginning `.github/` or equal to `scripts/check`) is not
+approved by the engine and waits for the human, held with the reason `apply
+<name>: the kit carries <path>, the repository's CI; a change of the CI is the
+owner's (§45)` (or §43's playbook reason when it carries the playbook too), and
+`hands kit check` prints a `WARN ci:` line for any kit that carries one, in
+either shape.
 
 The commit message is the first line of `KIT.md` at the kit's root, else
 `plan: kit <name>`, the zip's file name without `.zip`; put the message you
@@ -375,6 +456,50 @@ the protocol takes its "no PR" branch. `hands doctor`'s `gh` row warns, and
 does not fail, without `gh`, because a project may commit direct
 (docs/INTEGRATION.md §4).
 
+### A `main` that takes pull requests only (DESIGN §45)
+
+A project whose `main` is protected by a ruleset with `pull_request` and
+`required_status_checks` (docs/PR-CI-GATE.md) refuses every direct push, and
+its config says so: `[repository] main = "pull-request"` (default `direct`,
+docs/INTEGRATION.md step 3). What moved `main` directly — every one of five
+commits — moves through a pull request whose checks have passed:
+
+- **a kit's apply** opens its own pull request from `kit/<stem>-<hash>`, waits
+  for its checks and merges it (§3's second prompt); a kit sent while a
+  mission is in flight lands on the mission's branch instead;
+- **the review's file**: the review's file is committed to the mission's
+  branch, never to `main` (below);
+- **the merge of a mission's pull request**, made on green checks only;
+- **a `journal:` commit**: hands' sentence before a consultation's send tells
+  the builder to commit `meta/journal.md` as `journal: <consultation>` only on a
+  branch other than `main`, and on `main` to leave it uncommitted for the next
+  mission's branch; the brief's §R commits a dirty journal at the start as
+  `journal: consultation lines` on the mission's branch;
+- **a "Direct" mission** never runs there: the review stops on it with the
+  blocker "a direct mission on a `main` that takes pull requests only".
+
+The review reads `main`'s rules from GitHub first (`gh api
+repos/<owner>/<repo>/rules/branches/main`), not from hands; when they cannot be
+read twice, a minute apart, the review's one blocker is "`main`'s rules could
+not be read: <the error>". With `pull_request` it waits for the pull request's
+checks at the reviewed tip (`hands ci-wait <number>`, §18; a failed or unshown
+gate is a blocker, and the command's last line goes in `## Notes`), commits the
+review file and the hosted review's archive to the mission's branch as `review:
+mission N`, waits for the checks again (its own commit started them) and merges
+only on exit 0. On any other end it does not merge: it adds the blocker `the
+merge was not made: <the command's last line>`, commits it as `review: mission
+N (not merged)` and replies with that blocker counted. A clean verdict always
+means a merged mission. A review with blockers stays on the open branch, which
+your closer mission continues (rule 1 of `architect/CLAUDE.md` and §19's row
+say how to read it there), and the reviewer returns the tree to `main`.
+Before it checks out the branch, the review — like a closer's `git checkout
+<branch> && git merge main` — carries a dirty journal's lines over and commits
+them as `journal: consultation lines`, because a dirty `meta/journal.md` stops
+the checkout of a branch whose journal differs from `main`'s. The brief's last
+unit, after the hosted review's fixes are pushed, waits for the pull request's
+checks the same way and fixes a failed check within the design as it fixes a
+hosted finding; the final report names each awaited check and its result.
+
 ## 10. What a stop means, and what to write next
 
 | Stop reason | Read | Next kit |
@@ -383,6 +508,7 @@ does not fail, without `gh`, because a project may commit direct
 | has blockers | the review's blockers | a mission that closes them first |
 | builder question | the job's `result` | an owner file as a decisions kit (§3), then `go <secret>`: route 4 of §19; after `VERDICT: question`, `answer <secret> <text>` with the zip attached is the shorter route; a plan kit only if the plan changes |
 | unrecognised verdict | the job's `result` and `stderr_tail` | fix the vocabulary or the brief |
+| the kit's apply did not land (DESIGN §45) | the job's `result`: its `VERDICT: kit not applied` line, whose `pr=<n>` names the pull request (`pr=none`: a refused push or a `gh` or `git` error), and that pull request's checks | a kit that breaks the gate: the same kit corrected, its pull request closed; a flaky check: none, the check re-run (§19's row) |
 | task_killed / orphan | the job record, the monitor event | a finding; rarely a kit |
 | max_resumes exhausted | the job records | the environment, not the plan |
 
@@ -586,6 +712,28 @@ line that never changes, such as `Read the builder prompt with the highest
 mission number in the meta directory and execute the mission below its
 divider.`, because a kickoff that names the mission would need a playbook in
 every kit, and every kit would wait for the human.
+
+**A project switching `main` to pull requests only (DESIGN §45).** The order
+is docs/PR-CI-GATE.md's section for hands, at a quiet moment with no job of the
+project running, queued or held (`hands jobs`; an apply filed before the
+switch keeps the prompt it was filed with):
+
+1. the CI workflow on `main`, its check green on a pull request;
+2. `[repository] main = "pull-request"` and a restart of the project's `handsd`
+   (doctor's `main` row then warns that `main` is not protected yet);
+3. docs/PR-CI-GATE.md's procedure, requiring the CI workflow's check only
+   (doctor's `main` row is then ok).
+
+A project that commits straight to `main` and has no CI adds its CI first, then
+runs its missions in the pull-request shape with the review protocol from the
+installed template, then the setting, then the procedure, one change at a time
+so that a failure is attributable to one. Undoing it is the owner's: the
+ruleset disabled in GitHub's settings, then the setting set back to `direct`
+and the daemon restarted, with no apply in between. Until it switches, a
+project on `direct` gets only what does not need the gate: the stop for an
+apply that did not land (§10), a resumed apply that re-sends its own prompt,
+and a role-filed kit carrying `.github/` or `scripts/check` waiting for the
+human (§3).
 
 ### Running as the architect role (DESIGN §31)
 
@@ -910,6 +1058,19 @@ the human-supplied unit above that would carry the content.
   budget, and last stop (§19's `digest` row says what each field means). It is
   read-only, needs no daemon, and redacts every project's `cmd_secret` and
   `ntfy_token` before a field is cut.
+- **`hands ci-wait <pr> [--check <name>]…`** (DESIGN §45) reads a pull
+  request's checks mechanically, through `gh` only and read-only, in a clone
+  whose `origin` is the pull request's repository. It waits for the checks
+  `main`'s `required_status_checks` rule names (`gh api
+  repos/<owner>/<repo>/rules/branches/<base>`), else the `--check` names; with
+  neither it waits for nothing. One call waits at most nine minutes, polling
+  every thirty seconds, so it fits one foreground tool call, and exits `0`
+  passed (every awaited check `pass` or `skipping`), `1` failed (one `fail` or
+  `cancel`), `3` still waiting (the wait, never a pass: call it again) or `2`
+  no check to wait for, or no `gh`, no sign-in, no such pull request or an
+  unreadable rule. It prints one line per awaited check (name, bucket, link),
+  then `ci-wait: passed | failed: <name> | waiting: <names> | error: <reason>`.
+  A check the rules do not require (a hosted reviewer's) is never awaited.
 - **docs/OPERATIONS.md is the human's runbook** for a hands machine: what it
   holds, its secrets by kind, a usage-limit stop, operating without the
   phone, a migration, a disaster and a release install. **docs/RELATED.md
@@ -993,10 +1154,11 @@ its consequences.
 |---|---|---|---|
 | `hands: Kit applied; the next kickoff is the driver's` (missions template) | nobody — route 1 | nothing; a mission kit's route 3 ends with `go <secret>` | nothing; route 3 ends with `hands go` |
 | `hands: Kit applied` (runs template) | nobody — route 1 | nothing; a run kit's route 3 ends with `go <secret>` | nothing; route 3 ends with `hands go` |
+| `hands: the pipeline stopped` — the kit's apply did not land: <its VERDICT: line, cut to 200 characters, or no VERDICT: line> (§45) | the project's chat — route 3 | read the pull request's checks (the line's `pr=<n>`; `pr=none` is a refused push or a `gh` or `git` error, its reason on the line) in GitHub's app; a flaky check re-run there and, once green, the pull request merged and `go <secret>` sent; a kit that breaks the gate: its pull request closed and the kit corrected and sent again by route 3. Under a human pause it arrives once as `hands: a stop under a human pause`, and the pause and its kept ends stay | in the builder's clone, `hands ci-wait <pr>` (or `gh pr checks <pr>`) reads the checks; a flaky check re-run with `gh run rerun <run> --failed` (`<run>` from the check's link) and, once `hands ci-wait <pr>` exits 0, `gh pr merge <pr> --merge --delete-branch --subject "merge: kit <stem> (PR #<pr>)"`, `git checkout main && git pull --ff-only` and `hands go`; a kit that breaks the gate: `gh pr close <pr>`, then the corrected kit by `hands kit apply <zip>`, `hands approve <job>`, `hands go` |
 | `hands: kit <name> filed by the architect; apply approved by the playbook` | nobody — route 1 | nothing: the engine sends the kickoff | nothing |
 | `hands: A held job was denied` | nobody — route 1 | nothing: a denial is somebody's decision already | nothing |
 | `hands: the pipeline stopped` — Mission <n> reviewed clean; next mission is the architect's | the project's chat — route 3 | the next mission's kit: `kit <secret>` with the zip, Approve, `go <secret>` | `hands kit apply <zip>`, `hands approve <job>`, `hands go` |
-| `hands: the pipeline stopped` — Mission <n> review has blockers | the project's chat — route 3 | a mission that closes the blockers first, by route 3 | `hands kit apply <zip>`, `hands approve <job>`, `hands go` |
+| `hands: the pipeline stopped` — Mission <n> review has blockers | the project's chat — route 3 | a mission that closes the blockers first, by route 3. On a repository whose `main` takes pull requests only (DESIGN §45) the review is on the mission's branch, not on `main`: the architect role reads it with `git show origin/<branch>:meta/reviews/REVIEW-<n>.md` (its clone is whole and fetched before every job); the phone architect, from a shallow single-branch clone, runs `git fetch --depth 1 origin <branch>`, then `git show FETCH_HEAD:meta/reviews/REVIEW-<n>.md`. On any other repository it is on `main` | `hands kit apply <zip>`, `hands approve <job>`, `hands go` |
 | `hands: the pipeline stopped` — Run <n> review has blockers | the project's chat — route 3 | a run that closes the blockers first, by route 3 | `hands kit apply <zip>`, `hands approve <job>`, `hands go` |
 | `hands: the pipeline stopped` — Mission <n> blocked; see the builder's reply | the project's chat — route 4 | `progress <secret>`; the owner file as a decisions kit: `kit <secret>` with the zip, Approve, then `go <secret>`. In role mode under a playbook without the blocked→consult rule, instead: `kit <secret>` with the zip, Approve without `go <secret>`, and once the apply has ended `consult <secret> <reason>` (route 5) | `hands kit apply <zip>`, `hands approve <job>`, `hands go`; for route 5 instead `hands kit apply <zip>`, `hands approve <job>`, then `hands consult` without `hands go` |
 | `hands: the pipeline stopped` — Run <n> blocked | the project's chat — route 4 | as for a blocked mission | as for a blocked mission |
@@ -1011,6 +1173,7 @@ its consequences.
 | `hands: the pipeline stopped` — Tripwire fired | the project's chat — route 6 | `progress <secret>`; then route 3, 4 or 5 | `hands jobs -n 3`, `hands status` |
 | `hands: a job is held for a human` — <reason>, `role:`, `job:`, the job id on its own line | the human alone — route 2 | the Approve or Deny button, or `approve <job> <secret>` / `deny <job> [reason] <secret>` | `hands approve <job>` / `hands deny <job> --reason "<reason>"` |
 | `hands: a job is held for a human` — apply <name>: the kit carries <path>, the playbook in force; a change of the playbook is the owner's (§43) | the human alone — route 2 | the Approve or Deny button (or `approve <job> <secret>` / `deny <job> [reason] <secret>`); once the apply has ended no engine kickoff follows, so `go <secret>` | `hands approve <job>` / `hands deny <job>`, then `hands go` |
+| `hands: a job is held for a human` — apply <name>: the kit carries <path>, the repository's CI; a change of the CI is the owner's (§45) | the human alone — route 2 | the Approve or Deny button (or `approve <job> <secret>` / `deny <job> [reason] <secret>`), once the human has read what the kit changes in `.github/` or `scripts/check` (a pull request's check runs them from its own branch); §43's playbook reason is shown instead when the kit carries the playbook too; once the apply has ended no engine kickoff follows, so `go <secret>` | `hands approve <job>` / `hands deny <job>`, then `hands go` |
 | `hands: kit received` — kit received <name> <bytes> <sha256> | the human alone — route 3 | Approve the apply's hold (its own notification), then `go <secret>` | `hands approve <job>`, `hands go` |
 | `hands: kit received` — apply <name>: <why>; the commit message is the default '<message>' (the kit has no `KIT.md`, or its first line is not used) | the human alone — route 3 | Approve the apply's hold if the default message will do, then `go <secret>`; else Deny it and send the kit again with a `KIT.md` whose first line is the commit message | `hands approve <job>`, `hands go`; or `hands deny <job>`, then `hands kit apply <zip>` with the `KIT.md` |
 | `hands: handsd started` — <project> on <socket>, then `Resumed: <role> job <job>, from job <job> which a daemon stop orphaned` (or `which this start found orphaned (its process was gone)`), one line per resumed job; then `While starting, handsd published <n> notification(s) on their own:` and `While starting, handsd raised <n> more notification(s):`, each followed by the lines it names | nobody — route 1 | nothing; a line folded in under `While starting, handsd raised …` is answered by its own row | `hands status` |
@@ -1046,7 +1209,7 @@ its consequences.
 | `hands: the pipeline stopped` — job.held: the architect's apply <job> is not approved: the stored zip of kit_id <kit> has sha256 <a>, and the kit check passed on sha256 <b> (§34); the hold is the human's | the human alone — route 2 | Deny the hold that follows; an HF report | `hands deny <job> --reason "<reason>"` |
 | `hands: a consultation stopped over a paused pipeline` — <reason> | the project's chat — route 6 | the pipeline stays paused; answer the reason by its own row | as the reason's own row |
 | `hands: a stop under a human pause` — <reason> (§44: a stop the human pause suppressed; the pause and its kept ends stay, and no `resume` rule fires until `resume`) | the project's chat — route 6 | the pipeline stays paused; answer the reason by its own row, then `resume <secret>` | as the reason's own row, then `hands resume` |
-| `hands: at rest` — nothing is running, queued or held and no limit resume is scheduled; kept until `resume`: <role> job <job> (<verdict>); … (§44), one per kept end, its verdict line cut to 100 characters; or nothing is running, queued or held and no limit resume is scheduled; no end is kept, so `resume` only un-pauses (§44). Once per human pause, at the first moment nothing runs; again, with the new list, when a kept end is replaced after it | the human alone — route 1 | the work the pause was for (an owner commit, docs/OPERATIONS.md "A quiet moment"), then `resume <secret>`: the kept ends are replayed, the first that starts a step or stops is decided and the rest discarded | `hands pipeline` (its `kept` lines), the commit, then `hands resume` |
+| `hands: at rest` — nothing is running, queued or held and no limit resume is scheduled; kept until `resume`: <role> job <job> (<verdict>); … (§44), one per kept end, its verdict line cut to 100 characters; or nothing is running, queued or held and no limit resume is scheduled; no end is kept, so `resume` only un-pauses (§44). Once per human pause, at the first moment nothing runs; again, with the new list, at the first such moment after the kept list has changed — an end kept or replaced after the last publication (§45) | the human alone — route 1 | the work the pause was for (an owner commit, docs/OPERATIONS.md "A quiet moment"), then `resume <secret>`: the kept ends are replayed, the first that starts a step or stops is decided and the rest discarded | `hands pipeline` (its `kept` lines), the commit, then `hands resume` |
 | `hands: resume discarded kept ends` — resume replayed <role> job <job>, which <started a job or stopped the pipeline>; discarded the <n> end(s) kept after it: <role> job <job> (<verdict>) (§44) | the project's chat — route 6 | `status <secret>`; each discarded end is decided by hand once the replayed step is read | `hands pipeline`, `hands show <job>` |
 | `hands: the pipeline stopped` — driver.<state>: the driver escalated: <reason> (§27, §28); the <role>'s question (job <job>), verbatim: … | the project's chat — route 4 | as for "The builder has a question" | as for "The builder has a question" |
 | `hands: the pipeline stopped` — driver.<state>: the consultation's driver job ended <state>, and a consultation that does not end resolved stops (§27, §28); the driver's reply has no VERDICT: line, so it stops (§27, §28); or the driver's verdict '<verdict>' is neither resolved nor escalate, so it stops (§27, §28) | the project's chat — route 6 | `progress <secret>`; then route 3 or 4 | route 3 or 4 |

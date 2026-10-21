@@ -54,6 +54,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
+import hands.forge as forge
 import hands.monitor
 import hands.runner
 from hands.config import (
@@ -218,7 +219,7 @@ def run_checks(
     instead of having it connect to its own socket.
     """
     found = [_config_check(config)]
-    found += [_claude_check(config), _gh_check()]
+    found += [_claude_check(config), _gh_check(), _main_check(config)]
     found += [
         _role_check(role, config.project)
         for role in config.roles.values()
@@ -705,6 +706,68 @@ def _gh_check() -> Check:
         f"{head}  ({path})\nlogged in as {login.group(1)} (user {user}); "
         "token scopes include `repo`",
     )
+
+
+#: §45: the rules that make `main` take pull requests only.
+_GATE_RULES = ("pull_request", "required_status_checks")
+#: §45: rules that refuse or queue hands' merge commits and pull-request merges.
+_MERGE_RULES = ("required_linear_history", "update", "merge_queue")
+
+
+def _main_check(config: Config) -> Check:
+    """§45 doctor's `main` row: the `[repository] main` setting beside `main`'s
+    effective rules, read with a GET through `gh` for the `<owner>/<repo>` of the
+    builder's clone's `origin`. Ok when they agree, a warning for each
+    disagreement, never a failure; skipped, naming why, with no `gh`, an `origin`
+    not on github.com, no sign-in or a failed read."""
+    setting = config.repository.main
+    try:
+        gh = forge.gh_path()
+    except forge.ForgeError as exc:
+        return Check("main", SKIP, f"setting: {setting}; skipped: {exc} (see the `gh` row)")
+    clone = config.role("builder").cwd
+    try:
+        repo = forge.origin_repo(clone)
+    except forge.ForgeError as exc:
+        return Check("main", SKIP, f"setting: {setting}; skipped: the builder's clone: {exc}")
+    try:
+        forge.signed_in(gh, timeout=PROBE_S)
+    except forge.ForgeError as exc:
+        return Check("main", SKIP, f"setting: {setting}; skipped: {exc} (see the `gh` row)")
+    try:
+        rules = forge.branch_rules(gh, repo, "main", timeout=PROBE_S)
+    except forge.ForgeError as exc:
+        return Check(
+            "main", SKIP, f"setting: {setting}; skipped: {repo}'s `main` rules could not be "
+            f"read: {exc}",
+        )  # fmt: skip
+    types = forge.rule_types(rules)
+    lines = [f"setting: {setting}; {repo}'s `main` rules: {', '.join(types) or 'none'}"]
+    required = forge.required_checks(rules)
+    if required:
+        lines.append(f"required checks: {', '.join(required)}")
+    warnings: list[str] = []
+    if setting == "direct" and any(kind in types for kind in _GATE_RULES):
+        warnings.append(
+            "`direct` with a pull-request gate on `main`: a direct push is refused, so "
+            'applies stop and reviews go to branches: set `[repository] main = "pull-request"`'
+        )
+    if setting == "pull-request" and "pull_request" not in types:
+        warnings.append("`main` is not protected yet: docs/PR-CI-GATE.md")
+    if setting == "pull-request" and "pull_request" in types and (
+        "required_status_checks" not in types
+    ):
+        warnings.append(
+            "pull requests merge without CI, and `hands ci-wait` has no check to wait for, "
+            "so every apply stops"
+        )
+    for kind in _MERGE_RULES:
+        if kind in types:
+            warnings.append(
+                f"`{kind}`: hands' merge commits and pull-request merges are refused or "
+                "queued by it"
+            )
+    return Check("main", WARN if warnings else OK, "\n".join(lines + warnings))
 
 
 def _project_line(project: str) -> str:

@@ -19,6 +19,24 @@ def _no_hands_environment(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
 
 
+#: DESIGN §45 "CI": a proxy on a port nothing listens on (discard, 9/tcp).
+OFF_MACHINE_PROXY = "http://127.0.0.1:9"
+
+
+@pytest.fixture(autouse=True)
+def _no_request_leaves_the_machine(monkeypatch: pytest.MonkeyPatch) -> None:
+    """DESIGN §45 "CI": no test sends a request off the machine. Every proxy
+    variable points at a port nothing listens on, with only `localhost` and
+    `127.0.0.1` exempt, so a request to any other host fails at once, on the
+    laptop and on GitHub's runner; a local stub on 127.0.0.1 is still reached."""
+    for name in ("HTTPS_PROXY", "HTTP_PROXY", "https_proxy", "http_proxy"):
+        monkeypatch.setenv(name, OFF_MACHINE_PROXY)
+    for name in ("ALL_PROXY", "all_proxy"):
+        monkeypatch.delenv(name, raising=False)
+    for name in ("NO_PROXY", "no_proxy"):
+        monkeypatch.setenv(name, "localhost,127.0.0.1")
+
+
 @pytest.fixture
 def tmp_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Path]:
     """Point HOME (and therefore `~/.hands`) at a temp dir for the duration of a test.
@@ -203,3 +221,33 @@ def _fake_gh_on_path(_fake_gh_dir: Path, monkeypatch: pytest.MonkeyPatch) -> Non
     its shape with `FAKE_GH_MODE` (see `tests/fake_gh.py`)."""
     monkeypatch.setenv("PATH", f"{_fake_gh_dir}{os.pathsep}{os.environ.get('PATH', '')}")
     monkeypatch.delenv("FAKE_GH_MODE", raising=False)
+
+
+#: The words of `uv build --offline` when the build backend is not in uv's cache.
+_NO_BACKEND_IN_CACHE = "was not found in the cache"
+
+
+def build_wheel(root: Path, dist: Path) -> Path:
+    """Build this repository's wheel into `dist` with `uv build --offline`; return it.
+
+    DESIGN §45 "CI": the build backend (hatchling) comes from uv's cache, which
+    the gate's `uv sync` fills when it builds the project — a fresh checkout, as
+    on GitHub's runner. A home whose uv cache never held hatchling (a fresh
+    home over an existing `.venv`) cannot build offline, and the suite never
+    reaches the network, so the test is skipped there, naming that lack; any
+    other build failure fails the test.
+    """
+    import shutil
+    import subprocess
+
+    uv = shutil.which("uv")
+    assert uv is not None, "the gate runs under uv; the wheel is built with it"
+    built = subprocess.run(
+        [uv, "build", "--wheel", "--offline", "--quiet", "-o", str(dist)],
+        cwd=root, capture_output=True, text=True, timeout=300,
+    )  # fmt: skip
+    if built.returncode != 0 and _NO_BACKEND_IN_CACHE in built.stderr:
+        pytest.skip("uv's cache holds no hatchling (the build backend), and tests stay offline")
+    assert built.returncode == 0, built.stderr
+    (wheel,) = dist.glob("hands-*.whl")
+    return wheel

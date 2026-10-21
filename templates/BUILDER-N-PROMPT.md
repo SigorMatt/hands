@@ -33,7 +33,14 @@ Pull request. This mission runs on the branch `mission-N`. U0 creates it
 from `main` (`git checkout main && git pull --ff-only && git checkout -b
 mission-N`), or, for a closer mission, continues the open branch this brief
 names (`git checkout <branch> && git merge main`, merging `main` in first so
-the kit's plan files are present). Every unit commit goes to that branch and
+the kit's plan files are present). For a closer, a dirty `meta/journal.md`
+stops that checkout (the branch's journal differs from `main`'s), so it
+carries the lines over first (DESIGN §45): keep the lines `git diff -U0 --
+meta/journal.md` adds, `git checkout -- meta/journal.md`, then `git checkout
+<branch>`, append the kept lines to its `meta/journal.md` and commit them,
+on their own, as `journal: consultation lines`, then `git merge main`; when
+the file is untracked on `main`, its whole content is the kept lines and it
+is removed before the checkout. Every unit commit goes to that branch and
 is pushed at once (`git push -u origin mission-N` the first time). The last
 unit opens the pull request — `gh pr create --base main --head mission-N
 --title "mission N: <title>" --body-file meta/FINAL-REPORT-N.md` — and the
@@ -46,15 +53,17 @@ the next kickoff run in this tree, on `main`.
 
 Direct. This mission commits to `main`: every unit commit is pushed to
 `main` at once, no branch and no pull request; the final reply's verdict
-has no `pr=`.
+has no `pr=`. A repository whose `main` takes pull requests only (DESIGN
+§45) never takes this shape: its review stops a direct brief with a
+blocker.
 
 ## Execution model (binding)
 
 - You are a thin orchestrator. You plan units, write the checkpoint,
   dispatch ONE sub-agent per unit (Task tool, foreground only), verify the
   unit cheaply, record one line, move on. You run nothing longer than `git
-  status`, `git log --oneline -5`, `hands hosted-review <pr>` and
-  `./scripts/check` yourself.
+  status`, `git log --oneline -5`, `hands hosted-review <pr>`, `hands ci-wait
+  <pr>` and `./scripts/check` yourself.
 - Before each unit: write `meta/CHECKPOINT.md` (unit id, intent, what
   "done" means, standing constraints). After each unit: update it and
   append one line to `meta/journal.md`.
@@ -118,7 +127,11 @@ end that reply with one of the mission's `VERDICT:` lines, always, even when
 the answer came with a file to commit first. If a `plan: decisions <date>
 (owner)` commit is on the branch after the checkpoint's last update and the
 checkpoint does not record its "For the builder" steps as done, carry them
-out first, record them in the checkpoint, and continue.
+out first, record them in the checkpoint, and continue. A dirty
+`meta/journal.md` at the start is committed, on its own, as `journal:
+consultation lines` on the mission's branch — on `main`, only after U0 has
+created or checked out that branch — and never pushed to `main` unless the
+Branch section says Direct.
 
 ## Units, in order
 
@@ -159,9 +172,15 @@ docs/QODO-EXTRACTION.md's method; it archives the bot's words under
 Review comment only. The unit then fixes each finding that is within the
 design, by a sub-agent under the sub-agent rules, committed and pushed to
 the branch; a finding that needs a design decision is filed in
-`meta/findings/FINDINGS.md`, never fixed in silence. It pushes, then writes
-the `## Hosted review` table into the final report, one row per finding,
-the finding verbatim and one disposition: `fixed in <sha>` | `dismissed:
+`meta/findings/FINDINGS.md`, never fixed in silence. It pushes. On a
+repository whose `main` takes pull requests only (DESIGN §45) it then waits
+for the pull request's checks — `hands ci-wait <pr>; echo
+"ci-wait-exit=$?"`, one foreground call at a time, again while it exits 3,
+at most seven calls — and fixes a failed check within the design as it
+fixes a hosted finding, committed and pushed to the branch, before the `##
+Hosted review` table; the final report names each awaited check and its
+result. Then it writes the `## Hosted review` table into the final report,
+one row per finding, the finding verbatim and one disposition: `fixed in <sha>` | `dismissed:
 <reason>` | `finding H-nnn filed`; it commits that table with the archive
 directory, pushes, and returns the tree to `main`. Then the verdict line.
 

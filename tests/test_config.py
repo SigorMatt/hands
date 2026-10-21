@@ -932,6 +932,9 @@ patterns = ["  gh pr create  ", "  decisions-  "]
 
 [runner]
 claude = "  /usr/local/bin/claude  "
+
+[repository]
+main = "  pull-request  "
 """
 
 
@@ -980,6 +983,7 @@ def test_every_accepted_string_value_is_stored_stripped(write_config, ops_repo: 
     assert cfg.role("builder").cwd.is_absolute()
     assert cfg.gates.patterns.count("gh pr create") == 1  # a default, not a second copy
     assert cfg.gates.patterns.count("decisions-") == 1
+    assert cfg.repository.main == "pull-request"  # §45 through §21's helper
 
 
 #: How each loader helper is called: the position of the `where` argument, so a
@@ -1111,7 +1115,7 @@ def test_a_new_section_that_checks_no_keys_is_caught_by_the_scan() -> None:
     every key anyone wrote under it and its raw read was invisible to the walk
     above. The demonstration is a mutated copy of `config.py` — the real one is
     what the test above asserts on."""
-    mutated = SOURCE.replace('"gates", "runner"),', '"gates", "runner", "extra"),', 1)
+    mutated = SOURCE.replace('"runner", "repository"),', '"runner", "repository", "extra"),', 1)
     assert mutated != SOURCE, "config.py no longer spells its section list as the scan expects"
 
     scan = config_keys(mutated)
@@ -1271,3 +1275,40 @@ def test_a_who_min_interval_s_that_is_not_a_number_does_not_load(
     write_config(f"[roles.builder]\ncwd = '~/g'\n[notify]\nwho_min_interval_s = {value}\n")
     with pytest.raises(ConfigError, match=r"\[notify\] who_min_interval_s"):
         load_config("demo")
+
+
+# ------------------------------------------ [repository] main (§45, mission 29 U2)
+
+
+def test_repository_main_is_direct_by_default(write_config) -> None:
+    write_config()
+    assert load_config("demo").repository.main == "direct"
+
+
+@pytest.mark.parametrize("value", ["direct", "pull-request"])
+def test_repository_main_takes_either_value(write_config, value: str) -> None:
+    write_config(f'[roles.builder]\ncwd = "~/g"\n[repository]\nmain = "{value}"\n')
+    assert load_config("demo").repository.main == value
+
+
+@pytest.mark.parametrize("value", ["pull_request", "protected", "Direct", ""])
+def test_any_other_repository_main_is_refused_naming_the_two(write_config, value: str) -> None:
+    write_config(f'[roles.builder]\ncwd = "~/g"\n[repository]\nmain = "{value}"\n')
+    with pytest.raises(ConfigError) as caught:
+        load_config("demo")
+    said = str(caught.value)
+    assert "[repository] main" in strip_paths(said)
+    assert '"direct"' in strip_paths(said) and '"pull-request"' in strip_paths(said)
+
+
+def test_repository_admits_no_other_key(write_config) -> None:
+    write_config('[roles.builder]\ncwd = "~/g"\n[repository]\nbranch = "main"\n')
+    with pytest.raises(ConfigError, match=r"unknown key\(s\) in \[repository\]: branch"):
+        load_config("demo")
+
+
+def test_the_config_template_carries_the_key_commented_with_its_default() -> None:
+    template = (Path(hands.config.__file__).resolve().parents[2] / "templates" / "config.toml")
+    lines = template.read_text(encoding="utf-8").splitlines()
+    assert "# [repository]" in [strip_paths(line) for line in lines]
+    assert any(line.startswith('# main = "direct"') for line in lines), lines

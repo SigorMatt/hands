@@ -34,7 +34,7 @@ A project whose missions run as pull requests (docs/ARCHITECT-HANDBOOK.md §9)
 needs the GitHub CLI: the builder opens the PR with `gh pr create`, and the
 review finds it with `gh pr list`, reads the hosted review with `gh api` and
 merges a clean one with `gh pr merge --merge`. hands itself never runs `gh`
-except for doctor's row. Three things, for **the user handsd runs as** (every role
+except for doctor's rows and `hands ci-wait` (DESIGN §45), both read-only. Three things, for **the user handsd runs as** (every role
 job runs as that user, so it is that user's login that counts):
 
 - `gh` installed and on that user's PATH;
@@ -44,6 +44,13 @@ job runs as that user, so it is that user's login that counts):
 
 `hands doctor` checks all three (step 4). A project whose briefs say
 "direct" commits to `main` and needs none of it.
+
+A project whose `main` takes pull requests only (DESIGN §45,
+docs/PR-CI-GATE.md) also runs `hands ci-wait <pr>`, which reads the checks
+with `gh pr checks` and `main`'s rules with `gh api`, both read-only. Pushing
+the CI workflow's file (`.github/workflows/check.yml`) needs GitHub's
+`workflow` scope when the git user pushes over HTTPS with the `gh` token:
+`gh auth status` lists the scopes, and `gh auth refresh -s workflow` adds it.
 
 The working tree must be on `main` between missions: the next kit apply and
 the next kickoff run in the builder's cwd, on whatever branch it is on. The
@@ -266,6 +273,13 @@ cwd` is optional.
 
     [playbook]
     path = "PLAYBOOK.toml"               # default; relative to roles.builder.cwd
+
+    [repository]                         # how `main` moves for hands (§45)
+    main = "direct"                      # default, as before; or "pull-request":
+                                         # only through pull requests merged once
+                                         # their checks have passed (any other
+                                         # value refuses to load). Read at start,
+                                         # so a change takes a restart
 
     [files]
     allowed_roots = ["~/git/<project>", "~/Downloads", "~/<project>-ops"]
@@ -535,6 +549,23 @@ that does not return, not logged in, or a token without `repo` is a `warn`
 naming the remedy — run `gh auth login` as this user (and grant the `repo`
 scope) — and is a warning, not a failure, because a project may commit
 direct.
+
+The `main` row (DESIGN §45) prints `[repository] main` and `main`'s
+effective rules, read with `gh api repos/<owner>/<repo>/rules/branches/main`
+(a GET; `<owner>/<repo>` from the builder's clone's `origin`, a github.com
+URL in https or ssh form), each rule type named. It is `ok` when they agree:
+`direct` with neither `pull_request` nor `required_status_checks`, or
+`pull-request` with both (the required checks named). It warns, never fails,
+on `direct` with either rule (a direct push is refused, so applies stop and
+reviews go to branches: set `pull-request`); on `pull-request` with no
+`pull_request` rule (`main` is not protected yet: docs/PR-CI-GATE.md); on
+`pull-request` with `pull_request` and no `required_status_checks` (pull
+requests merge without CI, and `hands ci-wait` has no check to wait for, so
+every apply stops); and on either setting with `required_linear_history`,
+`update` or `merge_queue` (hands' merge commits and pull-request merges are
+refused or queued by it). With no `gh`, no sign-in, an `origin` that is not
+on github.com, or a failed read, the row is skipped, naming why; the `gh` row
+already warns about `gh`.
 
 The `worktrees` row (DESIGN §40, H-067) reads `.git/worktrees/` in each
 role's clone (`<cwd>/repo` when there is one, else the cwd when it is a git

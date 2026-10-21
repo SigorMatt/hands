@@ -30,6 +30,8 @@ from types import ModuleType
 
 import pytest
 
+from conftest import build_wheel
+
 ROOT = Path(__file__).parents[1]
 HOOK = ROOT / ".claude" / "hooks" / "no_background.py"
 SETTINGS = ROOT / ".claude" / "settings.json"
@@ -850,18 +852,9 @@ def test_the_built_wheel_carries_the_hook(tmp_path: Path) -> None:
     """§43 rule 2: `pyproject.toml` force-includes the hook as
     `hands/shipped/no_background.py`, read from the build's own file list as the
     guard's `hands/shipped/bash_guard.py` is."""
-    import shutil
     import zipfile
 
-    uv = shutil.which("uv")
-    assert uv is not None
-    dist = tmp_path / "dist"
-    built = subprocess.run(
-        [uv, "build", "--wheel", "--offline", "--quiet", "-o", str(dist)],
-        cwd=ROOT, capture_output=True, text=True, timeout=300,
-    )
-    assert built.returncode == 0, built.stderr
-    (wheel,) = dist.glob("hands-*.whl")
+    wheel = build_wheel(ROOT, tmp_path / "dist")
     with zipfile.ZipFile(wheel) as archive:
         assert "hands/shipped/no_background.py" in archive.namelist()
         assert archive.read("hands/shipped/no_background.py") == HOOK.read_bytes()

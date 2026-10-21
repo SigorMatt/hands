@@ -9,7 +9,6 @@ argv, and a local bare repository as the url: no real systemd, no remote, no
 from __future__ import annotations
 
 import io
-import os
 import re
 import shutil
 import stat
@@ -19,7 +18,7 @@ from pathlib import Path
 
 import pytest
 
-from conftest import strip_paths
+from conftest import build_wheel, strip_paths
 from hands.cli import main as hands_main
 from hands.config import docs_root, load_config
 from hands.doctor import SHIPPED_GUARDS
@@ -235,16 +234,7 @@ def test_generated_topics_carry_the_name_and_are_ntfy_topics() -> None:
 def test_the_wheel_carries_what_project_add_copies(tmp_path: Path) -> None:
     """The wheel, not the source tree: the files `project add` reads resolve
     inside the unpacked package's `hands/shipped/`."""
-    uv = shutil.which("uv")
-    assert uv is not None
-    dist = tmp_path / "dist"
-    built = subprocess.run(
-        [uv, "build", "--wheel", "--offline", "--quiet", "-o", str(dist)],
-        cwd=ROOT, capture_output=True, text=True, timeout=300,
-        env={**os.environ},
-    )
-    assert built.returncode == 0, built.stderr
-    (wheel,) = dist.glob("hands-*.whl")
+    wheel = build_wheel(ROOT, tmp_path / "dist")
     names = set(zipfile.ZipFile(wheel).namelist())
     for rel in (
         "templates/config.toml",

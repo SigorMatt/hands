@@ -44,7 +44,7 @@ from hands.limits import LimitManager
 from hands.monitor import MonitorSupervisor
 from hands.notify import Notifier
 from hands.phone import ARCHITECT_TITLE, BUILDER_TITLE, PhoneChannel, answer_reply, reply_answer
-from hands.playbook import PlaybookEngine, series_roles_problem
+from hands.playbook import PlaybookEngine, chain_first, series_roles_problem
 from hands.runner import LINE_LIMIT, Runner, RunnerError, reconcile_orphans
 from hands.spool import (
     ARCHITECT_ORIGIN,
@@ -293,7 +293,7 @@ class Daemon:
         resumed = await self._feed_orphans()
         # §44 rule 4: a human pause restored here, its orphans fed and its §6 resumes
         # decided, may be at rest already with no job left to end; a set mark is not
-        # published again.
+        # published again unless an end was kept after it (§45).
         self.playbook.check_at_rest()
         if self.phone is not None:
             self.phone.start()
@@ -770,14 +770,7 @@ class Daemon:
         resume carries no `kit_id` (§6, §10), so `resumed_from` is followed back to
         the chain's first job, which is asked. A record the chain names that cannot
         be read ends the walk at the last one read."""
-        current, seen = job, {job.id}
-        while current.resumed_from is not None and current.resumed_from not in seen:
-            seen.add(current.resumed_from)
-            try:
-                current = self.spool.load_job(current.resumed_from)
-            except SpoolError:
-                break
-        return current.kit_id is not None
+        return chain_first(self.spool, job).kit_id is not None
 
     def _owner_sentence_now(self, job: Job) -> str | None:
         if job.role != "builder" or self.is_apply(job):

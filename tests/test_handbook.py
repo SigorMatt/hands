@@ -11,7 +11,6 @@ from __future__ import annotations
 import asyncio
 import io
 import re
-import shutil
 import subprocess
 import sys
 import zipfile
@@ -19,7 +18,7 @@ from pathlib import Path
 
 import pytest
 
-from conftest import strip_paths
+from conftest import build_wheel, strip_paths
 from hands.cli import main as hands_main
 from hands.config import DOCS_ENV, docs_root, parse_config
 from hands.playbook import SERIES_KEYS, parse_playbook
@@ -66,15 +65,7 @@ def test_the_installed_wheel_carries_the_handbook_and_templates(tmp_path: Path) 
     """The wheel, not the source tree: build it (offline, from the build cache the
     gate's `uv sync` fills), unpack it, and run `hands handbook` from the unpacked
     package alone. Both paths resolve inside that package's `hands/shipped/`."""
-    uv = shutil.which("uv")
-    assert uv is not None, "the gate runs under uv; the wheel is built with it"
-    dist = tmp_path / "dist"
-    built = subprocess.run(
-        [uv, "build", "--wheel", "--offline", "--quiet", "-o", str(dist)],
-        cwd=ROOT, capture_output=True, text=True, timeout=300,
-    )
-    assert built.returncode == 0, built.stderr
-    (wheel,) = dist.glob("hands-*.whl")
+    wheel = build_wheel(ROOT, tmp_path / "dist")
     site = tmp_path / "site"
     with zipfile.ZipFile(wheel) as zf:
         zf.extractall(site)

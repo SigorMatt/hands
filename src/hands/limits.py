@@ -494,16 +494,18 @@ class LimitManager:
 
     async def _resume(self, job: Job) -> Job:
         """§6: the builder gets a new `clear` job — `role.resume_line` when the config
-        sets one, otherwise the limited job's own prompt (H-008); aux the same prompt."""
+        sets one, otherwise the limited job's own prompt (H-008); aux the same prompt.
+        §45: a limited apply (§43's chain walk) gets the apply's own prompt, never
+        `resume_line` (`builder_resume_prompt`)."""
         # §43: what the sender sent, without hands' leading sentences (the journal
         # and owner sentences); the resume's own dispatch decides them again.
         # Imported here: `hands.playbook` imports this module.
-        from hands.playbook import sent_prompt
+        from hands.playbook import builder_resume_prompt, sent_prompt
 
         role = self.config.role(job.role)
         sent = sent_prompt(job.prompt)
         if job.role == "builder":
-            prompt, context = role.resume_prompt(sent), "clear"
+            prompt, context = builder_resume_prompt(self.spool, role, job), "clear"
         else:
             prompt, context = sent, job.context
         resumed = await self.enqueue(

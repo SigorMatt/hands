@@ -258,6 +258,37 @@ def test_kit_apply_of_a_passing_kit_files_a_held_apply_naming_the_copied_zip(
     drive(body)
 
 
+def test_under_pull_request_kit_apply_files_the_pull_request_prompt(
+    tmp_home: Path, workdir: Path, downloads: Path, tmp_path: Path
+) -> None:
+    """§45: `hands kit apply` files the apply's prompt in the configured shape,
+    naming the copied zip's sha256 — `hands kit check`'s for that project."""
+    files = (
+        f'\n[files]\nallowed_roots = ["{workdir}", "{downloads}"]\n'
+        f'kit_dir = "{downloads}"\nkit_max_mb = 1\n\n[repository]\nmain = "pull-request"\n'
+    )
+    (tmp_home / ".hands" / f"{PROJECT}.toml").write_text(
+        config_body(tmp_home, workdir, extra=files)
+    )
+    kit = a_kit(tmp_path / "elsewhere" / "m24.zip", passing_kit())
+    digest = hashlib.sha256(kit.read_bytes()).hexdigest()
+    report = kit_mod.check_kit(kit, workdir, project=PROJECT)
+    assert report.ok and report.apply_shape == "pull-request"
+
+    async def body(daemon: Daemon) -> None:
+        answer = await ok("kit", "apply", str(kit))
+        record = await ok("show", answer["job"]["id"])
+        assert record["state"] == "held" and record["origin"] == "kit"
+        assert record["prompt"] == report.apply_prompt
+        assert record["prompt"].startswith(
+            "Apply ~/Downloads/m24.zip to this repository, whose `main` takes pull requests "
+        )
+        assert f"`kit/m24-{digest[:12]}`" in record["prompt"]
+        assert answer["sha256"] == digest
+
+    drive(body)
+
+
 DECISIONS_MESSAGE = "plan: decisions 2026-10-18 (owner)"
 DECISIONS_KIT = {
     "meta/decisions/2026-10-18-owner.md": "# Owner decisions\n\n## For the builder\n\nO-1.\n",

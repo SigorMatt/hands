@@ -67,6 +67,7 @@ from hands.config import (
     HANDBOOK_PATH,
     TEMPLATES_PATH,
     Config,
+    RoleConfig,
     docs_root,
 )
 from hands.limits import LimitManager
@@ -119,6 +120,7 @@ __all__ = [
     "KEPT_DISCARDED_TITLE",
     "ROLE_ENDS",
     "SUPPRESSED_HUMAN_TITLE",
+    "STOP_TITLE",
     "ResumeRefused",
     "PipelineState",
     "PlaceholderError",
@@ -129,10 +131,13 @@ __all__ = [
     "PlaybookNotCommitted",
     "Rule",
     "SeriesAnchor",
+    "builder_resume_prompt",
+    "chain_first",
     "check_series_roles",
     "load_playbook",
     "next_milestone",
     "owner_hold_reason",
+    "ci_hold_reason",
     "parse_playbook",
     "playbook_path",
     "playbook_repo_path",
@@ -150,6 +155,7 @@ __all__ = [
     "series_roles_problem",
     "CHECKPOINT",
     "JOURNAL_REMINDER",
+    "JOURNAL_REMINDER_PULL_REQUEST",
     "OWNER_REMINDER",
     "owner_files_pending",
     "sent_prompt",
@@ -323,6 +329,16 @@ def owner_hold_reason(name: str, path: str) -> str:
     )
 
 
+def ci_hold_reason(name: str, path: str) -> str:
+    """§45 "A kit that carries the CI is the owner's": the published reason of the
+    hold of an architect-filed apply of kit `name` whose stored kit carries `path`,
+    an entry of the repository's CI (`spool.carries_ci`), and not the playbook."""
+    return (
+        f"apply {name}: the kit carries {path}, the repository's CI; a change of the CI "
+        "is the owner's (§45)"
+    )
+
+
 #: §10's "Placeholders": the job fields a rule may name as `{job.<field>}`.
 JOB_PLACEHOLDERS: tuple[str, ...] = ("id", "head_at_start", "head_at_end", "session_id")
 
@@ -342,6 +358,8 @@ UNPAUSE_ORIGINS = frozenset({"cli", "phone", "kit"})
 
 #: The `stop` reason `hands pause` files (§11, H-007). A human, not a rule.
 PAUSE_REASON = "paused by human"
+#: §10, §11: the title of every stop that takes.
+STOP_TITLE = "hands: the pipeline stopped"
 #: §29: the notification of an engine consult stop suppressed over a paused pipeline.
 SUPPRESSED_CONSULT_TITLE = "hands: a consultation stopped over a paused pipeline"
 #: §44: the `paused_by` of a human pause — `hands pause` (`cli`) or the phone's
@@ -970,6 +988,15 @@ JOURNAL_REMINDER = (
     "shows it): commit it first, on its own, as `journal: {consultation}`, then do "
     "what follows.]"
 )
+#: §45: the sentence under `[repository] main = "pull-request"`, word for word (one
+#: line; DESIGN.md wraps it). The same leading words, so the reader below knows both.
+JOURNAL_REMINDER_PULL_REQUEST = (
+    "[hands: {journal} is uncommitted in your working tree (`git status --porcelain` "
+    "shows it): on a branch other than `main`, commit it first, on its own, as "
+    "`journal: {consultation}`; this repository's `main` takes pull requests only, so "
+    "on `main` leave it uncommitted for the next mission's branch. Then do what "
+    "follows.]"
+)
 _JOURNAL_REMINDER_RE = re.compile(r"\A\[hands: meta/journal\.md is uncommitted [^\n]*\]\n\n")
 #: §43 (H-073): the checkpoint whose update after an owner file means its steps are
 #: recorded, under the builder's cwd.
@@ -1005,6 +1032,34 @@ def sent_prompt(prompt: str) -> str:
                 break
         else:
             return prompt
+
+
+def chain_first(spool: Spool, job: Job) -> Job:
+    """§43: the first job of `job`'s resume chain — `resumed_from` followed back, a
+    resume carrying no `kit_id` (§6, §10). A record the chain names that cannot be
+    read ends the walk at the last one read; a loop ends it where it closes."""
+    current, seen = job, {job.id}
+    while current.resumed_from is not None and current.resumed_from not in seen:
+        seen.add(current.resumed_from)
+        try:
+            current = spool.load_job(current.resumed_from)
+        except SpoolError:
+            break
+    return current
+
+
+def builder_resume_prompt(spool: Spool, role: RoleConfig, job: Job) -> str:
+    """§6, §10 with §45: the prompt a `clear` resume of the builder's `job` sends.
+
+    A resume of an apply as §43 counts one (the chain's first job carries a
+    `kit_id`) re-sends the apply's own prompt — the first job's, as its sender
+    sent it (`sent_prompt`) — never `resume_line`; any other job gets
+    `role.resume_prompt`: `resume_line` when the config sets one, else its own
+    prompt again (H-008)."""
+    first = chain_first(spool, job)
+    if first.kit_id is not None:
+        return sent_prompt(first.prompt)
+    return role.resume_prompt(sent_prompt(job.prompt))
 
 
 def owner_files_pending(cwd: Path) -> list[str] | None:
@@ -1606,10 +1661,14 @@ class PipelineState:
     #: §44 rule 2: the reason of the first stop suppressed under the human pause, or
     #: None. Once set, a `resume` rule fires nothing until the pause ends.
     suppressed_stop: str | None = None
-    #: §44 rule 4: when `hands: at rest` was published under this human pause, or
-    #: None. Persisted so a restart does not publish it again; cleared when a kept
-    #: end is replaced after it, so it is published again with the new list.
+    #: §44 rule 4, §45: when `hands: at rest` was last published under this human
+    #: pause, or None. Persisted so a restart does not publish it again.
     at_rest: str | None = None
+    #: §45 (H-079): an end was kept or replaced after `at_rest`, so the kept list has
+    #: changed since that publication and `at rest` is published again, with the new
+    #: list, at the next moment nothing runs. Persisted, so a restart publishes an
+    #: end kept after the mark and never published, and nothing otherwise.
+    kept_since_rest: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -1630,6 +1689,7 @@ class PipelineState:
             "kept": [dict(entry) for entry in self.kept],
             "suppressed_stop": self.suppressed_stop,
             "at_rest": self.at_rest,
+            "kept_since_rest": self.kept_since_rest,
         }
 
     @classmethod
@@ -1661,6 +1721,7 @@ class PipelineState:
                 data["suppressed_stop"] if isinstance(data.get("suppressed_stop"), str) else None
             ),
             at_rest=data["at_rest"] if isinstance(data.get("at_rest"), str) else None,
+            kept_since_rest=data.get("kept_since_rest") is True,
         )
 
 
@@ -1971,6 +2032,12 @@ class PlaybookEngine:
         if job is None and payload:
             job = self._job(payload.get("job"))
         enforced = driver_stop(event, job, asked=self._asked(job))
+        unlanded = self._apply_not_landed(event, job)
+        if unlanded is not None:
+            # §45 (H-080): the engine's own, before any playbook rule, paused or not;
+            # never kept under a human pause, and it never replaces a kept end.
+            await self._stop_apply(unlanded, _payload(event, job))
+            return
         if self.state.paused:
             if enforced is not None:
                 # §29: the engine's consult stops apply over a paused pipeline too:
@@ -2014,6 +2081,30 @@ class PlaybookEngine:
                 f"{event}: the playbook engine failed ({type(exc).__name__}: {exc})",
                 _payload(event, job),
             )
+
+    def _apply_not_landed(self, event: str, job: Job | None) -> str | None:
+        """§45 "An apply that did not land (H-080)": the stop reason for the
+        `builder.done` of an apply as §43 counts one (`chain_first`: a job with a
+        `kit_id`, or a resume of one) whose reply does not begin `VERDICT: kit
+        applied` — its VERDICT: line cut to 200 characters, or "no VERDICT: line" —
+        or None for any other event, any other job, and an apply that landed."""
+        if event != BUILDER_DONE or job is None:
+            return None
+        if chain_first(self.spool, job).kit_id is None:
+            return None
+        if job.verdict is not None and _KIT_APPLIED_RE.match(job.verdict):
+            return None
+        return f"the kit's apply did not land: {_cut(job.verdict, 200)} (§45)"
+
+    async def _stop_apply(self, reason: str, payload: dict[str, Any]) -> None:
+        """§45: over an unpaused pipeline a stop; over a paused one the reason is
+        published once — under a human pause as §44 rule 2's suppressed stop, under
+        any other pause titled as a stop — and the pause, its reason and the kept
+        ends stay (`stop` changes none of them over a pause)."""
+        if self.state.paused and not self.human_paused:
+            await self.stop(reason, payload, suppressed_title=STOP_TITLE)
+            return
+        await self.stop(reason, payload)
 
     def _asked(self, job: Job | None) -> Job | None:
         """§36: the job a driver consultation was about (its prompt's head names it),
@@ -2131,10 +2222,10 @@ class PlaybookEngine:
         self.state.kept = [
             kept for kept in self.state.kept if kept.get("role") != job.role
         ] + [entry]
-        if replaced and self.state.at_rest is not None:
-            # §44 rule 4: a kept end replaced after `at rest` publishes it again, with
-            # the new list, at the next moment nothing runs.
-            self.state.at_rest = None
+        if self.state.at_rest is not None:
+            # §45 (H-079): an end kept or replaced after `at rest` publishes it again,
+            # with the new list, at the next moment nothing runs.
+            self.state.kept_since_rest = True
         self._save()
         log.info("playbook: paused by a human; %s of job %s is kept until `resume` (§44)",
                  event, job.id)
@@ -2201,12 +2292,17 @@ class PlaybookEngine:
         ]
 
     def _engine_applied_kit(self, job: Job) -> bool:
-        """§32: an apply hands filed from the architect's kit, released by the engine."""
-        gate = job.gate if isinstance(job.gate, dict) else {}
+        """§32: an apply hands filed from the architect's kit, released by the engine.
+
+        §45: asked of the chain's first job (`chain_first`), so a resume of such an
+        apply — after a restart, a failure or a limit — is one too, and when it
+        lands the engine's kickoff follows it as it would have followed the first."""
+        first = chain_first(self.spool, job)
+        gate = first.gate if isinstance(first.gate, dict) else {}
         return (
             gate.get("decided_by") == ORIGIN
             and gate.get("decision") == "approved"
-            and kit_apply_problem(self.spool, job) is None
+            and kit_apply_problem(self.spool, first) is None
         )
 
     async def _approve_architect_hold(self, book: Playbook, job: Job | None) -> bool:
@@ -2408,7 +2504,7 @@ class PlaybookEngine:
         states — if it is still held, the pipeline is not paused, it is still an
         apply hands filed from a checked kit (`kit_apply_problem`), its stored zip is
         the one the check passed on (`_kit_bytes_unchanged`, §34), and (§43) that
-        zip carries no playbook (`_carries_no_playbook`). Any other is published
+        zip carries no playbook (`_carries_no_owner_entry`). Any other is published
         with its buttons for the human (`_announce_hold`)."""
         job = self._job(filed.id)
         if job is None or job.state != "held":
@@ -2428,7 +2524,7 @@ class PlaybookEngine:
         where = _payload("job.held", job)
         if not await self._kit_bytes_unchanged(job, where):
             return
-        if not await self._carries_no_playbook(job):
+        if not await self._carries_no_owner_entry(job):
             # §43: with its buttons and §43's reason (None for a zip that does not read).
             reason = await asyncio.to_thread(self.published_hold_reason, job)
             self._announce_hold(job, approved=False, reason=reason)
@@ -2459,9 +2555,10 @@ class PlaybookEngine:
         # a gate decision notifies nobody (`daemon.NOTIFY_KINDS`).
         log.info("playbook: approved the architect's apply %s (decided_by: playbook, §31)", job.id)
 
-    async def _carries_no_playbook(self, job: Job) -> bool:
+    async def _carries_no_owner_entry(self, job: Job) -> bool:
         """§43 "A playbook change is the owner's": True when the stored kit of `job`
-        carries no entry that carries the playbook (§44: `_stored_kit_playbooks`), so the
+        carries no entry that carries the playbook (§44: `_stored_kit_playbooks`) and
+        (§45) none that carries the repository's CI (`Spool.stored_kit_ci`), so the
         engine may approve its apply.
 
         Asked by `_release_kit` only, after `kit_apply_problem` has accepted the apply
@@ -2476,7 +2573,8 @@ class PlaybookEngine:
         record = self.spool.read_kit_record(job.kit_id)
         assert record is not None  # likewise
         carried = await asyncio.to_thread(self._stored_kit_playbooks, job.kit_id, record["name"])
-        if carried is None:
+        ci = await asyncio.to_thread(self.spool.stored_kit_ci, job.kit_id, record["name"])
+        if carried is None or ci is None:
             log.warning(
                 "playbook: %s is not approved: the stored zip of kit_id %s does not read "
                 "as one; the hold is the human's (§43)", job.id, job.kit_id,
@@ -2486,6 +2584,13 @@ class PlaybookEngine:
             log.info(
                 "playbook: %s is not approved: the kit carries %s, the playbook in force; "
                 "a change of the playbook is the owner's (§43)", job.id, carried[0],
+            )
+            return False
+        if ci:
+            # §45: the CI a pull request's check runs from its own branch is the owner's.
+            log.info(
+                "playbook: %s is not approved: the kit carries %s, the repository's CI; "
+                "a change of the CI is the owner's (§45)", job.id, ci[0],
             )
             return False
         return True
@@ -2500,7 +2605,10 @@ class PlaybookEngine:
         zip is the one the check passed on (the sha256 `kit.json` recorded, as
         `_kit_bytes_unchanged` asks) and carries the playbook (§44:
         `_stored_kit_playbooks`), under a playbook in force in role mode with
-        `autonomous` (`_book_in_force`). None otherwise: the gate's own reason,
+        `autonomous` (`_book_in_force`). §45's sentence (`ci_hold_reason`) when it is
+        held, on those same terms, because its kit carries the repository's CI and
+        not the playbook (§43's wins for a kit that carries both). None otherwise:
+        the gate's own reason,
         `apply <name>`, which stays the gate's either way. Blocking (it reads and
         hashes the stored zip); the engine asks it in a worker thread. A hold the
         engine publishes for another cause (§33's escalation, a hash mismatch, a
@@ -2513,20 +2621,24 @@ class PlaybookEngine:
         if record is None:  # pragma: no cover - `kit_apply_problem` read it
             return None
         carried = self._stored_kit_playbooks(job.kit_id, record["name"])
-        if not carried:
+        ci = () if carried else self.spool.stored_kit_ci(job.kit_id, record["name"])
+        if not carried and not ci:
             return None
         if self.spool.stored_kit_sha256(job.kit_id, record["name"]) != record["sha256"]:
             return None
         book = self._book_in_force()
         if book is None or not book.architect_is_autonomous:
             return None
-        return owner_hold_reason(record["name"], carried[0])
+        if carried:
+            return owner_hold_reason(record["name"], carried[0])
+        assert ci
+        return ci_hold_reason(record["name"], ci[0])
 
     def _stored_kit_playbooks(self, kit_id: str, name: str) -> tuple[str, ...] | None:
         """§44 "H-077, ruled": the entries of the stored zip that carry the playbook,
         judged against this project's configured playbook path read as a repository
         path (`playbook_repo_path`) and the two fixed names, in any letter case. The
-        engine's approval (`_carries_no_playbook`) and the published reason
+        engine's approval (`_carries_no_owner_entry`) and the published reason
         (`published_hold_reason`, the daemon's `decide_held_reason` too) ask this one.
         Blocking (git and the zip): asked in a worker thread."""
         return self.spool.stored_kit_playbooks(kit_id, name, playbook_repo_path(self.config))
@@ -2719,7 +2831,8 @@ class PlaybookEngine:
             # its text to the builder's session as a `keep`, never as a clear.
             prompt, context = sent, "keep"
         elif job.role == "builder":  # §10/§6: the resume line when configured, else the
-            prompt, context = role.resume_prompt(sent), "clear"  # same prompt (H-008)
+            # same prompt (H-008); §45: an apply's own prompt, found by the chain walk
+            prompt, context = builder_resume_prompt(self.spool, role, job), "clear"
         elif job.state == "orphaned":
             # §39 (H-057): an orphaned review's prompt goes to a fresh context.
             prompt, context = sent, "clear"
@@ -3057,6 +3170,10 @@ class PlaybookEngine:
         Any line counts as dirty — modified, or untracked as a first consult line
         leaves it; `<consultation>` is the job of the newest `consult.done` event
         (the line §27 appended last), "consultation" when there is none.
+
+        §45: under `[repository] main = "pull-request"` the sentence is
+        `JOURNAL_REMINDER_PULL_REQUEST` (commit only on a branch); under `direct`,
+        `JOURNAL_REMINDER` as before. `sent_prompt` strips either.
         """
         try:
             status = _git(
@@ -3072,7 +3189,12 @@ class PlaybookEngine:
             if event.kind == "consult.done" and isinstance(event.payload.get("job"), str):
                 consultation = event.payload["job"]
                 break
-        return JOURNAL_REMINDER.format(
+        sentence = (
+            JOURNAL_REMINDER_PULL_REQUEST
+            if self.config.repository.main == "pull-request"
+            else JOURNAL_REMINDER
+        )
+        return sentence.format(
             journal=JOURNAL.as_posix(), consultation=" ".join(consultation.split())
         )
 
@@ -3407,6 +3529,7 @@ class PlaybookEngine:
         payload: dict[str, Any] | None = None,
         *,
         notify_suppressed: bool = False,
+        suppressed_title: str | None = None,
     ) -> None:
         """§10: pause the pipeline, notify, record the reason (§11's `stop` event).
 
@@ -3433,6 +3556,9 @@ class PlaybookEngine:
         and marks the pause (`suppressed_stop`), so that no `resume` rule fires past
         it; the pause and its kept ends stay. (A `pause` over the human pause is a
         no-op that never reaches here: `pause`.)
+
+        §45: `suppressed_title` publishes a stop suppressed over any other pause once,
+        under that title — the engine's stop for an apply that did not land.
         """
         if self.state.paused:
             suppressed = {**(payload or {}), "reason": reason, "kept": self.state.stop_reason}
@@ -3446,6 +3572,8 @@ class PlaybookEngine:
                 self._notify(SUPPRESSED_CONSULT_TITLE, suppressed)
             elif human:
                 self._notify(SUPPRESSED_HUMAN_TITLE, suppressed)
+            elif suppressed_title is not None:
+                self._notify(suppressed_title, suppressed)
             return
         self.state.paused = True
         self.state.paused_by = "stop"
@@ -3454,7 +3582,7 @@ class PlaybookEngine:
         self._save()
         self.spool.append_event("stop", {**(payload or {}), "reason": reason})
         log.warning("playbook: stop — %s", reason)
-        self._notify("hands: the pipeline stopped", {**(payload or {}), "reason": reason})
+        self._notify(STOP_TITLE, {**(payload or {}), "reason": reason})
 
     async def pause(self, *, by: str = "cli") -> dict[str, Any]:
         """`hands pause` (§4): no rule fires until it is resumed.
@@ -3583,12 +3711,17 @@ class PlaybookEngine:
         """§44 rule 4: under a human pause, at the first moment no job is running,
         queued or held and no §6 resume is scheduled, publish `hands: at rest` once,
         naming each kept end or saying none is kept, and record the mark with the
-        pause (`at_rest`). Called when the pause is sent and whenever a job reaches a
+        pause (`at_rest`); and again, with the new list, at the first such moment
+        after an end was kept or replaced after that publication (§45,
+        `kept_since_rest`). Called when the pause is sent and whenever a job reaches a
         terminal state: here from `on_job`, and by the daemon and the API for the
         ends that do not reach `on_job` (a job denied, cancelled while queued, or one
-        the runner could not spawn). Over an unpaused pipeline, another stop, or a
-        pause already at rest it does nothing."""
-        if not self.human_paused or self.state.at_rest is not None:
+        the runner could not spawn), and at a daemon start. Over an unpaused pipeline,
+        another stop, or a pause already at rest with nothing kept since it does
+        nothing."""
+        if not self.human_paused:
+            return
+        if self.state.at_rest is not None and not self.state.kept_since_rest:
             return
         busy = [job.id for job in self.spool.list_jobs() if job.state not in TERMINAL_STATES]
         if busy:
@@ -3599,6 +3732,7 @@ class PlaybookEngine:
             return
         kept = [dict(entry) for entry in self.state.kept]
         self.state.at_rest = now_iso()
+        self.state.kept_since_rest = False
         self._save()
         payload = {"message": _at_rest_message(kept), "kept": kept}
         log.info("playbook: at rest under a human pause (%d kept end(s))", len(kept))
@@ -3637,6 +3771,7 @@ class PlaybookEngine:
         self.state.kept = []
         self.state.suppressed_stop = None
         self.state.at_rest = None
+        self.state.kept_since_rest = False
         self._save()
         self.spool.append_event("pipeline.resumed", {"by": by, "was": was})
         log.info("playbook: un-paused by %s (was: %s)", by, was)

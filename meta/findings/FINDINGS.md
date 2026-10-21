@@ -2967,3 +2967,133 @@ stops; `hands: at rest` is published once nothing runs; the state lives in
 `pipeline.json`.
 
 Status: resolved (mission 28 U1 d367373, rules 1, 2, 3, 5 and 6; mission 28 U2, this commit, rule 4 and the documentation — DESIGN §44: under a human pause a role's end that would start the next step is kept, one per role, in `pipeline.json`; a `notify` end fires; a `resume` rule fires until a stop is suppressed under the pause, and every suppressed stop is notified; `go` and `consult` are refused naming `resume`; `resume` reloads, refuses on a playbook that does not load, replays the kept ends up to the first that starts a job or stops and discards the rest; `hands: at rest` is published once per human pause (the mark in `pipeline.json`) at the first moment no job is running, queued or held and no §6 resume is scheduled, checked when the pause is sent, on every job end the engine hears, a denial, a cancel while queued and a job that could not spawn, naming each kept end or that none is kept, and again with the new list when a kept end is replaced after it; the handbook's §10, §14, §18 and §19, docs/PLAYBOOK.md and docs/OPERATIONS.md say so. Tests: tests/test_human_pause.py, tests/test_playbook.py, tests/test_phone.py, tests/test_operator_table.py)
+
+## H-079 — `hands: at rest` is not published again when an end of another role is kept after it
+
+Severity: low · Component: src/hands/playbook.py (`_keep`, the at-rest
+mark); DESIGN §44 rule 4, §45
+Filed by: mission 29 orchestrator, U0 (2026-10-21), from REVIEW-28
+should-fix 1 (2026-10-20).
+Evidence: meta/reviews/REVIEW-28.md should-fix 1; the code read at adb061b:
+`_keep` clears the at-rest mark only when a kept end is replaced, so an end
+of a role with nothing kept yet, kept after the mark (a laptop `hands send`
+to the aux under the pause, whose `aux.done` is then kept), publishes
+nothing.
+
+Problem. The kept list the human or a project chat guards on is stale:
+`hands: at rest` named the builder's end only, while the aux's end is kept
+too and `resume` will replay it.
+
+Direction. DESIGN §45 "Review 28's should-fix items" 1: rule 4 publishes
+`hands: at rest` once per human pause at the first moment nothing runs, and
+again, with the new list, at the first such moment after the kept list has
+changed (an end kept or replaced after the last publication); the mark
+records when it was last published; a restart publishes nothing unless an
+end was kept after the mark.
+
+Status: resolved (mission 29 U6, this commit — DESIGN §45 "Review 28's should-fix items" 1: under a human pause an end kept or replaced after `hands: at rest` was published sets `kept_since_rest` in `pipeline.json` (`PlaybookEngine._keep`), and `check_at_rest` publishes `at rest` again, with the new list, at the first moment after it that no job is running, queued or held and no §6 resume is scheduled, then clears it; `at_rest` records the last publication. A daemon start publishes nothing unless an end was kept after the mark and not yet published. The handbook's §19 `at rest` row, docs/PLAYBOOK.md and docs/OPERATIONS.md say it. Tests: tests/test_human_pause.py, tests/test_docs_45.py)
+
+## H-080 — an apply that did not land meets the playbook's rules
+
+Severity: medium · Component: src/hands/playbook.py (`_engine_rules`,
+`_under_human_pause`); DESIGN §27, §31, §43, §44, §45
+Filed by: mission 29 orchestrator, U0 (2026-10-21), from the architect's
+reading of 1acc9e0 (2026-10-20).
+Evidence: the code at 1acc9e0: an apply's `builder.done` goes to the
+playbook's rules like any builder end — this repository's catch-all
+`^VERDICT:` consults the driver about a "question" that is not one, the
+templates' last rule stops with "Builder finished without a recognised
+verdict", which says nothing of the kit; and under a human pause §44 rule 1
+keeps it as the builder's end, replacing the kept end of the mission it was
+sent beside.
+
+Problem. Under the pull-request gate an apply that does not land (a red
+check, a refused push or merge) becomes ordinary, and its end is decided by
+rules written for a mission's builder.
+
+Direction. DESIGN §45 "An apply that did not land (H-080)": the
+`builder.done` of an apply as §43 counts one whose reply does not begin
+`VERDICT: kit applied` is the engine's to decide, before any playbook rule:
+over an unpaused pipeline a stop with §45's reason, over a paused one one
+publication; never kept, never replacing a kept end.
+
+Status: resolved (mission 29 U4, this commit — DESIGN §45 "An apply that did not land (H-080)": the `builder.done` of an apply as §43 counts one (`chain_first`: a job with a `kit_id`, or a resume of one) whose VERDICT: line does not begin `VERDICT: kit applied` is decided by the engine before any playbook rule (`PlaybookEngine._apply_not_landed`): over an unpaused pipeline a stop, `the kit's apply did not land: <its VERDICT: line cut to 200 characters, or "no VERDICT: line"> (§45)`, titled `hands: the pipeline stopped`; over a paused one the reason is published once — under a human pause as `hands: a stop under a human pause`, under any other pause titled as a stop — and the pause, its reason and the kept ends stay; never kept. A landed apply and a `hands send` are decided as before. With it, §45's CI hold (`spool.carries_ci`, `ci_hold_reason`, `hands kit check`'s `WARN ci:` line) and the `pull-request` journal sentence (`JOURNAL_REMINDER_PULL_REQUEST`); the handbook's §19 rows. Tests: tests/test_apply_not_landed.py, tests/test_operator_table.py)
+
+## H-081 — the review's merge does not tie the merged head to the reviewed one
+
+Severity: medium · Component: meta/REVIEW-PROTOCOL.md,
+templates/REVIEW-PROTOCOL.md (the merge under `pull_request`); DESIGN §35,
+§45 "The review"
+Filed by: mission 29 orchestrator, U7 (2026-10-21), from PR #9's hosted
+review (finding 1, "A review can merge unreviewed commits").
+Evidence: meta/reviews/hosted/PR-9/1/ — the protocol waits for the checks
+by pull request number (`hands ci-wait <number>`) and merges with `gh pr
+merge <number> --merge --subject …`; nothing checks that the head merged is
+the review's own commit on top of the reviewed tip. A commit pushed to the
+branch during the review would pass the checks and be merged unreviewed.
+
+Problem. §45 gives the merge command word for word, and the protocols and
+their pins quote it; adding a guard changes that text.
+
+Decision needed. Whether the merge carries `--match-head-commit <the
+review commit's sha>` (gh refuses the merge when the head moved), and the
+`not merged` blocker then covers a moved head. Not changed in mission 29:
+the command is §45's.
+
+Status: open (needs a design decision).
+
+## H-082 — the `pull-request` apply prompt's case (b) matches `main` itself
+
+Severity: high · Component: src/hands/kit.py (`PULL_REQUEST_APPLY`); DESIGN
+§45 "The apply (§27), by the setting"
+Filed by: mission 29 orchestrator, U7 (2026-10-21), from PR #9's hosted
+review (finding 2, "Applies from main take the mission-branch path and
+fail").
+Evidence: meta/reviews/hosted/PR-9/1/ and §45's prompt, which the code
+quotes word for word (cd0e13f): case (b) is "On another branch, not a
+`kit/` one, that is on `origin` … and whose pull requests, if it has any,
+are all open". `main` is on `origin`, is not a `kit/` branch, and no pull
+request has `main` as its head, so a builder on `main` between missions —
+the usual place of an apply — takes (b): it commits on `main` and pushes,
+the gate refuses the push, it replies `VERDICT: kit not applied pr=none`,
+and the engine stops (U4). Case (c) "On any other branch: `git checkout
+main`. Then, on `main`: …" and the bullet "A mission in flight is the
+branch case (b) … left for `main` (c)" show the intent: `main` is (c).
+
+Problem. Under `[repository] main = "pull-request"` every apply started on
+`main` would stop without a pull request. Nothing reaches it while the
+setting is `direct` (the `direct` prompt is another text), so this
+repository is safe until the switch of docs/PR-CI-GATE.md's "hands"
+section step 2 — which must not be made before this is decided.
+
+Decision needed. Proposed: case (b) reads "On another branch, not `main`
+and not a `kit/` one, …" (the code, handbook §3's quotation and the
+pinning tests moved to it by the next mission). Not changed in mission 29:
+the prompt is §45's word for word.
+
+Status: open (needs a design decision; blocks the switch to
+`pull-request`).
+
+## H-083 — the CI hold names `.github/` and `scripts/check`, not the gate's other inputs
+
+Severity: medium · Component: src/hands/spool.py (`carries_ci`); DESIGN
+§43, §45 "A kit that carries the CI is the owner's"
+Filed by: mission 29 orchestrator, U7 (2026-10-21), from PR #9's hosted
+review (finding 6, "Kits can still weaken the gate their PR merges on").
+Evidence: meta/reviews/hosted/PR-9/1/ — `scripts/check` runs `uv sync`,
+`ruff check .` and `pytest`, which `pyproject.toml`, `uv.lock` and
+`tests/conftest.py` (and any test file) configure; a role-filed kit that
+changes `addopts`, a ruff exclude or a conftest is approved by the engine,
+and its own pull request's check runs the gate it changed.
+
+Problem. §45 names the two paths exactly; the gate's configuration is
+wider, and a kit's tests are its own to change (kits add tests every
+mission), so no path list closes it whole.
+
+Decision needed. Whether the hold widens to the gate's configuration files
+(`pyproject.toml`, `uv.lock`, `tests/conftest.py`, a project-configured
+list), or stands, the review's forbidden-edit blocker and the human's
+reading of the pull request being the rest. Not changed in mission 29: the
+paths are §45's.
+
+Status: open (needs a design decision).
