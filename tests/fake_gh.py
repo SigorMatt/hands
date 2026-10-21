@@ -47,6 +47,10 @@ A pull request whose number is not in `FAKE_GH_PRS` (comma-separated), when it
 is set, is unknown to both `pr` commands, as gh says it. Under
 `FAKE_GH_MODE=unauth`, `api` and `pr` exit 4 as gh does when not signed in.
 Every `pr` call is logged to `FAKE_GH_API_LOG` as `api` calls are.
+
+`FAKE_GH_STALL`, when set, names the start of a command (`auth status`, `pr
+view`, `api`, `pr checks`): a call whose arguments begin with those words sleeps
+far past any test's limit before it answers, as a `gh` that stalls.
 """
 
 import json
@@ -200,6 +204,9 @@ def pr(argv: list[str]) -> int:
 
 def main(argv: list[str]) -> int:
     mode = os.environ.get("FAKE_GH_MODE", "ok")
+    stall = os.environ.get("FAKE_GH_STALL", "").split()
+    if stall and argv[: len(stall)] == stall:
+        time.sleep(60)
     if argv[:1] == ["api"]:
         return api(argv)
     if argv[:1] == ["pr"]:

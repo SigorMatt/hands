@@ -44,11 +44,11 @@ OTHER_LINK = "https://github.com/o/r/actions/runs/3/job/4"
 def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     root = tmp_path / "repo"
     root.mkdir()
-    subprocess.run(["git", "init", "-q", str(root)], check=True)
+    subprocess.run(["git", "init", "-q", str(root)], check=True, timeout=30)
     subprocess.run(
         ["git", "-C", str(root), "remote", "add", "origin", "https://github.com/o/r.git"],
-        check=True,
-    )
+        check=True, timeout=30,
+    )  # fmt: skip
     monkeypatch.chdir(root)
     monkeypatch.setenv("FAKE_GH_API_LOG", str(tmp_path / "gh.log"))
     monkeypatch.setenv("FAKE_GH_CHECKS", str(tmp_path / "checks.json"))
@@ -184,8 +184,9 @@ def test_not_reported_at_the_limit_is_waiting_not_an_error(
     monkeypatch.setenv("FAKE_GH_RULES", REQUIRES_CHECK)
     checks_file(None)
     probe = subprocess.run(
-        ["gh", "pr", "checks", "7", "--json", "name,bucket,link"], capture_output=True, text=True
-    )
+        ["gh", "pr", "checks", "7", "--json", "name,bucket,link"],
+        capture_output=True, text=True, timeout=30,
+    )  # fmt: skip
     assert probe.returncode == 1
     assert probe.stderr.strip() == "no checks reported on the 'feature' branch"
     got, lines = wait()
@@ -367,8 +368,9 @@ def test_an_origin_not_on_github_com_is_exit_2(
     repo: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     subprocess.run(
-        ["git", "remote", "set-url", "origin", "https://gitlab.com/o/r.git"], check=True
-    )
+        ["git", "remote", "set-url", "origin", "https://gitlab.com/o/r.git"],
+        check=True, timeout=30,
+    )  # fmt: skip
     got, lines = wait("check")
     assert got == 2, lines
     assert lines == ["ci-wait: error: origin is not a github.com repository"]
@@ -377,11 +379,188 @@ def test_an_origin_not_on_github_com_is_exit_2(
 def test_a_tokened_origin_is_never_printed(repo: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     subprocess.run(
         ["git", "remote", "set-url", "origin", "https://x:tk_SECRET0@gitlab.com/o/r.git"],
-        check=True,
-    )
+        check=True, timeout=30,
+    )  # fmt: skip
     got, lines = wait("check")
     assert got == 2
     assert "tk_SECRET0" not in strip_paths("\n".join(lines))
+
+
+# ------------------------------------- the limit bounds the whole call (§45)
+
+
+class Stalls:
+    """`subprocess.run` for `hands.forge`: each `git` or `gh` call takes `takes`
+    seconds of the test's clock; one that would take longer than the timeout it
+    was given times out at that timeout, as a stalled tool does."""
+
+    def __init__(self, clock: Clock, takes: float) -> None:
+        self.clock = clock
+        self.takes = takes
+        self.calls: list[tuple[str, float, float]] = []  # (command, started, timeout)
+        self.real = subprocess.run
+
+    def __call__(self, argv: list[str], **kwargs):  # type: ignore[no-untyped-def]
+        timeout = kwargs["timeout"]
+        command = " ".join(Path(argv[0]).name.split() + argv[1:3])
+        self.calls.append((command, self.clock.now, timeout))
+        if self.takes > timeout:
+            self.clock.now += timeout
+            raise subprocess.TimeoutExpired(argv, timeout)
+        self.clock.now += self.takes
+        return self.real(argv, **kwargs)
+
+
+@pytest.fixture
+def stalls(monkeypatch: pytest.MonkeyPatch) -> Callable[[Clock, float], Stalls]:
+    def _make(clock: Clock, takes: float) -> Stalls:
+        runner = Stalls(clock, takes)
+        monkeypatch.setattr(forge.subprocess, "run", runner)
+        return runner
+
+    return _make
+
+
+def bounded(runner: Stalls, clock: Clock, start: float, limit: float) -> None:
+    """Every read was given no more than the time left, and the call ended by the limit."""
+    for command, started, timeout in runner.calls:
+        assert 0 < timeout <= start + limit - started, (command, started, timeout)
+        assert timeout <= forge.GH_TIMEOUT_S
+    assert clock.now <= start + limit
+
+
+def test_slow_reads_before_the_first_poll_count_against_the_nine_minutes(
+    repo: Path, checks_file, monkeypatch: pytest.MonkeyPatch, stalls
+) -> None:
+    """Each read takes 100 s: four before the first poll (sign-in, origin, the
+    pull request, the rules) use 400 of the 540, so the poll after one sleep has
+    10 s left, stalls and ends the call at the limit as still waiting."""
+    monkeypatch.setenv("FAKE_GH_RULES", REQUIRES_CHECK)
+    checks_file([entry("check", "pending")])
+    clock = Clock()
+    runner = stalls(clock, 100.0)
+    out = io.StringIO()
+    code = cli.ci_wait(7, [], out=out, clock=clock, sleep=clock.sleep)
+    assert code == 3, out.getvalue()
+    assert out.getvalue().splitlines() == [f"check  pending  {LINK}", "ci-wait: waiting: check"]
+    bounded(runner, clock, 1000.0, 540.0)
+    assert clock.now == 1540.0
+    assert [c for c, _, _ in runner.calls] == [
+        "gh auth status", "git -C " + str(repo), "gh pr view",
+        "gh api repos/o/r/rules/branches/main", "gh pr checks", "gh pr checks",
+    ]  # fmt: skip
+    assert runner.calls[-1][2] == 10.0
+    assert clock.sleeps == [30.0]
+
+
+def test_a_read_of_the_pull_request_stalled_at_the_limit_is_an_error(
+    repo: Path, checks_file, stalls
+) -> None:
+    """Sign-in and origin take 200 of a 250 s limit: the pull request's read is
+    given the 50 s left, stalls, and the call ends at the limit with exit 2 (it
+    could not read the pull request)."""
+    checks_file([entry("check", "pass")])
+    clock = Clock()
+    runner = stalls(clock, 100.0)
+    out = io.StringIO()
+    code = cli.ci_wait(7, ["check"], out=out, clock=clock, sleep=clock.sleep, limit_s=250.0)
+    assert code == 2, out.getvalue()
+    lines = out.getvalue().splitlines()
+    assert len(lines) == 1
+    assert lines[0].startswith("ci-wait: error: gh pr view did not answer within 50 s")
+    bounded(runner, clock, 1000.0, 250.0)
+    assert clock.now == 1250.0
+
+
+def test_no_time_left_before_a_read_is_an_error_and_the_read_never_starts(
+    repo: Path, checks_file, stalls
+) -> None:
+    checks_file([entry("check", "pass")])
+    clock = Clock()
+    runner = stalls(clock, 100.0)
+    out = io.StringIO()
+    code = cli.ci_wait(7, ["check"], out=out, clock=clock, sleep=clock.sleep, limit_s=200.0)
+    assert code == 2, out.getvalue()
+    assert out.getvalue().splitlines() == [
+        "ci-wait: error: pull request #7: not read, the 200 s limit was reached"
+    ]
+    assert [c for c, _, _ in runner.calls][-1].startswith("git")
+    bounded(runner, clock, 1000.0, 200.0)
+
+
+def test_a_first_poll_stalled_at_the_limit_is_still_waiting(
+    repo: Path, checks_file, monkeypatch: pytest.MonkeyPatch, stalls
+) -> None:
+    """The first checks read is given the 50 s left and stalls: exit 3, each
+    awaited check pending and not read, never a pass and never an error."""
+    monkeypatch.setenv("FAKE_GH_RULES", REQUIRES_CHECK)
+    checks_file([entry("check", "pass")])
+    clock = Clock()
+    runner = stalls(clock, 100.0)
+    out = io.StringIO()
+    code = cli.ci_wait(7, [], out=out, clock=clock, sleep=clock.sleep, limit_s=450.0)
+    assert code == 3, out.getvalue()
+    assert out.getvalue().splitlines() == [
+        "check  pending  (not read before the limit)",
+        "ci-wait: waiting: check",
+    ]
+    bounded(runner, clock, 1000.0, 450.0)
+    assert clock.now == 1450.0
+
+
+def test_a_checks_read_stalled_with_time_left_is_still_an_error(
+    repo: Path, checks_file, monkeypatch: pytest.MonkeyPatch, stalls
+) -> None:
+    """A read given gh's own 120 s, not cut short by the limit, that does not
+    answer is a read that failed: exit 2, as before."""
+    monkeypatch.setenv("FAKE_GH_RULES", REQUIRES_CHECK)
+    checks_file([entry("check", "pass")])
+    clock = Clock()
+    runner = stalls(clock, 0.0)
+    real = runner.real
+
+    def checks_stall(argv: list[str], **kwargs):  # type: ignore[no-untyped-def]
+        if argv[1:3] == ["pr", "checks"]:
+            clock.now += kwargs["timeout"]
+            raise subprocess.TimeoutExpired(argv, kwargs["timeout"])
+        return real(argv, **kwargs)
+
+    monkeypatch.setattr(forge.subprocess, "run", checks_stall)
+    out = io.StringIO()
+    code = cli.ci_wait(7, [], out=out, clock=clock, sleep=clock.sleep)
+    assert code == 2, out.getvalue()
+    assert out.getvalue().splitlines() == [
+        "ci-wait: error: gh pr checks did not answer within 120 s"
+    ]
+
+
+@pytest.mark.parametrize(
+    ("stall", "code", "last"),
+    [
+        ("auth status", 2, "ci-wait: error: gh auth status did not answer within "),
+        ("pr view", 2, "ci-wait: error: gh pr view did not answer within "),
+        ("api", 2, "ci-wait: error: gh api repos/o/r/rules/branches/main did not answer within "),
+        ("pr checks", 3, "ci-wait: waiting: check"),
+    ],
+)
+def test_a_stalled_gh_ends_the_call_by_the_limit_on_the_real_clock(
+    repo: Path, checks_file, monkeypatch: pytest.MonkeyPatch, stall: str, code: int, last: str
+) -> None:
+    """The fake `gh` sleeps 60 s on one command; with a 2 s limit, timed by
+    the real clock, the whole call ends within the limit and a margin for
+    killing the stalled process."""
+    import time
+
+    monkeypatch.setenv("FAKE_GH_RULES", REQUIRES_CHECK)
+    monkeypatch.setenv("FAKE_GH_STALL", stall)
+    checks_file([entry("check", "pass")])
+    out = io.StringIO()
+    started = time.monotonic()
+    got = cli.ci_wait(7, [], out=out, limit_s=2.0, interval_s=0.1)
+    took = time.monotonic() - started
+    assert got == code, out.getvalue()
+    assert out.getvalue().splitlines()[-1].startswith(last)
+    assert took < 2.0 + 1.0, took
 
 
 # ---------------------------------------------------------------- the command
@@ -414,8 +593,9 @@ def test_the_command_waits_with_the_module_limit_and_interval(
     """The defaults are the module's nine minutes and thirty seconds, read when
     the command runs, so a test can shorten them."""
     assert (cli.CI_WAIT_LIMIT_S, cli.CI_WAIT_INTERVAL_S) == (540.0, 30.0)
-    monkeypatch.setattr(cli, "CI_WAIT_LIMIT_S", 0.2)
-    monkeypatch.setattr(cli, "CI_WAIT_INTERVAL_S", 0.05)
+    # the limit counts from the call's start, the reads before the first poll too
+    monkeypatch.setattr(cli, "CI_WAIT_LIMIT_S", 3.0)
+    monkeypatch.setattr(cli, "CI_WAIT_INTERVAL_S", 0.5)
     checks_file([entry("check", "pending")])
     out = io.StringIO()
     code = hands_main(["ci-wait", "7", "--check", "check"], stdout=out, stderr=io.StringIO())

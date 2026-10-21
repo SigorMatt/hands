@@ -36,6 +36,10 @@ class ForgeError(Exception):
     """A read that did not answer; the message is the reason, with no token in it."""
 
 
+class ForgeTimeout(ForgeError):
+    """A read that did not answer within the timeout it was given."""
+
+
 def owner_repo(url: str) -> str | None:
     """`<owner>/<repo>` of a github.com URL, or None for any other URL."""
     for form in _ORIGIN_FORMS:
@@ -49,15 +53,19 @@ def owner_repo(url: str) -> str | None:
     return None
 
 
-def origin_url(clone: Path) -> str:
+def origin_url(clone: Path, *, timeout: float = GH_TIMEOUT_S) -> str:
     """`git remote get-url origin` in `clone`; the URL is never put in an error."""
     env = {name: value for name, value in os.environ.items() if name not in GIT_ENV_CLEARED}
     try:
         done = subprocess.run(
             ["git", "-C", str(clone), "remote", "get-url", "origin"],
             env=env, stdin=subprocess.DEVNULL, capture_output=True, text=True,
-            timeout=GH_TIMEOUT_S, check=False,
+            timeout=timeout, check=False,
         )  # fmt: skip
+    except subprocess.TimeoutExpired as exc:
+        raise ForgeTimeout(
+            f"git remote get-url origin did not answer within {timeout:g} s"
+        ) from exc
     except (OSError, subprocess.SubprocessError) as exc:
         raise ForgeError(f"git remote get-url origin did not run: {exc}") from exc
     if done.returncode != 0:
@@ -66,9 +74,9 @@ def origin_url(clone: Path) -> str:
     return done.stdout.strip()
 
 
-def origin_repo(clone: Path) -> str:
+def origin_repo(clone: Path, *, timeout: float = GH_TIMEOUT_S) -> str:
     """`<owner>/<repo>` of `clone`'s origin, or why there is none."""
-    repo = owner_repo(origin_url(clone))
+    repo = owner_repo(origin_url(clone, timeout=timeout))
     if repo is None:
         raise ForgeError("origin is not a github.com repository")
     return repo
@@ -94,6 +102,8 @@ def run_gh(gh: str, *args: str, timeout: float = GH_TIMEOUT_S) -> subprocess.Com
             [gh, *args], env=env, stdin=subprocess.DEVNULL, capture_output=True, text=True,
             timeout=timeout, check=False,
         )  # fmt: skip
+    except subprocess.TimeoutExpired as exc:
+        raise ForgeTimeout(f"gh {' '.join(args[:2])} did not answer within {timeout:g} s") from exc
     except (OSError, subprocess.SubprocessError) as exc:
         raise ForgeError(f"gh {' '.join(args[:2])} did not run: {exc}") from exc
 

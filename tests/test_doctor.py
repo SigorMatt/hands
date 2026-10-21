@@ -3577,8 +3577,10 @@ def _main_row(
             handle.write(f'\n[repository]\nmain = "{setting}"\n')
     work = tmp_path / "work"
     shutil.rmtree(work / ".git")
-    subprocess.run(["git", "init", "-q", str(work)], check=True)
-    subprocess.run(["git", "-C", str(work), "remote", "add", "origin", origin], check=True)
+    subprocess.run(["git", "init", "-q", str(work)], check=True, timeout=30)
+    subprocess.run(
+        ["git", "-C", str(work), "remote", "add", "origin", origin], check=True, timeout=30
+    )
     if rules is not None:
         monkeypatch.setenv("FAKE_GH_RULES", json.dumps(rules))
     monkeypatch.setenv("FAKE_GH_API_LOG", str(tmp_path / "gh.log"))

@@ -208,19 +208,34 @@ def ci_wait(
     """`hands ci-wait <pr> [--check <name>]…` (§45): 0 passed, 1 failed, 3 still
     waiting at the limit, 2 nothing to wait for or a read that failed. Prints
     nothing until the end: one line per awaited check, then the last line (an
-    error prints the last line only)."""
+    error prints the last line only).
+
+    The limit counts from the call's start: every `git` and `gh` read is given
+    the time left (at most `forge.GH_TIMEOUT_S`), and a read with none left is
+    not started. A read before the first poll that does not answer is an error
+    (2); a checks read cut short by the limit ends the wait as still waiting
+    (3), with the rows of the last poll that answered."""
+    deadline = clock() + limit_s
 
     def error(reason: str) -> int:
         print(f"ci-wait: error: {reason}", file=out)
         return 2
 
+    def left(what: str) -> float:
+        remaining = deadline - clock()
+        if remaining <= 0:
+            raise forge.ForgeError(f"{what}: not read, the {limit_s:g} s limit was reached")
+        return min(forge.GH_TIMEOUT_S, remaining)
+
     where = Path.cwd() if cwd is None else cwd
     try:
         gh = forge.gh_path()
-        forge.signed_in(gh)
-        repo = forge.origin_repo(where)
-        base, _head = forge.pr_branches(gh, repo, pr)
-        awaited = forge.required_checks(forge.branch_rules(gh, repo, base))
+        forge.signed_in(gh, timeout=left("the sign-in"))
+        repo = forge.origin_repo(where, timeout=left("origin"))
+        base, _head = forge.pr_branches(gh, repo, pr, timeout=left(f"pull request #{pr}"))
+        awaited = forge.required_checks(
+            forge.branch_rules(gh, repo, base, timeout=left(f"{base}'s rules"))
+        )
     except forge.ForgeError as exc:
         return error(str(exc))
     if not awaited:
@@ -229,13 +244,20 @@ def ci_wait(
         return error(
             f"no check to wait for: {base}'s rules require none and no --check was given"
         )
-    deadline = clock() + limit_s
+    rows = [(name, "pending", "(not read before the limit)") for name in awaited]
     while True:
+        budget = min(forge.GH_TIMEOUT_S, deadline - clock())
+        if budget <= 0:
+            break
         try:
-            reported = forge.pr_checks(gh, repo, pr)
+            reported = forge.pr_checks(gh, repo, pr, timeout=budget)
+        except forge.ForgeTimeout as exc:
+            if budget < forge.GH_TIMEOUT_S:
+                break  # cut short by the limit: still waiting, never an error
+            return error(str(exc))
         except forge.ForgeError as exc:
             return error(str(exc))
-        rows: list[tuple[str, str, str]] = []
+        rows = []
         for name in awaited:
             mine = [entry for entry in reported if entry["name"] == name]
             if not mine:
@@ -255,6 +277,8 @@ def ci_wait(
         if failed_names or not pending_names or remaining <= 0:
             break
         sleep(min(interval_s, remaining))
+    failed_names = [name for name, bucket, _ in rows if bucket in CI_FAILED]
+    pending_names = [name for name, bucket, _ in rows if bucket not in CI_PASSED + CI_FAILED]
     for name, bucket, link in rows:
         print(f"{name}  {bucket}  {link}", file=out)
     if failed_names:
