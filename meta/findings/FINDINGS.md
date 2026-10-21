@@ -3018,5 +3018,4 @@ Direction. DESIGN §45 "An apply that did not land (H-080)": the
 over an unpaused pipeline a stop with §45's reason, over a paused one one
 publication; never kept, never replacing a kept end.
 
-Status: decided (DESIGN §45: the engine's own stop, never kept), scheduled
-for U4.
+Status: resolved (mission 29 U4, this commit — DESIGN §45 "An apply that did not land (H-080)": the `builder.done` of an apply as §43 counts one (`chain_first`: a job with a `kit_id`, or a resume of one) whose VERDICT: line does not begin `VERDICT: kit applied` is decided by the engine before any playbook rule (`PlaybookEngine._apply_not_landed`): over an unpaused pipeline a stop, `the kit's apply did not land: <its VERDICT: line cut to 200 characters, or "no VERDICT: line"> (§45)`, titled `hands: the pipeline stopped`; over a paused one the reason is published once — under a human pause as `hands: a stop under a human pause`, under any other pause titled as a stop — and the pause, its reason and the kept ends stay; never kept. A landed apply and a `hands send` are decided as before. With it, §45's CI hold (`spool.carries_ci`, `ci_hold_reason`, `hands kit check`'s `WARN ci:` line) and the `pull-request` journal sentence (`JOURNAL_REMINDER_PULL_REQUEST`); the handbook's §19 rows. Tests: tests/test_apply_not_landed.py, tests/test_operator_table.py)

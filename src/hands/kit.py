@@ -143,7 +143,13 @@ from hands.playbook import (
     parse_playbook,
     playbook_repo_path,
 )
-from hands.spool import PLAYBOOK_PATHS, PathEscape, carries_playbook, resolve_under_roots
+from hands.spool import (
+    PLAYBOOK_PATHS,
+    PathEscape,
+    carries_ci,
+    carries_playbook,
+    resolve_under_roots,
+)
 
 __all__ = [
     "APPLY_EXCEPTION",
@@ -397,6 +403,9 @@ class Report:
     #: §40 (H-061): the playbook in force's warnings; printed `WARN playbook: …`,
     #: and none of them fails a check.
     warnings: list[str] = field(default_factory=list)
+    #: §45: the kit's entries that carry the repository's CI (`carries_ci`), named in
+    #: one `WARN ci:` line; none of them fails a check.
+    ci_warnings: list[str] = field(default_factory=list)
     #: §42: the kit is a decisions kit (`decisions_owner_files`), so `brief`,
     #: `verdicts` and `wording` pass it, and `hands kit file` refuses it.
     decisions: bool = False
@@ -422,6 +431,7 @@ class Report:
             "sha256": self.sha256,
             "kit_md": self.kit_md,
             "warnings": self.warnings,
+            "ci_warnings": self.ci_warnings,
             "decisions": self.decisions,
         }
 
@@ -988,6 +998,21 @@ def _repository_root(repo: Path) -> Path:
         return git_toplevel(repo)
     except KitError:
         return repo
+
+
+def _ci_warning(kit: _Kit) -> str | None:
+    """§45 "A kit that carries the CI is the owner's": the `WARN ci:` line for any
+    kit with an entry that carries the repository's CI (`carries_ci`: a casefolded
+    path that begins `.github/` or equals `scripts/check`), naming each such entry;
+    None for a kit that carries none."""
+    carried = sorted(name for name in kit.files if carries_ci(name))
+    if not carried:
+        return None
+    return (
+        f"the kit carries {', '.join(carried)}, the repository's CI: filed by the "
+        "architect role, its apply waits for the human, because a change of the CI is "
+        "the owner's (§45)"
+    )
 
 
 def _owner_warning(
@@ -1671,6 +1696,7 @@ def check_kit(
             *(orphaned_rule_warnings(book) if book is not None else []),
             *filter(None, [_owner_warning(kit, repo, configured, known)]),
         ],
+        ci_warnings=list(filter(None, [_ci_warning(kit)])),
         decisions=bool(owners),
     )
     if report.ok:
@@ -1718,6 +1744,8 @@ def run(
         print(check.line(), file=out)
     for warning in report.warnings:
         print(f"WARN playbook: {warning}", file=out)
+    for warning in report.ci_warnings:
+        print(f"WARN ci: {warning}", file=out)
     failed = [check for check in report.checks if not check.ok]
     if failed:
         print(report.kit_md_note, file=out)
