@@ -14,7 +14,9 @@ Conventions:
 - One commit per unit: <area>: <one line> with a body naming the unit and
   the DESIGN.md sections it implements, pushed at once to the mission's
   branch; the brief says which (a `mission-N` branch, or `main` for a
-  "direct" brief). `main` moves by merges and by plan commits.
+  "direct" brief). `main` moves by merges, and by plan and review commits
+  only while `[repository] main` is `direct`; branch protection follows
+  docs/PR-CI-GATE.md.
 - At mission end the working tree is left on `main`:
   `git checkout main && git pull --ff-only`.
 - Tests live in tests/; tests/fake_claude.py stands in for the claude CLI.

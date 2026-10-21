@@ -42,7 +42,7 @@ EXAMPLE = ROOT / "tests" / "fixtures" / "playbook_example.toml"
 NOT_COMMANDS = {"--help", "--version", "--project", "--json", "--socket", "<command>"}
 #: Commands of §4 the CLI answers itself, with no daemon method (`kit check`, §26).
 CLIENT_COMMANDS = {"kit", "migrate-spool", "handbook", "project", "hosted-review",
-                   "digest"}  # §29, §38, §39, §42
+                   "digest", "ci-wait"}  # §29, §38, §39, §42, §45
 #: `hands <command>`, where `hands` is the program and not the tail of a path
 #: (`git clone …/hands repo`) — hence the lookbehind.
 COMMAND_RE = re.compile(r"(?<![\w/.~-])hands (?:--\w+ [\w<>-]+ )?([a-z-]+|--[a-z-]+)")
@@ -2165,15 +2165,17 @@ def test_this_repositorys_review_protocol_is_the_template_with_its_names() -> No
 def test_this_repositorys_claude_md_commits_to_the_missions_branch() -> None:
     """§35 "The builder" (mission 19 U3): CLAUDE.md's convention is one commit per
     unit pushed at once to the mission's branch, which the brief names (a
-    `mission-N` branch, or `main` for a "direct" brief); `main` moves by merges
-    and plan commits; the tree is left on `main` at mission end."""
+    `mission-N` branch, or `main` for a "direct" brief); `main` moves by merges,
+    and (§45) by plan and review commits only while the setting is `direct`; the
+    tree is left on `main` at mission end."""
     text = flattened((ROOT / "CLAUDE.md").read_text(encoding="utf-8"))
     for said in (
         "One commit per unit: <area>: <one line>",
         "pushed at once to the mission's branch",
         "the brief says which",
         "a `mission-N` branch, or `main` for a \"direct\" brief",
-        "`main` moves by merges and by plan commits",
+        "`main` moves by merges, and by plan and review commits only while"
+        " `[repository] main` is `direct`",
         "`git checkout main && git pull --ff-only`",
     ):
         assert said in text, f"CLAUDE.md does not say {said!r}"
@@ -2319,8 +2321,12 @@ def test_the_playbook_doc_describes_the_review_prompt_the_templates_ship() -> No
         assert must in base, f"docs/PLAYBOOK.md's review base does not say {must!r}"
 
 
-#: The `gh` commands §35's flow uses; the docs may show these and no other.
-GH_COMMANDS = {"pr create", "pr list", "pr merge", "api", "auth login", "auth status"}
+#: The `gh` commands §35's flow uses, with §45's (`pr checks`, read by `hands
+#: ci-wait`; a flaky check re-run with `run rerun` and a kit that breaks the gate
+#: closed with `pr close`, §19's apply row; `auth refresh -s workflow`, the scope a
+#: workflow file's push needs); the docs may show these and no other.
+GH_COMMANDS = {"pr create", "pr list", "pr merge", "api", "auth login", "auth status",
+               "pr checks", "pr close", "run rerun", "auth refresh"}
 
 
 @pytest.mark.parametrize(

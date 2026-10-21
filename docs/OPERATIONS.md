@@ -267,6 +267,10 @@ file, a playbook change) while an autonomous series runs (DESIGN §44):
    `go` and `consult` are refused until step 4.
 3. Commit, in the builder's repository — the project's chat, or a decisions
    kit whose apply (`kit <secret>`, Approve) commits without ending the pause.
+   Under `[repository] main = "pull-request"` a commit at rest is a decisions
+   kit, whose apply goes through its own pull request (DESIGN §45): `main`
+   refuses a direct push, so a commit of your own on `main` would stay unpushed
+   and break the next `git pull --ff-only`.
 4. `resume <secret>` (`hands resume`): the playbook is reloaded, so the commit
    is in force, and the kept end is decided as if it had just arrived, starting
    the next step. A playbook that does not load refuses the `resume`, naming
@@ -275,6 +279,32 @@ file, a playbook change) while an autonomous series runs (DESIGN §44):
 A daemon restart meanwhile keeps the pause, the kept end and the `at rest`
 mark (`pipeline.json`), and a builder the restart killed is resumed by the
 playbook's `builder.orphaned` rule as when nothing is paused.
+
+### Switching `main` to pull requests only
+
+DESIGN §45 and docs/PR-CI-GATE.md, whose section for hands this follows. A
+project switches at a quiet moment of its own, one change at a time, so that a
+failure is attributable to one change:
+
+1. `hands jobs` (and `hands status`): no job of the project running, queued or
+   held. An apply filed before the switch keeps the prompt it was filed with.
+2. The CI workflow on `main`, its check green on a pull request. A project with
+   no CI and missions committed straight to `main` adds its CI, then runs its
+   missions in the pull-request shape, with the review protocol from the
+   installed template, before step 3.
+3. `[repository] main = "pull-request"` in `~/.hands/<project>.toml`, then
+   `systemctl --user restart handsd@<project>`. `hands doctor`'s `main` row
+   then warns that `main` is not protected yet.
+4. docs/PR-CI-GATE.md's procedure, requiring the CI workflow's check only (read
+   from a real run, never from the YAML). `hands doctor`'s `main` row is then
+   ok.
+
+From then on a kit's apply opens, waits for and merges its own pull request, a
+review commits to the mission's branch and merges on green checks, and a
+`journal:` line is committed only on a branch. Undoing it is the owner's: the
+ruleset disabled in GitHub's settings, then the setting set back to `direct`
+and `systemctl --user restart handsd@<project>`, with no apply in between (the
+setting still `pull-request` and no rule to wait for, an apply would stop).
 
 ### No phone
 

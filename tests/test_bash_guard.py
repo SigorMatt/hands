@@ -1762,6 +1762,28 @@ def test_architect_mode_with_a_human_consultation_admits_its_read_set(cmd: str) 
     assert guard.check(cmd, **HUMAN_ARCHITECT) is None, cmd
 
 
+def test_architect_rule_1s_review_on_the_branch_is_a_line_the_guard_allows(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """§45 "The brief template and the architect": on a repository whose `main`
+    takes pull requests only, rule 1 of `architect/CLAUDE.md` reads a review with
+    blockers from the mission's branch with `git -C ./repo show
+    origin/<branch>:meta/reviews/REVIEW-N.md`; filled in, the guard allows it, and
+    (§45: "its guard allows no other form of `git fetch`") the phone architect's
+    `git fetch --depth 1 origin <branch>` is refused to the role. The guard is not
+    changed by this unit; this pins what it already does."""
+    import re as _re
+
+    monkeypatch.chdir(tmp_path)
+    text = " ".join((ARCHITECT_KIT / "CLAUDE.md").read_text(encoding="utf-8").split())
+    rule_1 = text.split(" 1. ", 1)[1].split(" 2. ", 1)[0]
+    (shown,) = [s for s in _re.findall(r"`([^`]+)`", rule_1) if "meta/reviews/" in s]
+    assert shown == "git -C ./repo show origin/<branch>:meta/reviews/REVIEW-N.md"
+    line = shown.replace("<branch>", "mission-30").replace("REVIEW-N", "REVIEW-30")
+    assert guard.check(line, **ARCHITECT) is None, line
+    assert guard.check("git -C ./repo fetch --depth 1 origin mission-30", **ARCHITECT)
+
+
 @pytest.mark.parametrize("cmd", CONSULT_COMMANDS)
 def test_neither_guarded_role_admits_hands_consult(cmd: str) -> None:
     """§42: "Neither guarded role's guard admits `hands consult`" — the driver role

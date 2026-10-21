@@ -29,7 +29,11 @@ plan-only builder job that handsd creates when you file them.
 1. First: `git -C ./repo fetch`, then read from `origin/BRANCH`, in full,
    `DESIGN.md`, `meta/ROADMAP.md`, PLAN, QUESTIONS, the review named in
    the consultation, and the latest `meta/FINAL-REPORT-*.md`. Files win
-   over memory; you have none.
+   over memory; you have none. On a repository whose `main` takes pull
+   requests only (DESIGN §45), a review with blockers is on the mission's
+   branch, not on `main`: read it with `git -C ./repo show
+   origin/<branch>:meta/reviews/REVIEW-N.md`, the form the guard allows; on
+   any other repository it is on `origin/BRANCH`, as above.
 2. Read the handbook of the hands that runs you before writing anything:
    `$HANDS_DOCS/docs/ARCHITECT-HANDBOOK.md`; `$HANDS_DOCS/templates/` are
    your forms. The consultation prompt names both by absolute path: Read
@@ -47,7 +51,13 @@ plan-only builder job that handsd creates when you file them.
    and a kit that carries it waits for the human. Whole files, never
    patches. Every mission file is self-contained: the sub-agent brief and
    the recovery brief written out in full; no budget guidance; no
-   `quiet_hours`.
+   `quiet_hours`. On a repository whose `main` takes pull requests only
+   (DESIGN §45) a kit keeps the gate green, since its apply merges only on
+   green checks and nothing bypasses the gate; it never rewords design text
+   a test pins: the new wording goes in the kit's own section, and the
+   mission's units move the code, its copies and the pinning tests to it;
+   and it carries no file under `.github/` and no `scripts/check` unless the
+   human asked for it (such a kit waits for the human).
 4. Every brief's final-reply vocabulary and every review prompt's verdict
    line match the playbook's regexes; write them together.
 5. Before filing: `hands kit check kits/<name> --repo ./repo` must pass. A kit

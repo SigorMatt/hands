@@ -201,6 +201,25 @@ that apply's `builder.done` the engine reloads the playbook from the committed
 file (DESIGN §36), so the kickoff it sends is the one the kit just committed; a
 playbook that no longer loads stops the pipeline with the loader's reason.
 
+### An apply that did not land (DESIGN §45)
+
+The `builder.done` of a kit's apply — a job with a kit, or a resume of one,
+the chain followed back by `resumed_from` — whose reply does not begin
+`VERDICT: kit applied` is the engine's to decide, before any playbook rule, in
+either `[repository] main` shape and with or without a playbook file. On an
+unpaused pipeline it stops it, titled as every engine stop is, with the
+reason `the kit's apply did not land: <its VERDICT: line cut to 200
+characters, or "no VERDICT: line"> (§45)`, so neither a catch-all `^VERDICT:`
+rule's consultation nor a template's "Builder finished without a recognised
+verdict" stop meets it. Over a pipeline already
+paused it does not stop it again: it publishes that reason once — under a
+human pause as `hands: a stop under a human pause`, under any other pause
+titled as a stop — and the pause, its reason and any kept ends stay. Like the
+limit manager's stop it is the engine's own: never kept, and it never replaces
+a kept end. An apply that landed is decided as before: the playbook's `kit
+applied` rule, or the engine's kickoff above. docs/ARCHITECT-HANDBOOK.md §19
+gives the route.
+
 ## Events (`on`)
 
 `builder.done`, `builder.failed`, `builder.limited`, `builder.orphaned`,
