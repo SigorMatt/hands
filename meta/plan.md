@@ -11,29 +11,29 @@ waits for its `check` check and the hosted review, and returns the tree to
 
 - [x] U0 (this commit) Plan, branch and findings (`plan:`) — this file,
       meta/CHECKPOINT.md, meta/findings/FINDINGS.md (H-079, H-080 filed)
-- [ ] U1 CI on GitHub's runner (§45 "CI") — .github/workflows/check.yml
+- [x] U1 624aff0 CI on GitHub's runner (§45 "CI") — .github/workflows/check.yml
       (added), tests/conftest.py (off-machine fixture), tests that leave the
       machine or fail in a bare run, a workflow pin test
-- [ ] U2 The setting, `hands ci-wait` and doctor's `main` row (§45; §4,
+- [x] U2 db5c000 The setting, `hands ci-wait` and doctor's `main` row (§45; §4,
       §13) — src/hands/config.py, src/hands/forge.py (added),
       src/hands/cli.py, src/hands/doctor.py, templates/config.toml,
       tests/fake_gh.py, tests
-- [ ] U3 The apply by the setting, and its resume (§45; §6, §10, §27, §43)
+- [x] U3 cd0e13f The apply by the setting, and its resume (§45; §6, §10, §27, §43)
       — src/hands/kit.py, daemon.py, api.py, phone.py, playbook.py,
       limits.py, the handbook's §3 quotation, tests
-- [ ] U4 An apply that did not land, the CI's hold, the journal sentence
+- [x] U4 39e7976 An apply that did not land, the CI's hold, the journal sentence
       (§45; §19, §31, §36, §39, §43, §44; H-080) — src/hands/playbook.py,
       spool.py, kit.py, handbook §19 + tests/test_operator_table.py,
       FINDINGS (H-080 resolved), tests
-- [ ] U5 The review protocol, the brief template, the architect and the
+- [x] U5 897ec34 The review protocol, the brief template, the architect and the
       documents (§45) — meta/REVIEW-PROTOCOL.md,
       templates/REVIEW-PROTOCOL.md, templates/BUILDER-N-PROMPT.md,
       architect/CLAUDE.md, docs/ARCHITECT-HANDBOOK.md, docs/INTEGRATION.md,
       docs/OPERATIONS.md, docs/PLAYBOOK.md, CLAUDE.md, tests
-- [ ] U6 At rest after the kept list changed (§45 item 1; §44 rule 4;
+- [x] U6 7e0914e At rest after the kept list changed (§45 item 1; §44 rule 4;
       H-079) — src/hands/playbook.py (daemon.py), handbook §19,
       docs/PLAYBOOK.md, docs/OPERATIONS.md, FINDINGS (H-079 resolved), tests
-- [ ] U7 Final report, the pull request, its checks and the hosted review's
+- [x] U7 (this commit) Final report, the pull request, its checks and the hosted review's
       findings — meta/FINAL-REPORT-29.md (drafted under meta/drafts/),
       meta/reviews/hosted/PR-<pr>/
 
