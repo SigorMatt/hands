@@ -277,7 +277,9 @@ def test_plan_apply_computes_replaced_and_added_against_the_repo(tmp_path: Path)
         "Apply ~/Downloads/m-11.zip to this repository: unzip -o into the repo root "
         "(it replaces DESIGN.md, gone.md and meta/plan.md and adds KIT.md and meta/NEW.md), "
         "then one plan-only sub-agent makes a single commit 'plan: kit m-11' listing those "
-        "files in its body, and pushes. Change nothing else. "
+        "files in its body, and pushes. If the push is refused, undo that commit "
+        "(git reset --keep HEAD~1) and reply instead with one line: VERDICT: kit not "
+        "applied pr=none <why, in one line>. Change nothing else. "
         "Reply with one line: VERDICT: kit applied <sha>."
     )
     with_md = kit_mod.plan_apply("/x/m-11.zip", ["KIT.md"], b"plan: mission 11\nmore\n", repo)
@@ -2168,6 +2170,62 @@ def test_kit_file_sends_only_the_name_and_the_built_zip(repo: Path, kits: Path) 
     assert sorted(params) == ["name", "zip"]
     assert params["name"] == "m16"
     assert base64.b64decode(str(params["zip"])) == kit_mod.build_zip(kit)
+
+
+def test_under_pull_request_kit_file_files_the_pull_request_prompt(
+    tmp_home: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """§45: the architect's `hands kit file` files the apply's prompt in the
+    configured shape; its branch names the sha256 of the zip handsd stored, the
+    one `build_zip` builds and `hands kit check` prints for the directory."""
+    import asyncio
+
+    from harness import (
+        architect_table,
+        close_consultation,
+        config_body,
+        drive,
+        open_consultation,
+        write_project,
+    )
+
+    workdir = write_tree(
+        tmp_path / "work", {"PLAYBOOK.toml": PLAYBOOK, "meta/REVIEW-PROTOCOL.md": PROTOCOL}
+    )
+    clone = write_tree(
+        tmp_path / "clone", {"PLAYBOOK.toml": PLAYBOOK, "meta/REVIEW-PROTOCOL.md": PROTOCOL}
+    )
+    kits_dir = tmp_path / "kits"
+    kits_dir.mkdir()
+    monkeypatch.setenv("HANDS_KITS", str(kits_dir))
+    monkeypatch.setenv("HANDS_CLONE", str(clone))
+    kit = write_tree(kits_dir / "m29", {**good_kit(), "KIT.md": "plan: mission 29 kit\n"})
+    extra = architect_table(tmp_home) + '\n[repository]\nmain = "pull-request"\n'
+    write_project(tmp_home, config_body(tmp_home, workdir, extra=extra))
+    answers: dict[str, object] = {}
+
+    async def body(daemon) -> None:
+        consulting = open_consultation(daemon)
+        answers["passing"] = await asyncio.to_thread(run_file, kit, "--json")
+        answers["spool"] = daemon.spool.root
+        close_consultation(daemon, consulting)
+
+    drive(body)
+    code, out, err = answers["passing"]  # type: ignore[misc]
+    assert code == 0, out + err
+    job = json.loads(out)["job"]
+    digest = hashlib.sha256(kit_mod.build_zip(kit)).hexdigest()
+    stored = Path(str(answers["spool"])) / "kits" / job["kit_id"] / "m29.zip"
+    assert hashlib.sha256(stored.read_bytes()).hexdigest() == digest
+    plan = kit_mod.apply_from_zip(
+        stored, workdir, kit_mod.home_shown(stored), shape="pull-request"
+    )
+    assert job["prompt"] == plan.prompt
+    assert job["prompt"].startswith(f"Apply {kit_mod.home_shown(stored)} to this repository, ")
+    assert f"`kit/m29-{digest[:12]}`" in job["prompt"]
+    assert f"(sha256 {digest})" in job["prompt"]
+    checked = kit_mod.check_kit(kit, workdir, project="demo")
+    assert checked.sha256 == digest and checked.apply_shape == "pull-request"
 
 
 def test_kit_file_files_a_held_apply_with_a_daemon_minted_kit_id(

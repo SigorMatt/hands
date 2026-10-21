@@ -841,7 +841,10 @@ class Api:
                 raise ApiError(_check_refusal(name, builder, report))
             if report.decisions:
                 raise ApiError(DECISIONS_REFUSAL.format(name=name))
-            plan = await asyncio.to_thread(apply_from_zip, path, builder, home_shown(path))
+            plan = await asyncio.to_thread(
+                apply_from_zip, path, builder, home_shown(path),
+                shape=self.config.repository.main,  # §45: the configured shape
+            )
             await asyncio.to_thread(
                 self.spool.record_kit,
                 kit_id,
@@ -919,7 +922,9 @@ class Api:
             copied = await asyncio.to_thread(place_kit, directory, name, data)
             path = directory / name
             shown = home_shown(path)
-            plan = await asyncio.to_thread(apply_from_zip, path, builder, shown)
+            plan = await asyncio.to_thread(
+                apply_from_zip, path, builder, shown, shape=self.config.repository.main
+            )  # §45: the configured shape
         except KitError as exc:
             raise ApiError(f"kit_apply: the apply was not filed: {exc}") from exc
         except OSError as exc:

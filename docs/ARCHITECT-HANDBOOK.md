@@ -75,7 +75,10 @@ The apply prompt:
     Apply ~/Downloads/<kit>.zip to this repository: unzip -o into the repo
     root (it replaces A and B and adds C), then one plan-only sub-agent
     makes a single commit '<message>' listing those files in its body, and
-    pushes. Change nothing else. Reply with one line: VERDICT: kit applied <sha>.
+    pushes. If the push is refused, undo that commit (git reset --keep
+    HEAD~1) and reply instead with one line: VERDICT: kit not applied
+    pr=none <why, in one line>. Change nothing else. Reply with one line:
+    VERDICT: kit applied <sha>.
 
 The kit's file name and the message are shell-quoted (`shlex.quote`): a name
 such as `a b.zip` is written `~/Downloads/'a b.zip'`; `m-12.zip` is unchanged.

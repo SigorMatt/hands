@@ -2547,6 +2547,8 @@ def test_a_kit_files_a_held_builder_apply_whose_prompt_is_kit_checks_byte_for_by
             + ("KIT.md, " if kit_md is not None else "")
             + "PLAYBOOK.toml and meta/BUILDER-11-PROMPT.md), then one plan-only sub-agent "
             f"makes a single commit '{message}' listing those files in its body, and pushes. "
+            "If the push is refused, undo that commit (git reset --keep HEAD~1) and reply "
+            "instead with one line: VERDICT: kit not applied pr=none <why, in one line>. "
             "Change nothing else. Reply with one line: VERDICT: kit applied <sha>."
         )
         assert kit_refusals(daemon) == []
@@ -2715,6 +2717,35 @@ def test_a_kit_that_is_not_a_zip_is_refused_with_no_job_and_stays_on_disk(
             {"reason": "the apply was not filed: the kit is not a readable zip"}
         ]
         assert (downloads / "junk.zip").read_bytes() == junk
+
+    phone_drive(body)
+
+
+def test_under_pull_request_the_phones_kit_files_the_pull_request_prompt(
+    tmp_home: Path, workdir: Path, downloads: Path, kit_server: KitServer
+) -> None:
+    """§45: the phone's `kit` files the apply's prompt in the configured shape,
+    naming the zip's sha256 — the prompt `hands kit check` prints for that
+    project, byte for byte."""
+    files = f'allowed_roots = ["{workdir}", "{downloads}"]\nkit_dir = "{downloads}"\n'
+    kit_config(tmp_home, workdir, files + '\n[repository]\nmain = "pull-request"\n')
+    body_zip = kit_zip(good_entries(None))
+    digest = hashlib.sha256(body_zip).hexdigest()
+
+    async def body(daemon: Daemon, fake: FakeNtfy) -> None:
+        (row,) = await kit_jobs(daemon, fake, kit_server.attach("mission-11.zip", body_zip))
+        record = await ok("show", row["id"])
+        assert record["state"] == "held" and record["gate"]["reason"] == "apply mission-11"
+        where = downloads / "mission-11.zip"
+        assert record["prompt"] == kit_mod.apply_from_zip(
+            where, workdir, "~/Downloads/mission-11.zip", shape="pull-request"
+        ).prompt
+        assert record["prompt"].startswith(
+            "Apply ~/Downloads/mission-11.zip to this repository, whose `main` takes pull "
+            "requests only (DESIGN §45). "
+        )
+        assert f"`kit/mission-11-{digest[:12]}`" in record["prompt"]
+        assert record["prompt"] == await kit_check_prompt(where, workdir)
 
     phone_drive(body)
 

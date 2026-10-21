@@ -67,6 +67,7 @@ from hands.config import (
     HANDBOOK_PATH,
     TEMPLATES_PATH,
     Config,
+    RoleConfig,
     docs_root,
 )
 from hands.limits import LimitManager
@@ -129,6 +130,8 @@ __all__ = [
     "PlaybookNotCommitted",
     "Rule",
     "SeriesAnchor",
+    "builder_resume_prompt",
+    "chain_first",
     "check_series_roles",
     "load_playbook",
     "next_milestone",
@@ -1005,6 +1008,34 @@ def sent_prompt(prompt: str) -> str:
                 break
         else:
             return prompt
+
+
+def chain_first(spool: Spool, job: Job) -> Job:
+    """§43: the first job of `job`'s resume chain — `resumed_from` followed back, a
+    resume carrying no `kit_id` (§6, §10). A record the chain names that cannot be
+    read ends the walk at the last one read; a loop ends it where it closes."""
+    current, seen = job, {job.id}
+    while current.resumed_from is not None and current.resumed_from not in seen:
+        seen.add(current.resumed_from)
+        try:
+            current = spool.load_job(current.resumed_from)
+        except SpoolError:
+            break
+    return current
+
+
+def builder_resume_prompt(spool: Spool, role: RoleConfig, job: Job) -> str:
+    """§6, §10 with §45: the prompt a `clear` resume of the builder's `job` sends.
+
+    A resume of an apply as §43 counts one (the chain's first job carries a
+    `kit_id`) re-sends the apply's own prompt — the first job's, as its sender
+    sent it (`sent_prompt`) — never `resume_line`; any other job gets
+    `role.resume_prompt`: `resume_line` when the config sets one, else its own
+    prompt again (H-008)."""
+    first = chain_first(spool, job)
+    if first.kit_id is not None:
+        return sent_prompt(first.prompt)
+    return role.resume_prompt(sent_prompt(job.prompt))
 
 
 def owner_files_pending(cwd: Path) -> list[str] | None:
@@ -2201,12 +2232,17 @@ class PlaybookEngine:
         ]
 
     def _engine_applied_kit(self, job: Job) -> bool:
-        """§32: an apply hands filed from the architect's kit, released by the engine."""
-        gate = job.gate if isinstance(job.gate, dict) else {}
+        """§32: an apply hands filed from the architect's kit, released by the engine.
+
+        §45: asked of the chain's first job (`chain_first`), so a resume of such an
+        apply — after a restart, a failure or a limit — is one too, and when it
+        lands the engine's kickoff follows it as it would have followed the first."""
+        first = chain_first(self.spool, job)
+        gate = first.gate if isinstance(first.gate, dict) else {}
         return (
             gate.get("decided_by") == ORIGIN
             and gate.get("decision") == "approved"
-            and kit_apply_problem(self.spool, job) is None
+            and kit_apply_problem(self.spool, first) is None
         )
 
     async def _approve_architect_hold(self, book: Playbook, job: Job | None) -> bool:
@@ -2719,7 +2755,8 @@ class PlaybookEngine:
             # its text to the builder's session as a `keep`, never as a clear.
             prompt, context = sent, "keep"
         elif job.role == "builder":  # §10/§6: the resume line when configured, else the
-            prompt, context = role.resume_prompt(sent), "clear"  # same prompt (H-008)
+            # same prompt (H-008); §45: an apply's own prompt, found by the chain walk
+            prompt, context = builder_resume_prompt(self.spool, role, job), "clear"
         elif job.state == "orphaned":
             # §39 (H-057): an orphaned review's prompt goes to a fresh context.
             prompt, context = sent, "clear"

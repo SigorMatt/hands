@@ -769,7 +769,10 @@ class PhoneChannel:
         """
         cwd = self.daemon.config.role("builder").cwd
         try:
-            plan = await asyncio.to_thread(apply_from_zip, path, cwd, home_shown(path))
+            plan = await asyncio.to_thread(  # §45: the configured shape names the zip's sha256
+                apply_from_zip, path, cwd, home_shown(path),
+                shape=self.daemon.config.repository.main,
+            )
         except KitError as exc:
             return await self._refuse_kit(f"the apply was not filed: {exc}")
         try:

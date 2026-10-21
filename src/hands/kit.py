@@ -7,8 +7,11 @@ the same `check_kit` on every kit `hands kit file` files (§33, `Api.kit_file`),
 against the builder's repository, and refuses a failing one. It reads the kit (a
 `.zip` or a directory whose files sit at their repository paths) and the
 repository the kit lands in, and prints one line per check, then — only when
-every check passes — the apply prompt of the handbook's §3 naming every file the
-kit replaces or adds, and the commit message.
+every check passes — the kit's sha256 (§45: of the zip, or of the zip `hands kit
+file` builds from a directory), the apply prompt's shape and why (`[repository]
+main` of the project configuration known here, else `direct`), the apply prompt
+of the handbook's §3 naming every file the kit replaces or adds, and the commit
+message.
 
 The apply prompt is built by one function, `plan_apply`, which `hands kit check`
 and handsd both call (§27): when a kit arrives from the phone, handsd lists the
@@ -146,6 +149,10 @@ __all__ = [
     "APPLY_EXCEPTION",
     "APPLY_VERDICT",
     "CHECK_NAMES",
+    "DIRECT",
+    "DIRECT_REFUSED_PUSH",
+    "PULL_REQUEST",
+    "PULL_REQUEST_APPLY",
     "KIT_MD",
     "KIT_MD_MAX",
     "KIT_NAME_RE",
@@ -174,6 +181,8 @@ __all__ = [
     "staged_path",
     "stage_kit",
     "kit_dir_under_kits",
+    "kit_branch",
+    "kit_stem",
     "kickoff_line",
     "kit_md_message",
     "named_paths",
@@ -192,6 +201,59 @@ __all__ = [
 BRIEF_RE = re.compile(r"^(?:meta/BUILDER-(?P<n>\d+)-PROMPT\.md|WORKPLAN\.md)$")
 #: The reply the apply prompt asks for; the only literal seen outside the brief.
 APPLY_VERDICT = "VERDICT: kit applied <sha>"
+#: §45: the two shapes of `[repository] main`, the apply's prompt by the setting.
+DIRECT = config_mod.MAIN_SETTINGS[0]
+PULL_REQUEST = config_mod.MAIN_SETTINGS[1]
+#: §45: the one sentence the `direct` prompt gains, before "Change nothing else.".
+DIRECT_REFUSED_PUSH = (
+    "If the push is refused, undo that commit (git reset --keep HEAD~1) and reply "
+    "instead with one line: VERDICT: kit not applied pr=none <why, in one line>."
+)
+#: §45: the `pull-request` prompt, word for word; DESIGN.md wraps it, and it is one
+#: paragraph, so its lines are joined here with single spaces, as the `direct`
+#: prompt's pieces are. `str.format` fills `{location}`, `{touched}`, `{message}`
+#: (as today), `{branch}`, `{title}`, `{body}` and `{subject}` (`apply_prompt`).
+PULL_REQUEST_APPLY = " ".join((
+    "Apply {location} to this repository, whose `main` takes pull requests only",
+    "(DESIGN §45). First, where the working tree is. (a) On `{branch}`, this kit's",
+    "own branch: go on below from the step not done yet (`gh pr list --head {branch}",
+    "--state all --json number,state` names its pull request and whether it merged).",
+    "(b) On another branch, not a `kit/` one, that is on `origin` (`git ls-remote",
+    "--exit-code --heads origin <that branch>`) and whose pull requests, if it has",
+    "any, are all open (`gh pr list --head <that branch> --state all --json state`",
+    "names none `MERGED` or `CLOSED`), a mission is in flight on it: unzip -o into",
+    "the repo root (it {touched}), then one plan-only sub-agent makes a single commit",
+    "{message} listing those files in its body, and pushes that branch; reply with",
+    "one line: VERDICT: kit applied <sha>; if that push is refused, undo the commit",
+    "(`git reset --keep HEAD~1`) and reply with one line: VERDICT: kit not applied",
+    "pr=none <why, in one line>. (c) On any other branch: `git checkout main`. Then,",
+    "on `main`: `git pull --ff-only`, and the first of these that holds. If `gh pr",
+    "list --head {branch} --state merged --json number,mergeCommit` names a merged",
+    "pull request, the kit is on `main` already: reply with one line: VERDICT: kit",
+    "applied <its merge commit's sha>. If `gh pr list --head {branch} --state open",
+    "--json number` names an open one: `git checkout {branch}` and go on below from",
+    "the step not done yet. If `git ls-remote --exit-code --heads origin {branch}`",
+    "finds the branch: `git checkout -B {branch} origin/{branch}` and go on below",
+    "from the step not done yet. Else: `git checkout -B {branch}`, unzip -o into the",
+    "repo root (it {touched}), one plan-only sub-agent makes a single commit {message}",
+    "listing those files in its body, `git push -u origin {branch}`, and `gh pr",
+    "create --base main --head {branch} --title {title} --body {body}`. Then wait for",
+    "its checks: `hands ci-wait <pr>; echo \"ci-wait-exit=$?\"`, one foreground call",
+    "at a time, again while it exits 3, at most seven calls. When it exits 0: `gh pr",
+    "merge <pr> --merge --delete-branch --subject {subject}`, then `git checkout main",
+    "&& git pull --ff-only`, and reply with one line: VERDICT: kit applied <sha>, the",
+    "merge commit's sha. If it exits 1 or 2, if the seventh call still exits 3, or if",
+    "the push, the pull request or the merge is refused: leave the pull request, if",
+    "there is one, open, `git checkout main`, and reply with one line: VERDICT: kit",
+    "not applied pr=<pr, or none> <why, in one line>. If `gh` or `git` cannot answer",
+    "one of the questions above, reply with one line: VERDICT: kit not applied",
+    "pr=none <its error, in one line>. Change nothing else.",
+))
+#: §45: `{branch}`'s `<stem>`: each character outside these becomes `-`, and it is
+#: cut to `KIT_STEM_MAX` characters; `<hash>` is `KIT_HASH_DIGITS` hex digits.
+_KIT_STEM_OUTSIDE_RE = re.compile(r"[^A-Za-z0-9_-]")
+KIT_STEM_MAX = 40
+KIT_HASH_DIGITS = 12
 #: §27: the entry whose first line is the apply's commit message.
 KIT_MD = "KIT.md"
 #: §28: the longest `KIT.md` first line that becomes the commit message.
@@ -325,8 +387,13 @@ class Report:
     kit_md: str | None = None
     #: One line saying `KIT.md`'s shape and what this kit's gives (§27).
     kit_md_note: str = ""
-    #: §36: the sha256 of the zip bytes the checks read (None for a directory).
+    #: §36: the sha256 of the zip bytes the checks read; §45: for a directory, of
+    #: the zip `hands kit file` builds from it (`build_zip`), None when it has an
+    #: entry that zip refuses.
     sha256: str | None = None
+    #: §45: the shape of `apply_prompt` (`[repository] main`), and why that one.
+    apply_shape: str = DIRECT
+    apply_shape_why: str = ""
     #: §40 (H-061): the playbook in force's warnings; printed `WARN playbook: …`,
     #: and none of them fails a check.
     warnings: list[str] = field(default_factory=list)
@@ -351,6 +418,8 @@ class Report:
             "adds": self.adds,
             "commit_message": self.commit_message,
             "apply_prompt": self.apply_prompt,
+            "apply_shape": self.apply_shape,
+            "sha256": self.sha256,
             "kit_md": self.kit_md,
             "warnings": self.warnings,
             "decisions": self.decisions,
@@ -381,8 +450,9 @@ class _Kit:
     filename: str
     files: dict[str, bytes]
     problems: list[str]
-    #: §36: the sha256 of the zip's bytes, read once and judged from memory; None
-    #: for a directory.
+    #: §36: the sha256 of the zip's bytes, read once and judged from memory; §45:
+    #: for a directory, of the zip `build_zip` makes of its files, None when one of
+    #: its entries is a problem (that zip is refused).
     sha256: str | None = None
 
 
@@ -628,7 +698,12 @@ def _read_dir(root: Path) -> _Kit:
                 problems.append(f"{where} ({problem})")
                 continue
             files[where] = path.read_bytes()
-    return _Kit(filename=f"{root.resolve().name}.zip", files=files, problems=problems)
+    # §45: the sha256 `hands kit file` files: of `build_zip`'s bytes, made from
+    # these same files by the one writer (`_zip_of`).
+    sha256 = None if problems else hashlib.sha256(_zip_of(files.items())).hexdigest()
+    return _Kit(
+        filename=f"{root.resolve().name}.zip", files=files, problems=problems, sha256=sha256
+    )
 
 
 def _read_kit(path: Path) -> _Kit:
@@ -874,19 +949,35 @@ def _check_playbook(
     return Check("playbook", True, reason), book
 
 
-def _configured_playbook(project: str | None, config: Config | None) -> tuple[bool, str | None]:
+def _known_config(project: str | None, config: Config | None) -> Config | None:
+    """The project configuration known here: `config` when the caller has one
+    (handsd's `kit_file`), else the one every `hands` command resolves; one that
+    does not resolve or load is none, so this never fails the check."""
+    if config is not None:
+        return config
+    try:
+        return config_mod.load_config(config_mod.resolve_project(project))
+    except config_mod.ConfigError:
+        return None
+
+
+def _configured_playbook(config: Config | None) -> tuple[bool, str | None]:
     """§44 "H-077, ruled": whether a project configuration is known here, and its
     `[playbook] path` read as a repository path (`playbook_repo_path`; None when it
-    leaves the repository). The config is `config` when the caller has one (handsd's
-    `kit_file`), else the one every `hands` command resolves; one that does not
-    resolve or load is no configuration — a WARN fails nothing, so this never fails
-    the check."""
+    leaves the repository) — a WARN fails nothing."""
     if config is None:
-        try:
-            config = config_mod.load_config(config_mod.resolve_project(project))
-        except config_mod.ConfigError:
-            return False, None
+        return False, None
     return True, playbook_repo_path(config)
+
+
+def _apply_shape(config: Config | None) -> tuple[str, str]:
+    """§45: the apply prompt's shape — the configuration's `[repository] main` when
+    one is known here, else `direct` — and why, as `kit check` says it."""
+    if config is None:
+        return DIRECT, "no project configuration is known here"
+    shape = config.repository.main
+    return shape, f'[repository] main = "{shape}" in {config.path}'
+
 
 
 def _repository_root(repo: Path) -> Path:
@@ -1318,11 +1409,36 @@ def kit_md_message(data: bytes | None) -> tuple[str | None, str | None]:
     return first, None
 
 
-def apply_prompt(location: str, replaces: list[str], adds: list[str], message: str) -> str:
-    """The handbook's §3 apply prompt, naming the kit's file and every file it touches.
+def kit_stem(file_name: str) -> str:
+    """§45: `<stem>` of the kit's branch and merge subject — the file name without
+    `.zip`, each character outside `A-Z a-z 0-9 _ -` replaced by `-`, cut to 40."""
+    stem = file_name.removesuffix(KIT_FILE_SUFFIX)
+    return _KIT_STEM_OUTSIDE_RE.sub("-", stem)[:KIT_STEM_MAX]
+
+
+def kit_branch(file_name: str, sha256: str) -> str:
+    """§45: `{branch}`, `kit/<stem>-<hash>`, the hash the zip's sha256's first 12
+    hexadecimal digits — so two kits of one name never share a branch."""
+    return f"kit/{kit_stem(file_name)}-{sha256[:KIT_HASH_DIGITS]}"
+
+
+def apply_prompt(
+    location: str,
+    replaces: list[str],
+    adds: list[str],
+    message: str,
+    *,
+    shape: str = DIRECT,
+    sha256: str | None = None,
+) -> str:
+    """The handbook's §3 apply prompt, naming the kit's file and every file it
+    touches, in the shape `[repository] main` gives (§45).
 
     The kit's file name (`location`'s last component) and the message are
     shell-quoted (§28, §29); the directory before the name is written as given.
+    `direct`: today's prompt with §45's sentence before "Change nothing else.".
+    `pull-request`: `PULL_REQUEST_APPLY`, whose branch and body name `sha256`, the
+    zip's (required in that shape).
     """
     head, slash, name = location.rpartition("/")
     touched = []
@@ -1330,23 +1446,49 @@ def apply_prompt(location: str, replaces: list[str], adds: list[str], message: s
         touched.append("replaces " + _and(replaces))
     if adds:
         touched.append("adds " + _and(adds))
+    said = " and ".join(touched)
+    where = f"{head}{slash}{shlex.quote(name)}"
+    if shape == PULL_REQUEST:
+        if sha256 is None:
+            raise ValueError("the pull-request apply prompt names the zip's sha256 (§45)")
+        body = f"Kit {name} (sha256 {sha256}), applied by hands (DESIGN §45): it {said}."
+        return PULL_REQUEST_APPLY.format(
+            location=where,
+            touched=said,
+            message=shlex.quote(message),
+            branch=kit_branch(name, sha256),
+            title=shlex.quote(message),
+            body=shlex.quote(body),
+            subject=shlex.quote(f"merge: kit {kit_stem(name)} (PR #<pr>)"),
+        )
+    if shape != DIRECT:
+        raise ValueError(f"[repository] main is {DIRECT!r} or {PULL_REQUEST!r}, not {shape!r}")
     return (
-        f"Apply {head}{slash}{shlex.quote(name)} to this repository: unzip -o into the repo root "
-        f"(it {' and '.join(touched)}), then one plan-only sub-agent makes a single commit "
+        f"Apply {where} to this repository: unzip -o into the repo root "
+        f"(it {said}), then one plan-only sub-agent makes a single commit "
         f"{shlex.quote(message)} listing those files in its body, and pushes. "
+        f"{DIRECT_REFUSED_PUSH} "
         "Change nothing else. "
         f"Reply with one line: {APPLY_VERDICT}."
     )
 
 
-def plan_apply(location: str, names: Iterable[str], kit_md: bytes | None, repo: Path) -> Apply:
+def plan_apply(
+    location: str,
+    names: Iterable[str],
+    kit_md: bytes | None,
+    repo: Path,
+    *,
+    shape: str = DIRECT,
+    sha256: str | None = None,
+) -> Apply:
     """The one apply of §27, for `kit check` and for handsd alike.
 
     `location` is where the builder finds the zip (its last component is the kit's
     file name), `names` the kit's file entries, `kit_md` the bytes of its `KIT.md`
     entry (None when it has none), and `repo` the repository the kit lands in: a
     name that exists there (a dangling symlink included) is replaced, any other
-    is added.
+    is added. §45: `shape` is `[repository] main`, and `sha256` the zip's.
     """
     name = PurePosixPath(location).name.removesuffix(".zip")
     files = sorted(set(names))
@@ -1365,14 +1507,17 @@ def plan_apply(location: str, names: Iterable[str], kit_md: bytes | None, repo: 
         adds=adds,
         commit_message=message,
         kit_md=line,
-        prompt=apply_prompt(location, replaces, adds, message),
+        prompt=apply_prompt(location, replaces, adds, message, shape=shape, sha256=sha256),
         kit_md_rule=rule,
         default_why=default_why,
     )
 
 
-def apply_from_zip(path: Path, repo: Path, location: str) -> Apply:
+def apply_from_zip(path: Path, repo: Path, location: str, *, shape: str = DIRECT) -> Apply:
     """handsd's apply for a kit received from the phone (§27), or `KitError` saying why not.
+
+    §45: the prompt is `shape`'s (`[repository] main`); the zip is read once into
+    memory, and the sha256 its prompt names is of those bytes, the ones listed.
 
     The zip's directory is listed, never extracted: the entries are checked by
     `kit check`'s one judge (`_zip_entries`, `_landing_problem`), and only a `KIT.md`
@@ -1381,9 +1526,11 @@ def apply_from_zip(path: Path, repo: Path, location: str) -> Apply:
     corrupt other entry is found by the builder's unzip, not here.
     """
     try:
-        archive = zipfile.ZipFile(path)
+        raw = path.read_bytes()
+        archive = zipfile.ZipFile(io.BytesIO(raw))
     except (zipfile.BadZipFile, OSError, EOFError, ValueError) as exc:
         raise KitError("the kit is not a readable zip") from exc
+    sha256 = hashlib.sha256(raw).hexdigest()
     with archive:
         try:
             good, found, whole = _zip_entries(archive)
@@ -1409,7 +1556,7 @@ def apply_from_zip(path: Path, repo: Path, location: str) -> Apply:
                 if isinstance(data, str):
                     raise KitError(f"the kit's {KIT_MD} is {data}")
                 kit_md = data
-    return plan_apply(location, names, kit_md, repo)
+    return plan_apply(location, names, kit_md, repo, shape=shape, sha256=sha256)
 
 
 def kit_md_note(plan: Apply) -> str:
@@ -1491,7 +1638,9 @@ def check_kit(
         review = _review_vocabulary(book, kit, repo)
         verdicts_check = _check_verdicts(book, literals, review)
         wording_check = _check_wording(brief_name, brief_text)
-    known, configured = _configured_playbook(project, config)
+    known_config = _known_config(project, config)
+    known, configured = _configured_playbook(known_config)
+    shape, shape_why = _apply_shape(known_config)
     checks = [
         _check_paths(kit, repo),
         playbook_check,
@@ -1500,8 +1649,11 @@ def check_kit(
         wording_check,
         _check_protocol(book, kit, repo),
     ]
+    # §45: a directory with an entry `build_zip` refuses has no sha256; it fails
+    # `paths`, so its prompt is never shown, and the plan's is the `direct` one.
     plan = plan_apply(
-        f"{KIT_DIR_SHOWN}/{kit.filename}", kit.files, kit.files.get(KIT_MD), repo
+        f"{KIT_DIR_SHOWN}/{kit.filename}", kit.files, kit.files.get(KIT_MD), repo,
+        shape=shape if kit.sha256 is not None else DIRECT, sha256=kit.sha256,
     )
     report = Report(
         kit=path,
@@ -1513,6 +1665,8 @@ def check_kit(
         kit_md=plan.kit_md,
         kit_md_note=kit_md_note(plan),
         sha256=kit.sha256,
+        apply_shape=shape,
+        apply_shape_why=shape_why,
         warnings=[
             *(orphaned_rule_warnings(book) if book is not None else []),
             *filter(None, [_owner_warning(kit, repo, configured, known)]),
@@ -1573,12 +1727,22 @@ def run(
             file=out,
         )
         return 1
+    if report.sha256 is not None:
+        print(f"sha256: {report.sha256} ({_sha256_of(report.kit)})", file=out)
+    print(f"apply shape: {report.apply_shape} ({report.apply_shape_why})", file=out)
     print("apply prompt:", file=out)
     print(f"    {report.apply_prompt}", file=out)
     print(f"commit message: {report.commit_message}", file=out)
     print(report.kit_md_note, file=out)
     print(f"kit check: pass ({len(report.checks)} of {len(report.checks)} checks)", file=out)
     return 0
+
+
+def _sha256_of(kit: Path) -> str:
+    """§45: what `kit check`'s sha256 is of."""
+    if kit.is_dir():
+        return "of the zip `hands kit file` builds from this directory"
+    return "of the zip"
 
 
 # ------------------------------------------ `hands kit apply <zip>` (§40, the human)
@@ -1962,13 +2126,20 @@ def build_zip(root: Path) -> bytes:
             f"hands kit file builds the zip from {root}, and refuses it (§32; a kit is "
             "whole regular files): " + "; ".join(problems)
         )
+    return _zip_of((where, path.read_bytes()) for where, path in entries)
+
+
+def _zip_of(entries: Iterable[tuple[str, bytes]]) -> bytes:
+    """§32: the one writer of a directory kit's zip — the entries sorted by path,
+    each deflated with one date and mode — so `build_zip` and `kit check`'s
+    sha256 of a directory (§45) are of the same bytes."""
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
-        for where, path in sorted(entries):
+        for where, data in sorted(entries):
             info = zipfile.ZipInfo(where, date_time=ZIP_DATE)
             info.compress_type = zipfile.ZIP_DEFLATED
             info.external_attr = (stat.S_IFREG | 0o644) << 16
-            archive.writestr(info, path.read_bytes())
+            archive.writestr(info, data)
     return buffer.getvalue()
 
 
