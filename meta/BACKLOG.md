@@ -115,7 +115,7 @@ item names the mission it is scheduled for; unscheduled items say so.
    proxy are the checklist; its four integration tiers name the level a
    harness must reach (their Tier 3). Cited, never imported.
 
-## Order (2026-10-18: 01:33 project separation first; 03:08–03:12 the rest; small missions; renumbered 18:52, kept one mission at 19:22, DESIGN §43; renumbered 2026-10-19 01:42 and 19:3x, DESIGN §44) — 26 the separation (DONE); 27 the separation follow-up (DONE); 28 a pause that holds the next step (H-078) + review 27's should-fix 1–3 + H-077 (DONE); 29 the pull-request gate (CI, the per-project `main` setting, applies and the review's commit through pull requests, docs/PR-CI-GATE.md, doctor); 30 M8b the harness seam with Codex (+ review 25's should-fix 3); 31 M8b's second mission, a local-model harness (OpenCode first); 32 M9 (+ review 25's should-fix 2); then M5b, a project from scratch (after 26), agile-skills migrated (after M9). Supersedes 2026-10-18 18:52's numbering (28 the seam, 29 the local harness, 30 M9), its 11:41 numbering and 2026-10-17 20:27's order. The 2026-10-17 23:25 kit for mission 26 (separation and profiles together) was never sent.
+## Order (2026-10-18: 01:33 project separation first; 03:08–03:12 the rest; small missions; renumbered 18:52, kept one mission at 19:22, DESIGN §43; renumbered 2026-10-19 01:42 and 19:3x, DESIGN §44; renumbered 2026-10-21, DESIGN §46) — 26 the separation (DONE); 27 the separation follow-up (DONE); 28 a pause that holds the next step (H-078) + review 27's should-fix 1–3 + H-077 (DONE); 29 the pull-request gate (CI, the per-project `main` setting, applies and the review's commit through pull requests, docs/PR-CI-GATE.md, doctor) (DONE); 30 the gate's follow-up (H-081, H-082, H-083, review 29's should-fix 2–4), after whose install this repository switches; 31 M8b the harness seam with Codex (+ review 25's should-fix 3), the first mission under the gate; 32 M8b's second mission, a local-model harness (OpenCode first); 33 M9 (+ review 25's should-fix 2); then M5b, a project from scratch (after 26), agile-skills migrated (after M9). Supersedes 2026-10-19's numbering (30 the seam, 31 the local harness, 32 M9), 2026-10-18 18:52's (28 the seam, 29 the local harness, 30 M9), its 11:41 numbering and 2026-10-17 20:27's order. The 2026-10-17 23:25 kit for mission 26 (separation and profiles together) was never sent.
 
 ## Mission 26 — DONE 2026-10-18 (the project separation; review 26: blockers=0, should-fix=2, carried to mission 27; PR #6 merged by the review, f16d6d1; installed on both daemons 19:34). A project operated from its own chat and the phone. Spec: DESIGN v3.25 §42.
 
@@ -199,7 +199,7 @@ item names the mission it is scheduled for; unscheduled items say so.
    made at rest, `resume`, the kept end's step starting, read back from its
    branch; a restart under a human pause resuming the builder.
 
-## Mission 29 (a `main` that takes pull requests only; decided 2026-10-19 01:42) — Spec: DESIGN v3.28 §45.
+## Mission 29 — DONE 2026-10-21 (a `main` that takes pull requests only; decided 2026-10-19 01:42; review 29: blockers=0, should-fix=4, carried to mission 30; PR #9 merged by the review, 4d32d35; its `check` green on GitHub's runner). Spec: DESIGN v3.28 §45.
 
 1. U0 the branch `mission-29`; H-079 (review 28's should-fix 1) and H-080
    (an apply that did not land) filed. U1 CI: `.github/workflows/check.yml`
@@ -224,13 +224,33 @@ item names the mission it is scheduled for; unscheduled items say so.
    PLAYBOOK, `CLAUDE.md`. docs/PR-CI-GATE.md comes in the kit.
 6. U6 `at rest` again after the kept list changed (H-079). U7 the report,
    the pull request, its CI check made green, the hosted review.
-7. Gate, after its install: this repository's setting `pull-request`, the
-   ruleset by docs/PR-CI-GATE.md requiring `check` only, doctor's `main`
-   row ok; kit 30's apply merged through a pull request and mission 30's
-   review committed to its branch and merged on green checks. The other
-   project switches at a later quiet moment of its own.
+7. Gate: moved to mission 30 (the switch would have stopped every apply
+   started on `main`, H-082). The other project switches at a later quiet
+   moment of its own.
 
-## Mission 30 (M8b, the harness seam with Codex; renumbered several times — 25, then 26, then 27 in 2026-10-17 20:27's order and at 2026-10-18 03:08, 28 at 18:52 — and mission 30 since 2026-10-19 19:3x) — DESIGN §46 from docs/HARNESS-PROBE.md.
+## Mission 30 (the gate's follow-up before the switch; decided 2026-10-21 22:5x) — Spec: DESIGN v3.29 §46.
+
+1. U0 the branch `mission-30`; H-081, H-082, H-083 set decided; H-084
+   (review 29's should-fix 2) and H-085 (should-fix 4) filed decided.
+2. U1 the `pull-request` apply prompt's case (b) excludes `main` (H-082);
+   the setting's refusal names its two values (should-fix 3).
+3. U2 the engine approves a role-filed kit only when it carries plan
+   files alone (`KIT.md`, `DESIGN.md`, `WORKPLAN.md`, root decisions
+   files, Markdown under `meta/` that no playbook rule names; exact case)
+   (H-083, the human's decision), replacing §45's CI hold; `kit check`'s
+   `WARN owner:` line; architect rule 3 word for word.
+4. U3 both review protocols: the moved-branch blocker and
+   `--match-head-commit` (H-081), failure-path reviews on the branch when
+   it exists (H-084), the tree back on `main` (H-085), a confirmed bug in
+   the pull request's own code a blocker (the human, 2026-10-21). U4 the report, the
+   pull request, its CI check, the hosted review.
+5. Gate, after its install: this repository's setting `pull-request`, the
+   ruleset by docs/PR-CI-GATE.md requiring `check` only, doctor's `main`
+   row ok; kit 31's apply merged through a pull request and mission 31's
+   review committed to its branch and merged on green checks with
+   `--match-head-commit`.
+
+## Mission 30 (M8b, the harness seam with Codex; renumbered several times — 25, then 26, then 27 in 2026-10-17 20:27's order and at 2026-10-18 03:08, 28 at 18:52 — mission 30 since 2026-10-19 19:3x, and mission 31 since 2026-10-21) — DESIGN §47 from docs/HARNESS-PROBE.md; the first mission under the pull-request gate.
 
 1. The seam: a per-harness runner or hands as an ACP client (the prior, if
    commands route through permission requests; the adapter
@@ -248,9 +268,9 @@ item names the mission it is scheduled for; unscheduled items say so.
 4. Gate: one hands mission built by a builder on Codex and reviewed clean.
    Split further if the kit grows past one review's size (small missions).
 
-## Mission 31 (M8b's second mission; numbered 28 on 2026-10-18 11:41, 29 at 18:52, 31 since 2026-10-19 19:3x) — a harness for a local model (OpenCode or dsh, or both), OpenCode first. Re-checked 2026-10-18 03:28 by the aux: OpenCode 1.19.2 signed in (Nebius Token Factory, a credential file under `$HOME`, a default model set, a headless JSON one-shot answered); dsh unreachable by any hands job (its key is exported only for interactive shells; no `~/.dsh` credentials file) until the human writes one, with its session-log extension and telemetry disabled (DESIGN §40). Its own small mission, after mission 30.
+## Mission 32 (M8b's second mission; numbered 28 on 2026-10-18 11:41, 29 at 18:52, 31 on 2026-10-19 19:3x, 32 since 2026-10-21) — a harness for a local model (OpenCode or dsh, or both), OpenCode first. Re-checked 2026-10-18 03:28 by the aux: OpenCode 1.19.2 signed in (Nebius Token Factory, a credential file under `$HOME`, a default model set, a headless JSON one-shot answered); dsh unreachable by any hands job (its key is exported only for interactive shells; no `~/.dsh` credentials file) until the human writes one, with its session-log extension and telemetry disabled (DESIGN §40). Its own small mission, after mission 31.
 
-## Mission 32 (M9, "a machine is replaceable"; 26, then 27, then 28 in 2026-10-17 20:27's order and at 2026-10-18 03:08; 29 at 11:41; 30 at 18:52; mission 32 since 2026-10-19 19:3x) — `hands export` / `hands import`, `hands upgrade [--accept-builder]`, `hands project refresh <p>` (replacing the laptop's merge script for architect/CLAUDE.md), the spool inventory, ntfy by MagicDNS name, docs/OPERATIONS.md updated; review 25's should-fix 2 (after a failed `find`, the capture script still writes the inbox tail; pinned by the hanging-`find` test); gate: the VM rehearsal. Split into two missions if it grows past one review's size. Then M5b (discotrade-v2 on Codex), a project from scratch (any time after mission 26 is installed), agile-skills migrated (M7, after M9).
+## Mission 33 (M9, "a machine is replaceable"; 26, then 27, then 28 in 2026-10-17 20:27's order and at 2026-10-18 03:08; 29 at 11:41; 30 at 18:52; 32 on 2026-10-19 19:3x; mission 33 since 2026-10-21) — `hands export` / `hands import`, `hands upgrade [--accept-builder]`, `hands project refresh <p>` (replacing the laptop's merge script for architect/CLAUDE.md), the spool inventory, ntfy by MagicDNS name, docs/OPERATIONS.md updated; review 25's should-fix 2 (after a failed `find`, the capture script still writes the inbox tail; pinned by the hanging-`find` test); gate: the VM rehearsal. Split into two missions if it grows past one review's size. Then M5b (discotrade-v2 on Codex), a project from scratch (any time after mission 26 is installed), agile-skills migrated (M7, after M9).
 
 ## Backlog: Claude credential profiles (moved out of mission 26 on 2026-10-18; built when a usage limit actually hits) — DESIGN §42 "Decided and kept on disk for later missions".
 

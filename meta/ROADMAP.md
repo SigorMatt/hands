@@ -54,7 +54,8 @@ harness, OpenCode first; mission 30 = M9 (+ review 25's should-fix 2).
 This supersedes the 11:41 numbering in the paragraph above (27 the seam,
 28 the local harness, 29 M9); the order after M9 is unchanged.
 
-**Renumbered 2026-10-19 01:42 and 19:3x (DESIGN §44).** At 01:42 the human
+**Renumbered 2026-10-19 01:42 and 19:3x (DESIGN §44; superseded on
+2026-10-21 by the next paragraph).** At 01:42 the human
 asked for GitHub to enforce a pull-request-only `main` with CI passing,
 built into the next mission, then applied to the other project; at 19:3x
 he split that mission, the pause first. Mission 28 = a pause that holds
@@ -67,6 +68,18 @@ review's commit through pull requests, docs/PR-CI-GATE.md, doctor); mission
 32 = M9 (+ review 25's should-fix 2). This supersedes the 18:52 numbering
 above (28 the seam, 29 the local harness, 30 M9); the order after M9 is
 unchanged.
+
+**Renumbered 2026-10-21 (DESIGN §46).** Mission 29's review found that
+switching this repository's `main` to pull requests would stop every kit
+apply started on `main` (H-082), with two more gaps of the gate (H-081,
+H-083); the human put a small follow-up first. Mission 30 = the gate's
+follow-up (H-081, H-082, H-083 — the engine approves plan files only —
+and review 29's should-fix 2–4); mission 31 = M8b, the harness seam with
+Codex (+ review 25's should-fix 3), the first mission under the gate;
+mission 32 = M8b's second mission, a local-model harness, OpenCode first;
+mission 33 = M9 (+ review 25's should-fix 2). This supersedes the
+2026-10-19 numbering above (30 the seam, 31 the local harness, 32 M9);
+the order after M9 is unchanged.
 
 Milestones are gated by a clean cold review of the mission that closes them,
 then an install (`uv tool install --force`) and a driver-kit refresh.
@@ -244,7 +257,7 @@ then an install (`uv tool install --force`) and a driver-kit refresh.
   Mission 25 (closer, DESIGN §41): review 24, the probe record corrected and
   its unavailable rows re-checked — DONE 2026-10-17 (review 25: blockers=0,
   should-fix=3, carried to missions 27 and 29 — since 2026-10-19 its
-  should-fix 1 done in mission 27, 3 in mission 30, 2 in mission 32; the
+  should-fix 1 done in mission 27, 3 in mission 31, 2 in mission 33; the
   review merged PR #5:
   594b8ee; installed on both daemons 2026-10-17 20:40). M8a CLOSED.
   Renumbered 2026-10-18 (DESIGN §42): the separation is mission 26, M8b
@@ -252,7 +265,8 @@ then an install (`uv tool install --force`) and a driver-kit refresh.
   mission 29; and at 18:52 (DESIGN §43): the separation follow-up 27, the
   seam 28, the local-model harness 29, M9 30; and on 2026-10-19 (DESIGN
   §44): the pause 28, the pull-request gate 29, the seam 30, the
-  local-model harness 31, M9 32.
+  local-model harness 31, M9 32; and on 2026-10-21 (DESIGN §46): the
+  gate's follow-up 30, the seam 31, the local-model harness 32, M9 33.
 - **The project separation** — mission 26 (designed 2026-10-17 18:45–20:27;
   made first and whole 2026-10-18 01:33, DESIGN §42). Each project's own
   Claude Project chat operates it from its pasted instruction (rule 15) and
@@ -335,16 +349,36 @@ then an install (`uv tool install --force`) and a driver-kit refresh.
   wherever `main`'s rules take pull requests only; docs/PR-CI-GATE.md (a
   ruleset template proven on another repository, with the order a project
   switches in); doctor's `main` row, the setting against the branch's
-  rules; review 28's should-fix 1 (H-079). Gate: after its install the
-  human sets this repository's `main` to `pull-request` and the aux
-  creates the ruleset (`current_user_can_bypass: never`); kit 30's apply
-  merges through a pull request on green checks, and mission 30's review
-  commits to its branch and merges on green checks. The other project
+  rules; review 28's should-fix 1 (H-079). DONE 2026-10-21 (review 29:
+  blockers=0, should-fix=4, carried to mission 30; PR #9 merged by the
+  review, 4d32d35; its `check` check green on GitHub's runner, the first
+  CI run of this repository). Its gate moved to mission 30: the review
+  found that the switch would stop every apply started on `main`
+  (H-082), so the switch waits for mission 30's install. The other project
   switches at a later quiet moment of its own, after mission 28's pause
   has been tested there.
-- **M8b The harness seam** — mission 30 with Codex (DESIGN §46, written
-  from docs/HARNESS-PROBE.md); a harness for a local model (OpenCode or dsh,
-  or both) is mission 31, M8b's second, kept separate under the
+- **The gate's follow-up** — mission 30 (decided 2026-10-21; DESIGN
+  §46). The `pull-request` apply prompt's case (b) excludes `main`
+  (H-082); the engine approves a role-filed kit on its own only when it
+  carries plan files alone (`KIT.md`, `DESIGN.md`, `WORKPLAN.md`, root
+  decisions files, Markdown under `meta/` that no playbook rule names),
+  anything else waiting for the human, which replaces §45's CI hold
+  (H-083, decided by the human); the review blocks on a branch that
+  moved during it and
+  merges with `--match-head-commit` (H-081), commits its failure-path
+  reviews to the mission's branch when it exists (H-084) and ends on
+  `main` (H-085); the setting's refusal names its two values; and a
+  confirmed bug in a pull request's own code blocks its merge (decided by
+  the human on 2026-10-21; in force from mission 31's review). Gate: after
+  its install the human sets this repository's `main` to `pull-request`
+  and the aux creates the ruleset by docs/PR-CI-GATE.md
+  (`current_user_can_bypass: never`); kit 31's apply merges through a
+  pull request on green checks, and mission 31's review commits to its
+  branch and merges on green checks with `--match-head-commit`.
+- **M8b The harness seam** — mission 31 with Codex (DESIGN §47, written
+  from docs/HARNESS-PROBE.md), the first mission under the pull-request
+  gate; a harness for a local model (OpenCode or dsh,
+  or both) is mission 32, M8b's second, kept separate under the
   small-missions rule, OpenCode first; its gate is written by its kit. Re-checked by the aux 2026-10-18
   03:28, correcting the probe's `unavailable` rows of 2026-10-17: OpenCode
   1.19.2 is signed in (Nebius Token Factory; its credential is a file
@@ -361,7 +395,7 @@ then an install (`uv tool install --force`) and a driver-kit refresh.
   guarded roles (driver, architect) stay on Claude Code until a harness
   guard has been reviewed; the harness-neutral guard and transcript
   reader; the templates' Task-tool and worktree wording made neutral;
-  doctor rows per harness; a privacy note. Mission 30 also carries review
+  doctor rows per harness; a privacy note. Mission 31 also carries review
   25's should-fix 3 (since 2026-10-18 18:52; should-fix 1, H-070, H-071
   and the DESIGN wording of H-027, H-034 and H-039 went to mission 27,
   DESIGN §43). The optional polish round (on `aux.done` with
@@ -379,8 +413,8 @@ then an install (`uv tool install --force`) and a driver-kit refresh.
     the review and the pull-request checks, not by its verdict line
     (DESIGN §41).
 - **M9 A machine is replaceable** — decided 2026-10-16 (DESIGN §40), mission
-  32 (renumbered 2026-10-18 by DESIGN §42, to 30 at 18:52 by §43, and to 32
-  on 2026-10-19 by §44; it
+  33 (renumbered 2026-10-18 by DESIGN §42, to 30 at 18:52 by §43, to 32
+  on 2026-10-19 by §44, and to 33 on 2026-10-21 by §46; it
   also carries review 25's
   should-fix 2, and splits into two missions if it grows past one review's
   size), before M5b: `hands export` (everything but secrets, env tables

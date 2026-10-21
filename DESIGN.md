@@ -1,4 +1,4 @@
-# hands — DESIGN v3.28
+# hands — DESIGN v3.29
 
 Machinery that replaces the human relay between the planning brain and the two
 Claude Code roles (builder, aux) on the Ubuntu laptop, and that keeps a series
@@ -4083,3 +4083,246 @@ The setting and the ruleset for this repository, doctor's `main` row ok,
 request merged on green checks, and mission 30's review committed to its
 branch and its merge made on green checks — read back from the branch and
 the pull requests. Declared met from the branch, never from memory.
+
+## 46. Changes from v3.28 (mission 29 review; the gate's follow-up before the switch)
+
+REVIEW-29 (`reviewed: 39d510a`, `blockers=0 should-fix=4`; the hosted
+review's seven findings: two fixed in the pull request, three filed as
+H-081, H-082 and H-083, two dismissed) merged PR #9 itself (4d32d35) on
+2026-10-21 at 10:03. PR #9 was the first pull request whose CI ran: its
+`check` check passed on GitHub's runner in 5m45s. Three of the filed
+findings are design gaps of §45, and one of them stops the switch: under
+`[repository] main = "pull-request"` every apply started on `main` would
+stop. So the switch of this repository waits for this section's mission
+(decided by the human on 2026-10-21 at 22:5x), and the roadmap moves by
+one: mission 30 is this follow-up, mission 31 the harness seam with Codex
+(+ review 25's should-fix 3), mission 32 the local-model harness, mission
+33 M9 (+ review 25's should-fix 2). This supersedes §44's numbering (30 the
+seam, 31 the local harness, 32 M9). This repository switches to
+`pull-request` after this mission is installed, by docs/PR-CI-GATE.md §5,
+and mission 31 is the first to run under the gate.
+
+**H-082: case (b) of the `pull-request` apply prompt matches `main`.** §45's
+case (b) reads "On another branch, not a `kit/` one, that is on `origin` …
+and whose pull requests, if it has any, are all open". `main` is on
+`origin`, is not a `kit/` branch, and no pull request has `main` as its
+head, so a builder on `main` — where every apply between missions starts —
+takes (b), commits on `main`, has its push refused and stops. The intent
+was always that `main` is case (c)'s. Case (b) now begins, word for word,
+the rest of §45's prompt unchanged:
+
+    (b) On a branch that is neither `main` nor a `kit/` one, that is on
+    `origin`
+
+**H-081: the review merges the head it reviewed.** The review waits for the
+checks by pull request number and merges by number; a commit pushed to the
+branch during the review would pass its checks and be merged unreviewed.
+In every review of a pull request — whether its file goes to `main` (no
+`pull_request` rule) or to the branch (with it); not in the direct shape,
+and not for a `reviewed: none` review:
+- before it commits its file, the reviewer checks that the branch has not
+  moved: after `git fetch origin`, `git rev-parse origin/<branch>` equals
+  the `reviewed:` sha (the whole 40-character sha); when it does not, a
+  blocker, "the branch moved during the review: <reviewed sha> → <its
+  tip>", and no merge. A push of the review's commit to the branch that is
+  refused (the branch moved after that check) is the same blocker: `git
+  fetch origin && git rebase origin/<branch>` puts the review's local
+  commits on the new tip, the blocker is added to `REVIEW-N.md` and
+  committed as `review: mission N (branch moved)`, and the branch is
+  pushed; if the rebase or that push fails too, the review commits nothing
+  more (`git rebase --abort` if one is under way), returns the tree to
+  `main`, sets the local branch back to its remote (`git branch -f
+  <branch> origin/<branch>`, which drops its unpushed `journal:` and
+  `review:` commits, the carried journal lines among them) so that the next
+  `git pull --ff-only` on it succeeds, and replies with the blocker
+  counted;
+- the merge names the head it may merge, by its whole sha: `gh pr merge
+  <number> --merge --match-head-commit <sha> --subject "merge: mission N (PR
+  #<number>)"`, `<sha>` being the reviewed tip when the review was committed
+  to `main`, and the review's own commit (`git rev-parse HEAD` after its
+  push) when it was committed to the branch; gh refuses the merge when the
+  head is another commit, and that refusal is the `not merged` blocker of
+  §45 — with or without the rule now: a merge that is refused or not made
+  adds the blocker to `REVIEW-N.md`, committed where the review was
+  (`review: mission N (not merged)`), and the reply counts it. A clean
+  verdict always means a merged mission.
+
+**H-083: the engine approves plan files only.** §45 held a role-filed kit
+that carries `.github/` or `scripts/check`, but the gate is configured by
+more than that (`pyproject.toml`, `uv.lock`, `tests/conftest.py`, any
+test), and no list of the gate's inputs is ever whole. Decided by the human
+on 2026-10-21: the engine approves a role-filed kit's apply on its own only
+when it carries plan files alone, and holds any other kit for the human,
+whatever the setting. A file entry is a **plan file** when its path, in its
+exact case (a Linux builder lands `Design.md` beside `DESIGN.md`, not on
+it), is one of the plan forms hands names (§26, handbook §3): `KIT.md`,
+`DESIGN.md`, `WORKPLAN.md` (the runs form), a `decisions-<name>.md` at the
+repository root, or a Markdown file (`.md`) under `meta/` that no `send`
+rule's prompt names. That last exception keeps `meta/REVIEW-PROTOCOL.md`
+here, the review's procedure, the owner's as the playbook is; it is about
+`meta/` only, so in the runs form `WORKPLAN.md`, which the runs template's
+prompts name and which holds that form's review procedure (its §0.2), stays
+a plan file the engine approves. Markdown only, because a file under
+`meta/` can be executable in effect (a `meta/conftest.py` is collected by a
+pytest with no `testpaths`). Directory entries are not judged; the engine
+and `kit check` read file entries alike.
+
+The files a `send` rule's prompt names are found as `kit check`'s
+`protocol` check finds them: `kit.named_paths` over each `send` rule's
+prompt of the playbook in force — the repository's, for `kit check` as for
+the engine, never a kit's own (a kit that carries a playbook is held by
+§43 anyway) — against the kit's file entries and the builder's repository.
+A placeholder path (`meta/reviews/REVIEW-{n}.md`) names no file and is
+ignored. `kit.py` imports `playbook.py`, so the engine reaches
+`named_paths` by an import inside the function that needs it, or the two
+move to a module both import; either is the builder's to choose and name in
+the commit body.
+
+The hold is published with its buttons and the reason `apply <name>: the
+kit carries <path>, which is not a plan file; the engine approves plan
+files only (KIT.md, DESIGN.md, WORKPLAN.md, decisions files at the root,
+Markdown under meta/ that no send rule's prompt names), and any other file
+is the owner's (§46)`, `<path>` the first such file entry in sorted order; a
+kit that carries the playbook is held with §43's reason, unchanged, whether
+or not it carries other files too. In the code: `spool.is_plan_file(entry,
+named)` is the one test, `Spool.stored_kit_non_plan(kit_id, name, named)`
+the entries of a stored kit that fail it, and
+`playbook.plan_hold_reason(name, path)` the reason; they replace §45's
+`carries_ci`, `stored_kit_ci` and `ci_hold_reason`, whose CI hold this
+contains (`.github/` and `scripts/check` are not plan files). `hands kit
+check` prints one `WARN owner:` line naming every file entry that is not a
+plan file and does not carry the playbook (that one keeps its `WARN
+playbook:` line), under the same condition as `WARN playbook:` (the
+repository's playbook, or the kit's own, is role mode with autonomy), in
+place of §45's `WARN ci:` (its `--json` key `ci_warnings` becomes
+`owner_warnings`). So a phone-mode kit carrying `.github/` is no longer
+warned by `kit check`: in phone mode every apply is the human's anyway, and
+the architect's rule that a kit carries no `.github/` file and no
+`scripts/check` unless the human asked stays in handbook §3. After the
+human approves a held apply no engine kickoff follows, as for §43's hold:
+the playbook's `kit applied` rule fires and the human sends `go`.
+
+The architect role (`architect/CLAUDE.md`). In rule 3, the parenthesis
+that lists what a kit holds and the sentence on `PLAYBOOK.toml` after it —
+from "(the next brief or run plan" to "and a kit that carries it waits for
+the human." — give way to a full stop after "`.claude/`" and then this
+sentence, word for word: `Its files are plan
+files only: KIT.md, DESIGN.md, WORKPLAN.md, a decisions-<name>.md at the
+root, and Markdown files under meta/ that no send rule's prompt names;
+the engine approves no other kit, which waits for the human (DESIGN §46).
+When the next step needs any other file — code, tests, configuration, the
+CI, the playbook or the review protocol — do not put it in a kit: escalate
+(rule 8), naming the file.` Rule 3's clause "and it carries no file under
+`.github/` and no `scripts/check` unless the human asked for it (such a kit
+waits for the human)" is dropped, the new sentence containing it; the rest
+of rule 3 stays. Rule 8's list of what escalates gains "a kit that would
+need a file other than a plan file (rule 3)".
+
+Evidence that this costs a role-mode missions series nothing: the other
+project's role-filed kits have only ever carried `KIT.md` and Markdown
+files under `meta/`, and its `meta/REVIEW-PROTOCOL.md` was committed only
+by its first plan kit, which the human applied (its `plan:` commits and the
+file's history, read on 2026-10-21). A runs-form series in role mode keeps
+`WORKPLAN.md` and root decisions files. The
+review's blocker for a unit commit that changes `.github/` or
+`scripts/check` with no unit naming it (§45) stays: it is about missions,
+not kits.
+
+**Review 29's should-fix items.**
+1. Answered above (H-081, H-082, H-083).
+2. The review's file on its failure paths (H-084, filed by this mission's
+   U0). §45 commits the review of a rules read that failed "to the
+   mission's branch when it exists", but the `reviewed: none` review of a
+   missing pull request, and of a Direct brief under `pull_request`,
+   "nowhere", while the architect is told to read a review with blockers
+   from the branch. One rule: the review of a failed rules read (whatever
+   the rules are, since they are unknown), and under `pull_request` the
+   review of a missing pull request, is committed to the branch the brief's
+   Branch section names when it exists on `origin` (`git ls-remote
+   --exit-code --heads origin <branch>`), never to `main`, and otherwise
+   nowhere; the review of a Direct brief under `pull_request` (whose branch
+   is `main`) is committed nowhere; the reply carries the blocker in every
+   case.
+3. A non-string `[repository] main` (`main = true`) is refused with "must be
+   a string", which does not name the two values. The refusal names them,
+   whatever the value's type: `[repository] main must be "direct" or
+   "pull-request", got <the value>`.
+4. The tree after a failure path (H-085, filed by this mission's U0).
+   Nothing returns the tree to `main` after the review commits to the
+   branch on a failure path. The rule, in every shape: a review that has
+   checked out the mission's branch ends with `git checkout main && git
+   pull --ff-only`, so the next kit's apply runs on `main`.
+
+**A confirmed bug in the pull request's own code blocks its merge (decided
+by the human on 2026-10-21 at 23:47).** PR #9 merged with four of the hosted
+reviewer's findings open — three of them defects in what the pull request
+added (H-082, H-083, H-084) and one at the base that it relies on (H-081)
+— because the protocol's blockers are a failed gate, a
+missing test, a design violation or a claim the disk contradicts, and code
+that follows a defective design violates nothing: the builder filed them,
+and the review carried them as a should-fix. Nothing of them was live, but
+`main` held known defects behind a setting not yet switched. The rule now,
+in both review protocols, for every confirmed finding, the hosted
+reviewer's and the reviewer's own. A **defect** is text — code, a prompt, a
+protocol, a document — whose behaviour contradicts its own stated purpose:
+a wrong result, a failure, a security gap; not a missing feature, and not
+a design choice someone may disagree with.
+- A defect in what the pull request adds or changes is a **blocker**, even
+  when the design prescribes it; so is a defect present at the base that
+  the pull request makes reachable where it was not, or relies on for what
+  it adds. The pull request stays open, and the closer mission continues
+  its branch, its kit correcting the design first.
+- Any other defect present at the base — shown by the base's own text, or
+  by one test or command in a worktree at the merge-base (`git merge-base
+  origin/main origin/<branch>`), never by the gate — is a **should-fix**
+  marked "to be filed": the review commits nothing but its own file and the
+  archive, as today, and the next mission's U0 or the architect's next kit
+  files it in `meta/findings/FINDINGS.md`.
+- In the direct shape there is no pull request to hold: a defect in the
+  commits under review is a blocker, as any blocker there, and the series
+  stops for the closer.
+PR #9's four confirmed findings, as worked examples: H-082 (case (b)
+commits on `main` and fails: added text, a failure) and H-084 (a review
+committed nowhere that the architect is told to read: added text, a wrong
+result) are defects in what it added; H-081 (the merge by number, at the
+base since mission 19) is one it relies on for the merge it adds after the
+checks' wait; H-083 (a hold meant to keep a kit from weakening the gate
+that lets `pyproject.toml` through) is a security gap in what it added.
+All four would now be blockers. The `## Hosted review` section says, for
+each confirmed finding, which it is and why. The brief template's last unit
+says so to the builder: a finding in the pull request's own code that
+needs a design decision is still filed, never fixed in silence, and it
+blocks the merge until the closer fixes it. Mission 30's own review runs
+the protocol on `main` when it starts, so the rule is in force from mission
+31's review.
+
+**Documentation.** The handbook's §3 (the prompt's case (b); the plan-files
+rule and its reason, replacing the CI hold; the architect's own rule on
+`.github/` and `scripts/check` kept), §9 (the moved-branch blocker and the
+`--match-head-commit` merge; the failure paths' review on the branch; a
+confirmed bug in the pull request's own code is a blocker), §12
+(the plan-files rule for a role-mode series — the role's first kit that
+carries anything but plan files waits for the human — and every sentence
+that says a role-filed kit runs unless it carries the playbook, or that a
+project on `direct` gets the `.github/` hold), §19 (the hold row's reason).
+docs/PLAYBOOK.md (the `autonomous` bullets) and docs/INTEGRATION.md (the
+architect role's section, where only `hands kit check` and the cold review
+stand between a kit and the branch): the plan-files rule.
+`templates/PLAYBOOK-missions.toml` and `templates/PLAYBOOK-runs.toml`: their
+comments that role mode runs "with no further gate" name the plan-files
+rule. `architect/CLAUDE.md` rule 3, word for word as above, so the install
+refreshes the architect's `CLAUDE.md`. `docs/ARCHITECT-INSTRUCTION.md` does
+not change.
+
+**Not changed.** The setting and its default; `hands ci-wait`; the rest of
+§45's prompt; §44's human pause; the engine's stop for an apply that did not
+land; the verdict line and the playbook's rules (a review with the new
+blocker is `blockers=<k>` like any other).
+
+**The gate of the mission (after its install; the human's and the aux's).**
+As §45's, one mission later: this repository's setting `pull-request`, the
+ruleset by docs/PR-CI-GATE.md requiring `check` only, doctor's `main` row
+ok, `current_user_can_bypass: never`; then kit 31's apply through a pull
+request merged on green checks, and mission 31's review committed to its
+branch and merged on green checks with `--match-head-commit`. Declared met
+from the branch, never from memory.
