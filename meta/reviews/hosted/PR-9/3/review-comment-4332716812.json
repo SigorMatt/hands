@@ -1,0 +1,69 @@
+{
+  "url": "https://api.github.com/repos/SigorMatt/hands/pulls/comments/4332716812",
+  "pull_request_review_id": 5594593245,
+  "id": 4332716812,
+  "node_id": "PRRC_kwDOUVwTn88AAAABAkADDA",
+  "diff_hunk": "@@ -192,6 +207,59 @@\n BRIEF_RE = re.compile(r\"^(?:meta/BUILDER-(?P<n>\\d+)-PROMPT\\.md|WORKPLAN\\.md)$\")\n #: The reply the apply prompt asks for; the only literal seen outside the brief.\n APPLY_VERDICT = \"VERDICT: kit applied <sha>\"\n+#: §45: the two shapes of `[repository] main`, the apply's prompt by the setting.\n+DIRECT = config_mod.MAIN_SETTINGS[0]\n+PULL_REQUEST = config_mod.MAIN_SETTINGS[1]\n+#: §45: the one sentence the `direct` prompt gains, before \"Change nothing else.\".\n+DIRECT_REFUSED_PUSH = (\n+    \"If the push is refused, undo that commit (git reset --keep HEAD~1) and reply \"\n+    \"instead with one line: VERDICT: kit not applied pr=none <why, in one line>.\"\n+)\n+#: §45: the `pull-request` prompt, word for word; DESIGN.md wraps it, and it is one\n+#: paragraph, so its lines are joined here with single spaces, as the `direct`\n+#: prompt's pieces are. `str.format` fills `{location}`, `{touched}`, `{message}`\n+#: (as today), `{branch}`, `{title}`, `{body}` and `{subject}` (`apply_prompt`).\n+PULL_REQUEST_APPLY = \" \".join((\n+    \"Apply {location} to this repository, whose `main` takes pull requests only\",\n+    \"(DESIGN §45). First, where the working tree is. (a) On `{branch}`, this kit's\",\n+    \"own branch: go on below from the step not done yet (`gh pr list --head {branch}\",\n+    \"--state all --json number,state` names its pull request and whether it merged).\",\n+    \"(b) On another branch, not a `kit/` one, that is on `origin` (`git ls-remote\",\n+    \"--exit-code --heads origin <that branch>`) and whose pull requests, if it has\",\n+    \"any, are all open (`gh pr list --head <that branch> --state all --json state`\",\n+    \"names none `MERGED` or `CLOSED`), a mission is in flight on it: unzip -o into\",",
+  "path": "src/hands/kit.py",
+  "commit_id": "39d510a086ef2878e76cadd6b98fa25d79f82883",
+  "original_commit_id": "9fa853c749b7866ad39a2b9f73e1a8851558f910",
+  "user": {
+    "login": "qodo-code-review[bot]",
+    "id": 151058649,
+    "node_id": "BOT_kgDOCQD42Q",
+    "avatar_url": "https://avatars.githubusercontent.com/in/484649?v=4",
+    "gravatar_id": "",
+    "url": "https://api.github.com/users/qodo-code-review%5Bbot%5D",
+    "html_url": "https://github.com/apps/qodo-code-review",
+    "followers_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/followers",
+    "following_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/following{/other_user}",
+    "gists_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/gists{/gist_id}",
+    "starred_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/starred{/owner}{/repo}",
+    "subscriptions_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/subscriptions",
+    "organizations_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/orgs",
+    "repos_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/repos",
+    "events_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/events{/privacy}",
+    "received_events_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/received_events",
+    "type": "Bot",
+    "user_view_type": "public",
+    "site_admin": false
+  },
+  "body": "<img src=\"https://img.shields.io/badge/High-634FD1?style=flat-square\" height=\"20px\" alt=\"Action required\">\n\n2\\. Applies from main take the mission-branch path and fail <code>🐞 Bug</code> <code>≡ Correctness</code>\n\n<pre>\n<b><i>PULL_REQUEST_APPLY</i></b> case (b) treats <b><i>main</i></b> as an in-flight mission branch because it is on\n<b><i>origin</i></b>, is not a <b><i>kit/</i></b> branch, and has no MERGED or CLOSED head pull requests. When an apply\nstarts on <b><i>main</i></b> between missions, the builder commits and attempts to push there instead of opening\nthe kit pull request; protected <b><i>main</i></b> refuses the push, and the resulting <b><i>kit not applied pr=none</i></b>\nreply stops the pipeline through <b><i>_apply_not_landed</i></b>.\n</pre>\n\n\n<details>\n<summary><strong>Agent Prompt</strong></summary>\n\n```\n## Issue description\nCase (b) of `PULL_REQUEST_APPLY` matches `main` as an in-flight mission branch. An apply started on `main`, the normal state between missions, therefore attempts a direct push to protected `main` instead of creating the kit branch and pull request.\n\n## Fix Focus Areas\n- src/hands/kit.py[222-257]\n- docs/ARCHITECT-HANDBOOK.md[91-128]\n- DESIGN.md[3750-3790]\n\n## Recommended Fix\nExplicitly exclude `main` from case (b), so an apply starting there proceeds through case (c). Update the matching prompt text in DESIGN.md and the handbook, update tests that pin the wording, and add a test asserting that case (b) excludes `main`.\n```\n\n<code>ⓘ Copy this prompt and use it to remediate the issue with your preferred AI generation tools</code>\n</details>\n\n[Dismiss ↗](https://app.qodo.ai/findings/9a353ce0-61e2-4400-a6c3-35ec8bf69897?action=dismiss&origin=git) | [View ↗](https://app.qodo.ai/findings/9a353ce0-61e2-4400-a6c3-35ec8bf69897)",
+  "created_at": "2026-10-21T03:24:22Z",
+  "updated_at": "2026-10-21T03:24:22Z",
+  "html_url": "https://github.com/SigorMatt/hands/pull/9#discussion_r4332716812",
+  "pull_request_url": "https://api.github.com/repos/SigorMatt/hands/pulls/9",
+  "_links": {
+    "self": {
+      "href": "https://api.github.com/repos/SigorMatt/hands/pulls/comments/4332716812"
+    },
+    "html": {
+      "href": "https://github.com/SigorMatt/hands/pull/9#discussion_r4332716812"
+    },
+    "pull_request": {
+      "href": "https://api.github.com/repos/SigorMatt/hands/pulls/9"
+    }
+  },
+  "reactions": {
+    "url": "https://api.github.com/repos/SigorMatt/hands/pulls/comments/4332716812/reactions",
+    "total_count": 0,
+    "+1": 0,
+    "-1": 0,
+    "laugh": 0,
+    "hooray": 0,
+    "confused": 0,
+    "heart": 0,
+    "rocket": 0,
+    "eyes": 0
+  },
+  "start_line": 227,
+  "original_start_line": 227,
+  "start_side": "RIGHT",
+  "line": 230,
+  "original_line": 230,
+  "side": "RIGHT",
+  "author_association": "NONE",
+  "original_position": 71,
+  "position": 71,
+  "subject_type": "line"
+}

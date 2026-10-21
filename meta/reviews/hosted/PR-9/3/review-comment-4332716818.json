@@ -1,0 +1,69 @@
+{
+  "url": "https://api.github.com/repos/SigorMatt/hands/pulls/comments/4332716818",
+  "pull_request_review_id": 5594593245,
+  "id": 4332716818,
+  "node_id": "PRRC_kwDOUVwTn88AAAABAkADEg",
+  "diff_hunk": "@@ -165,6 +166,21 @@ def carries_playbook(entry: str, configured: str | None) -> bool:\n     if configured is not None:\n         known.add(configured.casefold())\n     return entry.casefold() in known\n+\n+\n+#: §45 \"A kit that carries the CI is the owner's\": an entry whose casefolded path\n+#: begins this carries the repository's CI (its workflows)…\n+CI_PREFIX = \".github/\"\n+#: …and so does the gate script every hands brief names.\n+CI_GATE = \"scripts/check\"\n+\n+\n+def carries_ci(entry: str) -> bool:\n+    \"\"\"§45: the one test of whether a kit entry carries the repository's CI — its\n+    path, casefolded, begins `.github/` or equals `scripts/check`. The engine's hold\n+    (`Spool.stored_kit_ci`) and `hands kit check`'s `WARN ci:` line ask this.\"\"\"\n+    folded = entry.casefold()\n+    return folded.startswith(CI_PREFIX) or folded == CI_GATE",
+  "path": "src/hands/spool.py",
+  "commit_id": "39d510a086ef2878e76cadd6b98fa25d79f82883",
+  "original_commit_id": "9fa853c749b7866ad39a2b9f73e1a8851558f910",
+  "user": {
+    "login": "qodo-code-review[bot]",
+    "id": 151058649,
+    "node_id": "BOT_kgDOCQD42Q",
+    "avatar_url": "https://avatars.githubusercontent.com/in/484649?v=4",
+    "gravatar_id": "",
+    "url": "https://api.github.com/users/qodo-code-review%5Bbot%5D",
+    "html_url": "https://github.com/apps/qodo-code-review",
+    "followers_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/followers",
+    "following_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/following{/other_user}",
+    "gists_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/gists{/gist_id}",
+    "starred_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/starred{/owner}{/repo}",
+    "subscriptions_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/subscriptions",
+    "organizations_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/orgs",
+    "repos_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/repos",
+    "events_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/events{/privacy}",
+    "received_events_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/received_events",
+    "type": "Bot",
+    "user_view_type": "public",
+    "site_admin": false
+  },
+  "body": "<img src=\"https://img.shields.io/badge/Medium-634FD1?style=flat-square\" height=\"20px\" alt=\"Remediation recommended\">\n\n7\\. Kits can still weaken the gate their pr merges on <code>🐞 Bug</code> <code>⛨ Security</code>\n\n<pre>\n<b><i>carries_ci</i></b> only treats an entry as CI when its casefolded path begins with <b><i>.github/</i></b> or equals\n<b><i>scripts/check</i></b>. The gate that <b><i>scripts/check</i></b> runs (<b><i>uv sync</i></b>, <b><i>ruff check .</i></b>, <b><i>pytest</i></b>) is also\nconfigured by <b><i>pyproject.toml</i></b>, <b><i>uv.lock</i></b> and <b><i>tests/conftest.py</i></b>. An architect-filed kit that\nchanges one of those files (for example pytest <b><i>addopts</i></b>, a conftest that deselects tests, or ruff\nexcludes) is still approved by the engine without a human hold, and its own pull request&#x27;s check\nthen runs the weakened gate it merges on, which is the exact risk §45&#x27;s hold is meant to close.\n</pre>\n\n\n<details>\n<summary><strong>Agent Prompt</strong></summary>\n\n```\n## Issue description\n`carries_ci` treats only `.github/` and `scripts/check` as the repository's CI. The gate that `scripts/check` runs is also driven by `pyproject.toml` (pytest/ruff config, dependencies), `uv.lock` and `tests/conftest.py`, so a role-filed kit that touches them is engine-approved and can weaken its own PR's check.\n\n## Fix Focus Areas\n- src/hands/spool.py[171-183]\n- src/hands/kit.py[1003-1015]\n- docs/ARCHITECT-HANDBOOK.md[147-162]\n\n## Recommended Fix\nExtend `carries_ci` to also match (casefolded) `pyproject.toml`, `uv.lock`, any `conftest.py`, and `scripts/` as a whole, or a configurable list. Update the hold reason text, the handbook and DESIGN wording, and the tests to match.\n```\n\n<code>ⓘ Copy this prompt and use it to remediate the issue with your preferred AI generation tools</code>\n</details>\n\n[Dismiss ↗](https://app.qodo.ai/findings/e5755419-309b-46a9-938e-af25dc3ef73c?action=dismiss&origin=git) | [View ↗](https://app.qodo.ai/findings/e5755419-309b-46a9-938e-af25dc3ef73c)",
+  "created_at": "2026-10-21T03:24:22Z",
+  "updated_at": "2026-10-21T03:24:22Z",
+  "html_url": "https://github.com/SigorMatt/hands/pull/9#discussion_r4332716818",
+  "pull_request_url": "https://api.github.com/repos/SigorMatt/hands/pulls/9",
+  "_links": {
+    "self": {
+      "href": "https://api.github.com/repos/SigorMatt/hands/pulls/comments/4332716818"
+    },
+    "html": {
+      "href": "https://github.com/SigorMatt/hands/pull/9#discussion_r4332716818"
+    },
+    "pull_request": {
+      "href": "https://api.github.com/repos/SigorMatt/hands/pulls/9"
+    }
+  },
+  "reactions": {
+    "url": "https://api.github.com/repos/SigorMatt/hands/pulls/comments/4332716818/reactions",
+    "total_count": 0,
+    "+1": 0,
+    "-1": 0,
+    "laugh": 0,
+    "hooray": 0,
+    "confused": 0,
+    "heart": 0,
+    "rocket": 0,
+    "eyes": 0
+  },
+  "start_line": 173,
+  "original_start_line": 173,
+  "start_side": "RIGHT",
+  "line": 183,
+  "original_line": 183,
+  "side": "RIGHT",
+  "author_association": "NONE",
+  "original_position": 26,
+  "position": 26,
+  "subject_type": "line"
+}

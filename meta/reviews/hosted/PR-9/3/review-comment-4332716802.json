@@ -1,0 +1,69 @@
+{
+  "url": "https://api.github.com/repos/SigorMatt/hands/pulls/comments/4332716802",
+  "pull_request_review_id": 5594593245,
+  "id": 4332716802,
+  "node_id": "PRRC_kwDOUVwTn88AAAABAkADAg",
+  "diff_hunk": "@@ -34,7 +61,8 @@ yourself:\n - With no open pull request, the review goes no further: no sub-agents, no\n   hosted review, no run of the gate. Write `meta/reviews/REVIEW-N.md` with\n   `reviewed: none` and one blocker, \"no pull request for <branch>\", commit\n-  it as below, and reply with `blockers=1 should-fix=0`.\n+  it as below, and reply with `blockers=1 should-fix=0`. With `pull_request`\n+  it is committed nowhere: `main` refuses it, and the branch may not exist.",
+  "path": "templates/REVIEW-PROTOCOL.md",
+  "commit_id": "39d510a086ef2878e76cadd6b98fa25d79f82883",
+  "original_commit_id": "9fa853c749b7866ad39a2b9f73e1a8851558f910",
+  "user": {
+    "login": "qodo-code-review[bot]",
+    "id": 151058649,
+    "node_id": "BOT_kgDOCQD42Q",
+    "avatar_url": "https://avatars.githubusercontent.com/in/484649?v=4",
+    "gravatar_id": "",
+    "url": "https://api.github.com/users/qodo-code-review%5Bbot%5D",
+    "html_url": "https://github.com/apps/qodo-code-review",
+    "followers_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/followers",
+    "following_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/following{/other_user}",
+    "gists_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/gists{/gist_id}",
+    "starred_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/starred{/owner}{/repo}",
+    "subscriptions_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/subscriptions",
+    "organizations_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/orgs",
+    "repos_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/repos",
+    "events_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/events{/privacy}",
+    "received_events_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/received_events",
+    "type": "Bot",
+    "user_view_type": "public",
+    "site_admin": false
+  },
+  "body": "<img src=\"https://img.shields.io/badge/Medium-634FD1?style=flat-square\" height=\"20px\" alt=\"Remediation recommended\">\n\n5\\. A missing pull request hides its review <code>🐞 Bug</code> <code>≡ Correctness</code>\n\n<pre>\nThe no-open-PR branch of the review protocol writes a blocker file but, under <b><i>pull_request</i></b>,\nexplicitly commits it nowhere even if the mission branch exists. When that blocker stops the\npipeline, the architect is instructed to read the review from the mission branch, where the file is\nabsent.\n</pre>\n\n\n<details>\n<summary><strong>Agent Prompt</strong></summary>\n\n```\n## Issue description\nA no-pull-request blocker review is not committed even when its mission branch exists, leaving the architect's documented read path empty.\n## Fix Focus Areas\n- templates/REVIEW-PROTOCOL.md[61-65]\n- meta/REVIEW-PROTOCOL.md[61-65]\n## Recommended Fix\nCheck whether the named mission branch exists and commit the blocker review there when it does, as the unreadable-rules path already directs. Specify a usable handoff when no branch exists.\n```\n\n<code>ⓘ Copy this prompt and use it to remediate the issue with your preferred AI generation tools</code>\n</details>\n\n[Dismiss ↗](https://app.qodo.ai/findings/d54b3307-ca23-48e9-854a-abaab34fecee?action=dismiss&origin=git) | [View ↗](https://app.qodo.ai/findings/d54b3307-ca23-48e9-854a-abaab34fecee)",
+  "created_at": "2026-10-21T03:24:22Z",
+  "updated_at": "2026-10-21T03:24:22Z",
+  "html_url": "https://github.com/SigorMatt/hands/pull/9#discussion_r4332716802",
+  "pull_request_url": "https://api.github.com/repos/SigorMatt/hands/pulls/9",
+  "_links": {
+    "self": {
+      "href": "https://api.github.com/repos/SigorMatt/hands/pulls/comments/4332716802"
+    },
+    "html": {
+      "href": "https://github.com/SigorMatt/hands/pull/9#discussion_r4332716802"
+    },
+    "pull_request": {
+      "href": "https://api.github.com/repos/SigorMatt/hands/pulls/9"
+    }
+  },
+  "reactions": {
+    "url": "https://api.github.com/repos/SigorMatt/hands/pulls/comments/4332716802/reactions",
+    "total_count": 0,
+    "+1": 0,
+    "-1": 0,
+    "laugh": 0,
+    "hooray": 0,
+    "confused": 0,
+    "heart": 0,
+    "rocket": 0,
+    "eyes": 0
+  },
+  "start_line": 64,
+  "original_start_line": 64,
+  "start_side": "RIGHT",
+  "line": 65,
+  "original_line": 65,
+  "side": "RIGHT",
+  "author_association": "NONE",
+  "original_position": 40,
+  "position": 40,
+  "subject_type": "line"
+}
