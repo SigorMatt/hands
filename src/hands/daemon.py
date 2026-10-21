@@ -293,7 +293,7 @@ class Daemon:
         resumed = await self._feed_orphans()
         # §44 rule 4: a human pause restored here, its orphans fed and its §6 resumes
         # decided, may be at rest already with no job left to end; a set mark is not
-        # published again.
+        # published again unless an end was kept after it (§45).
         self.playbook.check_at_rest()
         if self.phone is not None:
             self.phone.start()

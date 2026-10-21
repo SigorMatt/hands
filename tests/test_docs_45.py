@@ -417,6 +417,29 @@ def test_the_playbook_doc_says_the_engines_stop_for_an_apply_that_did_not_land()
         assert said in strip_paths(text), f"docs/PLAYBOOK.md does not say {said!r}"
 
 
+def test_the_documents_say_at_rest_is_published_again_after_the_kept_list_changed() -> None:
+    """§45 should-fix 1 (H-079): rule 4's "again" is an end kept or replaced after
+    the last publication, not only a replaced one."""
+    (row,) = [line for line in rows_of(HANDBOOK.read_text(encoding="utf-8"))
+              if line.startswith("| `hands: at rest`")]
+    again = ("again, with the new list, at the first such moment after the kept list has"
+             " changed — an end kept or replaced after the last publication (§45)")
+    assert again in strip_paths(row)
+    assert "when a kept end is replaced after it" not in strip_paths(row)
+    playbook = read("docs", "PLAYBOOK.md")
+    for said in ("again, with the new list, at the first such moment after the kept list"
+                 " has changed — an end kept or replaced after the last publication",
+                 "a restart publishes nothing unless an end was kept after it"):
+        assert said in strip_paths(playbook), f"docs/PLAYBOOK.md does not say {said!r}"
+    assert "when a kept end is replaced after it" not in strip_paths(playbook)
+    operations = read("docs", "OPERATIONS.md")
+    for said in ("An end kept after it (a send of yours under the pause) publishes it"
+                 " again, with the new list, once nothing runs",
+                 "it publishes `at rest` only for an end kept after the mark and not yet"
+                 " published"):
+        assert said in strip_paths(operations), f"docs/OPERATIONS.md does not say {said!r}"
+
+
 def test_this_repositorys_claude_md_says_how_main_moves_by_the_setting() -> None:
     text = read("CLAUDE.md")
     assert (

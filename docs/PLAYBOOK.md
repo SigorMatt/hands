@@ -376,9 +376,11 @@ is as above.
   resume is scheduled — checked when the pause is sent and whenever a job ends,
   however it ends — handsd publishes `hands: at rest`, naming each kept end
   (role, job id, its verdict line cut to 100 characters) or saying none is
-  kept. Once per pause (the mark is in `pipeline.json`, so a restart does not
-  publish it again), and again with the new list when a kept end is replaced
-  after it.
+  kept. Once per pause, and again, with the new list, at the first such moment
+  after the kept list has changed — an end kept or replaced after the last
+  publication, such as the end of a send of yours to the aux under the pause
+  (§45). The mark is in `pipeline.json`, so a restart publishes nothing unless
+  an end was kept after it.
 - **`resume`.** It reloads the playbook first, so what was committed at rest is
   the playbook the replay uses. A playbook file that does not load, or no
   playbook while ends are kept, refuses the `resume` with the load's reason, and

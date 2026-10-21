@@ -1661,10 +1661,14 @@ class PipelineState:
     #: §44 rule 2: the reason of the first stop suppressed under the human pause, or
     #: None. Once set, a `resume` rule fires nothing until the pause ends.
     suppressed_stop: str | None = None
-    #: §44 rule 4: when `hands: at rest` was published under this human pause, or
-    #: None. Persisted so a restart does not publish it again; cleared when a kept
-    #: end is replaced after it, so it is published again with the new list.
+    #: §44 rule 4, §45: when `hands: at rest` was last published under this human
+    #: pause, or None. Persisted so a restart does not publish it again.
     at_rest: str | None = None
+    #: §45 (H-079): an end was kept or replaced after `at_rest`, so the kept list has
+    #: changed since that publication and `at rest` is published again, with the new
+    #: list, at the next moment nothing runs. Persisted, so a restart publishes an
+    #: end kept after the mark and never published, and nothing otherwise.
+    kept_since_rest: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -1685,6 +1689,7 @@ class PipelineState:
             "kept": [dict(entry) for entry in self.kept],
             "suppressed_stop": self.suppressed_stop,
             "at_rest": self.at_rest,
+            "kept_since_rest": self.kept_since_rest,
         }
 
     @classmethod
@@ -1716,6 +1721,7 @@ class PipelineState:
                 data["suppressed_stop"] if isinstance(data.get("suppressed_stop"), str) else None
             ),
             at_rest=data["at_rest"] if isinstance(data.get("at_rest"), str) else None,
+            kept_since_rest=data.get("kept_since_rest") is True,
         )
 
 
@@ -2216,10 +2222,10 @@ class PlaybookEngine:
         self.state.kept = [
             kept for kept in self.state.kept if kept.get("role") != job.role
         ] + [entry]
-        if replaced and self.state.at_rest is not None:
-            # §44 rule 4: a kept end replaced after `at rest` publishes it again, with
-            # the new list, at the next moment nothing runs.
-            self.state.at_rest = None
+        if self.state.at_rest is not None:
+            # §45 (H-079): an end kept or replaced after `at rest` publishes it again,
+            # with the new list, at the next moment nothing runs.
+            self.state.kept_since_rest = True
         self._save()
         log.info("playbook: paused by a human; %s of job %s is kept until `resume` (§44)",
                  event, job.id)
@@ -3705,12 +3711,17 @@ class PlaybookEngine:
         """§44 rule 4: under a human pause, at the first moment no job is running,
         queued or held and no §6 resume is scheduled, publish `hands: at rest` once,
         naming each kept end or saying none is kept, and record the mark with the
-        pause (`at_rest`). Called when the pause is sent and whenever a job reaches a
+        pause (`at_rest`); and again, with the new list, at the first such moment
+        after an end was kept or replaced after that publication (§45,
+        `kept_since_rest`). Called when the pause is sent and whenever a job reaches a
         terminal state: here from `on_job`, and by the daemon and the API for the
         ends that do not reach `on_job` (a job denied, cancelled while queued, or one
-        the runner could not spawn). Over an unpaused pipeline, another stop, or a
-        pause already at rest it does nothing."""
-        if not self.human_paused or self.state.at_rest is not None:
+        the runner could not spawn), and at a daemon start. Over an unpaused pipeline,
+        another stop, or a pause already at rest with nothing kept since it does
+        nothing."""
+        if not self.human_paused:
+            return
+        if self.state.at_rest is not None and not self.state.kept_since_rest:
             return
         busy = [job.id for job in self.spool.list_jobs() if job.state not in TERMINAL_STATES]
         if busy:
@@ -3721,6 +3732,7 @@ class PlaybookEngine:
             return
         kept = [dict(entry) for entry in self.state.kept]
         self.state.at_rest = now_iso()
+        self.state.kept_since_rest = False
         self._save()
         payload = {"message": _at_rest_message(kept), "kept": kept}
         log.info("playbook: at rest under a human pause (%d kept end(s))", len(kept))
@@ -3759,6 +3771,7 @@ class PlaybookEngine:
         self.state.kept = []
         self.state.suppressed_stop = None
         self.state.at_rest = None
+        self.state.kept_since_rest = False
         self._save()
         self.spool.append_event("pipeline.resumed", {"by": by, "was": was})
         log.info("playbook: un-paused by %s (was: %s)", by, was)

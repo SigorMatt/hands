@@ -905,14 +905,92 @@ def test_at_rest_after_a_job_fails_with_no_resume_rule(tmp_home: Path, workdir: 
 
 
 def test_at_rest_is_not_published_again_after_a_restart(tmp_home: Path, workdir: Path) -> None:
+    """§45 should-fix 1: a restart with no end kept after the mark publishes nothing."""
     engine, recorder = held_engine(tmp_home, workdir)
     run(engine.pause())
     assert len(rests(recorder)) == 1
     again, after = restarted(tmp_home, workdir)
     assert again.pipeline()["at_rest"] == engine.state.at_rest
+    again.check_at_rest()  # what a daemon start does (daemon.py)
     run(again.on_job(ended(again.spool, "builder", "VERDICT: note the tree is clean")))
-    run(again.on_job(ended(again.spool, "aux", REVIEWED)))
-    assert rests(after) == [], "the mark is in pipeline.json"
+    assert rests(after) == [], "the mark is in pipeline.json and nothing was kept after it"
+
+
+def test_a_restart_publishes_an_end_kept_after_the_mark_and_never_published(
+    tmp_home: Path, workdir: Path
+) -> None:
+    """§45 should-fix 1: an end kept after the mark while another job ran, the
+    daemon then dying before anything else ended, is published by the restart."""
+    engine, recorder = held_engine(tmp_home, workdir)
+    run(engine.pause())
+    assert len(rests(recorder)) == 1, "an idle pipeline: at rest at once"
+    aux = running_on(engine.spool, "aux")
+    builder = running_on(engine.spool, "builder")
+    reviewed = engine.spool.transition(aux, "done", verdict=REVIEWED, result=REVIEWED)
+    run(engine.on_job(reviewed))
+    assert len(rests(recorder)) == 1, "the builder runs: not at rest"
+    # the daemon dies; the builder is found ended by the next one, nothing fed yet
+    engine.spool.transition(builder, "killed")
+    again, after = restarted(tmp_home, workdir)
+    again.check_at_rest()  # what a daemon start does (daemon.py)
+    (note,) = rests(after)
+    assert f"aux job {reviewed.id} ({REVIEWED})" in strip_paths(note["message"])
+    assert [entry["job"] for entry in note["kept"]] == [reviewed.id]
+    again.check_at_rest()
+    assert len(rests(after)) == 1, "published once for that list"
+
+
+def test_at_rest_is_published_again_when_a_laptop_send_to_the_aux_is_kept_after_it(
+    tmp_home: Path, workdir: Path
+) -> None:
+    """§45 should-fix 1 (H-079): an end of a role with nothing kept yet, kept after
+    the mark, publishes `at rest` again naming both ends, once its job has ended."""
+    engine, recorder = held_engine(tmp_home, workdir)
+    builder = running_on(engine.spool, "builder")
+    run(engine.pause())
+    first = engine.spool.transition(builder, "done", verdict=FINISHED, result=FINISHED)
+    run(engine.on_job(first))
+    (note,) = rests(recorder)
+    assert [entry["job"] for entry in note["kept"]] == [first.id]
+    # a laptop `hands send` to the aux under the pause
+    sent = engine.spool.create_job(role="aux", context="clear", prompt="review", origin="cli")
+    run(engine.on_job_start(sent))
+    assert paused_by_human(engine)
+    engine.spool.transition(sent, "running")
+    engine.check_at_rest()
+    assert len(rests(recorder)) == 1, "the aux runs: not at rest"
+    reviewed = engine.spool.transition(sent.id, "done", verdict=REVIEWED, result=REVIEWED)
+    run(engine.on_job(reviewed))
+    first_note, second_note = rests(recorder)
+    message = strip_paths(second_note["message"])
+    assert f"builder job {first.id} ({FINISHED})" in message
+    assert f"aux job {reviewed.id} ({REVIEWED})" in message
+    assert [entry["job"] for entry in second_note["kept"]] == [first.id, reviewed.id]
+    assert all_titles(recorder) == [STOPPED, AT_REST, AT_REST]
+    # nothing kept since: no third
+    engine.check_at_rest()
+    run(engine.on_job(ended(engine.spool, "builder", "VERDICT: note the tree is clean")))
+    assert len(rests(recorder)) == 2
+
+
+def test_an_end_kept_while_a_job_runs_is_published_the_next_moment_nothing_runs(
+    tmp_home: Path, workdir: Path
+) -> None:
+    engine, recorder = held_engine(tmp_home, workdir)
+    run(engine.pause())
+    assert len(rests(recorder)) == 1, "an idle pipeline: at rest at once"
+    aux = running_on(engine.spool, "aux")
+    builder = running_on(engine.spool, "builder")
+    reviewed = engine.spool.transition(aux, "done", verdict=REVIEWED, result=REVIEWED)
+    run(engine.on_job(reviewed))
+    assert kept_jobs(engine) == [reviewed.id]
+    assert len(rests(recorder)) == 1, "the builder runs: no publication"
+    noted = engine.spool.transition(builder, "done", verdict="VERDICT: note the tree is clean",
+                                    result="VERDICT: note the tree is clean")
+    run(engine.on_job(noted))
+    _, second = rests(recorder)
+    assert [entry["job"] for entry in second["kept"]] == [reviewed.id]
+    assert f"aux job {reviewed.id} ({REVIEWED})" in strip_paths(second["message"])
 
 
 def test_at_rest_is_published_again_with_the_new_list_when_a_kept_end_is_replaced(
@@ -925,14 +1003,14 @@ def test_at_rest_is_published_again_with_the_new_list_when_a_kept_end_is_replace
     run(engine.on_job(first))
     review = ended(engine.spool, "aux", REVIEWED)
     run(engine.on_job(review))
-    assert len(rests(recorder)) == 1, "a kept end that replaces nothing: not again"
+    assert len(rests(recorder)) == 2, "an end kept after the mark: again (§45)"
     # the human's own send under the pause, whose end replaces the builder's
     sent = engine.spool.create_job(role="builder", context="keep", prompt="go on", origin="cli")
     run(engine.on_job_start(sent))
     engine.spool.transition(sent, "running")
     later = engine.spool.transition(sent.id, "done", verdict=QUESTION, result=QUESTION)
     run(engine.on_job(later))
-    first_note, second_note = rests(recorder)
+    first_note, _, second_note = rests(recorder)
     assert first.id in strip_paths(first_note["message"])
     message = strip_paths(second_note["message"])
     assert first.id not in strip_paths(message)

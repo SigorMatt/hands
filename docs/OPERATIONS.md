@@ -264,6 +264,8 @@ file, a playbook change) while an autonomous series runs (DESIGN §44):
    finishes; the end that would start the next step is kept, not decided.
 2. Wait for `hands: at rest`: nothing is running, queued or held, and it names
    the kept end, if any. `hands pipeline` prints the same as its `kept` lines.
+   An end kept after it (a send of yours under the pause) publishes it again,
+   with the new list, once nothing runs.
    `go` and `consult` are refused until step 4.
 3. Commit, in the builder's repository — the project's chat, or a decisions
    kit whose apply (`kit <secret>`, Approve) commits without ending the pause.
@@ -277,7 +279,8 @@ file, a playbook change) while an autonomous series runs (DESIGN §44):
    why, and the pause and its kept end stay until a `resume` that loads.
 
 A daemon restart meanwhile keeps the pause, the kept end and the `at rest`
-mark (`pipeline.json`), and a builder the restart killed is resumed by the
+mark (`pipeline.json`): it publishes `at rest` only for an end kept after the
+mark and not yet published, and a builder the restart killed is resumed by the
 playbook's `builder.orphaned` rule as when nothing is paused.
 
 ### Switching `main` to pull requests only

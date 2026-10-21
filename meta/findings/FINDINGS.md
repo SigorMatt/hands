@@ -2991,8 +2991,7 @@ changed (an end kept or replaced after the last publication); the mark
 records when it was last published; a restart publishes nothing unless an
 end was kept after the mark.
 
-Status: decided (DESIGN §45: again at the first moment nothing runs after
-the kept list changed), scheduled for U6.
+Status: resolved (mission 29 U6, this commit — DESIGN §45 "Review 28's should-fix items" 1: under a human pause an end kept or replaced after `hands: at rest` was published sets `kept_since_rest` in `pipeline.json` (`PlaybookEngine._keep`), and `check_at_rest` publishes `at rest` again, with the new list, at the first moment after it that no job is running, queued or held and no §6 resume is scheduled, then clears it; `at_rest` records the last publication. A daemon start publishes nothing unless an end was kept after the mark and not yet published. The handbook's §19 `at rest` row, docs/PLAYBOOK.md and docs/OPERATIONS.md say it. Tests: tests/test_human_pause.py, tests/test_docs_45.py)
 
 ## H-080 — an apply that did not land meets the playbook's rules
 
