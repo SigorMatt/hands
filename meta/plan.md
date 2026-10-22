@@ -12,16 +12,16 @@ and pushed, `[b]` = blocked (two failures) or refused.
 - [x] U0 (this commit) Plan, branch and findings (`plan:`) — this file,
       meta/CHECKPOINT.md, meta/findings/FINDINGS.md (H-081, H-082, H-083
       decided; H-084, H-085 filed)
-- [ ] U1 Case (b), and the setting's refusal (§46 "H-082"; review 29's
+- [x] U1 16723ad Case (b), and the setting's refusal (§46 "H-082"; review 29's
       should-fix 3 is U1's; §45) — src/hands/kit.py, src/hands/config.py,
       handbook §3 quotation, FINDINGS (H-082 resolved), tests
-- [ ] U2 The engine approves plan files only (§46 "H-083"; §31, §32, §43,
+- [x] U2 8b3aa60 The engine approves plan files only (§46 "H-083"; §31, §32, §43,
       §45) — src/hands/spool.py, playbook.py, daemon.py (if needed),
       kit.py, architect/CLAUDE.md, handbook §3/§12/§19 +
       tests/test_operator_table.py, docs/PLAYBOOK.md, docs/INTEGRATION.md,
       templates/PLAYBOOK-missions.toml, templates/PLAYBOOK-runs.toml,
       FINDINGS (H-083 resolved), tests
-- [ ] U3 The review merges what it reviewed, its failure paths, and the
+- [x] U3 2a2442e The review merges what it reviewed, its failure paths, and the
       blocker for a bug in the pull request's own code (§46 "H-081", "A
       confirmed bug ...", review 29's should-fix 2 and 4; §35, §45) —
       meta/REVIEW-PROTOCOL.md, templates/REVIEW-PROTOCOL.md,

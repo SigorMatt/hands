@@ -10,6 +10,33 @@ Done: U0 (`plan:`) — plan, branch, findings (H-081/H-082/H-083
 decided and scheduled; H-084, H-085 filed). Green 3/3 (5366). Pushed;
 `origin/mission-30` exists.
 
+Done: U1 16723ad — PULL_REQUEST_APPLY case (b) "neither `main` nor a
+`kit/` one" (word-for-word test built from §45 with §46's block); config
+`_choice` refuses any non-value of any type naming both (repr of the
+value); handbook §3; H-082 resolved; green 3/3 (5370). Not proven: a real
+builder on `main` taking (c).
+
+Done: U2 8b3aa60 — spool.is_plan_file / stored_kit_non_plan /
+stored_kit_files; playbook.plan_hold_reason (§43's wins; named_paths by an
+import inside the engine method); kit.send_named_paths, WARN owner:,
+owner_warnings; CI hold removed; architect rules 3/8; handbook §3/§12/§19;
+PLAYBOOK.md, INTEGRATION.md, templates; tests/test_plan_files.py added;
+harness playbookless_kit no longer carries meta/REVIEW-PROTOCOL.md; H-083
+resolved; green 3/3 (5390). Not proven: daemon end to end with a held
+non-plan kit; a builder cwd below the repo root.
+
+Done: U3 2a2442e — both protocols (moved-branch blocker and refused-push
+steps, --match-head-commit merge, not merged with or without the rule,
+failure paths to the branch via ls-remote, Direct brief nowhere, `## A
+defect (DESIGN §46)`, `## The end (every shape)` on main); brief template
+sentence; handbook §9/§19; tests/test_docs_46.py added; H-081, H-084,
+H-085 resolved; green 3/3 (5459). Not proven: a real reviewer following
+it; gh refusing a moved head. Left unchanged (outside §46's list):
+architect/CLAUDE.md rule 1, handbook §7's blocker list.
+
+In progress: U4 — final report, PR, CI, hosted review, ## Hosted review
+and ## CI sections, tree to main.
+
 Standing constraints: one foreground sub-agent per unit, commit and push every
 unit to `mission-30` (never `main`), ./scripts/check green three consecutive
 runs before each commit (each a foreground call, 15-minute / 900000 ms
