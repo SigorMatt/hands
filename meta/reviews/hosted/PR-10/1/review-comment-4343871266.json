@@ -1,0 +1,69 @@
+{
+  "url": "https://api.github.com/repos/SigorMatt/hands/pulls/comments/4343871266",
+  "pull_request_review_id": 5608459615,
+  "id": 4343871266,
+  "node_id": "PRRC_kwDOUVwTn88AAAABAuo3Ig",
+  "diff_hunk": "@@ -1,49 +1,46 @@\n-# plan — mission 29 (a `main` that takes pull requests only)\n+# plan — mission 30 (the gate's follow-up before the switch)\n \n-Source: meta/BUILDER-29-PROMPT.md, DESIGN v3.28 §45 (with §4, §6, §8, §10,\n-§13, §27, §31, §32, §35, §36, §39, §43, §44), meta/reviews/REVIEW-28.md,\n-meta/findings/FINDINGS.md (H-079, H-080), docs/PR-CI-GATE.md. Branch\n-`mission-29`, created from `main` (f7d61c8, `plan: mission 29 kit (DESIGN\n-v3.28, main by pull requests only)`). Units run in order; each ends with a\n-commit and a push to `mission-29`; the last unit opens the pull request,\n-waits for its `check` check and the hosted review, and returns the tree to\n-`main`. `[x]` = done and pushed, `[b]` = blocked (two failures) or refused.\n+Source: meta/BUILDER-30-PROMPT.md, DESIGN v3.29 §46 (with §43, §45, §35),\n+meta/reviews/REVIEW-29.md, meta/findings/FINDINGS.md (H-081, H-082, H-083;",
+  "path": "meta/plan.md",
+  "commit_id": "b1ad99d66014f5ea68e9662d7491b87f9dc6fc64",
+  "original_commit_id": "b1ad99d66014f5ea68e9662d7491b87f9dc6fc64",
+  "user": {
+    "login": "qodo-code-review[bot]",
+    "id": 151058649,
+    "node_id": "BOT_kgDOCQD42Q",
+    "avatar_url": "https://avatars.githubusercontent.com/in/484649?v=4",
+    "gravatar_id": "",
+    "url": "https://api.github.com/users/qodo-code-review%5Bbot%5D",
+    "html_url": "https://github.com/apps/qodo-code-review",
+    "followers_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/followers",
+    "following_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/following{/other_user}",
+    "gists_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/gists{/gist_id}",
+    "starred_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/starred{/owner}{/repo}",
+    "subscriptions_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/subscriptions",
+    "organizations_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/orgs",
+    "repos_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/repos",
+    "events_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/events{/privacy}",
+    "received_events_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/received_events",
+    "type": "Bot",
+    "user_view_type": "public",
+    "site_admin": false
+  },
+  "body": "<img src=\"https://img.shields.io/badge/Medium-634FD1?style=flat-square\" height=\"20px\" alt=\"Remediation recommended\">\n\n2\\. Sub-agents edit protected mission metadata <code>📘 Rule violation</code> <code>§ Compliance</code>\n\n<pre>\nThe U0 plan commit modifies <b><i>meta/plan.md</i></b> and <b><i>meta/CHECKPOINT.md</i></b>, despite the mission&#x27;s standing\nconstraint that sub-agents must not edit those files. Protected planning state can therefore be\nrewritten by an automated unit, leaving later builders with metadata that does not reflect the\ndesignated owner&#x27;s checkpoint or plan.\n</pre>\n\n\n<details>\n<summary><strong>Agent Prompt</strong></summary>\n\n```\n## Issue description\nThe PR modifies `meta/plan.md` and `meta/CHECKPOINT.md`, which the compliance rule reserves from sub-agent edits.\n\n## Fix Focus Areas\n- meta/plan.md[1-4]\n- meta/CHECKPOINT.md[3-6]\n\n## Recommended Fix\nRemove the sub-agent-authored changes to `meta/plan.md` and `meta/CHECKPOINT.md`, or move the plan and checkpoint updates into an owner-controlled step that is not performed by a sub-agent.\n```\n\n<code>ⓘ Copy this prompt and use it to remediate the issue with your preferred AI generation tools</code>\n</details>\n\n[Dismiss ↗](https://app.qodo.ai/findings/c0e7b7dc-4f2c-4815-9fa8-ea793a134dc3?action=dismiss&origin=git) | [View ↗](https://app.qodo.ai/findings/c0e7b7dc-4f2c-4815-9fa8-ea793a134dc3)",
+  "created_at": "2026-10-22T02:07:25Z",
+  "updated_at": "2026-10-22T02:07:25Z",
+  "html_url": "https://github.com/SigorMatt/hands/pull/10#discussion_r4343871266",
+  "pull_request_url": "https://api.github.com/repos/SigorMatt/hands/pulls/10",
+  "_links": {
+    "self": {
+      "href": "https://api.github.com/repos/SigorMatt/hands/pulls/comments/4343871266"
+    },
+    "html": {
+      "href": "https://github.com/SigorMatt/hands/pull/10#discussion_r4343871266"
+    },
+    "pull_request": {
+      "href": "https://api.github.com/repos/SigorMatt/hands/pulls/10"
+    }
+  },
+  "reactions": {
+    "url": "https://api.github.com/repos/SigorMatt/hands/pulls/comments/4343871266/reactions",
+    "total_count": 0,
+    "+1": 0,
+    "-1": 0,
+    "laugh": 0,
+    "hooray": 0,
+    "confused": 0,
+    "heart": 0,
+    "rocket": 0,
+    "eyes": 0
+  },
+  "start_line": 1,
+  "original_start_line": 1,
+  "start_side": "RIGHT",
+  "line": 4,
+  "original_line": 4,
+  "side": "RIGHT",
+  "author_association": "NONE",
+  "original_position": 13,
+  "position": 13,
+  "subject_type": "line"
+}

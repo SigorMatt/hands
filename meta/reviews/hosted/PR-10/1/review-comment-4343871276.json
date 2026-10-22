@@ -1,0 +1,69 @@
+{
+  "url": "https://api.github.com/repos/SigorMatt/hands/pulls/comments/4343871276",
+  "pull_request_review_id": 5608459615,
+  "id": 4343871276,
+  "node_id": "PRRC_kwDOUVwTn88AAAABAuo3LA",
+  "diff_hunk": "@@ -266,24 +318,40 @@ there is nothing to carry.\n ## The merge (with a PR)\n \n With `blockers=0`, merge the PR yourself — `gh pr merge <number> --merge\n---subject \"merge: mission N (PR #<number>)\"` (a merge commit, never a\n-squash: the per-unit commits are what the next cold review works on) — then\n-bring the local tree level: `git checkout main && git pull --ff-only`. With\n-blockers, the review leaves the PR open; say so in the reply, after the\n-verdict line. Without a PR there is nothing to merge.\n+--match-head-commit <sha> --subject \"merge: mission N (PR #<number>)\"` (a\n+merge commit, never a squash: the per-unit commits are what the next cold\n+review works on), `<sha>` being the whole sha of the reviewed tip when the\n+review was committed to `main`, and the review's own commit (`git rev-parse\n+HEAD` after its push) when it was committed to the branch; gh refuses the\n+merge when the head is another commit — then bring the local tree level:\n+`git checkout main && git pull --ff-only`. With blockers, the review leaves\n+the PR open; say so in the reply, after the verdict line. Without a PR there\n+is nothing to merge.\n+\n+A merge that is refused or not made, with or without the `pull_request`\n+rule, is a blocker: add it to `REVIEW-N.md`, \"the merge was not made: <the\n+command's last line>\", commit it where the review was (to `main` without\n+the rule, to the branch with it) as `review: mission N (not merged)`, push,\n+and reply with that blocker counted. A clean verdict always means a merged",
+  "path": "meta/REVIEW-PROTOCOL.md",
+  "commit_id": "b1ad99d66014f5ea68e9662d7491b87f9dc6fc64",
+  "original_commit_id": "b1ad99d66014f5ea68e9662d7491b87f9dc6fc64",
+  "user": {
+    "login": "qodo-code-review[bot]",
+    "id": 151058649,
+    "node_id": "BOT_kgDOCQD42Q",
+    "avatar_url": "https://avatars.githubusercontent.com/in/484649?v=4",
+    "gravatar_id": "",
+    "url": "https://api.github.com/users/qodo-code-review%5Bbot%5D",
+    "html_url": "https://github.com/apps/qodo-code-review",
+    "followers_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/followers",
+    "following_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/following{/other_user}",
+    "gists_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/gists{/gist_id}",
+    "starred_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/starred{/owner}{/repo}",
+    "subscriptions_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/subscriptions",
+    "organizations_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/orgs",
+    "repos_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/repos",
+    "events_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/events{/privacy}",
+    "received_events_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/received_events",
+    "type": "Bot",
+    "user_view_type": "public",
+    "site_admin": false
+  },
+  "body": "<img src=\"https://img.shields.io/badge/Medium-634FD1?style=flat-square\" height=\"20px\" alt=\"Remediation recommended\">\n\n3\\. A moved head prevents saving the blocker <code>🐞 Bug</code> <code>☼ Reliability</code>\n\n<pre>\nThe new <b><i>not merged</i></b> path requires a blocker commit on the branch but gives no recovery step if that\ncommit&#x27;s push is refused. When the head moves after the review commit was pushed,\n<b><i>--match-head-commit</i></b> refuses the merge and the local branch is behind the remote, so pushing the\nrequired blocker commit is non-fast-forward.\n</pre>\n\n\n<details>\n<summary><strong>Agent Prompt</strong></summary>\n\n```\n## Issue description\nA moved PR head makes the guarded merge fail, then prevents the protocol from pushing its required `not merged` blocker commit to the stale local branch.\n\n## Fix Focus Areas\n- meta/REVIEW-PROTOCOL.md[331-347]\n- templates/REVIEW-PROTOCOL.md[331-347]\n\n## Recommended Fix\nSpecify a recovery path for a refused push of the `not merged` commit: fetch the new branch tip, put the blocker review on that tip without merging, and push it. If that cannot be done, specify how to leave the local branch usable and report the blocker in the reply.\n```\n\n<code>ⓘ Copy this prompt and use it to remediate the issue with your preferred AI generation tools</code>\n</details>\n\n[Dismiss ↗](https://app.qodo.ai/findings/8942f708-6508-4af5-a310-e644960be71e?action=dismiss&origin=git) | [View ↗](https://app.qodo.ai/findings/8942f708-6508-4af5-a310-e644960be71e)",
+  "created_at": "2026-10-22T02:07:25Z",
+  "updated_at": "2026-10-22T02:07:25Z",
+  "html_url": "https://github.com/SigorMatt/hands/pull/10#discussion_r4343871276",
+  "pull_request_url": "https://api.github.com/repos/SigorMatt/hands/pulls/10",
+  "_links": {
+    "self": {
+      "href": "https://api.github.com/repos/SigorMatt/hands/pulls/comments/4343871276"
+    },
+    "html": {
+      "href": "https://github.com/SigorMatt/hands/pull/10#discussion_r4343871276"
+    },
+    "pull_request": {
+      "href": "https://api.github.com/repos/SigorMatt/hands/pulls/10"
+    }
+  },
+  "reactions": {
+    "url": "https://api.github.com/repos/SigorMatt/hands/pulls/comments/4343871276/reactions",
+    "total_count": 0,
+    "+1": 0,
+    "-1": 0,
+    "laugh": 0,
+    "hooray": 0,
+    "confused": 0,
+    "heart": 0,
+    "rocket": 0,
+    "eyes": 0
+  },
+  "start_line": 331,
+  "original_start_line": 331,
+  "start_side": "RIGHT",
+  "line": 335,
+  "original_line": 335,
+  "side": "RIGHT",
+  "author_association": "NONE",
+  "original_position": 136,
+  "position": 136,
+  "subject_type": "line"
+}

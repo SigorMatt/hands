@@ -3135,3 +3135,28 @@ left on the mission's branch takes another case of the apply prompt.
 Direction. DESIGN §46 "Review 29's should-fix items" 4.
 
 Status: resolved (mission 30 U3, this commit — DESIGN §46 "Review 29's should-fix items" 4: both review protocols end, in every shape, in a section `## The end (every shape)`: a review that has checked out the mission's branch ends with `git checkout main && git pull --ff-only`, and the failure paths end as it says; the handbook's §9 says so. Tests: tests/test_docs_46.py)
+
+## H-086 — a review on `main` whose `not merged` push and recovery both fail leaves local `main` ahead
+
+Severity: low · Component: meta/REVIEW-PROTOCOL.md,
+templates/REVIEW-PROTOCOL.md ("A merge that is refused or not made");
+DESIGN §46 "H-081"
+Filed by: mission 30 orchestrator, U4 (2026-10-22), from the sub-agent's
+report on the fix of PR #10's hosted finding 3 (676aa1b).
+Evidence: with no `pull_request` rule the review is committed to `main`.
+When the `not merged` blocker's push is refused and the rebase onto
+`origin/main` or the push after it fails too, the protocol commits nothing
+more and returns the tree to `main` with `git pull --ff-only`; §46's
+`git branch -f <branch> origin/<branch>` resets only the mission's branch,
+so the unpushed `review:` commits stay on local `main` and that pull can
+fail (diverged).
+
+Problem. The next kit's apply runs on a local `main` that is not
+`origin/main`.
+
+Decision needed. Whether that path resets local `main` to `origin/main`
+(`git reset --hard origin/main` on `main`, dropping the unpushed review
+commits as §46 drops the branch's), or stops and replies for the human.
+Reached only without the rule, after two refusals.
+
+Status: open (needs a design decision).

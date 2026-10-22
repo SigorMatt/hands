@@ -27,7 +27,7 @@ and pushed, `[b]` = blocked (two failures) or refused.
       meta/REVIEW-PROTOCOL.md, templates/REVIEW-PROTOCOL.md,
       templates/BUILDER-N-PROMPT.md, handbook §9/§19, FINDINGS (H-081,
       H-084, H-085 resolved), tests
-- [ ] U4 Final report, the pull request, its checks and the hosted review's
+- [x] U4 b1ad99d, 676aa1b, 5a3a5a4, (this commit) Final report, the pull request, its checks and the hosted review's
       findings — meta/FINAL-REPORT-30.md (drafted under meta/drafts/),
       meta/reviews/hosted/PR-<pr>/
 

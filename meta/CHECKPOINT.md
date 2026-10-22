@@ -34,8 +34,15 @@ H-085 resolved; green 3/3 (5459). Not proven: a real reviewer following
 it; gh refusing a moved head. Left unchanged (outside §46's list):
 architect/CLAUDE.md rule 1, handbook §7's blocker list.
 
-In progress: U4 — final report, PR, CI, hosted review, ## Hosted review
-and ## CI sections, tree to main.
+Done: U4 b1ad99d (report), PR #10; check passed at b1ad99d; hosted fetch
+1: 4 findings — 1, 3 fixed in 676aa1b (protocol: check after the pull,
+HEAD = reviewed; not-merged push recovery), 4 fixed in 5a3a5a4
+(casefolded named exclusion), 2 dismissed (orchestrator's own files);
+fetch 2: 1 of 4 open (the dismissed one); check passed at 5a3a5a4
+(github-actions 15368); H-086 filed (not-merged on main, both refusals);
+green 3/3 (5475); (this commit) the Hosted review and CI sections +
+archive PR-10/1..2.
+Mission 30 — FINISHED after this push and its check; tree returns to main.
 
 Standing constraints: one foreground sub-agent per unit, commit and push every
 unit to `mission-30` (never `main`), ./scripts/check green three consecutive
