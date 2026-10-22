@@ -974,7 +974,8 @@ def test_the_protocol_template_finds_the_pr_reads_the_hosted_review_and_merges()
         "`reviewed: <sha>`",
         "first line after the title",
         "before any merge",
-        "`gh pr merge <number> --merge --subject \"merge: mission N (PR #<number>)\"`",
+        "`gh pr merge <number> --merge --match-head-commit <sha> --subject"
+        " \"merge: mission N (PR #<number>)\"`",
         "`git checkout main && git pull --ff-only`",
         "leaves the PR open",
         "VERDICT: review mission N blockers=<k> should-fix=<m>",

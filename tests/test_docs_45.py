@@ -62,9 +62,10 @@ PROTOCOL_45 = {
         " before any merge"
     ),
     "the-direct-blocker": "\"a direct mission on a `main` that takes pull requests only\"",
-    "no-pr-committed-nowhere": (
-        "With `pull_request` it is committed nowhere: `main` refuses it, and the"
-        " branch may not exist"
+    # §46 "Review 29's should-fix items" 2 moved this pin (H-084).
+    "no-pr-committed-to-the-branch-on-origin": (
+        "With `pull_request` it is committed to `<branch>` when it exists on"
+        " `origin`"
     ),
     "the-wait-at-the-reviewed-tip": (
         "wait for the pull request's checks at the reviewed tip:"

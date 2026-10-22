@@ -2236,7 +2236,8 @@ def test_the_handbook_section_9_is_the_pull_request_flow_of_section_35() -> None
         "`reviewed: <sha>`",
         "committed to `main` before any merge",
         "`blockers=0`",
-        '`gh pr merge <number> --merge --subject "merge: mission N (PR #<number>)"`',
+        '`gh pr merge <number> --merge --match-head-commit <sha> --subject'
+        ' "merge: mission N (PR #<number>)"`',
         "never a squash",
         "the per-unit commits are what the next cold review's sub-agents work on",
         "standing approval of every merge it makes",

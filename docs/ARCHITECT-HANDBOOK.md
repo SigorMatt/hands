@@ -454,9 +454,12 @@ the title.
 **The merge.** The review file is committed to `main` before any merge (as
 `review: mission N`, pushed at once), so your clone reads it from `main` whatever
 happens to the branch. On `blockers=0` the reviewer merges the PR itself —
-`gh pr merge <number> --merge --subject "merge: mission N (PR #<number>)"`
-— and brings the tree level with `git checkout main && git pull
---ff-only`. A merge commit, never a squash: the per-unit commits are what the
+`gh pr merge <number> --merge --match-head-commit <sha> --subject "merge:
+mission N (PR #<number>)"`, `<sha>` the whole sha of the reviewed tip when
+the review was committed to `main`, and the review's own commit (`git
+rev-parse HEAD` after its push) when it was committed to the branch, so gh
+refuses to merge any other head (DESIGN §46) — and brings the tree level
+with `git checkout main && git pull --ff-only`. A merge commit, never a squash: the per-unit commits are what the
 next cold review's sub-agents work on, one per commit. With blockers the PR
 stays open and the reply says so; your next kit is a closer mission whose
 brief names the branch to continue, and its review merges when clean. The
@@ -464,6 +467,48 @@ verdict line is unchanged: `VERDICT: review mission N blockers=<k>
 should-fix=<m>`. The merge is inside the review job on purpose: a human
 merging later would let the next kickoff start from a `main` without the
 mission's code.
+
+**The merged head is the reviewed one (DESIGN §46).** In every review of a
+pull request — its file going to `main` or to the branch; not in the direct
+shape, not for a `reviewed: none` review — the reviewer runs `git fetch
+origin` before committing its file and checks that `git rev-parse
+origin/<branch>` is the whole `reviewed:` sha; when it is not, the blocker
+"the branch moved during the review: <reviewed sha> → <its tip>", and no
+merge. A refused push of the review's commit is the same blocker: the
+review rebases onto the new tip and commits it as `review: mission N
+(branch moved)`; when that fails too it commits nothing more, returns to
+`main`, runs `git branch -f <branch> origin/<branch>` and replies with the
+blocker counted. A merge that is refused or not made, with or without the
+`pull_request` rule, adds the blocker `the merge was not made: <the
+command's last line>`, committed where the review was as `review: mission N
+(not merged)`.
+
+**The failure paths.** The review of a failed rules read (whatever the
+rules), and under `pull_request` that of a missing pull request, is
+committed to the branch the brief names when it exists on `origin` (`git
+ls-remote --exit-code --heads origin <branch>`), never to `main`, and
+otherwise nowhere; a Direct brief's under `pull_request` is committed
+nowhere; the reply carries the blocker in every case. In every shape, a
+review that has checked out the mission's branch ends with `git checkout
+main && git pull --ff-only`, so your next kit's apply runs on `main`.
+
+**A confirmed bug in the pull request's own code blocks its merge (DESIGN
+§46).** A **defect** is text — code, a prompt, a protocol, a document —
+whose behaviour contradicts its own stated purpose: a wrong result, a
+failure, a security gap; not a missing feature, and not a design choice
+someone may disagree with. A confirmed defect in what the pull request adds
+or changes is a blocker, even when the design prescribes it; so is one at
+the base that the pull request makes reachable where it was not, or relies
+on for what it adds. The pull request stays open and your closer mission
+continues its branch, its kit correcting the design first. Any other defect
+at the base — shown by the base's own text, or by one test or command in a
+worktree at the merge-base (`git merge-base origin/main origin/<branch>`),
+never by the gate — is a should-fix marked "to be filed", which the next
+mission's U0 or your next kit files. In the direct shape a defect in the
+commits under review is a blocker, and the series stops for the closer. The
+review's `## Hosted review` section says which each confirmed finding is,
+and why; the brief's last unit still files a finding that needs a design
+decision, and it blocks the merge until the closer fixes it.
 
 **Standing approval.** The human's approval of a playbook whose review
 protocol merges on a clean review is the standing approval of every merge it
@@ -1191,7 +1236,7 @@ its consequences.
 | `hands: kit <name> filed by the architect; apply approved by the playbook` | nobody — route 1 | nothing: the engine sends the kickoff | nothing |
 | `hands: A held job was denied` | nobody — route 1 | nothing: a denial is somebody's decision already | nothing |
 | `hands: the pipeline stopped` — Mission <n> reviewed clean; next mission is the architect's | the project's chat — route 3 | the next mission's kit: `kit <secret>` with the zip, Approve, `go <secret>` | `hands kit apply <zip>`, `hands approve <job>`, `hands go` |
-| `hands: the pipeline stopped` — Mission <n> review has blockers | the project's chat — route 3 | a mission that closes the blockers first, by route 3. On a repository whose `main` takes pull requests only (DESIGN §45) the review is on the mission's branch, not on `main`: the architect role reads it with `git show origin/<branch>:meta/reviews/REVIEW-<n>.md` (its clone is whole and fetched before every job); the phone architect, from a shallow single-branch clone, runs `git fetch --depth 1 origin <branch>`, then `git show FETCH_HEAD:meta/reviews/REVIEW-<n>.md`. On any other repository it is on `main` | `hands kit apply <zip>`, `hands approve <job>`, `hands go` |
+| `hands: the pipeline stopped` — Mission <n> review has blockers | the project's chat — route 3 | a mission that closes the blockers first, by route 3; a confirmed defect in what the pull request adds or changes, or one at the base it makes reachable or relies on, is such a blocker even when the design prescribes it, and the closer continues the branch, its kit correcting the design first (DESIGN §46). On a repository whose `main` takes pull requests only (DESIGN §45) the review is on the mission's branch, not on `main`: the architect role reads it with `git show origin/<branch>:meta/reviews/REVIEW-<n>.md` (its clone is whole and fetched before every job); the phone architect, from a shallow single-branch clone, runs `git fetch --depth 1 origin <branch>`, then `git show FETCH_HEAD:meta/reviews/REVIEW-<n>.md`. On any other repository it is on `main`, but the review of a failed rules read, whatever the rules, and under `pull_request` that of a missing pull request, is on the branch the brief names when it exists on `origin`, and otherwise nowhere; a Direct brief's under `pull_request` is nowhere; the reply carries the blocker either way (DESIGN §46) | `hands kit apply <zip>`, `hands approve <job>`, `hands go` |
 | `hands: the pipeline stopped` — Run <n> review has blockers | the project's chat — route 3 | a run that closes the blockers first, by route 3 | `hands kit apply <zip>`, `hands approve <job>`, `hands go` |
 | `hands: the pipeline stopped` — Mission <n> blocked; see the builder's reply | the project's chat — route 4 | `progress <secret>`; the owner file as a decisions kit: `kit <secret>` with the zip, Approve, then `go <secret>`. In role mode under a playbook without the blocked→consult rule, instead: `kit <secret>` with the zip, Approve without `go <secret>`, and once the apply has ended `consult <secret> <reason>` (route 5) | `hands kit apply <zip>`, `hands approve <job>`, `hands go`; for route 5 instead `hands kit apply <zip>`, `hands approve <job>`, then `hands consult` without `hands go` |
 | `hands: the pipeline stopped` — Run <n> blocked | the project's chat — route 4 | as for a blocked mission | as for a blocked mission |

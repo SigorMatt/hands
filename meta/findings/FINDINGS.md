@@ -3040,7 +3040,7 @@ review commit's sha>` (gh refuses the merge when the head moved), and the
 `not merged` blocker then covers a moved head. Not changed in mission 29:
 the command is §45's.
 
-Status: decided (DESIGN §46: the moved-branch blocker and `--match-head-commit`, in every review of a pull request), scheduled for U3.
+Status: resolved (mission 30 U3, this commit — DESIGN §46 "H-081": both review protocols (templates/REVIEW-PROTOCOL.md and this repository's copy, the template with `SigorMatt/hands` and the 15-minute timeout), in every review of a pull request — its file going to `main` or to the branch; not in the direct shape, not for a `reviewed: none` review — check before the review's commit, after `git fetch origin`, that `git rev-parse origin/<branch>` is the whole `reviewed:` sha, else the blocker "the branch moved during the review: <reviewed sha> → <its tip>" and no merge; a refused push of the review's commit is the same blocker (rebase onto the new tip and `review: mission N (branch moved)`, or, when that fails too, `git rebase --abort`, the tree to `main`, `git branch -f <branch> origin/<branch>` and the blocker in the reply); the merge is `gh pr merge <number> --merge --match-head-commit <sha> --subject "merge: mission N (PR #<number>)"`, `<sha>` the reviewed tip on `main` or the review's own commit on the branch; a merge refused or not made, with or without the rule, is the `not merged` blocker committed where the review was. With it, §46's merge rule: a confirmed defect in what the pull request adds or changes, or one at the base it makes reachable or relies on, is a blocker; any other defect at the base a should-fix marked "to be filed"; in the direct shape a blocker; the `## Hosted review` section says which. The brief template's last unit and the handbook's §9 and §19 say so. Tests: tests/test_docs_46.py, tests/test_docs_45.py, tests/test_docs.py, tests/test_kit.py)
 
 ## H-082 — the `pull-request` apply prompt's case (b) matches `main` itself
 
@@ -3117,10 +3117,7 @@ nothing there to read.
 
 Direction. DESIGN §46 "Review 29's should-fix items" 2.
 
-Status: decided (DESIGN §46: a failed rules read's review, and under
-`pull_request` a missing pull request's, to the brief's branch when it
-exists on origin, never `main`, else nowhere; a Direct brief's under
-`pull_request` nowhere), scheduled for U3.
+Status: resolved (mission 30 U3, this commit — DESIGN §46 "Review 29's should-fix items" 2: both review protocols commit the review of a failed rules read, whatever the rules, and under `pull_request` that of a missing pull request, to the branch the brief's Branch section names when it exists on `origin` (`git ls-remote --exit-code --heads origin <branch>`), never to `main`, and otherwise nowhere; a Direct brief's under `pull_request` nowhere; the reply carries the blocker in every case; §45's "nowhere" for a missing pull request is gone. The handbook's §9 and §19 say so. Tests: tests/test_docs_46.py, tests/test_docs_45.py)
 
 ## H-085 — nothing returns the tree to `main` after the review commits to the branch on a failure path
 
@@ -3137,5 +3134,4 @@ left on the mission's branch takes another case of the apply prompt.
 
 Direction. DESIGN §46 "Review 29's should-fix items" 4.
 
-Status: decided (DESIGN §46: a review that checked out the branch ends on
-`main`), scheduled for U3.
+Status: resolved (mission 30 U3, this commit — DESIGN §46 "Review 29's should-fix items" 4: both review protocols end, in every shape, in a section `## The end (every shape)`: a review that has checked out the mission's branch ends with `git checkout main && git pull --ff-only`, and the failure paths end as it says; the handbook's §9 says so. Tests: tests/test_docs_46.py)
