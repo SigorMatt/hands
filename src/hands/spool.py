@@ -182,12 +182,18 @@ def is_plan_file(entry: str, named: Iterable[str]) -> bool:
     path, in its exact case, is `KIT.md`, `DESIGN.md`, `WORKPLAN.md`, a
     `decisions-<name>.md` at the repository root, or a Markdown file (`.md`) under
     `meta/` that is not among `named`, the paths the `send` rules' prompts of the
-    playbook in force name. The engine's hold (`Spool.stored_kit_non_plan`) and
+    playbook in force name. The named exclusion compares casefolded, as §44's
+    H-077 does for the playbook: on a case-insensitive builder filesystem
+    `meta/review-protocol.md` lands on a named `meta/REVIEW-PROTOCOL.md`, so it is
+    not a plan file either (§46 is silent on the case of the exclusion; this is
+    the stricter reading). The engine's hold (`Spool.stored_kit_non_plan`) and
     `hands kit check`'s `WARN owner:` line ask this; directory entries are not
     judged, so the callers pass file entries only."""
     if entry in PLAN_FILES or PLAN_DECISIONS_RE.fullmatch(entry):
         return True
-    return entry.startswith(PLAN_META) and entry.endswith(".md") and entry not in set(named)
+    if not (entry.startswith(PLAN_META) and entry.endswith(".md")):
+        return False
+    return entry.casefold() not in {name.casefold() for name in named}
 #: `new_kit_id`'s shape: 16 lowercase hex digits.
 KIT_ID_RE = re.compile(r"[0-9a-f]{16}")
 #: §34: `kit.json`'s `sha256`: 64 lowercase hex digits, as `hashlib` writes them.

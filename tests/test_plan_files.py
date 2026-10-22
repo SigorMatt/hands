@@ -137,6 +137,16 @@ def test_is_plan_file_is_section_46s_one_test(entry: str, plan: bool) -> None:
     assert is_plan_file(entry, {"meta/REVIEW-PROTOCOL.md"}) is plan
 
 
+@pytest.mark.parametrize("entry", ["meta/review-protocol.md", "meta/Review-Protocol.md"])
+def test_a_named_path_in_another_case_is_not_a_plan_file(entry: str) -> None:
+    """PR #10 hosted finding 4: on a case-insensitive builder filesystem the entry
+    lands on the named protocol, so the named exclusion compares casefolded (as
+    §44's H-077 does for the playbook); the plan forms stay exact case."""
+    assert is_plan_file(entry, {"meta/REVIEW-PROTOCOL.md"}) is False
+    assert is_plan_file("Design.md", {"meta/REVIEW-PROTOCOL.md"}) is False
+    assert is_plan_file("meta/other.md", {"meta/REVIEW-PROTOCOL.md"}) is True
+
+
 def test_the_reason_is_section_46s_word_for_word() -> None:
     assert plan_hold_reason("m16", "docs/x.md") == plan_reason("m16", "docs/x.md")
 
@@ -191,6 +201,21 @@ def test_a_kit_carrying_another_file_is_held_with_section_46s_reason(
     assert "hands: Kit applied; the next kickoff is the driver's" in [
         title for title, _ in recorder.notified
     ]
+
+
+def test_a_kit_carrying_the_named_protocol_in_another_case_is_held(
+    tmp_home: Path, workdir: Path
+) -> None:
+    """PR #10 hosted finding 4: the review rule names meta/REVIEW-PROTOCOL.md, which
+    the repository holds; a kit carrying meta/review-protocol.md is held with §46's
+    reason naming it, not approved."""
+    write_tree(workdir, {"meta/REVIEW-PROTOCOL.md": PROTOCOL})
+    engine, recorder, holds = plan_engine(tmp_home, workdir)
+    entry = "meta/review-protocol.md"
+    job = file_and_end(engine, {"KIT.md": "plan: m16\n", entry: "x\n"})
+    assert recorder.approved == []
+    assert engine.spool.load_job(job.id).state == "held"
+    assert holds.published == [(job.id, plan_reason("m16", entry))]
 
 
 def test_the_reason_names_the_first_such_entry_in_sorted_order(
@@ -287,6 +312,30 @@ def test_kit_check_warns_owner_naming_every_non_plan_entry_but_the_playbook(
     report = json.loads(out)
     assert report["owner_warnings"] == [warn.removeprefix("WARN owner: ")]
     assert sorted(key for key in report if key.endswith("_warnings")) == ["owner_warnings"]
+
+
+def test_kit_check_warns_owner_for_the_named_protocol_in_another_case(
+    tmp_home: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """PR #10 hosted finding 4: `kit check` judges as the engine does."""
+    monkeypatch.delenv("HANDS_PROJECT", raising=False)
+    _kit_config(tmp_home, tmp_path)
+    repo = write_tree(
+        tmp_path / "repo",
+        {"PLAYBOOK.toml": AUTONOMOUS_PLAYBOOK, "meta/REVIEW-PROTOCOL.md": PROTOCOL},
+    )
+    kit = write_tree(
+        tmp_path / "k",
+        {**good_kit(), "KIT.md": "plan: m11\n", "meta/review-protocol.md": PROTOCOL},
+    )
+    code, out = check(kit, repo)
+    assert code == 0, out
+    [warn] = owner_warns(out)
+    said = strip_paths(warn)
+    assert (
+        "the kit carries meta/review-protocol.md, which is not a plan file"
+        in strip_paths(said)
+    ), said
 
 
 def test_kit_check_prints_no_owner_line_for_a_phone_mode_repository(
