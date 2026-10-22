@@ -45,7 +45,7 @@ __all__ = [
     "KIT_CHECK_PASSED",
     "ORPHAN_DAEMON_STOP",
     "PLAYBOOK_PATHS",
-    "carries_ci",
+    "is_plan_file",
     "carries_playbook",
     "ANSWER_ORIGIN",
     "REPLY_ORIGIN",
@@ -168,19 +168,26 @@ def carries_playbook(entry: str, configured: str | None) -> bool:
     return entry.casefold() in known
 
 
-#: §45 "A kit that carries the CI is the owner's": an entry whose casefolded path
-#: begins this carries the repository's CI (its workflows)…
-CI_PREFIX = ".github/"
-#: …and so does the gate script every hands brief names.
-CI_GATE = "scripts/check"
+#: §46 "H-083": the plan forms hands names (§26, handbook §3) at a fixed path, in
+#: their exact case.
+PLAN_FILES = ("KIT.md", "DESIGN.md", "WORKPLAN.md")
+#: …a `decisions-<name>.md` at the repository root…
+PLAN_DECISIONS_RE = re.compile(r"decisions-[^/]+\.md")
+#: …and a Markdown file under this directory that no `send` rule's prompt names.
+PLAN_META = "meta/"
 
 
-def carries_ci(entry: str) -> bool:
-    """§45: the one test of whether a kit entry carries the repository's CI — its
-    path, casefolded, begins `.github/` or equals `scripts/check`. The engine's hold
-    (`Spool.stored_kit_ci`) and `hands kit check`'s `WARN ci:` line ask this."""
-    folded = entry.casefold()
-    return folded.startswith(CI_PREFIX) or folded == CI_GATE
+def is_plan_file(entry: str, named: Iterable[str]) -> bool:
+    """§46 "H-083": the one test of whether a kit's file entry is a plan file — its
+    path, in its exact case, is `KIT.md`, `DESIGN.md`, `WORKPLAN.md`, a
+    `decisions-<name>.md` at the repository root, or a Markdown file (`.md`) under
+    `meta/` that is not among `named`, the paths the `send` rules' prompts of the
+    playbook in force name. The engine's hold (`Spool.stored_kit_non_plan`) and
+    `hands kit check`'s `WARN owner:` line ask this; directory entries are not
+    judged, so the callers pass file entries only."""
+    if entry in PLAN_FILES or PLAN_DECISIONS_RE.fullmatch(entry):
+        return True
+    return entry.startswith(PLAN_META) and entry.endswith(".md") and entry not in set(named)
 #: `new_kit_id`'s shape: 16 lowercase hex digits.
 KIT_ID_RE = re.compile(r"[0-9a-f]{16}")
 #: §34: `kit.json`'s `sha256`: 64 lowercase hex digits, as `hashlib` writes them.
@@ -618,14 +625,27 @@ class Spool:
             return None
         return tuple(sorted(entry for entry in names if carries_playbook(entry, configured)))
 
-    def stored_kit_ci(self, kit_id: str, name: str) -> tuple[str, ...] | None:
-        """§45: the entries of the zip stored for `kit_id` that carry the repository's
-        CI (`carries_ci`), sorted, by its central-directory names, or None when the
-        zip cannot be read as one."""
+    def stored_kit_non_plan(
+        self, kit_id: str, name: str, named: Iterable[str]
+    ) -> tuple[str, ...] | None:
+        """§46 "H-083": the file entries of the zip stored for `kit_id` that are not
+        plan files (`is_plan_file`, against `named`), sorted, by its central-directory
+        names as §43's are read (a directory entry, ending `/`, is not judged), or
+        None when the zip cannot be read as one."""
+        files = self.stored_kit_files(kit_id, name)
+        if files is None:
+            return None
+        judged = set(named)
+        return tuple(entry for entry in files if not is_plan_file(entry, judged))
+
+    def stored_kit_files(self, kit_id: str, name: str) -> tuple[str, ...] | None:
+        """§46: the file entries of the zip stored for `kit_id`, sorted, by its
+        central-directory names (a directory entry, ending `/`, left out), or None
+        when the zip cannot be read as one."""
         names = self._stored_kit_names(kit_id, name)
         if names is None:
             return None
-        return tuple(sorted(entry for entry in names if carries_ci(entry)))
+        return tuple(sorted(entry for entry in names if not entry.endswith("/")))
 
     def _stored_kit_names(self, kit_id: str, name: str) -> set[str] | None:
         try:

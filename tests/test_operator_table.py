@@ -541,7 +541,7 @@ EXEMPT: dict[tuple[str, str, str], str] = {
         "reason is the gate's (gates.py), the `hands: a job is held for a human` row",
     ("daemon", "_on_event", "self._held_reasons.pop(str(job_id), None)"):
         "§43's hold reason at filing, decided by playbook.py `published_hold_reason` "
-        "(`owner_hold_reason`, §45's `ci_hold_reason`) in a worker thread before the "
+        "(`owner_hold_reason`, §46's `plan_hold_reason`) in a worker thread before the "
         "`job.held` is filed "
         "(`Daemon.decide_held_reason`): the `the kit carries <path>` row, pinned by "
         "test_section_43s_three_rows_are_in_the_table",
@@ -1041,10 +1041,12 @@ def test_every_string_the_reading_cannot_follow_is_an_exemption_with_a_reason() 
          "phone.py `_file_apply`"),
         ("apply <name>: the kit carries <path>, the playbook in force; a change of the "
          "playbook is the owner's (§43)", "playbook.py `published_hold_reason`"),
-        # §45: the CI's hold reason (`ci_hold_reason`), and the engine's stop for an
+        # §46: the plan-files hold reason (`plan_hold_reason`), and §45's stop for an
         # apply that did not land (`_apply_not_landed`).
-        ("apply <name>: the kit carries <path>, the repository's CI; a change of the CI "
-         "is the owner's (§45)", "playbook.py `published_hold_reason`"),
+        ("apply <name>: the kit carries <path>, which is not a plan file; the engine "
+         "approves plan files only (KIT.md, DESIGN.md, WORKPLAN.md, decisions files at "
+         "the root, Markdown under meta/ that no send rule's prompt names), and any "
+         "other file is the owner's (§46)", "playbook.py `published_hold_reason`"),
         ("the kit's apply did not land:", "playbook.py `_apply_not_landed`"),
     ],
 )

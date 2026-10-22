@@ -153,13 +153,35 @@ units move the code, its copies and the pinning tests to it. And a kit carries
 no file under `.github/` and no `scripts/check` unless the human asked for it:
 a pull request's check runs the workflow and the gate script from the pull
 request's own branch, so a kit that rewrote either could weaken the check its
-own pull request is merged on. A role-filed kit with such an entry (its
-casefolded path beginning `.github/` or equal to `scripts/check`) is not
-approved by the engine and waits for the human, held with the reason `apply
-<name>: the kit carries <path>, the repository's CI; a change of the CI is the
-owner's (§45)` (or §43's playbook reason when it carries the playbook too), and
-`hands kit check` prints a `WARN ci:` line for any kit that carries one, in
-either shape.
+own pull request is merged on.
+
+**The engine approves plan files only (DESIGN §46).** Under `[series]
+architect = "role"` with `autonomous = true`, whatever `[repository] main`
+says, the engine approves the apply of a kit the role filed only when every
+file entry is a plan file and the kit carries no playbook. A file entry is a
+plan file when its path, in its exact case (a Linux builder lands `Design.md`
+beside `DESIGN.md`, not on it), is `KIT.md`, `DESIGN.md`, `WORKPLAN.md` (the
+runs form), a `decisions-<name>.md` at the repository root, or a Markdown file
+(`.md`) under `meta/` that no `send` rule's prompt of the repository's playbook
+in force names (so `meta/REVIEW-PROTOCOL.md`, which the review rule names, is
+the owner's, as the playbook is; a placeholder path such as
+`meta/reviews/REVIEW-{n}.md` names no file). The gate is configured by more
+than `.github/` and `scripts/check` — `pyproject.toml`, `uv.lock`,
+`tests/conftest.py`, any test — and no list of its inputs is ever whole, so
+the rule names what may pass rather than what may not. Any other kit waits for
+the human, held with its buttons and the reason `apply <name>: the kit carries
+<path>, which is not a plan file; the engine approves plan files only (KIT.md,
+DESIGN.md, WORKPLAN.md, decisions files at the root, Markdown under meta/ that
+no send rule's prompt names), and any other file is the owner's (§46)`,
+`<path>` the first such entry in sorted order (§43's playbook reason when it
+carries the playbook, with or without other files). After the human approves
+it no engine kickoff follows: the playbook's `kit applied` rule fires and the
+human sends `go`. `hands kit check` prints one `WARN owner:` line naming every
+file entry that is not a plan file and does not carry the playbook (that one
+keeps its `WARN playbook:` line), under the same condition as `WARN
+playbook:`; a phone-mode kit is not warned, since every apply in phone mode is
+the human's anyway — the rule above on `.github/` and `scripts/check` stands
+for it.
 
 The commit message is the first line of `KIT.md` at the kit's root, else
 `plan: kit <name>`, the zip's file name without `.zip`; put the message you
@@ -696,10 +718,20 @@ passes.
 
 **The first plan kit's apply is silent.** Under `[series] autonomous` the
 engine's own `builder.done` rule approves the apply of a kit the role filed
-(`decided_by: playbook`) that carries no playbook, the first plan kit
-included, so no Approve or Deny reaches the phone for it: the first thing the
-phone sees is the kickoff the engine sends after the apply. Approving such a
-playbook is approving that apply too.
+(`decided_by: playbook`) that carries plan files only (§3, DESIGN §46), the
+first plan kit included when it does, so no Approve or Deny reaches the phone
+for it: the first thing the phone sees is the kickoff the engine sends after
+the apply. Approving such a playbook is approving that apply too.
+
+**A kit that carries anything but plan files waits for the human (DESIGN
+§46).** In a role-mode series the engine approves a role-filed kit only when
+every file entry is a plan file (§3): `KIT.md`, `DESIGN.md`, `WORKPLAN.md`, a
+`decisions-<name>.md` at the root, or Markdown under `meta/` that no `send`
+rule's prompt names. The role's first kit that carries anything else — code,
+tests, configuration, the CI, the review protocol — waits for the human, held
+with §46's reason naming the path, and once the human approves it no engine
+kickoff follows: the human sends `go`. A first plan kit that carries the
+review protocol or the playbook is the human's to apply for that reason.
 
 **A kit that carries the playbook waits for the human (DESIGN §43).** A
 change of the playbook is the owner's: a kit the role files that carries
@@ -731,9 +763,8 @@ so that a failure is attributable to one. Undoing it is the owner's: the
 ruleset disabled in GitHub's settings, then the setting set back to `direct`
 and the daemon restarted, with no apply in between. Until it switches, a
 project on `direct` gets only what does not need the gate: the stop for an
-apply that did not land (§10), a resumed apply that re-sends its own prompt,
-and a role-filed kit carrying `.github/` or `scripts/check` waiting for the
-human (§3).
+apply that did not land (§10) and a resumed apply that re-sends its own
+prompt. The plan-files rule (§3, DESIGN §46) holds in either shape.
 
 ### Running as the architect role (DESIGN §31)
 
@@ -770,8 +801,10 @@ under; read it there rather than here. What changes for you:
   stores, against the builder's repository, and refuses a failing kit with the
   check's output (DESIGN §33). Under `[series] autonomous` the engine approves
   that hold itself once your reply names it, and sends the kickoff, so a kit you
-  file is a kit that runs — unless it carries the playbook, which is the
-  owner's: that apply waits for the human (DESIGN §43), so file no playbook.
+  file is a kit that runs — when it carries plan files only (§3, DESIGN §46).
+  Any other file is the owner's: the playbook (DESIGN §43), the review protocol,
+  code, tests, configuration, the CI; such an apply waits for the human, so put
+  none of them in a kit and escalate instead (architect rule 8).
 - **One kit per consultation, under the name your verdict gives.** File at most
   one kit, and reply `VERDICT: next kit <name>` with exactly its name. A second
   `hands kit file` in the same consultation is refused by handsd as "one kit per
@@ -1173,7 +1206,7 @@ its consequences.
 | `hands: the pipeline stopped` — Tripwire fired | the project's chat — route 6 | `progress <secret>`; then route 3, 4 or 5 | `hands jobs -n 3`, `hands status` |
 | `hands: a job is held for a human` — <reason>, `role:`, `job:`, the job id on its own line | the human alone — route 2 | the Approve or Deny button, or `approve <job> <secret>` / `deny <job> [reason] <secret>` | `hands approve <job>` / `hands deny <job> --reason "<reason>"` |
 | `hands: a job is held for a human` — apply <name>: the kit carries <path>, the playbook in force; a change of the playbook is the owner's (§43) | the human alone — route 2 | the Approve or Deny button (or `approve <job> <secret>` / `deny <job> [reason] <secret>`); once the apply has ended no engine kickoff follows, so `go <secret>` | `hands approve <job>` / `hands deny <job>`, then `hands go` |
-| `hands: a job is held for a human` — apply <name>: the kit carries <path>, the repository's CI; a change of the CI is the owner's (§45) | the human alone — route 2 | the Approve or Deny button (or `approve <job> <secret>` / `deny <job> [reason] <secret>`), once the human has read what the kit changes in `.github/` or `scripts/check` (a pull request's check runs them from its own branch); §43's playbook reason is shown instead when the kit carries the playbook too; once the apply has ended no engine kickoff follows, so `go <secret>` | `hands approve <job>` / `hands deny <job>`, then `hands go` |
+| `hands: a job is held for a human` — apply <name>: the kit carries <path>, which is not a plan file; the engine approves plan files only (KIT.md, DESIGN.md, WORKPLAN.md, decisions files at the root, Markdown under meta/ that no send rule's prompt names), and any other file is the owner's (§46) | the human alone — route 2 | the Approve or Deny button (or `approve <job> <secret>` / `deny <job> [reason] <secret>`), once the human has read what the kit changes in that file and every other one that is not a plan file (`hands kit check`'s `WARN owner:` line names them all); §43's playbook reason is shown instead when the kit carries the playbook too; once the apply has ended no engine kickoff follows, so `go <secret>` | `hands approve <job>` / `hands deny <job>`, then `hands go` |
 | `hands: kit received` — kit received <name> <bytes> <sha256> | the human alone — route 3 | Approve the apply's hold (its own notification), then `go <secret>` | `hands approve <job>`, `hands go` |
 | `hands: kit received` — apply <name>: <why>; the commit message is the default '<message>' (the kit has no `KIT.md`, or its first line is not used) | the human alone — route 3 | Approve the apply's hold if the default message will do, then `go <secret>`; else Deny it and send the kit again with a `KIT.md` whose first line is the commit message | `hands approve <job>`, `hands go`; or `hands deny <job>`, then `hands kit apply <zip>` with the `KIT.md` |
 | `hands: handsd started` — <project> on <socket>, then `Resumed: <role> job <job>, from job <job> which a daemon stop orphaned` (or `which this start found orphaned (its process was gone)`), one line per resumed job; then `While starting, handsd published <n> notification(s) on their own:` and `While starting, handsd raised <n> more notification(s):`, each followed by the lines it names | nobody — route 1 | nothing; a line folded in under `While starting, handsd raised …` is answered by its own row | `hands status` |

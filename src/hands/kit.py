@@ -146,8 +146,8 @@ from hands.playbook import (
 from hands.spool import (
     PLAYBOOK_PATHS,
     PathEscape,
-    carries_ci,
     carries_playbook,
+    is_plan_file,
     resolve_under_roots,
 )
 
@@ -192,6 +192,7 @@ __all__ = [
     "kickoff_line",
     "kit_md_message",
     "named_paths",
+    "send_named_paths",
     "pattern_alternatives",
     "placeholder_instances",
     "plan_apply",
@@ -405,9 +406,10 @@ class Report:
     #: §40 (H-061): the playbook in force's warnings; printed `WARN playbook: …`,
     #: and none of them fails a check.
     warnings: list[str] = field(default_factory=list)
-    #: §45: the kit's entries that carry the repository's CI (`carries_ci`), named in
-    #: one `WARN ci:` line; none of them fails a check.
-    ci_warnings: list[str] = field(default_factory=list)
+    #: §46 "H-083": the kit's file entries that are not plan files (`is_plan_file`)
+    #: and do not carry the playbook, named in one `WARN owner:` line under the
+    #: condition of `WARN playbook:`; none of them fails a check.
+    owner_warnings: list[str] = field(default_factory=list)
     #: §42: the kit is a decisions kit (`decisions_owner_files`), so `brief`,
     #: `verdicts` and `wording` pass it, and `hands kit file` refuses it.
     decisions: bool = False
@@ -433,7 +435,7 @@ class Report:
             "sha256": self.sha256,
             "kit_md": self.kit_md,
             "warnings": self.warnings,
-            "ci_warnings": self.ci_warnings,
+            "owner_warnings": self.owner_warnings,
             "decisions": self.decisions,
         }
 
@@ -1002,18 +1004,60 @@ def _repository_root(repo: Path) -> Path:
         return repo
 
 
-def _ci_warning(kit: _Kit) -> str | None:
-    """§45 "A kit that carries the CI is the owner's": the `WARN ci:` line for any
-    kit with an entry that carries the repository's CI (`carries_ci`: a casefolded
-    path that begins `.github/` or equals `scripts/check`), naming each such entry;
-    None for a kit that carries none."""
-    carried = sorted(name for name in kit.files if carries_ci(name))
-    if not carried:
+def _repository_books(repo: Path, configured: str | None) -> list[tuple[str, Playbook]]:
+    """The repository's playbooks `kit check` judges a kit's owner lines under, each
+    with its name, in order: the `configured` repository path, then the two fixed
+    names; one that is missing or does not load is left out (the `playbook` check
+    judges it)."""
+    candidates = [*([configured] if configured is not None else []), *PLAYBOOK_PATHS]
+    # PR #8 hosted finding 5: `configured` is a repository path, so it is read under
+    # the repository's root — handsd passes the builder's cwd, which may sit below it.
+    # The fixed names are read under `repo`, as the `playbook` check reads them.
+    root = _repository_root(repo) if configured is not None else repo
+    files: dict[Path, str] = {}
+    for name in candidates:
+        files.setdefault((root if name == configured else repo) / name, name)
+    books: list[tuple[str, Playbook]] = []
+    for file, name in files.items():
+        if not file.is_file():
+            continue
+        with contextlib.suppress(PlaybookError, OSError):
+            books.append((name, _load(file.read_bytes(), name)))
+    return books
+
+
+def _plan_warning(kit: _Kit, repo: Path, configured: str | None) -> str | None:
+    """§46 "H-083": the `WARN owner:` line naming every file entry of the kit that is
+    not a plan file (`is_plan_file`) and does not carry the playbook (that one keeps
+    its `WARN playbook:` line), under `WARN playbook:`'s condition — the
+    repository's playbook, or the kit's own, sets `architect = "role"` with
+    `autonomous = true`. The paths the `send` rules' prompts name are those of the
+    repository's playbook in force (the first of `_repository_books`), never the
+    kit's own. None when no entry is such a file, or no playbook is autonomous."""
+    books = _repository_books(repo, configured)
+    named = send_named_paths(books[0][1], kit.files, repo) if books else set()
+    owned = sorted(
+        name for name in kit.files
+        if not name.endswith("/")
+        and not carries_playbook(name, configured)
+        and not is_plan_file(name, named)
+    )
+    if not owned:
         return None
+    autonomous = any(book.architect_is_autonomous for _, book in books)
+    for name in kit.files:
+        if autonomous:
+            break
+        if carries_playbook(name, configured):
+            with contextlib.suppress(PlaybookError):
+                autonomous = _load(kit.files[name], name).architect_is_autonomous
+    if not autonomous:
+        return None
+    which = "which is not a plan file" if len(owned) == 1 else "which are not plan files"
     return (
-        f"the kit carries {', '.join(carried)}, the repository's CI: filed by the "
-        "architect role, its apply waits for the human, because a change of the CI is "
-        "the owner's (§45)"
+        f"the kit carries {_and(owned)}, {which}: filed by the architect role, its apply "
+        "waits for the human, because the engine approves plan files only and any other "
+        "file is the owner's (§46)"
     )
 
 
@@ -1037,21 +1081,12 @@ def _owner_warning(
     carried = sorted(name for name in kit.files if carries_playbook(name, configured))
     if not carried:
         return None
-    autonomous: list[str] = []
+    autonomous = [
+        f"the repository's {name}"
+        for name, book in _repository_books(repo, configured)
+        if book.architect_is_autonomous
+    ]
     candidates = [*([configured] if configured is not None else []), *PLAYBOOK_PATHS]
-    # PR #8 hosted finding 5: `configured` is a repository path, so it is read under
-    # the repository's root — handsd passes the builder's cwd, which may sit below it.
-    # The fixed names are read under `repo`, as the `playbook` check reads them.
-    root = _repository_root(repo) if configured is not None else repo
-    files: dict[Path, str] = {}
-    for name in candidates:
-        files.setdefault((root if name == configured else repo) / name, name)
-    for file, name in files.items():
-        if not file.is_file():
-            continue
-        with contextlib.suppress(PlaybookError, OSError):
-            if _load(file.read_bytes(), name).architect_is_autonomous:
-                autonomous.append(f"the repository's {name}")
     for name in carried:
         with contextlib.suppress(PlaybookError):
             if _load(kit.files[name], name).architect_is_autonomous:
@@ -1337,6 +1372,23 @@ def named_paths(text: str, files: Iterable[str], repo: Path) -> list[str]:
         elif (stem := last.split(".", 1)[0]) not in PROSE_CAPS and _BARE_NAME_RE.fullmatch(stem):
             found.append(word)
     return found
+
+
+def send_named_paths(book: Playbook, files: Iterable[str], repo: Path) -> set[str]:
+    """§46 "H-083": the paths the `send` rules' prompts of `book` name, as the
+    `protocol` check finds them (`named_paths`, against the kit's file entries
+    `files` and the repository `repo`); a placeholder path
+    (`meta/reviews/REVIEW-{n}.md`) names no file and is left out. The engine
+    (`PlaybookEngine._stored_kit_non_plan`) and `hands kit check`'s `WARN owner:`
+    line ask this, with the repository's playbook in force."""
+    listed = list(files)
+    return {
+        name
+        for rule in book.rules
+        if rule.then == "send" and rule.prompt
+        for name in named_paths(rule.prompt, listed, repo)
+        if not _PATH_PLACEHOLDER_RE.search(name)
+    }
 
 
 def _named_files(book: Playbook, kit: _Kit, repo: Path) -> dict[str, list[int]]:
@@ -1698,7 +1750,7 @@ def check_kit(
             *(orphaned_rule_warnings(book) if book is not None else []),
             *filter(None, [_owner_warning(kit, repo, configured, known)]),
         ],
-        ci_warnings=list(filter(None, [_ci_warning(kit)])),
+        owner_warnings=list(filter(None, [_plan_warning(kit, repo, configured)])),
         decisions=bool(owners),
     )
     if report.ok:
@@ -1746,8 +1798,8 @@ def run(
         print(check.line(), file=out)
     for warning in report.warnings:
         print(f"WARN playbook: {warning}", file=out)
-    for warning in report.ci_warnings:
-        print(f"WARN ci: {warning}", file=out)
+    for warning in report.owner_warnings:
+        print(f"WARN owner: {warning}", file=out)
     failed = [check for check in report.checks if not check.ok]
     if failed:
         print(report.kit_md_note, file=out)

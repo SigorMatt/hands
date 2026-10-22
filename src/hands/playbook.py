@@ -137,7 +137,7 @@ __all__ = [
     "load_playbook",
     "next_milestone",
     "owner_hold_reason",
-    "ci_hold_reason",
+    "plan_hold_reason",
     "parse_playbook",
     "playbook_path",
     "playbook_repo_path",
@@ -329,13 +329,16 @@ def owner_hold_reason(name: str, path: str) -> str:
     )
 
 
-def ci_hold_reason(name: str, path: str) -> str:
-    """§45 "A kit that carries the CI is the owner's": the published reason of the
-    hold of an architect-filed apply of kit `name` whose stored kit carries `path`,
-    an entry of the repository's CI (`spool.carries_ci`), and not the playbook."""
+def plan_hold_reason(name: str, path: str) -> str:
+    """§46 "H-083": the published reason of the hold of an architect-filed apply of
+    kit `name` whose stored kit carries `path`, the first file entry in sorted order
+    that is not a plan file (`spool.is_plan_file`), and not the playbook (§43's
+    reason, `owner_hold_reason`, wins for a kit that carries it)."""
     return (
-        f"apply {name}: the kit carries {path}, the repository's CI; a change of the CI "
-        "is the owner's (§45)"
+        f"apply {name}: the kit carries {path}, which is not a plan file; the engine "
+        "approves plan files only (KIT.md, DESIGN.md, WORKPLAN.md, decisions files at "
+        "the root, Markdown under meta/ that no send rule's prompt names), and any "
+        "other file is the owner's (§46)"
     )
 
 
@@ -2558,8 +2561,8 @@ class PlaybookEngine:
     async def _carries_no_owner_entry(self, job: Job) -> bool:
         """§43 "A playbook change is the owner's": True when the stored kit of `job`
         carries no entry that carries the playbook (§44: `_stored_kit_playbooks`) and
-        (§45) none that carries the repository's CI (`Spool.stored_kit_ci`), so the
-        engine may approve its apply.
+        (§46 "H-083") every file entry of it is a plan file
+        (`_stored_kit_non_plan`), so the engine may approve its apply.
 
         Asked by `_release_kit` only, after `kit_apply_problem` has accepted the apply
         and `_kit_bytes_unchanged` has verified the stored zip, so the entries read are
@@ -2573,8 +2576,8 @@ class PlaybookEngine:
         record = self.spool.read_kit_record(job.kit_id)
         assert record is not None  # likewise
         carried = await asyncio.to_thread(self._stored_kit_playbooks, job.kit_id, record["name"])
-        ci = await asyncio.to_thread(self.spool.stored_kit_ci, job.kit_id, record["name"])
-        if carried is None or ci is None:
+        owned = await asyncio.to_thread(self._stored_kit_non_plan, job.kit_id, record["name"])
+        if carried is None or owned is None:
             log.warning(
                 "playbook: %s is not approved: the stored zip of kit_id %s does not read "
                 "as one; the hold is the human's (§43)", job.id, job.kit_id,
@@ -2586,11 +2589,11 @@ class PlaybookEngine:
                 "a change of the playbook is the owner's (§43)", job.id, carried[0],
             )
             return False
-        if ci:
-            # §45: the CI a pull request's check runs from its own branch is the owner's.
+        if owned:
+            # §46: the engine approves plan files only; any other file is the owner's.
             log.info(
-                "playbook: %s is not approved: the kit carries %s, the repository's CI; "
-                "a change of the CI is the owner's (§45)", job.id, ci[0],
+                "playbook: %s is not approved: the kit carries %s, which is not a plan "
+                "file; any other file is the owner's (§46)", job.id, owned[0],
             )
             return False
         return True
@@ -2605,10 +2608,10 @@ class PlaybookEngine:
         zip is the one the check passed on (the sha256 `kit.json` recorded, as
         `_kit_bytes_unchanged` asks) and carries the playbook (§44:
         `_stored_kit_playbooks`), under a playbook in force in role mode with
-        `autonomous` (`_book_in_force`). §45's sentence (`ci_hold_reason`) when it is
-        held, on those same terms, because its kit carries the repository's CI and
-        not the playbook (§43's wins for a kit that carries both). None otherwise:
-        the gate's own reason,
+        `autonomous` (`_book_in_force`). §46's sentence (`plan_hold_reason`) when it
+        is held, on those same terms, because its kit carries a file entry that is
+        not a plan file and not the playbook (§43's wins for a kit that carries
+        both). None otherwise: the gate's own reason,
         `apply <name>`, which stays the gate's either way. Blocking (it reads and
         hashes the stored zip); the engine asks it in a worker thread. A hold the
         engine publishes for another cause (§33's escalation, a hash mismatch, a
@@ -2620,19 +2623,19 @@ class PlaybookEngine:
         record = self.spool.read_kit_record(job.kit_id)
         if record is None:  # pragma: no cover - `kit_apply_problem` read it
             return None
-        carried = self._stored_kit_playbooks(job.kit_id, record["name"])
-        ci = () if carried else self.spool.stored_kit_ci(job.kit_id, record["name"])
-        if not carried and not ci:
-            return None
-        if self.spool.stored_kit_sha256(job.kit_id, record["name"]) != record["sha256"]:
-            return None
         book = self._book_in_force()
         if book is None or not book.architect_is_autonomous:
             return None
+        carried = self._stored_kit_playbooks(job.kit_id, record["name"])
+        owned = () if carried else self._stored_kit_non_plan(job.kit_id, record["name"], book)
+        if not carried and not owned:
+            return None
+        if self.spool.stored_kit_sha256(job.kit_id, record["name"]) != record["sha256"]:
+            return None
         if carried:
             return owner_hold_reason(record["name"], carried[0])
-        assert ci
-        return ci_hold_reason(record["name"], ci[0])
+        assert owned
+        return plan_hold_reason(record["name"], owned[0])
 
     def _stored_kit_playbooks(self, kit_id: str, name: str) -> tuple[str, ...] | None:
         """§44 "H-077, ruled": the entries of the stored zip that carry the playbook,
@@ -2642,6 +2645,27 @@ class PlaybookEngine:
         (`published_hold_reason`, the daemon's `decide_held_reason` too) ask this one.
         Blocking (git and the zip): asked in a worker thread."""
         return self.spool.stored_kit_playbooks(kit_id, name, playbook_repo_path(self.config))
+
+    def _stored_kit_non_plan(
+        self, kit_id: str, name: str, book: Playbook | None = None
+    ) -> tuple[str, ...] | None:
+        """§46 "H-083": the file entries of the stored zip that are not plan files
+        (`Spool.stored_kit_non_plan`), the paths the `send` rules' prompts name being
+        those of `book`, the playbook in force (`_book_in_force` when not given; none
+        named without one), found by `kit.send_named_paths` against the zip's entries
+        and the builder's cwd. `kit.py` imports this module, so `send_named_paths` is
+        imported here, inside the function. Blocking (the zip): asked in a worker
+        thread."""
+        from hands.kit import send_named_paths
+
+        if book is None:
+            book = self._book_in_force()
+        files = self.spool.stored_kit_files(kit_id, name)
+        if files is None:
+            return None
+        cwd = self.config.role("builder").cwd
+        named = send_named_paths(book, files, cwd) if book is not None else set()
+        return self.spool.stored_kit_non_plan(kit_id, name, named)
 
     def _book_in_force(self) -> Playbook | None:
         """The playbook `published_hold_reason` judges under: the one loaded, once the

@@ -36,6 +36,7 @@ from hands.playbook import (
 from hands.runner import job_env
 from hands.spool import Job, Spool
 from harness import (
+    PASSING_PROTOCOL,
     PROJECT,
     REVIEW_VOCABULARY_RULE,
     architect_table,
@@ -102,6 +103,8 @@ def role_project(tmp_home: Path, workdir: Path, *, book: str | None = ROLE_BOOK,
         config_body(tmp_home, workdir, extra=extra)
     )
     commit_file(workdir, "meta/ROADMAP.md", ROADMAP)
+    # §46: the protocol a review rule names is the repository's, not a kit's.
+    commit_file(workdir, "meta/REVIEW-PROTOCOL.md", PASSING_PROTOCOL)
     if book is not None:
         commit_file(workdir, "PLAYBOOK.toml", book)
     return PROJECT

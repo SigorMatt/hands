@@ -1555,7 +1555,14 @@ plainly before you turn it on: **the human who approves an `autonomous`
 playbook is approving every apply the architect files under it.** The playbook
 is itself a gated kit apply, so that approval is a real one, made once; it is
 the standing approval for every apply that follows, and nothing else stands
-between a kit and the branch but `hands kit check` and the cold review. A
+between a kit and the branch but `hands kit check` and the cold review — for a
+kit of plan files. The engine approves plan files only (§46): a kit whose file
+entries are all `KIT.md`, `DESIGN.md`, `WORKPLAN.md`, a `decisions-<name>.md` at
+the repository root, or Markdown under `meta/` that no `send` rule's prompt of
+the playbook in force names (exact case), and that carries no playbook. Any
+other kit — code, tests, configuration, the CI, the review protocol, the
+playbook — waits for you, held with its buttons and a reason naming the path;
+`hands kit check` names every such entry in its `WARN owner:` line. A
 playbook with `architect = "role"` and no `[roles.architect]` in the config is
 a config error (§32): `handsd` refuses to start on it, naming both files; `hands
 doctor` fails its playbook row with it; the engine stops on it if the playbook

@@ -3095,8 +3095,7 @@ list), or stands, the review's forbidden-edit blocker and the human's
 reading of the pull request being the rest. Not changed in mission 29: the
 paths are §45's.
 
-Status: decided (DESIGN §46: the engine approves plan files only, replacing
-§45's CI hold; the human, 2026-10-21), scheduled for U2.
+Status: resolved (mission 30 U2, this commit — DESIGN §46 "H-083": the engine approves a role-filed kit's apply under an autonomous role-mode playbook only when every file entry is a plan file (`spool.is_plan_file(entry, named)`: in exact case `KIT.md`, `DESIGN.md`, `WORKPLAN.md`, a root `decisions-<name>.md`, or Markdown under `meta/` not in `named`) and it carries no playbook; `named` is `kit.send_named_paths` (`named_paths` over the `send` rules' prompts of the repository's playbook in force, placeholder paths left out), reached from playbook.py by an import inside `PlaybookEngine._stored_kit_non_plan`; any other kit is held with `playbook.plan_hold_reason`'s sentence naming the first such entry in sorted order (§43's reason when it carries the playbook), `Spool.stored_kit_non_plan` reading the stored zip's file entries; `carries_ci`, `stored_kit_ci` and `ci_hold_reason` removed; `hands kit check`'s `WARN owner:` line (`--json` `owner_warnings`) in place of `WARN ci:`; architect rule 3 and rule 8; the handbook's §3, §12 and §19, docs/PLAYBOOK.md, docs/INTEGRATION.md and both templates' comments. Tests: tests/test_plan_files.py, tests/test_docs_45.py, tests/test_operator_table.py)
 
 ## H-084 — the review's file on its failure paths: committed nowhere, read from the branch
 

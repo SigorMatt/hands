@@ -130,6 +130,17 @@ files. With `architect = "role"` and `autonomous = true` (DESIGN §32):
   job it was filed during, and no other job carrying the id — never by origin
   alone. Any other hold (no or unknown `kit_id`, a gate that is not the kit's
   apply) stays held for a human, and with no `job.held` rule the pipeline stops.
+- the engine approves plan files only (DESIGN §46): it approves that apply on
+  its own only when every file entry of the stored kit is a plan file — its
+  path, in its exact case, `KIT.md`, `DESIGN.md`, `WORKPLAN.md`, a
+  `decisions-<name>.md` at the repository root, or a Markdown file under
+  `meta/` that no `send` rule's prompt of the playbook in force names — and the
+  kit carries no playbook. Any other kit (code, tests, configuration, the CI,
+  `meta/REVIEW-PROTOCOL.md` when the review rule names it) waits for the human,
+  held with its buttons and §46's reason naming the first such path (§43's when
+  it carries the playbook); once the human approves it no engine kickoff
+  follows, and the human sends `go`. `hands kit check` names every such entry
+  in one `WARN owner:` line;
   A socket client cannot set `origin: architect` (`hands send` refuses it), and
   handsd accepts `hands kit file` only while an architect consultation is
   running or the engine waits for its `next kit`;
