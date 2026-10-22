@@ -73,6 +73,7 @@ from hands.playbook import (
 from hands.spool import Job, Spool, new_kit_id, now_iso
 from harness import (
     PASSING_PLAYBOOK,
+    PASSING_PROTOCOL,
     PROJECT,
     REVIEW_VOCABULARY_RULE,
     UNCHECKED_KIT,
@@ -5020,6 +5021,8 @@ def architect_project(tmp_home: Path, workdir: Path, *, book: str = E2E_BOOK,
     write_project(tmp_home, body)
     write_playbook(workdir, book)
     commit_file(workdir, str(ROADMAP), ROADMAP_TEXT)  # §32: read as committed
+    # §46: the protocol the review rule names is the repository's, not a kit's.
+    commit_file(workdir, "meta/REVIEW-PROTOCOL.md", PASSING_PROTOCOL)
     return architect
 
 
@@ -7048,11 +7051,14 @@ def test_a_kit_carrying_a_fixed_name_is_the_owners_under_a_configured_path(
     _held_for_the_owner(engine, recorder, holds, "meta/PLAYBOOK.toml")
 
 
-def test_an_entry_at_another_projects_configured_path_is_approved_as_before(
+def test_an_entry_at_another_projects_configured_path_is_held_as_no_plan_file(
     tmp_home: Path, workdir: Path
 ) -> None:
-    """§44: without that configuration `ops/rules.toml` is an ordinary file: the
-    engine approves the kit, one buttonless line, no hold published."""
+    """§44: without that configuration `ops/rules.toml` does not carry the playbook:
+    §43's reason is not given. §46: it is not a plan file either, so the kit is
+    held for the human with §46's reason (mission 30: before it, approved)."""
+    from hands.playbook import plan_hold_reason
+
     engine, recorder, holds = _owner_engine(tmp_home, workdir)
     architect = consultation(engine.spool)
     job = _filed_with(
@@ -7062,8 +7068,8 @@ def test_an_entry_at_another_projects_configured_path_is_approved_as_before(
         architect, "done", verdict="VERDICT: next kit m16", result="VERDICT: next kit m16"
     )
     end_consultation(engine, architect)
-    assert recorder.approved == [{"job": job.id, "reason": AUTONOMOUS_APPROVAL}]
-    assert holds.published == []
+    assert recorder.approved == []
+    assert holds.published == [(job.id, plan_hold_reason("m16", "ops/rules.toml"))]
 
 
 def test_the_configured_playbook_path_is_read_as_a_repository_path(

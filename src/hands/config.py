@@ -933,14 +933,12 @@ def parse_config(data: dict[str, Any], *, project: str, path: Path) -> Config:
 
     repository_t = _table(data, "repository", path)
     _check_keys(repository_t, ("main",), "[repository]", path)
-    # §45: any value but the two refuses to load, naming them; an empty one too,
-    # so `blank=None` here leaves that refusal to the check below.
-    main = _str(repository_t, "main", MAIN_SETTINGS[0], "[repository]", path, blank=None)
-    if main not in MAIN_SETTINGS:
-        raise ConfigError(
-            f'{path}: [repository] main must be "direct" or "pull-request", got {main!r} '
-            '(§45; "direct" when the key is left out)'
-        )
+    # §45: any value but the two refuses to load, naming them, whatever its type
+    # (review 29's should-fix 3) — an empty string and a non-string too.
+    main = _choice(
+        repository_t, "main", MAIN_SETTINGS, "[repository]", path,
+        hint='§45; "direct" when the key is left out',
+    )
     repository = RepositoryConfig(main=main)
 
     return Config(
@@ -1250,6 +1248,21 @@ def _str(
     if blank is not None and not value.strip():
         raise ConfigError(f"{path}: {where} {key} must not be empty, got {value!r}; {blank}")
     return value.strip()
+
+
+def _choice(
+    table: dict[str, Any], key: str, choices: tuple[str, ...], where: str, path: Path,
+    *, hint: str,
+) -> str:
+    """One string key that must be one of `choices`, stripped; the first is the
+    default. Any other value — of any type, empty or not a string at all — is
+    refused naming every choice (§45 "The setting", review 29's should-fix 3:
+    `_str`'s "must be a string" names none of them)."""
+    value = table.get(key, choices[0])
+    if isinstance(value, str) and value.strip() in choices:
+        return value.strip()
+    named = " or ".join(f'"{choice}"' for choice in choices)
+    raise ConfigError(f"{path}: {where} {key} must be {named}, got {value!r} ({hint})")
 
 
 def _opt_str(

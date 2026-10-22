@@ -236,9 +236,10 @@ Kickoff line (the only way this mission is started or resumed):
 
 
 #: §43: a rule for a role-mode playbook whose `aux.done` consult stands first, so it
-#: never fires. Its prompt names the review protocol a `playbookless_kit` carries,
-#: which gives `hands kit check` the review vocabulary to judge that kit by against
-#: the repository's playbook.
+#: never fires. Its prompt names the review protocol the repository carries
+#: (§46: a kit that carried it would be the owner's), which gives `hands kit check`
+#: the review vocabulary to judge a `playbookless_kit` by against the repository's
+#: playbook.
 REVIEW_VOCABULARY_RULE = """
 [[rule]]
 on = "aux.done"
@@ -251,12 +252,14 @@ prompt = "Read meta/REVIEW-PROTOCOL.md and review mission {n}."
 
 
 def playbookless_kit() -> dict[str, str]:
-    """§43: the entries of a kit that carries no playbook — the one kind of kit the
-    engine approves under an autonomous series. It passes the check against a
-    repository whose playbook has a `^VERDICT: mission (?P<n>\\d+) finished` rule."""
+    """§43, §46: the entries of a kit that carries no playbook and plan files only —
+    the one kind of kit the engine approves under an autonomous series. It passes
+    the check against a repository whose playbook has a `^VERDICT: mission
+    (?P<n>\\d+) finished` rule and whose `meta/REVIEW-PROTOCOL.md`
+    (`PASSING_PROTOCOL`) is committed: a kit that carried the protocol a `send`
+    rule names would be held for the human (§46)."""
     return {
         "meta/BUILDER-17-PROMPT.md": PLAYBOOKLESS_BRIEF,
-        "meta/REVIEW-PROTOCOL.md": PASSING_PROTOCOL,
         "KIT.md": "plan: mission 17 kit\n",
     }
 

@@ -62,9 +62,10 @@ PROTOCOL_45 = {
         " before any merge"
     ),
     "the-direct-blocker": "\"a direct mission on a `main` that takes pull requests only\"",
-    "no-pr-committed-nowhere": (
-        "With `pull_request` it is committed nowhere: `main` refuses it, and the"
-        " branch may not exist"
+    # §46 "Review 29's should-fix items" 2 moved this pin (H-084).
+    "no-pr-committed-to-the-branch-on-origin": (
+        "With `pull_request` it is committed to `<branch>` when it exists on"
+        " `origin`"
     ),
     "the-wait-at-the-reviewed-tip": (
         "wait for the pull request's checks at the reviewed tip:"
@@ -233,7 +234,7 @@ def test_architect_rule_1_says_where_a_review_with_blockers_is() -> None:
         assert said in strip_paths(one), f"architect rule 1 does not say {said!r}"
 
 
-def test_architect_rule_3_keeps_the_gate_green_and_carries_no_ci() -> None:
+def test_architect_rule_3_keeps_the_gate_green_and_carries_plan_files_only() -> None:
     three = architect_rule(3)
     for said in (
         "On a repository whose `main` takes pull requests only (DESIGN §45)",
@@ -242,10 +243,21 @@ def test_architect_rule_3_keeps_the_gate_green_and_carries_no_ci() -> None:
         "it never rewords design text a test pins",
         "the new wording goes in the kit's own section, and the mission's units move"
         " the code, its copies and the pinning tests to it",
-        "it carries no file under `.github/` and no `scripts/check` unless the human"
-        " asked for it",
+        # §46 "H-083": the sentence that replaces the `.github/` clause, word for word.
+        "Its files are plan files only: KIT.md, DESIGN.md, WORKPLAN.md, a"
+        " decisions-<name>.md at the root, and Markdown files under meta/ that no send"
+        " rule's prompt names; the engine approves no other kit, which waits for the"
+        " human (DESIGN §46). When the next step needs any other file — code, tests,"
+        " configuration, the CI, the playbook or the review protocol — do not put it"
+        " in a kit: escalate (rule 8), naming the file.",
     ):
         assert said in strip_paths(three), f"architect rule 3 does not say {said!r}"
+    for gone in ("unless the human asked for it", "(the next brief or run plan",
+                 "and a kit that carries it waits for the human."):
+        assert gone not in strip_paths(three), f"architect rule 3 still says {gone!r}"
+    assert "a kit that would need a file other than a plan file (rule 3)" in strip_paths(
+        architect_rule(8)
+    )
 
 
 # --------------------------------------------------------------------- handbook
@@ -273,9 +285,14 @@ def test_handbook_section_3_names_the_branch_the_body_the_subject_and_the_ci_kit
         "re-sends the apply's own prompt",
         "A kit must leave the gate green",
         "never rewords design text a test pins",
-        "apply <name>: the kit carries <path>, the repository's CI; a change of the CI"
-        " is the owner's (§45)",
-        "`WARN ci:`",
+        # §46 "H-083": the plan-files rule replaces §45's CI hold; the architect's
+        # own rule on `.github/` and `scripts/check` stays.
+        "apply <name>: the kit carries <path>, which is not a plan file; the engine"
+        " approves plan files only (KIT.md, DESIGN.md, WORKPLAN.md, decisions files at"
+        " the root, Markdown under meta/ that no send rule's prompt names), and any"
+        " other file is the owner's (§46)",
+        "`WARN owner:`",
+        "no file under `.github/` and no `scripts/check` unless the human asked for it",
     ):
         assert said in strip_paths(three), f"handbook §3 does not say {said!r}"
 

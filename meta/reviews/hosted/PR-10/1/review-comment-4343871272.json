@@ -1,0 +1,69 @@
+{
+  "url": "https://api.github.com/repos/SigorMatt/hands/pulls/comments/4343871272",
+  "pull_request_review_id": 5608459615,
+  "id": 4343871272,
+  "node_id": "PRRC_kwDOUVwTn88AAAABAuo3KA",
+  "diff_hunk": "@@ -232,6 +265,25 @@ runs at a time inside the gate's timeout,\n A review whose Notes lack the schedule is itself a should-fix for the next\n review.\n \n+The branch has not moved (DESIGN §46). In every review of a pull request —\n+its file going to `main` or to the branch; not in the direct shape, and not\n+for a `reviewed: none` review — before you commit the file: `git fetch\n+origin`, then `git rev-parse origin/<branch>` must equal the `reviewed:`\n+sha, the whole 40-character sha. When it does not, add a blocker, \"the",
+  "path": "meta/REVIEW-PROTOCOL.md",
+  "commit_id": "b1ad99d66014f5ea68e9662d7491b87f9dc6fc64",
+  "original_commit_id": "b1ad99d66014f5ea68e9662d7491b87f9dc6fc64",
+  "user": {
+    "login": "qodo-code-review[bot]",
+    "id": 151058649,
+    "node_id": "BOT_kgDOCQD42Q",
+    "avatar_url": "https://avatars.githubusercontent.com/in/484649?v=4",
+    "gravatar_id": "",
+    "url": "https://api.github.com/users/qodo-code-review%5Bbot%5D",
+    "html_url": "https://github.com/apps/qodo-code-review",
+    "followers_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/followers",
+    "following_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/following{/other_user}",
+    "gists_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/gists{/gist_id}",
+    "starred_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/starred{/owner}{/repo}",
+    "subscriptions_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/subscriptions",
+    "organizations_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/orgs",
+    "repos_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/repos",
+    "events_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/events{/privacy}",
+    "received_events_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/received_events",
+    "type": "Bot",
+    "user_view_type": "public",
+    "site_admin": false
+  },
+  "body": "<img src=\"https://img.shields.io/badge/High-634FD1?style=flat-square\" height=\"20px\" alt=\"Action required\">\n\n1\\. Reviewers can merge unreviewed changes <code>🐞 Bug</code> <code>≡ Correctness</code>\n\n<pre>\nThe moved-branch check compares <b><i>origin/&lt;branch&gt;</i></b> with <b><i>reviewed:</i></b> before the protocol&#x27;s later `git\npull --ff-only`, which can advance the local branch after that comparison. If someone pushes in that\ninterval, the review commit is placed on the unreviewed tip, its push succeeds, and\n<b><i>--match-head-commit</i></b> accepts that review commit for the merge.\n</pre>\n\n\n<details>\n<summary><strong>Agent Prompt</strong></summary>\n\n```\n## Issue description\nThe branch can advance between the new reviewed-head comparison and the protocol's subsequent fast-forward pull, allowing an unreviewed commit into the merge.\n\n## Fix Focus Areas\n- meta/REVIEW-PROTOCOL.md[268-278]\n- meta/REVIEW-PROTOCOL.md[295-301]\n- templates/REVIEW-PROTOCOL.md[268-278]\n- templates/REVIEW-PROTOCOL.md[295-301]\n\n## Recommended Fix\nFor a branch review, perform the checkout and pull before the final comparison, and require the resulting local HEAD and fetched remote head to equal the full `reviewed:` SHA before making the review commit. Treat a mismatch as the moved-branch blocker; retain the refused-push handling for movement after that check.\n```\n\n<code>ⓘ Copy this prompt and use it to remediate the issue with your preferred AI generation tools</code>\n</details>\n\n[Dismiss ↗](https://app.qodo.ai/findings/090ab43e-d800-4188-ba90-5b3c872e7734?action=dismiss&origin=git) | [View ↗](https://app.qodo.ai/findings/090ab43e-d800-4188-ba90-5b3c872e7734)",
+  "created_at": "2026-10-22T02:07:25Z",
+  "updated_at": "2026-10-22T02:07:25Z",
+  "html_url": "https://github.com/SigorMatt/hands/pull/10#discussion_r4343871272",
+  "pull_request_url": "https://api.github.com/repos/SigorMatt/hands/pulls/10",
+  "_links": {
+    "self": {
+      "href": "https://api.github.com/repos/SigorMatt/hands/pulls/comments/4343871272"
+    },
+    "html": {
+      "href": "https://github.com/SigorMatt/hands/pull/10#discussion_r4343871272"
+    },
+    "pull_request": {
+      "href": "https://api.github.com/repos/SigorMatt/hands/pulls/10"
+    }
+  },
+  "reactions": {
+    "url": "https://api.github.com/repos/SigorMatt/hands/pulls/comments/4343871272/reactions",
+    "total_count": 0,
+    "+1": 0,
+    "-1": 0,
+    "laugh": 0,
+    "hooray": 0,
+    "confused": 0,
+    "heart": 0,
+    "rocket": 0,
+    "eyes": 0
+  },
+  "start_line": 270,
+  "original_start_line": 270,
+  "start_side": "RIGHT",
+  "line": 272,
+  "original_line": 272,
+  "side": "RIGHT",
+  "author_association": "NONE",
+  "original_position": 95,
+  "position": 95,
+  "subject_type": "line"
+}

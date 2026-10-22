@@ -3040,7 +3040,7 @@ review commit's sha>` (gh refuses the merge when the head moved), and the
 `not merged` blocker then covers a moved head. Not changed in mission 29:
 the command is §45's.
 
-Status: open (needs a design decision).
+Status: resolved (mission 30 U3, this commit — DESIGN §46 "H-081": both review protocols (templates/REVIEW-PROTOCOL.md and this repository's copy, the template with `SigorMatt/hands` and the 15-minute timeout), in every review of a pull request — its file going to `main` or to the branch; not in the direct shape, not for a `reviewed: none` review — check before the review's commit, after `git fetch origin`, that `git rev-parse origin/<branch>` is the whole `reviewed:` sha, else the blocker "the branch moved during the review: <reviewed sha> → <its tip>" and no merge; a refused push of the review's commit is the same blocker (rebase onto the new tip and `review: mission N (branch moved)`, or, when that fails too, `git rebase --abort`, the tree to `main`, `git branch -f <branch> origin/<branch>` and the blocker in the reply); the merge is `gh pr merge <number> --merge --match-head-commit <sha> --subject "merge: mission N (PR #<number>)"`, `<sha>` the reviewed tip on `main` or the review's own commit on the branch; a merge refused or not made, with or without the rule, is the `not merged` blocker committed where the review was. With it, §46's merge rule: a confirmed defect in what the pull request adds or changes, or one at the base it makes reachable or relies on, is a blocker; any other defect at the base a should-fix marked "to be filed"; in the direct shape a blocker; the `## Hosted review` section says which. The brief template's last unit and the handbook's §9 and §19 say so. Tests: tests/test_docs_46.py, tests/test_docs_45.py, tests/test_docs.py, tests/test_kit.py)
 
 ## H-082 — the `pull-request` apply prompt's case (b) matches `main` itself
 
@@ -3071,8 +3071,7 @@ and not a `kit/` one, …" (the code, handbook §3's quotation and the
 pinning tests moved to it by the next mission). Not changed in mission 29:
 the prompt is §45's word for word.
 
-Status: open (needs a design decision; blocks the switch to
-`pull-request`).
+Status: resolved (mission 30 U1, this commit — DESIGN §46 "H-082": `PULL_REQUEST_APPLY`'s case (b) begins "(b) On a branch that is neither `main` nor a `kit/` one, that is on `origin`", the rest of §45's prompt unchanged, so a builder on `main` is not case (b)'s; the handbook's §3 quotes it. With it, review 29's should-fix 3: `[repository] main` of any other value, whatever its type (`true`, `1`, `"squash"`), refuses to load as `[repository] main must be "direct" or "pull-request", got <the value>` (`config._choice`). Tests: tests/test_apply_shape.py, tests/test_docs_45.py, tests/test_config.py)
 
 ## H-083 — the CI hold names `.github/` and `scripts/check`, not the gate's other inputs
 
@@ -3095,5 +3094,69 @@ Decision needed. Whether the hold widens to the gate's configuration files
 list), or stands, the review's forbidden-edit blocker and the human's
 reading of the pull request being the rest. Not changed in mission 29: the
 paths are §45's.
+
+Status: resolved (mission 30 U2, this commit — DESIGN §46 "H-083": the engine approves a role-filed kit's apply under an autonomous role-mode playbook only when every file entry is a plan file (`spool.is_plan_file(entry, named)`: in exact case `KIT.md`, `DESIGN.md`, `WORKPLAN.md`, a root `decisions-<name>.md`, or Markdown under `meta/` not in `named`) and it carries no playbook; `named` is `kit.send_named_paths` (`named_paths` over the `send` rules' prompts of the repository's playbook in force, placeholder paths left out), reached from playbook.py by an import inside `PlaybookEngine._stored_kit_non_plan`; any other kit is held with `playbook.plan_hold_reason`'s sentence naming the first such entry in sorted order (§43's reason when it carries the playbook), `Spool.stored_kit_non_plan` reading the stored zip's file entries; `carries_ci`, `stored_kit_ci` and `ci_hold_reason` removed; `hands kit check`'s `WARN owner:` line (`--json` `owner_warnings`) in place of `WARN ci:`; architect rule 3 and rule 8; the handbook's §3, §12 and §19, docs/PLAYBOOK.md, docs/INTEGRATION.md and both templates' comments. Tests: tests/test_plan_files.py, tests/test_docs_45.py, tests/test_operator_table.py)
+
+## H-084 — the review's file on its failure paths: committed nowhere, read from the branch
+
+Severity: medium · Component: meta/REVIEW-PROTOCOL.md,
+templates/REVIEW-PROTOCOL.md ("`main`'s rules", "The commits under
+review"); DESIGN §45 "The review"
+Filed by: mission 30 orchestrator, U0 (2026-10-22), from REVIEW-29
+should-fix 2 (PR #9's hosted finding 5, 2026-10-21).
+Evidence: meta/REVIEW-PROTOCOL.md at 4d32d35, "`main`'s rules" and "The
+commits under review": under `pull_request` the `reviewed: none` review of
+a missing pull request, and of a Direct brief, is committed nowhere, while
+the review of a failed rules read goes to the mission's branch when it
+exists; and the architect is told to read a review with blockers from the
+branch.
+
+Problem. A review the architect is told to read from the branch is, on two
+of the three failure paths, committed nowhere, so the architect finds
+nothing there to read.
+
+Direction. DESIGN §46 "Review 29's should-fix items" 2.
+
+Status: resolved (mission 30 U3, this commit — DESIGN §46 "Review 29's should-fix items" 2: both review protocols commit the review of a failed rules read, whatever the rules, and under `pull_request` that of a missing pull request, to the branch the brief's Branch section names when it exists on `origin` (`git ls-remote --exit-code --heads origin <branch>`), never to `main`, and otherwise nowhere; a Direct brief's under `pull_request` nowhere; the reply carries the blocker in every case; §45's "nowhere" for a missing pull request is gone. The handbook's §9 and §19 say so. Tests: tests/test_docs_46.py, tests/test_docs_45.py)
+
+## H-085 — nothing returns the tree to `main` after the review commits to the branch on a failure path
+
+Severity: medium · Component: meta/REVIEW-PROTOCOL.md,
+templates/REVIEW-PROTOCOL.md; DESIGN §45 "The review"
+Filed by: mission 30 orchestrator, U0 (2026-10-22), from REVIEW-29
+should-fix 4 (2026-10-21).
+Evidence: both protocols at 4d32d35: a review that commits its file to the
+mission's branch on a failure path checks that branch out, and no step
+returns the tree to `main` after it.
+
+Problem. The next kit's apply runs in this tree and expects `main`; a tree
+left on the mission's branch takes another case of the apply prompt.
+
+Direction. DESIGN §46 "Review 29's should-fix items" 4.
+
+Status: resolved (mission 30 U3, this commit — DESIGN §46 "Review 29's should-fix items" 4: both review protocols end, in every shape, in a section `## The end (every shape)`: a review that has checked out the mission's branch ends with `git checkout main && git pull --ff-only`, and the failure paths end as it says; the handbook's §9 says so. Tests: tests/test_docs_46.py)
+
+## H-086 — a review on `main` whose `not merged` push and recovery both fail leaves local `main` ahead
+
+Severity: low · Component: meta/REVIEW-PROTOCOL.md,
+templates/REVIEW-PROTOCOL.md ("A merge that is refused or not made");
+DESIGN §46 "H-081"
+Filed by: mission 30 orchestrator, U4 (2026-10-22), from the sub-agent's
+report on the fix of PR #10's hosted finding 3 (676aa1b).
+Evidence: with no `pull_request` rule the review is committed to `main`.
+When the `not merged` blocker's push is refused and the rebase onto
+`origin/main` or the push after it fails too, the protocol commits nothing
+more and returns the tree to `main` with `git pull --ff-only`; §46's
+`git branch -f <branch> origin/<branch>` resets only the mission's branch,
+so the unpushed `review:` commits stay on local `main` and that pull can
+fail (diverged).
+
+Problem. The next kit's apply runs on a local `main` that is not
+`origin/main`.
+
+Decision needed. Whether that path resets local `main` to `origin/main`
+(`git reset --hard origin/main` on `main`, dropping the unpushed review
+commits as §46 drops the branch's), or stops and replies for the human.
+Reached only without the rule, after two refusals.
 
 Status: open (needs a design decision).

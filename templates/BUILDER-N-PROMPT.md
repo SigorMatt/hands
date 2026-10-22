@@ -172,7 +172,10 @@ docs/QODO-EXTRACTION.md's method; it archives the bot's words under
 Review comment only. The unit then fixes each finding that is within the
 design, by a sub-agent under the sub-agent rules, committed and pushed to
 the branch; a finding that needs a design decision is filed in
-`meta/findings/FINDINGS.md`, never fixed in silence. It pushes. On a
+`meta/findings/FINDINGS.md`, never fixed in silence. Such a finding in
+the pull request's own code — a defect in what it adds or changes, or one
+at the base that it makes reachable or relies on — blocks its merge until
+the closer mission fixes it (DESIGN §46). It pushes. On a
 repository whose `main` takes pull requests only (DESIGN §45) it then waits
 for the pull request's checks — `hands ci-wait <pr>; echo
 "ci-wait-exit=$?"`, one foreground call at a time, again while it exits 3,

@@ -13,9 +13,11 @@ kickoff = "Read meta/BUILDER-N-PROMPT.md and execute the mission below its divid
 # uncomment every line between the `>>> architect` markers below (strip one
 # "# " from each) and read docs/INTEGRATION.md "The architect role" first:
 # approving an `autonomous` playbook approves every apply the architect files
-# under it, with no further gate — but not a rewrite of the playbook: a change
-# of the playbook is the owner's (§43), so the apply of a kit the role files
-# that carries PLAYBOOK.toml or meta/PLAYBOOK.toml waits for the human.
+# under it, with no further gate, for a kit of plan files only (§46): KIT.md,
+# DESIGN.md, WORKPLAN.md, decisions-<name>.md at the root, and Markdown under
+# meta/ that no send rule's prompt names, in exact case. The apply of any other
+# kit the role files waits for the human — the playbook (a change of it is the
+# owner's, §43), the review protocol, code, tests, configuration and the CI.
 # In role mode, therefore, the kickoff above must be a line that never changes,
 # such as "Read the builder prompt with the highest mission number in the meta
 # directory and execute the mission below its divider.": a kickoff that names

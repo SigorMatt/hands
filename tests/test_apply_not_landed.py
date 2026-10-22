@@ -6,9 +6,8 @@ the owner's", "The journal under a `main` that takes pull requests only"; §19,
 The `builder.done` of an apply as §43 counts one (a job with a `kit_id`, or a
 resume of one) whose reply does not begin `VERDICT: kit applied` is the engine's
 to decide, before any playbook rule: a stop over an unpaused pipeline, one
-publication over a paused one, never kept. A role-filed kit carrying `.github/`
-or `scripts/check` is held for the human with §45's reason (§43's when it carries
-the playbook too), and `hands kit check` warns `WARN ci:` for it. Under
+publication over a paused one, never kept. (§45's CI hold is §46's plan-files
+rule since mission 30, tested in tests/test_plan_files.py.) Under
 `[repository] main = "pull-request"` hands' journal sentence is §45's, word for
 word; §36's reader strips both.
 """
@@ -16,7 +15,6 @@ word; §36's reader strips both.
 from __future__ import annotations
 
 import asyncio
-import io
 from collections.abc import Awaitable
 from pathlib import Path
 from typing import Any
@@ -24,7 +22,6 @@ from typing import Any
 import pytest
 
 from conftest import commit_file, strip_paths
-from hands.cli import main
 from hands.config import parse_config
 from hands.gates import decide
 from hands.playbook import (
@@ -35,23 +32,16 @@ from hands.playbook import (
     PlaybookEngine,
     sent_prompt,
 )
-from hands.spool import Job, Spool, carries_ci, new_kit_id
+from hands.spool import Job, Spool, new_kit_id
 from test_human_pause import FINISHED, held_engine, kept_jobs, paused_by_human
-from test_kit import AUTONOMOUS_PLAYBOOK, PLAYBOOK, PROTOCOL, good_kit, write_tree
 from test_playbook import (
-    ARCHITECT_BOOK,
     AUTONOMOUS,
     ROOT_PLAYBOOK,
     Recorder,
-    _filed_with,
-    _owner_engine,
     applied_kit,
-    consultation,
-    end_consultation,
     engine_for,
     filed_kit,
     finished,
-    owner_reason,
 )
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -257,185 +247,8 @@ def test_the_engines_stop_reason_has_a_row_in_the_operator_table() -> None:
         assert words in strip_paths(said), (words, row)
 
 
-# --------------------------------------------- a kit that carries the CI
-
-
-def ci_reason(name: str, path: str) -> str:
-    """§45's published reason, word for word."""
-    return (
-        f"apply {name}: the kit carries {path}, the repository's CI; a change of the CI "
-        "is the owner's (§45)"
-    )
-
-
-@pytest.mark.parametrize(
-    ("entry", "carried"),
-    [
-        (".github/workflows/x.yml", True),
-        (".GitHub/x", True),
-        ("scripts/check", True),
-        ("Scripts/Check", True),
-        ("scripts/check.sh", False),
-        ("github/x", False),
-        ("docs/.github/x", False),
-    ],
-)
-def test_carries_ci_is_section_45s_test(entry: str, carried: bool) -> None:
-    assert carries_ci(entry) is carried
-
-
-@pytest.mark.parametrize("entry", [".github/workflows/x.yml", ".GitHub/x", "scripts/check"])
-def test_a_role_filed_kit_carrying_the_ci_is_held_with_the_cis_reason(
-    tmp_home: Path, workdir: Path, entry: str
-) -> None:
-    engine, recorder, holds = _owner_engine(tmp_home, workdir)
-    architect = consultation(engine.spool)
-    job = _filed_with(engine, architect, {entry: "x\n", "meta/BUILDER-17-PROMPT.md": "b\n"})
-    architect = engine.spool.transition(
-        architect, "done", verdict="VERDICT: next kit m16", result="VERDICT: next kit m16"
-    )
-    end_consultation(engine, architect)
-    assert recorder.approved == [] and recorder.denied == []
-    held = engine.spool.load_job(job.id)
-    assert held.state == "held"
-    assert held.gate is not None and held.gate["reason"] == "apply m16"
-    assert holds.published == [(job.id, ci_reason("m16", entry))]
-    assert engine.published_hold_reason(held) == ci_reason("m16", entry)
-    assert not engine.state.paused, engine.state.stop_reason
-
-
-def test_a_kit_carrying_the_playbook_and_the_ci_is_held_with_the_playbooks_reason(
-    tmp_home: Path, workdir: Path
-) -> None:
-    engine, recorder, holds = _owner_engine(tmp_home, workdir)
-    architect = consultation(engine.spool)
-    job = _filed_with(engine, architect, {
-        "PLAYBOOK.toml": ARCHITECT_BOOK, ".github/workflows/check.yml": "x\n",
-        "meta/BUILDER-17-PROMPT.md": "b\n",
-    })
-    architect = engine.spool.transition(
-        architect, "done", verdict="VERDICT: next kit m16", result="VERDICT: next kit m16"
-    )
-    end_consultation(engine, architect)
-    assert recorder.approved == []
-    assert holds.published == [(job.id, owner_reason("m16", "PLAYBOOK.toml"))]
-    assert engine.published_hold_reason(engine.spool.load_job(job.id)) == owner_reason(
-        "m16", "PLAYBOOK.toml"
-    )
-
-
-def test_an_ordinary_role_filed_kit_is_approved_by_the_engine_as_before(
-    tmp_home: Path, workdir: Path
-) -> None:
-    engine, recorder, holds = _owner_engine(tmp_home, workdir)
-    architect = consultation(engine.spool)
-    job = _filed_with(engine, architect, {
-        "scripts/check.sh": "x\n", "docs/github.md": "x\n", "meta/BUILDER-17-PROMPT.md": "b\n",
-    })
-    architect = engine.spool.transition(
-        architect, "done", verdict="VERDICT: next kit m16", result="VERDICT: next kit m16"
-    )
-    end_consultation(engine, architect)
-    assert [entry["job"] for entry in recorder.approved] == [job.id]
-    assert holds.published == []
-
-
-def test_the_ci_hold_row_is_in_the_operator_table() -> None:
-    from test_operator_table import SECTION_19, flat, handbook_section, table_rows
-
-    rows = table_rows(handbook_section(SECTION_19))[1:]
-    said = "apply <name>: the kit carries <path>, the repository's CI; a change of the CI is " \
-        "the owner's (§45)"
-    [row] = [row for row in rows if said in strip_paths(flat(row[0]))]
-    assert row[0].startswith("`hands: a job is held for a human`"), row
-    assert row[1] == "the human alone — route 2", row
-
-
-def check(kit: Path, repo: Path) -> tuple[int, str]:
-    out, err = io.StringIO(), io.StringIO()
-    code = main(["kit", "check", str(kit), "--repo", str(repo)], stdout=out, stderr=err)
-    return code, out.getvalue()
-
-
-def ci_warns(out: str) -> list[str]:
-    return [text for text in out.splitlines() if text.startswith("WARN ci: ")]
-
-
-def playbook_warns(out: str) -> list[str]:
-    return [text for text in out.splitlines() if text.startswith("WARN playbook: ")
-            and "§43" in strip_paths(text)]
-
-
-def _kit_config(tmp_home: Path, tmp_path: Path) -> None:
-    (tmp_path / "hands-architect").mkdir(exist_ok=True)
-    (tmp_home / ".hands" / "demo.toml").write_text(
-        f'[roles.builder]\ncwd = "{tmp_path}"\n\n'
-        f'[roles.architect]\ncwd = "{tmp_path / "hands-architect"}"\n',
-        encoding="utf-8",
-    )
-
-
-@pytest.mark.parametrize("entry", [".github/workflows/x.yml", ".GitHub/x", "scripts/check"])
-def test_kit_check_warns_ci_for_a_kit_that_carries_it(
-    tmp_home: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, entry: str
-) -> None:
-    monkeypatch.delenv("HANDS_PROJECT", raising=False)
-    _kit_config(tmp_home, tmp_path)
-    repo = write_tree(
-        tmp_path / "repo", {"PLAYBOOK.toml": PLAYBOOK, "meta/REVIEW-PROTOCOL.md": PROTOCOL}
-    )
-    kit = write_tree(tmp_path / "k", {**good_kit(), entry: "x\n"})
-    code, out = check(kit, repo)
-    assert code == 0, out
-    [warn] = ci_warns(out)
-    said = strip_paths(warn)
-    assert f"the kit carries {entry}, the repository's CI" in said, said
-    assert "the owner's (§45)" in strip_paths(said), said
-    assert playbook_warns(out) == []
-
-
-def test_kit_check_warns_on_both_for_a_kit_that_carries_the_playbook_and_the_ci(
-    tmp_home: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.delenv("HANDS_PROJECT", raising=False)
-    _kit_config(tmp_home, tmp_path)
-    repo = write_tree(
-        tmp_path / "repo",
-        {"PLAYBOOK.toml": AUTONOMOUS_PLAYBOOK, "meta/REVIEW-PROTOCOL.md": PROTOCOL},
-    )
-    kit = write_tree(tmp_path / "k", {**good_kit(), ".github/workflows/check.yml": "x\n"})
-    code, out = check(kit, repo)
-    assert code == 0, out
-    assert len(ci_warns(out)) == 1, out
-    assert len(playbook_warns(out)) == 1, out
-
-
-def test_kit_check_of_an_ordinary_kit_prints_no_ci_warning(
-    tmp_home: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.delenv("HANDS_PROJECT", raising=False)
-    _kit_config(tmp_home, tmp_path)
-    repo = write_tree(
-        tmp_path / "repo", {"PLAYBOOK.toml": PLAYBOOK, "meta/REVIEW-PROTOCOL.md": PROTOCOL}
-    )
-    kit = write_tree(tmp_path / "k", {**good_kit(), "scripts/check.sh": "x\n"})
-    code, out = check(kit, repo)
-    assert code == 0, out
-    assert ci_warns(out) == []
-    assert "WARN ci" not in strip_paths(out), out
-
-
-def test_a_kit_carrying_the_ci_is_not_held_by_the_engine_outside_autonomy(
-    tmp_home: Path, workdir: Path
-) -> None:
-    """The hold is §43's, extended: only a role-filed kit under autonomy is the
-    engine's to approve, so `published_hold_reason` is None for a phone kit."""
-    engine, _, _ = _owner_engine(tmp_home, workdir)
-    job = engine.spool.create_job(
-        role="builder", context="clear", prompt="Apply the kit.", origin="kit",
-        kit_id=new_kit_id(), state="held",
-    )
-    assert engine.published_hold_reason(job) is None
+# §45's CI hold (`carries_ci`, `ci_hold_reason`, `WARN ci:`) is contained in
+# §46's plan-files rule since mission 30: tests/test_plan_files.py.
 
 
 # ----------------------------------------------- the journal sentence (§45)

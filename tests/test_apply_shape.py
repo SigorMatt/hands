@@ -59,19 +59,34 @@ def run(coro: Awaitable[Any]) -> Any:
     return asyncio.run(coro)  # type: ignore[arg-type]
 
 
-def design_template() -> str:
-    """§45's `pull-request` prompt: the indented block, its lines joined with
-    single spaces (it is one paragraph, wrapped in DESIGN.md)."""
-    lines = DESIGN.read_text(encoding="utf-8").splitlines()
-    start = lines.index(
-        "    Apply {location} to this repository, whose `main` takes pull requests"
-    )
+def indented_block(lines: list[str], first: str) -> str:
+    """The indented DESIGN.md block that begins with the line `first`, its lines
+    joined with single spaces (each is one paragraph, wrapped)."""
     block = []
-    for line in lines[start:]:
+    for line in lines[lines.index(first):]:
         if not line.startswith("    "):
             break
         block.append(line.strip())
     return " ".join(block)
+
+
+#: §45's case (b) as it began before §46 (H-082), joined; §46 replaces it.
+OLD_CASE_B = "(b) On another branch, not a `kit/` one, that is on `origin`"
+
+
+def design_template() -> str:
+    """§45's `pull-request` prompt with §46's case (b) (H-082): §45's indented
+    block, joined, whose case (b) begins as §46's indented block says, word for
+    word, the rest of §45's prompt unchanged."""
+    lines = DESIGN.read_text(encoding="utf-8").splitlines()
+    template = indented_block(
+        lines, "    Apply {location} to this repository, whose `main` takes pull requests"
+    )
+    case_b = indented_block(
+        lines, "    (b) On a branch that is neither `main` nor a `kit/` one, that is on"
+    )
+    assert template.count(OLD_CASE_B) == 1, template
+    return template.replace(OLD_CASE_B, case_b)
 
 
 def sha(data: bytes) -> str:
@@ -125,6 +140,23 @@ def test_the_pull_request_prompt_is_section_45s_word_for_word() -> None:
     assert "--subject 'merge: kit a-b-c (PR #<pr>)'`" in strip_paths(prompt)
     assert f"--title 'plan: kit a b.c' --body '{body}'`" in strip_paths(prompt)
     assert prompt.endswith("<its error, in one line>. Change nothing else.")
+
+
+def test_the_pull_request_prompts_case_b_is_neither_main_nor_a_kit_branch() -> None:
+    """§46 (H-082): case (b) begins "On a branch that is neither `main` nor a
+    `kit/` one, that is on `origin`", so a builder on `main` takes case (c)."""
+    case_b = (
+        "(b) On a branch that is neither `main` nor a `kit/` one, that is on `origin`"
+        " (`git ls-remote --exit-code --heads origin <that branch>`)"
+    )
+    assert kit_mod.PULL_REQUEST_APPLY.count(case_b) == 1
+    assert "neither `main` nor a `kit/` one" in strip_paths(kit_mod.PULL_REQUEST_APPLY)
+    assert "another branch" not in strip_paths(kit_mod.PULL_REQUEST_APPLY)
+    prompt = kit_mod.apply_prompt(
+        "~/Downloads/k.zip", [], ["KIT.md"], "plan: k", shape="pull-request",
+        sha256=sha(b"k"),
+    )
+    assert case_b in strip_paths(prompt)
 
 
 def test_a_stem_over_40_characters_is_cut_in_the_branch_and_the_subject() -> None:

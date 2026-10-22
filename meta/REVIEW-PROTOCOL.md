@@ -27,12 +27,14 @@ It names `pull_request` when it does. If the read fails, it is tried once
 more a minute later, in the foreground. If that fails too, the review goes
 no further: no sub-agents, no hosted review, no run of the gate. Write
 `meta/reviews/REVIEW-N.md` with `reviewed: none` and one blocker, "`main`'s
-rules could not be read: <the error>"; commit it to the mission's branch
-when it exists (the branch the brief's Branch section names, found by `git
-ls-remote --exit-code --heads origin <branch>`), as "The review file" says
-for a `main` that takes pull requests only — a push to a branch is never
-refused by the gate — and otherwise nowhere; and reply with `blockers=1
-should-fix=0`.
+rules could not be read: <the error>"; whatever the rules are, since they
+are unknown, commit it to the branch the brief's Branch section names when
+it exists on `origin` (`git ls-remote --exit-code --heads origin
+<branch>`), never to `main` (a Direct brief's branch is `main`, so its
+review is committed nowhere), as "The review file" says for a `main` that
+takes pull requests only — a push to a branch is never refused by the gate
+— and otherwise nowhere; end as "The end" says; and reply with `blockers=1
+should-fix=0`: the reply carries the blocker in every case.
 
 - Without `pull_request`, the review is committed as before: to `main`,
   before any merge.
@@ -61,8 +63,11 @@ yourself:
 - With no open pull request, the review goes no further: no sub-agents, no
   hosted review, no run of the gate. Write `meta/reviews/REVIEW-N.md` with
   `reviewed: none` and one blocker, "no pull request for <branch>", commit
-  it as below, and reply with `blockers=1 should-fix=0`. With `pull_request`
-  it is committed nowhere: `main` refuses it, and the branch may not exist.
+  it, end as "The end" says, and reply with `blockers=1 should-fix=0`.
+  Without `pull_request` it is committed to `main`, as below. With
+  `pull_request` it is committed to `<branch>` when it exists on `origin`
+  (`git ls-remote --exit-code --heads origin <branch>`), never to `main`, as
+  "The review file" says, and otherwise nowhere.
 - With one, the commits under review are the PR's own since the last
   reviewed tip, without `main`'s own history: `git log
   <base>..origin/<branch> ^origin/main`. The base is the merge-base with
@@ -198,6 +203,33 @@ You run `./scripts/check` yourself once, at the tip under review (in a `git
 worktree` at it), and record the result in `## Notes`; that is your only
 run of the gate.
 
+## A defect (DESIGN §46)
+
+For every confirmed finding, the hosted reviewer's and your own. A
+**defect** is text — code, a prompt, a protocol, a document — whose
+behaviour contradicts its own stated purpose: a wrong result, a failure, a
+security gap; not a missing feature, and not a design choice someone may
+disagree with.
+
+- A defect in what the pull request adds or changes is a blocker, even when
+  the design prescribes it; so is a defect present at the base that the
+  pull request makes reachable where it was not, or relies on for what it
+  adds. The pull request stays open, and the closer mission continues its
+  branch, its kit correcting the design first.
+- Any other defect present at the base — shown by the base's own text, or
+  by one test or command in a worktree at the merge-base (`git merge-base
+  origin/main origin/<branch>`), never by the gate — is a should-fix marked
+  "to be filed": the review commits nothing but its own file and the
+  archive, as for every review, and the next mission's U0 or the
+  architect's next kit files it in `meta/findings/FINDINGS.md`. That
+  worktree goes under `/tmp` like the others.
+- In the direct shape there is no pull request to hold: a defect in the
+  commits under review is a blocker, as any blocker there, and the series
+  stops for the closer.
+
+The `## Hosted review` section says, for each confirmed finding, which of
+these it is and why.
+
 ## The review file
 
 With `pull_request`, before writing, wait for the pull request's checks at
@@ -216,11 +248,12 @@ none` when the brief's branch has no pull request, when `main`'s rules could
 not be read, and for a direct brief on a `main` that takes pull requests
 only). Then exactly these
 sections: `## Blockers` (numbered; a blocker is a failed gate, a missing
-test, a design violation, or a claim the disk contradicts), `## Should-fix`
-(numbered), `## Hosted review` (with a PR: the archive's `<k>`, the
-verdict the command took from the Code Review comment, every finding of the
-bot, verbatim, each with one of: confirmed → carried as blocker k or
-should-fix m; dismissed → the reason; and the sub-agent's audit of the
+test, a design violation, a claim the disk contradicts, or a confirmed
+defect as "A defect" says), `## Should-fix` (numbered), `## Hosted review`
+(with a PR: the archive's `<k>`, the verdict the command took from the
+Code Review comment, every finding of the bot, verbatim, each with one of:
+confirmed → carried as blocker k or should-fix m, with which case of "A
+defect" it is and why; dismissed → the reason; and the sub-agent's audit of the
 builder's disposition of it; without a PR, or with no bot review after ten
 minutes, one line saying so), `## Notes`, `## Per-commit verdicts` (the
 sub-agents' reports, verbatim, the hosted-review sub-agent's among them).
@@ -232,11 +265,37 @@ runs at a time inside the gate's timeout,
 A review whose Notes lack the schedule is itself a should-fix for the next
 review.
 
+The branch has not moved (DESIGN §46). In every review of a pull request —
+its file going to `main` or to the branch; not in the direct shape, and not
+for a `reviewed: none` review — as the last step before you commit the
+file — after the tree is brought to `main` or the branch is checked out and
+pulled, as below, so that no pull after the check brings in a commit
+pushed after it: `git fetch origin`, then `git rev-parse origin/<branch>`
+must equal the `reviewed:` sha, the whole 40-character sha. When the file
+goes to the branch, the commit the review's commit goes on top of must be
+the reviewed tip, or the `journal: consultation lines` commit whose parent
+is the reviewed tip: `git rev-parse HEAD` must equal the whole `reviewed:`
+sha, or, when HEAD is that journal commit, `git rev-parse HEAD^` must. When
+either does not, add a blocker, "the branch moved during the review:
+<reviewed sha> → <its tip>", commit the file as below, and do not merge. A push of the review's commit to the
+branch that is refused (the branch moved after that check) is the same
+blocker: `git fetch origin && git rebase origin/<branch>` puts the review's
+local commits on the new tip, the blocker is added to `REVIEW-N.md` and
+committed as `review: mission N (branch moved)`, and the branch is pushed;
+if the rebase or that push fails too, the review commits nothing more
+(`git rebase --abort` if one is under way), returns the tree to `main`
+(`git checkout main && git pull --ff-only`), sets the local branch back to
+its remote (`git branch -f <branch> origin/<branch>`, which drops its
+unpushed `journal:` and `review:` commits, the carried journal lines among
+them) so that the next `git pull --ff-only` on it succeeds, and replies
+with the blocker counted. Either way, there is no merge.
+
 Without `pull_request`, the file goes to `main`. Before you commit it,
 bring the tree to an up-to-date `main`: `git checkout main && git pull
 --ff-only`, and copy the directory the hosted-review sub-agent wrote,
-`meta/reviews/hosted/PR-<pr>/<k>/`, from its worktree to the same path. You
-may commit that file and the hosted-review archive directory only, to
+`meta/reviews/hosted/PR-<pr>/<k>/`, from its worktree to the same path.
+Then check that the branch has not moved (above), last before the commit.
+You may commit that file and the hosted-review archive directory only, to
 `main`, as `review: mission N`, and push them, before any merge: the review
 and the bot's words as they were are on `main` whatever happens to the
 branch. Touch nothing else.
@@ -244,7 +303,8 @@ branch. Touch nothing else.
 With `pull_request`, the review file and the hosted review's archive are
 committed to the mission's branch, never to `main`: carry the journal's
 lines over (below), then `git checkout <branch> && git pull --ff-only`, copy
-the archive directory in as above, and make one commit `review: mission N`,
+the archive directory in as above, check that the branch has not moved
+(above), and make one commit `review: mission N`,
 pushed to the branch, before any merge. You may commit that file and the
 hosted-review archive directory only, besides the journal's own commit. A
 clean review lands on `main` with the merge; a review with blockers stays
@@ -266,24 +326,49 @@ there is nothing to carry.
 ## The merge (with a PR)
 
 With `blockers=0`, merge the PR yourself — `gh pr merge <number> --merge
---subject "merge: mission N (PR #<number>)"` (a merge commit, never a
-squash: the per-unit commits are what the next cold review works on) — then
-bring the local tree level: `git checkout main && git pull --ff-only`. With
-blockers, the review leaves the PR open; say so in the reply, after the
-verdict line. Without a PR there is nothing to merge.
+--match-head-commit <sha> --subject "merge: mission N (PR #<number>)"` (a
+merge commit, never a squash: the per-unit commits are what the next cold
+review works on), `<sha>` being the whole sha of the reviewed tip when the
+review was committed to `main`, and the review's own commit (`git rev-parse
+HEAD` after its push) when it was committed to the branch; gh refuses the
+merge when the head is another commit — then bring the local tree level:
+`git checkout main && git pull --ff-only`. With blockers, the review leaves
+the PR open; say so in the reply, after the verdict line. Without a PR there
+is nothing to merge.
+
+A merge that is refused or not made, with or without the `pull_request`
+rule, is a blocker: add it to `REVIEW-N.md`, "the merge was not made: <the
+command's last line>", commit it where the review was (to `main` without
+the rule, to the branch with it) as `review: mission N (not merged)`, push,
+and reply with that blocker counted. When that push is refused (the branch
+moved after the review's commit was pushed), take the steps of a refused
+push of the review's commit: `git fetch origin && git rebase
+origin/<branch>` (`git rebase origin/main` when the review went to `main`)
+puts the review's local commits on the new tip, and push; if the rebase or
+that push fails too, commit nothing more (`git rebase --abort` if one is
+under way), return the tree to `main` (`git checkout main && git pull
+--ff-only`), set the local branch back to its remote (`git branch -f
+<branch> origin/<branch>`) when the review went to the branch, and reply
+with the blocker counted. Either way, there is no merge. A clean verdict
+always means a merged mission.
 
 With `pull_request` and `blockers=0`, the review's own commit has started
 the checks again, so first wait for them — `hands ci-wait <number>; echo
 "ci-wait-exit=$?"`, one foreground call at a time, again while it exits 3,
 at most seven calls — and merge only on exit 0, as above (`gh pr merge
-<number> --merge --subject "merge: mission N (PR #<number>)"`, then `git
-checkout main && git pull --ff-only`). On any other end, or when the merge
-is refused, do not merge: add a blocker to `REVIEW-N.md`, "the merge was not
-made: <the command's last line>", commit it to the branch as `review:
-mission N (not merged)`, push, and reply with that blocker counted. A clean
-verdict always means a merged mission. With blockers, the PR stays open:
-return the tree to `main` (`git checkout main && git pull --ff-only`), so
-the next kit's apply runs on `main`.
+<number> --merge --match-head-commit <sha> --subject "merge: mission N (PR
+#<number>)"`, `<sha>` the review's own commit, then `git checkout main &&
+git pull --ff-only`). On any other end, or when the merge is refused, do not
+merge: that is the `not merged` blocker above. With blockers, the PR stays
+open: return the tree to `main` (`git checkout main && git pull
+--ff-only`), so the next kit's apply runs on `main`.
+
+## The end (every shape)
+
+In every shape, a review that has checked out the mission's branch ends
+with `git checkout main && git pull --ff-only` — on a failure path, after
+its file, after a `not merged` or a moved-branch blocker, as after the
+merge — so the next kit's apply runs on `main`.
 
 Last, remove every worktree this review added: `git worktree remove --force
 <path>` for each (yours and each sub-agent's, under `/tmp`), then `git

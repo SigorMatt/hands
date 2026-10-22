@@ -92,11 +92,11 @@ shell-quoted:
     only (DESIGN §45). First, where the working tree is. (a) On `{branch}`,
     this kit's own branch: go on below from the step not done yet
     (`gh pr list --head {branch} --state all --json number,state` names its
-    pull request and whether it merged). (b) On another branch, not a `kit/`
-    one, that is on `origin` (`git ls-remote --exit-code --heads origin
-    <that branch>`) and whose pull requests, if it has any, are all open
-    (`gh pr list --head <that branch> --state all --json state` names none
-    `MERGED` or `CLOSED`), a mission is in flight on it: unzip -o into the
+    pull request and whether it merged). (b) On a branch that is neither
+    `main` nor a `kit/` one, that is on `origin` (`git ls-remote --exit-code
+    --heads origin <that branch>`) and whose pull requests, if it has any,
+    are all open (`gh pr list --head <that branch> --state all --json state`
+    names none `MERGED` or `CLOSED`), a mission is in flight on it: unzip -o into the
     repo root (it {touched}), then one plan-only sub-agent makes a single
     commit {message} listing those files in its body, and pushes that
     branch; reply with one line: VERDICT: kit applied <sha>; if that push is
@@ -153,13 +153,35 @@ units move the code, its copies and the pinning tests to it. And a kit carries
 no file under `.github/` and no `scripts/check` unless the human asked for it:
 a pull request's check runs the workflow and the gate script from the pull
 request's own branch, so a kit that rewrote either could weaken the check its
-own pull request is merged on. A role-filed kit with such an entry (its
-casefolded path beginning `.github/` or equal to `scripts/check`) is not
-approved by the engine and waits for the human, held with the reason `apply
-<name>: the kit carries <path>, the repository's CI; a change of the CI is the
-owner's (§45)` (or §43's playbook reason when it carries the playbook too), and
-`hands kit check` prints a `WARN ci:` line for any kit that carries one, in
-either shape.
+own pull request is merged on.
+
+**The engine approves plan files only (DESIGN §46).** Under `[series]
+architect = "role"` with `autonomous = true`, whatever `[repository] main`
+says, the engine approves the apply of a kit the role filed only when every
+file entry is a plan file and the kit carries no playbook. A file entry is a
+plan file when its path, in its exact case (a Linux builder lands `Design.md`
+beside `DESIGN.md`, not on it), is `KIT.md`, `DESIGN.md`, `WORKPLAN.md` (the
+runs form), a `decisions-<name>.md` at the repository root, or a Markdown file
+(`.md`) under `meta/` that no `send` rule's prompt of the repository's playbook
+in force names (so `meta/REVIEW-PROTOCOL.md`, which the review rule names, is
+the owner's, as the playbook is; a placeholder path such as
+`meta/reviews/REVIEW-{n}.md` names no file). The gate is configured by more
+than `.github/` and `scripts/check` — `pyproject.toml`, `uv.lock`,
+`tests/conftest.py`, any test — and no list of its inputs is ever whole, so
+the rule names what may pass rather than what may not. Any other kit waits for
+the human, held with its buttons and the reason `apply <name>: the kit carries
+<path>, which is not a plan file; the engine approves plan files only (KIT.md,
+DESIGN.md, WORKPLAN.md, decisions files at the root, Markdown under meta/ that
+no send rule's prompt names), and any other file is the owner's (§46)`,
+`<path>` the first such entry in sorted order (§43's playbook reason when it
+carries the playbook, with or without other files). After the human approves
+it no engine kickoff follows: the playbook's `kit applied` rule fires and the
+human sends `go`. `hands kit check` prints one `WARN owner:` line naming every
+file entry that is not a plan file and does not carry the playbook (that one
+keeps its `WARN playbook:` line), under the same condition as `WARN
+playbook:`; a phone-mode kit is not warned, since every apply in phone mode is
+the human's anyway — the rule above on `.github/` and `scripts/check` stands
+for it.
 
 The commit message is the first line of `KIT.md` at the kit's root, else
 `plan: kit <name>`, the zip's file name without `.zip`; put the message you
@@ -432,9 +454,12 @@ the title.
 **The merge.** The review file is committed to `main` before any merge (as
 `review: mission N`, pushed at once), so your clone reads it from `main` whatever
 happens to the branch. On `blockers=0` the reviewer merges the PR itself —
-`gh pr merge <number> --merge --subject "merge: mission N (PR #<number>)"`
-— and brings the tree level with `git checkout main && git pull
---ff-only`. A merge commit, never a squash: the per-unit commits are what the
+`gh pr merge <number> --merge --match-head-commit <sha> --subject "merge:
+mission N (PR #<number>)"`, `<sha>` the whole sha of the reviewed tip when
+the review was committed to `main`, and the review's own commit (`git
+rev-parse HEAD` after its push) when it was committed to the branch, so gh
+refuses to merge any other head (DESIGN §46) — and brings the tree level
+with `git checkout main && git pull --ff-only`. A merge commit, never a squash: the per-unit commits are what the
 next cold review's sub-agents work on, one per commit. With blockers the PR
 stays open and the reply says so; your next kit is a closer mission whose
 brief names the branch to continue, and its review merges when clean. The
@@ -442,6 +467,52 @@ verdict line is unchanged: `VERDICT: review mission N blockers=<k>
 should-fix=<m>`. The merge is inside the review job on purpose: a human
 merging later would let the next kickoff start from a `main` without the
 mission's code.
+
+**The merged head is the reviewed one (DESIGN §46).** In every review of a
+pull request — its file going to `main` or to the branch; not in the direct
+shape, not for a `reviewed: none` review — the reviewer runs `git fetch
+origin` as the last step before committing its file, after the branch is
+checked out and pulled, and checks that `git rev-parse origin/<branch>` is
+the whole `reviewed:` sha and, when the file goes to the branch, that the
+commit it goes on top of is the reviewed tip or the `journal: consultation
+lines` commit whose parent is it; when it is not, the blocker
+"the branch moved during the review: <reviewed sha> → <its tip>", and no
+merge. A refused push of the review's commit is the same blocker: the
+review rebases onto the new tip and commits it as `review: mission N
+(branch moved)`; when that fails too it commits nothing more, returns to
+`main`, runs `git branch -f <branch> origin/<branch>` and replies with the
+blocker counted. A merge that is refused or not made, with or without the
+`pull_request` rule, adds the blocker `the merge was not made: <the
+command's last line>`, committed where the review was as `review: mission N
+(not merged)`; a refused push of that commit takes the same rebase, and the
+same retreat when it fails.
+
+**The failure paths.** The review of a failed rules read (whatever the
+rules), and under `pull_request` that of a missing pull request, is
+committed to the branch the brief names when it exists on `origin` (`git
+ls-remote --exit-code --heads origin <branch>`), never to `main`, and
+otherwise nowhere; a Direct brief's under `pull_request` is committed
+nowhere; the reply carries the blocker in every case. In every shape, a
+review that has checked out the mission's branch ends with `git checkout
+main && git pull --ff-only`, so your next kit's apply runs on `main`.
+
+**A confirmed bug in the pull request's own code blocks its merge (DESIGN
+§46).** A **defect** is text — code, a prompt, a protocol, a document —
+whose behaviour contradicts its own stated purpose: a wrong result, a
+failure, a security gap; not a missing feature, and not a design choice
+someone may disagree with. A confirmed defect in what the pull request adds
+or changes is a blocker, even when the design prescribes it; so is one at
+the base that the pull request makes reachable where it was not, or relies
+on for what it adds. The pull request stays open and your closer mission
+continues its branch, its kit correcting the design first. Any other defect
+at the base — shown by the base's own text, or by one test or command in a
+worktree at the merge-base (`git merge-base origin/main origin/<branch>`),
+never by the gate — is a should-fix marked "to be filed", which the next
+mission's U0 or your next kit files. In the direct shape a defect in the
+commits under review is a blocker, and the series stops for the closer. The
+review's `## Hosted review` section says which each confirmed finding is,
+and why; the brief's last unit still files a finding that needs a design
+decision, and it blocks the merge until the closer fixes it.
 
 **Standing approval.** The human's approval of a playbook whose review
 protocol merges on a clean review is the standing approval of every merge it
@@ -696,10 +767,20 @@ passes.
 
 **The first plan kit's apply is silent.** Under `[series] autonomous` the
 engine's own `builder.done` rule approves the apply of a kit the role filed
-(`decided_by: playbook`) that carries no playbook, the first plan kit
-included, so no Approve or Deny reaches the phone for it: the first thing the
-phone sees is the kickoff the engine sends after the apply. Approving such a
-playbook is approving that apply too.
+(`decided_by: playbook`) that carries plan files only (§3, DESIGN §46), the
+first plan kit included when it does, so no Approve or Deny reaches the phone
+for it: the first thing the phone sees is the kickoff the engine sends after
+the apply. Approving such a playbook is approving that apply too.
+
+**A kit that carries anything but plan files waits for the human (DESIGN
+§46).** In a role-mode series the engine approves a role-filed kit only when
+every file entry is a plan file (§3): `KIT.md`, `DESIGN.md`, `WORKPLAN.md`, a
+`decisions-<name>.md` at the root, or Markdown under `meta/` that no `send`
+rule's prompt names. The role's first kit that carries anything else — code,
+tests, configuration, the CI, the review protocol — waits for the human, held
+with §46's reason naming the path, and once the human approves it no engine
+kickoff follows: the human sends `go`. A first plan kit that carries the
+review protocol or the playbook is the human's to apply for that reason.
 
 **A kit that carries the playbook waits for the human (DESIGN §43).** A
 change of the playbook is the owner's: a kit the role files that carries
@@ -731,9 +812,8 @@ so that a failure is attributable to one. Undoing it is the owner's: the
 ruleset disabled in GitHub's settings, then the setting set back to `direct`
 and the daemon restarted, with no apply in between. Until it switches, a
 project on `direct` gets only what does not need the gate: the stop for an
-apply that did not land (§10), a resumed apply that re-sends its own prompt,
-and a role-filed kit carrying `.github/` or `scripts/check` waiting for the
-human (§3).
+apply that did not land (§10) and a resumed apply that re-sends its own
+prompt. The plan-files rule (§3, DESIGN §46) holds in either shape.
 
 ### Running as the architect role (DESIGN §31)
 
@@ -770,8 +850,10 @@ under; read it there rather than here. What changes for you:
   stores, against the builder's repository, and refuses a failing kit with the
   check's output (DESIGN §33). Under `[series] autonomous` the engine approves
   that hold itself once your reply names it, and sends the kickoff, so a kit you
-  file is a kit that runs — unless it carries the playbook, which is the
-  owner's: that apply waits for the human (DESIGN §43), so file no playbook.
+  file is a kit that runs — when it carries plan files only (§3, DESIGN §46).
+  Any other file is the owner's: the playbook (DESIGN §43), the review protocol,
+  code, tests, configuration, the CI; such an apply waits for the human, so put
+  none of them in a kit and escalate instead (architect rule 8).
 - **One kit per consultation, under the name your verdict gives.** File at most
   one kit, and reply `VERDICT: next kit <name>` with exactly its name. A second
   `hands kit file` in the same consultation is refused by handsd as "one kit per
@@ -1158,7 +1240,7 @@ its consequences.
 | `hands: kit <name> filed by the architect; apply approved by the playbook` | nobody — route 1 | nothing: the engine sends the kickoff | nothing |
 | `hands: A held job was denied` | nobody — route 1 | nothing: a denial is somebody's decision already | nothing |
 | `hands: the pipeline stopped` — Mission <n> reviewed clean; next mission is the architect's | the project's chat — route 3 | the next mission's kit: `kit <secret>` with the zip, Approve, `go <secret>` | `hands kit apply <zip>`, `hands approve <job>`, `hands go` |
-| `hands: the pipeline stopped` — Mission <n> review has blockers | the project's chat — route 3 | a mission that closes the blockers first, by route 3. On a repository whose `main` takes pull requests only (DESIGN §45) the review is on the mission's branch, not on `main`: the architect role reads it with `git show origin/<branch>:meta/reviews/REVIEW-<n>.md` (its clone is whole and fetched before every job); the phone architect, from a shallow single-branch clone, runs `git fetch --depth 1 origin <branch>`, then `git show FETCH_HEAD:meta/reviews/REVIEW-<n>.md`. On any other repository it is on `main` | `hands kit apply <zip>`, `hands approve <job>`, `hands go` |
+| `hands: the pipeline stopped` — Mission <n> review has blockers | the project's chat — route 3 | a mission that closes the blockers first, by route 3; a confirmed defect in what the pull request adds or changes, or one at the base it makes reachable or relies on, is such a blocker even when the design prescribes it, and the closer continues the branch, its kit correcting the design first (DESIGN §46). On a repository whose `main` takes pull requests only (DESIGN §45) the review is on the mission's branch, not on `main`: the architect role reads it with `git show origin/<branch>:meta/reviews/REVIEW-<n>.md` (its clone is whole and fetched before every job); the phone architect, from a shallow single-branch clone, runs `git fetch --depth 1 origin <branch>`, then `git show FETCH_HEAD:meta/reviews/REVIEW-<n>.md`. On any other repository it is on `main`, but the review of a failed rules read, whatever the rules, and under `pull_request` that of a missing pull request, is on the branch the brief names when it exists on `origin`, and otherwise nowhere; a Direct brief's under `pull_request` is nowhere; the reply carries the blocker either way (DESIGN §46) | `hands kit apply <zip>`, `hands approve <job>`, `hands go` |
 | `hands: the pipeline stopped` — Run <n> review has blockers | the project's chat — route 3 | a run that closes the blockers first, by route 3 | `hands kit apply <zip>`, `hands approve <job>`, `hands go` |
 | `hands: the pipeline stopped` — Mission <n> blocked; see the builder's reply | the project's chat — route 4 | `progress <secret>`; the owner file as a decisions kit: `kit <secret>` with the zip, Approve, then `go <secret>`. In role mode under a playbook without the blocked→consult rule, instead: `kit <secret>` with the zip, Approve without `go <secret>`, and once the apply has ended `consult <secret> <reason>` (route 5) | `hands kit apply <zip>`, `hands approve <job>`, `hands go`; for route 5 instead `hands kit apply <zip>`, `hands approve <job>`, then `hands consult` without `hands go` |
 | `hands: the pipeline stopped` — Run <n> blocked | the project's chat — route 4 | as for a blocked mission | as for a blocked mission |
@@ -1173,7 +1255,7 @@ its consequences.
 | `hands: the pipeline stopped` — Tripwire fired | the project's chat — route 6 | `progress <secret>`; then route 3, 4 or 5 | `hands jobs -n 3`, `hands status` |
 | `hands: a job is held for a human` — <reason>, `role:`, `job:`, the job id on its own line | the human alone — route 2 | the Approve or Deny button, or `approve <job> <secret>` / `deny <job> [reason] <secret>` | `hands approve <job>` / `hands deny <job> --reason "<reason>"` |
 | `hands: a job is held for a human` — apply <name>: the kit carries <path>, the playbook in force; a change of the playbook is the owner's (§43) | the human alone — route 2 | the Approve or Deny button (or `approve <job> <secret>` / `deny <job> [reason] <secret>`); once the apply has ended no engine kickoff follows, so `go <secret>` | `hands approve <job>` / `hands deny <job>`, then `hands go` |
-| `hands: a job is held for a human` — apply <name>: the kit carries <path>, the repository's CI; a change of the CI is the owner's (§45) | the human alone — route 2 | the Approve or Deny button (or `approve <job> <secret>` / `deny <job> [reason] <secret>`), once the human has read what the kit changes in `.github/` or `scripts/check` (a pull request's check runs them from its own branch); §43's playbook reason is shown instead when the kit carries the playbook too; once the apply has ended no engine kickoff follows, so `go <secret>` | `hands approve <job>` / `hands deny <job>`, then `hands go` |
+| `hands: a job is held for a human` — apply <name>: the kit carries <path>, which is not a plan file; the engine approves plan files only (KIT.md, DESIGN.md, WORKPLAN.md, decisions files at the root, Markdown under meta/ that no send rule's prompt names), and any other file is the owner's (§46) | the human alone — route 2 | the Approve or Deny button (or `approve <job> <secret>` / `deny <job> [reason] <secret>`), once the human has read what the kit changes in that file and every other one that is not a plan file (`hands kit check`'s `WARN owner:` line names them all); §43's playbook reason is shown instead when the kit carries the playbook too; once the apply has ended no engine kickoff follows, so `go <secret>` | `hands approve <job>` / `hands deny <job>`, then `hands go` |
 | `hands: kit received` — kit received <name> <bytes> <sha256> | the human alone — route 3 | Approve the apply's hold (its own notification), then `go <secret>` | `hands approve <job>`, `hands go` |
 | `hands: kit received` — apply <name>: <why>; the commit message is the default '<message>' (the kit has no `KIT.md`, or its first line is not used) | the human alone — route 3 | Approve the apply's hold if the default message will do, then `go <secret>`; else Deny it and send the kit again with a `KIT.md` whose first line is the commit message | `hands approve <job>`, `hands go`; or `hands deny <job>`, then `hands kit apply <zip>` with the `KIT.md` |
 | `hands: handsd started` — <project> on <socket>, then `Resumed: <role> job <job>, from job <job> which a daemon stop orphaned` (or `which this start found orphaned (its process was gone)`), one line per resumed job; then `While starting, handsd published <n> notification(s) on their own:` and `While starting, handsd raised <n> more notification(s):`, each followed by the lines it names | nobody — route 1 | nothing; a line folded in under `While starting, handsd raised …` is answered by its own row | `hands status` |

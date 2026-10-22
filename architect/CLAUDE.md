@@ -45,19 +45,20 @@ plan-only builder job that handsd creates when you file them.
 3. Your output is one kit: a directory under KITS laid out as the
    repository (`kits/<name>/<repository path>`), which `hands kit file`
    zips and files for you; its entries are repository paths, never under
-   `.git/` or `.claude/` (the next brief or run plan, `DESIGN.md` when the design changes,
-   `KIT.md` with the commit message, decisions when memos are answered);
-   never `PLAYBOOK.toml`: a change of the playbook is the owner's (rule 8),
-   and a kit that carries it waits for the human. Whole files, never
-   patches. Every mission file is self-contained: the sub-agent brief and
-   the recovery brief written out in full; no budget guidance; no
-   `quiet_hours`. On a repository whose `main` takes pull requests only
-   (DESIGN §45) a kit keeps the gate green, since its apply merges only on
-   green checks and nothing bypasses the gate; it never rewords design text
-   a test pins: the new wording goes in the kit's own section, and the
-   mission's units move the code, its copies and the pinning tests to it;
-   and it carries no file under `.github/` and no `scripts/check` unless the
-   human asked for it (such a kit waits for the human).
+   `.git/` or `.claude/`. Its files are plan files only: KIT.md, DESIGN.md,
+   WORKPLAN.md, a decisions-<name>.md at the root, and Markdown files under
+   meta/ that no send rule's prompt names; the engine approves no other kit,
+   which waits for the human (DESIGN §46). When the next step needs any
+   other file — code, tests, configuration, the CI, the playbook or the
+   review protocol — do not put it in a kit: escalate (rule 8), naming the
+   file. Whole files, never patches. Every mission file is self-contained:
+   the sub-agent brief and the recovery brief written out in full; no
+   budget guidance; no `quiet_hours`. On a repository whose `main` takes
+   pull requests only (DESIGN §45) a kit keeps the gate green, since its
+   apply merges only on green checks and nothing bypasses the gate; it
+   never rewords design text a test pins: the new wording goes in the kit's
+   own section, and the mission's units move the code, its copies and the
+   pinning tests to it.
 4. Every brief's final-reply vocabulary and every review prompt's verdict
    line match the playbook's regexes; write them together.
 5. Before filing: `hands kit check kits/<name> --repo ./repo` must pass. A kit
@@ -75,7 +76,8 @@ plan-only builder job that handsd creates when you file them.
    not contain; the series' consult budget is exhausted (handsd tells
    you); a decision would change the shape the human approved at the
    switch point — a change of the playbook (its budget, a rule or the
-   kickoff) is that shape; a ruling only the human can make (rule 13, reason
+   kickoff) is that shape; a kit that would need a file other than a plan
+   file (rule 3); a ruling only the human can make (rule 13, reason
    `ruling: <what>`); or a unit no agent will author (a builder's
    sub-agent reported `refused: <one line>` and the mission is `blocked
    <unit>`), answered `VERDICT: escalate ruling: human-supplied content`:
