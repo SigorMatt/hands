@@ -471,8 +471,11 @@ mission's code.
 **The merged head is the reviewed one (DESIGN §46).** In every review of a
 pull request — its file going to `main` or to the branch; not in the direct
 shape, not for a `reviewed: none` review — the reviewer runs `git fetch
-origin` before committing its file and checks that `git rev-parse
-origin/<branch>` is the whole `reviewed:` sha; when it is not, the blocker
+origin` as the last step before committing its file, after the branch is
+checked out and pulled, and checks that `git rev-parse origin/<branch>` is
+the whole `reviewed:` sha and, when the file goes to the branch, that the
+commit it goes on top of is the reviewed tip or the `journal: consultation
+lines` commit whose parent is it; when it is not, the blocker
 "the branch moved during the review: <reviewed sha> → <its tip>", and no
 merge. A refused push of the review's commit is the same blocker: the
 review rebases onto the new tip and commits it as `review: mission N
@@ -481,7 +484,8 @@ review rebases onto the new tip and commits it as `review: mission N
 blocker counted. A merge that is refused or not made, with or without the
 `pull_request` rule, adds the blocker `the merge was not made: <the
 command's last line>`, committed where the review was as `review: mission N
-(not merged)`.
+(not merged)`; a refused push of that commit takes the same rebase, and the
+same retreat when it fails.
 
 **The failure paths.** The review of a failed rules read (whatever the
 rules), and under `pull_request` that of a missing pull request, is

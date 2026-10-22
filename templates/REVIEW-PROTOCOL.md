@@ -267,11 +267,17 @@ review.
 
 The branch has not moved (DESIGN §46). In every review of a pull request —
 its file going to `main` or to the branch; not in the direct shape, and not
-for a `reviewed: none` review — before you commit the file: `git fetch
-origin`, then `git rev-parse origin/<branch>` must equal the `reviewed:`
-sha, the whole 40-character sha. When it does not, add a blocker, "the
-branch moved during the review: <reviewed sha> → <its tip>", commit the
-file as below, and do not merge. A push of the review's commit to the
+for a `reviewed: none` review — as the last step before you commit the
+file — after the tree is brought to `main` or the branch is checked out and
+pulled, as below, so that no pull after the check brings in a commit
+pushed after it: `git fetch origin`, then `git rev-parse origin/<branch>`
+must equal the `reviewed:` sha, the whole 40-character sha. When the file
+goes to the branch, the commit the review's commit goes on top of must be
+the reviewed tip, or the `journal: consultation lines` commit whose parent
+is the reviewed tip: `git rev-parse HEAD` must equal the whole `reviewed:`
+sha, or, when HEAD is that journal commit, `git rev-parse HEAD^` must. When
+either does not, add a blocker, "the branch moved during the review:
+<reviewed sha> → <its tip>", commit the file as below, and do not merge. A push of the review's commit to the
 branch that is refused (the branch moved after that check) is the same
 blocker: `git fetch origin && git rebase origin/<branch>` puts the review's
 local commits on the new tip, the blocker is added to `REVIEW-N.md` and
@@ -287,8 +293,9 @@ with the blocker counted. Either way, there is no merge.
 Without `pull_request`, the file goes to `main`. Before you commit it,
 bring the tree to an up-to-date `main`: `git checkout main && git pull
 --ff-only`, and copy the directory the hosted-review sub-agent wrote,
-`meta/reviews/hosted/PR-<pr>/<k>/`, from its worktree to the same path. You
-may commit that file and the hosted-review archive directory only, to
+`meta/reviews/hosted/PR-<pr>/<k>/`, from its worktree to the same path.
+Then check that the branch has not moved (above), last before the commit.
+You may commit that file and the hosted-review archive directory only, to
 `main`, as `review: mission N`, and push them, before any merge: the review
 and the bot's words as they were are on `main` whatever happens to the
 branch. Touch nothing else.
@@ -296,7 +303,8 @@ branch. Touch nothing else.
 With `pull_request`, the review file and the hosted review's archive are
 committed to the mission's branch, never to `main`: carry the journal's
 lines over (below), then `git checkout <branch> && git pull --ff-only`, copy
-the archive directory in as above, and make one commit `review: mission N`,
+the archive directory in as above, check that the branch has not moved
+(above), and make one commit `review: mission N`,
 pushed to the branch, before any merge. You may commit that file and the
 hosted-review archive directory only, besides the journal's own commit. A
 clean review lands on `main` with the merge; a review with blockers stays
@@ -332,8 +340,17 @@ A merge that is refused or not made, with or without the `pull_request`
 rule, is a blocker: add it to `REVIEW-N.md`, "the merge was not made: <the
 command's last line>", commit it where the review was (to `main` without
 the rule, to the branch with it) as `review: mission N (not merged)`, push,
-and reply with that blocker counted. A clean verdict always means a merged
-mission.
+and reply with that blocker counted. When that push is refused (the branch
+moved after the review's commit was pushed), take the steps of a refused
+push of the review's commit: `git fetch origin && git rebase
+origin/<branch>` (`git rebase origin/main` when the review went to `main`)
+puts the review's local commits on the new tip, and push; if the rebase or
+that push fails too, commit nothing more (`git rebase --abort` if one is
+under way), return the tree to `main` (`git checkout main && git pull
+--ff-only`), set the local branch back to its remote (`git branch -f
+<branch> origin/<branch>`) when the review went to the branch, and reply
+with the blocker counted. Either way, there is no merge. A clean verdict
+always means a merged mission.
 
 With `pull_request` and `blockers=0`, the review's own commit has started
 the checks again, so first wait for them — `hands ci-wait <number>; echo

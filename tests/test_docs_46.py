@@ -63,6 +63,37 @@ PROTOCOL_46 = {
         " journal lines among them"
     ),
     "the-moved-reply": "replies with the blocker counted",
+    # PR #10's hosted finding 1: the check is the last step before the commit.
+    "the-check-is-the-last-step": (
+        "as the last step before you commit the file — after the tree is brought"
+        " to `main` or the branch is checked out and pulled, as below"
+    ),
+    "the-check-after-the-pull": (
+        "copy the archive directory in as above, check that the branch has not"
+        " moved (above), and make one commit `review: mission N`"
+    ),
+    "the-head-is-the-reviewed-tip": (
+        "When the file goes to the branch, the commit the review's commit goes on"
+        " top of must be the reviewed tip, or the `journal: consultation lines`"
+        " commit whose parent is the reviewed tip: `git rev-parse HEAD` must equal"
+        " the whole `reviewed:` sha, or, when HEAD is that journal commit,"
+        " `git rev-parse HEAD^` must"
+    ),
+    # PR #10's hosted finding 3: the not-merged push's recovery.
+    "the-not-merged-push-refused": (
+        "When that push is refused (the branch moved after the review's commit"
+        " was pushed), take the steps of a refused push of the review's commit:"
+        " `git fetch origin && git rebase origin/<branch>` (`git rebase"
+        " origin/main` when the review went to `main`) puts the review's local"
+        " commits on the new tip, and push"
+    ),
+    "the-not-merged-recovery-fails": (
+        "if the rebase or that push fails too, commit nothing more (`git rebase"
+        " --abort` if one is under way), return the tree to `main` (`git checkout"
+        " main && git pull --ff-only`), set the local branch back to its remote"
+        " (`git branch -f <branch> origin/<branch>`) when the review went to the"
+        " branch, and reply with the blocker counted"
+    ),
     # H-081: the merge names its head.
     "the-match-head-merge": MERGE_46,
     "the-sha-on-main": (
@@ -172,6 +203,25 @@ def test_the_moved_branch_check_comes_before_the_reviews_commit(name: str) -> No
     check = review_file.index("`git rev-parse origin/<branch>` must equal")
     assert check < review_file.index("Without `pull_request`, the file goes to `main`")
     assert check < review_file.index("one commit `review: mission N`, pushed to the branch")
+
+
+@pytest.mark.parametrize("name", ["templates", "meta"])
+def test_the_moved_branch_check_comes_after_the_pull(name: str) -> None:
+    """PR #10's hosted finding 1: a pull after the check could bring in a commit
+    pushed after it, so the check is the last step before the review's commit,
+    in both paragraphs that commit it."""
+    text = read(name, "REVIEW-PROTOCOL.md")
+    review_file = text.split("## The review file", 1)[1].split("## The merge", 1)[0]
+    on_main = review_file.split("Without `pull_request`, the file goes to `main`", 1)[1]
+    on_main = on_main.split("With `pull_request`, the review file", 1)[0]
+    check = on_main.index("check that the branch has not moved (above)")
+    assert on_main.index("`git checkout main && git pull --ff-only`") < check
+    assert check < on_main.index("as `review: mission N`")
+    on_branch = review_file.split("With `pull_request`, the review file", 1)[1]
+    on_branch = on_branch.split("Carrying the journal's lines over", 1)[0]
+    check = on_branch.index("check that the branch has not moved (above)")
+    assert on_branch.index("`git checkout <branch> && git pull --ff-only`") < check
+    assert check < on_branch.index("one commit `review: mission N`")
 
 
 @pytest.mark.parametrize("name", ["templates", "meta"])
